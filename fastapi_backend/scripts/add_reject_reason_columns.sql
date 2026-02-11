@@ -1,0 +1,6 @@
+-- 为请假、加班、公出表增加驳回原因字段，便于申请人查看
+-- 执行一次即可；若列已存在会报错，可忽略。
+
+ALTER TABLE qj ADD COLUMN bhyy VARCHAR(500) DEFAULT NULL COMMENT '驳回原因';
+ALTER TABLE jiaban ADD COLUMN bhyy VARCHAR(500) DEFAULT NULL COMMENT '驳回原因';
+ALTER TABLE gcsqb ADD COLUMN bhyy VARCHAR(500) DEFAULT NULL COMMENT '驳回原因';

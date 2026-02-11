@@ -1,0 +1,23 @@
+# Node/Vue 前端
+vue-project/node_modules/
+vue-project/dist/
+vue-project/.vite/
+vue-project/.env.local
+
+# Python 后端
+fastapi_backend/venv/
+fastapi_backend/.venv/
+fastapi_backend/__pycache__/
+fastapi_backend/.pytest_cache/
+fastapi_backend/.env
+
+# 运行/上传产生的数据
+fastapi_backend/uploads/
+fastapi_backend/data/
+*.log
+
+# IDE/系统
+.vscode/
+.idea/
+.DS_Store
+*.pyc
