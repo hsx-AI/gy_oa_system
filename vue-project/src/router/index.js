@@ -77,6 +77,11 @@ const routes = [
     component: () => import('../views/attendance/BusinessTrip.vue')
   },
   {
+    path: '/attendance/business-trip/all-records',
+    name: 'BusinessTripAllRecords',
+    component: () => import('../views/attendance/BusinessTripAllRecords.vue')
+  },
+  {
     path: '/attendance/approvals',
     name: 'Approvals',
     component: () => import('../views/attendance/Approval.vue')
@@ -100,6 +105,16 @@ const routes = [
     path: '/file/numbering',
     name: 'FileNumbering',
     component: () => import('../views/file/FileNumbering.vue')
+  },
+  {
+    path: '/file/tech-category',
+    name: 'TechCategoryManage',
+    component: () => import('../views/file/TechCategoryManage.vue')
+  },
+  {
+    path: '/file/workno',
+    name: 'WorkNoManage',
+    component: () => import('../views/file/WorkNoManage.vue')
   },
   {
     path: '/profile',

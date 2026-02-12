@@ -206,6 +206,18 @@ export function getBusinessTripList(params) {
   })
 }
 
+/**
+ * 全部公出记录（按权限：部长/副部长看全员，其余看本科室）
+ * @param {Object} params - { name, year? }
+ */
+export function getBusinessTripAllRecords(params) {
+  return request({
+    url: '/business-trip/all-records',
+    method: 'get',
+    params
+  })
+}
+
 /** 删除本人已驳回的公出记录 */
 export function deleteBusinessTripRecord(id, params) {
   return request({ url: `/business-trip/${id}`, method: 'delete', params })

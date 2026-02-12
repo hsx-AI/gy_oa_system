@@ -109,8 +109,9 @@
 
           <div class="form-row">
             <div class="form-group half">
-              <label>类别</label>
-              <select v-model="form.type" name="leaveType" autocomplete="on">
+              <label>请假类型 <span class="label-required">*</span></label>
+              <select v-model="form.type" name="leaveType" autocomplete="on" required>
+                <option value="">请选择请假类型</option>
                 <option v-for="type in leaveTypes" :key="type" :value="type">{{ type }}</option>
               </select>
             </div>
@@ -314,7 +315,7 @@ const canApprove = ref(false)
 const form = reactive({
   department: userInfo.department,
   name: userInfo.name,
-  type: '事假',
+  type: '',  // 必选，默认为空，强制用户选择避免误填
   shift: '白班',
   contactMethod: '电话',
   startTime: '',
@@ -508,8 +509,8 @@ const submitApplication = async () => {
     alert('请完善姓名信息')
     return
   }
-  if (!form.type) {
-    alert('请选择请假类别')
+  if (!form.type?.trim()) {
+    alert('请选择请假类型')
     return
   }
   if (!form.shift) {
@@ -682,6 +683,10 @@ const submitApplication = async () => {
 
 .application-form {
   margin-top: var(--spacing-lg);
+}
+
+.label-required {
+  color: var(--color-error, #dc2626);
 }
 
 .form-row {

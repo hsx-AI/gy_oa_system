@@ -29,6 +29,13 @@
             <p class="record-card__desc">{{ recordFilterLabel }}</p>
           </div>
           <div class="record-card__filters">
+            <button
+              type="button"
+              class="btn btn-outline"
+              @click="$router.push('/attendance/business-trip/all-records')"
+            >
+              全部公出记录
+            </button>
             <label class="filter-label">筛选：</label>
             <select v-model.number="recordYear" class="filter-select">
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
