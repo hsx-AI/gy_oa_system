@@ -14,6 +14,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 from database import db
+from routers.approvers import _get_user_info, _jb_match
 import logging
 import uuid
 
@@ -126,6 +127,37 @@ def _trip_status(bldzt, szrzt) -> tuple:
     return "审批中", "status-processing"
 
 
+def _row_to_record(row) -> dict:
+    """将 gcsqb 一行转为前端所需记录结构"""
+    bldzt = 0 if row.get("bldzt") is None else int(row.get("bldzt"))
+    szrzt = 0 if row.get("szrzt") is None else int(row.get("szrzt"))
+    status, status_class = _trip_status(bldzt, szrzt)
+    current_approver = ""
+    if status == "审批中":
+        if szrzt == 1:
+            current_approver = (row.get("szr") or "").strip()
+        elif bldzt == 1:
+            current_approver = (row.get("bld") or "").strip()
+    rec = {
+        "id": row.get("id"),
+        "targetUnit": row.get("wpdw") or "",
+        "person": row.get("gcr") or "",
+        "assignTime": _fmt_dt(row.get("wpsj")),
+        "projectName": row.get("xmmc") or "",
+        "location": row.get("gcdd") or "",
+        "startTime": _fmt_dt(row.get("gcsj")),
+        "actualReturnTime": _fmt_dt(row.get("sjfhtime")),
+        "fhdjStatus": int(row.get("fhdj_status") or 0),
+        "status": status,
+        "statusClass": status_class,
+        "currentApprover": current_approver,
+        "rejectReason": (row.get("bhyy") or "").strip(),
+    }
+    rec["roomDirectorApproveTime"] = _fmt_dt(row.get("szrpztime")) if row.get("szrpztime") is not None else ""
+    rec["deptLeaderApproveTime"] = _fmt_dt(row.get("bldpztime")) if row.get("bldpztime") is not None else ""
+    return rec
+
+
 @router.get("/list")
 async def get_business_trip_list(
     name: str,
@@ -164,40 +196,61 @@ async def get_business_trip_list(
             else:
                 raise
 
-        records = []
-        for row in rows:
-            bldzt = 0 if row.get("bldzt") is None else int(row.get("bldzt"))
-            szrzt = 0 if row.get("szrzt") is None else int(row.get("szrzt"))
-            status, status_class = _trip_status(bldzt, szrzt)
-            # 审批中时：室主任待审批(szrzt==1) 显示室主任，部领导待审批(bldzt==1) 显示部领导
-            current_approver = ""
-            if status == "审批中":
-                if szrzt == 1:
-                    current_approver = (row.get("szr") or "").strip()  # 室主任
-                elif bldzt == 1:
-                    current_approver = (row.get("bld") or "").strip()  # 部领导
-            rec = {
-                "id": row.get("id"),
-                "targetUnit": row.get("wpdw") or "",
-                "person": row.get("gcr") or "",
-                "assignTime": _fmt_dt(row.get("wpsj")),
-                "projectName": row.get("xmmc") or "",
-                "location": row.get("gcdd") or "",
-                "startTime": _fmt_dt(row.get("gcsj")),
-                "actualReturnTime": _fmt_dt(row.get("sjfhtime")),
-                "fhdjStatus": int(row.get("fhdj_status") or 0),
-                "status": status,
-                "statusClass": status_class,
-                "currentApprover": current_approver,
-                "rejectReason": (row.get("bhyy") or "").strip(),
-            }
-            rec["roomDirectorApproveTime"] = _fmt_dt(row.get("szrpztime")) if row.get("szrpztime") is not None else ""
-            rec["deptLeaderApproveTime"] = _fmt_dt(row.get("bldpztime")) if row.get("bldpztime") is not None else ""
-            records.append(rec)
-
+        records = [_row_to_record(row) for row in rows]
         return {"success": True, "data": records, "total": len(records)}
     except Exception as e:
         logger.error(f"查询公出记录失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/all-records")
+async def get_business_trip_all_records(
+    name: str = Query(..., description="当前用户姓名"),
+    year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
+):
+    """
+    全部公出记录（按权限）：
+    部长/副部长：按时间顺序查看全员公出记录；
+    其余人：仅查看本科室全员公出记录。
+    按委派时间/公出时间倒序。
+    """
+    try:
+        user = _get_user_info(name)
+        if not user:
+            return {"success": True, "data": [], "total": 0, "scope": "none"}
+        jb = (user.get("jb") or "").strip()
+        lsys = (user.get("lsys") or "").strip()
+        is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+
+        order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
+        if is_leader:
+            sql = f"""
+                SELECT g.id, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                    g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
+                FROM gcsqb g
+                {f"WHERE (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
+                {order}
+            """
+            params = (year, year) if year is not None else ()
+        else:
+            if not lsys:
+                return {"success": True, "data": [], "total": 0, "scope": "dept"}
+            sql = f"""
+                SELECT g.id, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                    g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
+                FROM gcsqb g
+                INNER JOIN yggl y ON g.gcr = y.name AND y.lsys = %s
+                {"AND (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
+                {order}
+            """
+            params = (lsys,) if year is None else (lsys, year, year)
+
+        rows = db.execute_query(sql, params)
+        records = [_row_to_record(row) for row in rows]
+        scope = "all" if is_leader else "dept"
+        return {"success": True, "data": records, "total": len(records), "scope": scope}
+    except Exception as e:
+        logger.error(f"查询全部公出记录失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 

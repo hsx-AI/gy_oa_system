@@ -20,4 +20,4 @@ fastapi_backend/data/
 .vscode/
 .idea/
 .DS_Store
-*.pyc
+*.git

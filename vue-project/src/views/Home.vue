@@ -729,8 +729,10 @@ async function navigateTo(feature) {
 .dashboard-card__body {
   flex: 1;
   min-height: 0;
+  max-height: 360px;
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
 }
 
 /* 待办列表 */

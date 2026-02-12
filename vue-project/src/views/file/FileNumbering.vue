@@ -7,6 +7,8 @@
           <p class="header-subtitle">技术文件、技术管理文件、管理文件的编号规则与记录查询</p>
         </div>
         <div class="header-actions">
+          <button class="btn" @click="goTechCategory">技术分类录入</button>
+          <button class="btn" @click="goWorkNo">工作号录入</button>
           <button class="btn btn-primary" @click="showModal = true">获取编号</button>
         </div>
       </div>
@@ -75,6 +77,7 @@
                     <th>项目名称</th>
                     <th>编号类别</th>
                     <th>编号内容</th>
+                    <th>编号时间</th>
                     <th>编号代码</th>
                     <th>PDF 文件</th>
                   </tr>
@@ -87,6 +90,7 @@
                     <td>{{ row.cpname }}</td>
                     <td>{{ row.fenlei }}</td>
                     <td>{{ row.neirong }}</td>
+                    <td>{{ row.bhtime || '—' }}</td>
                     <td>
                       <span class="bianhao-code">{{ row.bianhao_code }}</span>
                       <button type="button" class="btn-copy-small" @click="copyText(row.bianhao_code)" title="复制">复制</button>
@@ -120,6 +124,7 @@
                     <th>项目名称</th>
                     <th>编号类别</th>
                     <th>编号内容</th>
+                    <th>编号时间</th>
                     <th>编号代码</th>
                     <th>PDF 文件</th>
                   </tr>
@@ -132,6 +137,7 @@
                     <td>{{ row.cpname }}</td>
                     <td>{{ row.fenleihao || row.fenlei }}</td>
                     <td>{{ row.neirong }}</td>
+                    <td>{{ row.bhtime || '—' }}</td>
                     <td>
                       <span class="bianhao-code">{{ row.bianhao_code }}</span>
                       <button type="button" class="btn-copy-small" @click="copyText(row.bianhao_code)" title="复制">复制</button>
@@ -163,6 +169,7 @@
                     <th>编制人</th>
                     <th>编号类别</th>
                     <th>编号内容</th>
+                    <th>编号时间</th>
                     <th>编号代码</th>
                     <th>PDF 文件</th>
                   </tr>
@@ -173,6 +180,7 @@
                     <td>{{ row.xm }}</td>
                     <td>{{ row.fenlei }}</td>
                     <td>{{ row.neirong }}</td>
+                    <td>{{ row.bhtime || '—' }}</td>
                     <td>
                       <span class="bianhao-code">{{ row.bianhao_code }}</span>
                       <button type="button" class="btn-copy-small" @click="copyText(row.bianhao_code)" title="复制">复制</button>
@@ -309,8 +317,11 @@
 
 <script setup>
 import { ref, watch, computed, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
 import { getStatisticsPermission } from '@/api/attendance'
+
+const router = useRouter()
 
 const currentTab = ref('tech')
 const showModal = ref(false)
@@ -748,6 +759,13 @@ async function submitNumbering() {
   }
   alert('功能开发中')
   showModal.value = false
+}
+function goTechCategory() {
+  router.push('/file/tech-category')
+}
+
+function goWorkNo() {
+  router.push('/file/workno')
 }
 </script>
 
