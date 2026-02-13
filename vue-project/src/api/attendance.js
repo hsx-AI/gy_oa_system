@@ -475,13 +475,15 @@ export function getAttendanceDates(params) {
 
 /**
  * 考勤异常列表（打卡管理员或班组长/主任/副主任）
+ * 数据量可能较大，不设短超时，避免加载超时
  * @param {Object} params - { year, month, current_user }
  */
 export function getAttendanceExceptions(params) {
   return request({
     url: '/attendance/exceptions',
     method: 'get',
-    params
+    params,
+    timeout: 120000
   })
 }
 
@@ -494,7 +496,8 @@ export function exportAttendanceExceptions(params) {
     url: '/attendance/exceptions/export',
     method: 'get',
     params,
-    responseType: 'blob'
+    responseType: 'blob',
+    timeout: 120000
   })
 }
 

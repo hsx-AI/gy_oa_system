@@ -32,15 +32,6 @@
             </svg>
             <span>考勤智能填报</span>
           </router-link>
-          <router-link to="/attendance/manual" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <rect x="3" y="4" width="18" height="18" rx="2" ry="2" />
-              <line x1="16" y1="2" x2="16" y2="6" />
-              <line x1="8" y1="2" x2="8" y2="6" />
-              <line x1="3" y1="10" x2="21" y2="10" />
-            </svg>
-            <span>考勤手动填报</span>
-          </router-link>
           <router-link to="/attendance/business-trip" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -342,10 +333,10 @@ onUnmounted(() => {
 const noNavRoutes = ['/login']
 const showNav = computed(() => !noNavRoutes.includes(route.path))
 
-// 显示用户名：优先 currentUser.name，其次 username，最后占位符
+// 显示用户名：优先 currentUser.name，其次 username（有登录态时才显示主布局，此处不应出现空）
 const displayUserName = computed(() => {
   const u = currentUser.value
-  return (u.name || u.userName || u.username || '').trim() || '管理员'
+  return (u.name || u.userName || u.username || '').trim() || '用户'
 })
 </script>
 

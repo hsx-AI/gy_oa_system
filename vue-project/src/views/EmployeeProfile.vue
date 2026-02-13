@@ -51,11 +51,13 @@
           </div>
           <div v-if="profile.exchangeTicketDetails?.length" class="profile-row profile-row--details">
             <span class="profile-label">换休票明细</span>
-            <span class="profile-value">
-              <template v-for="(d, i) in profile.exchangeTicketDetails" :key="d.expireDate">
-                <span v-if="i">，</span>{{ formatTicketCount(d.count) }}张于{{ formatExpireDate(d.expireDate) }}过期
-              </template>
-            </span>
+            <div class="profile-value profile-details-wrap">
+              <div class="profile-details-scroll">
+                <template v-for="(d, i) in profile.exchangeTicketDetails" :key="d.expireDate">
+                  <span v-if="i">，</span>{{ formatTicketCount(d.count) }}张于{{ formatExpireDate(d.expireDate) }}过期
+                </template>
+              </div>
+            </div>
           </div>
         </div>
         <div v-else-if="loading" class="profile-loading">加载中...</div>
@@ -207,6 +209,19 @@ onMounted(fetchProfile)
 }
 .profile-row:last-child {
   border-bottom: none;
+}
+.profile-row--details .profile-label {
+  flex-shrink: 0;
+}
+.profile-details-wrap {
+  min-width: 0;
+}
+.profile-details-scroll {
+  max-height: 200px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  line-height: 1.6;
+  padding-right: 4px;
 }
 .profile-row--details .profile-value {
   flex-wrap: wrap;

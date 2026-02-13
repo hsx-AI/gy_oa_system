@@ -166,9 +166,30 @@ const router = createRouter({
   routes
 })
 
-// 领导人看板仅部长/副部长可访问（yggl 表 jb 字段）
-// 打卡数据上传仅 webconfig.dakaman 用户可访问
+// 未登录时仅允许访问登录页，其余一律重定向到 /login
 router.beforeEach(async (to, _from, next) => {
+  if (to.path === '/login') {
+    next()
+    return
+  }
+  const raw = localStorage.getItem('userInfo')
+  if (!raw) {
+    next('/login')
+    return
+  }
+  try {
+    const user = JSON.parse(raw)
+    const name = (user.name || user.userName || '').trim()
+    if (!name) {
+      next('/login')
+      return
+    }
+  } catch {
+    next('/login')
+    return
+  }
+
+  // 以下为各页面单独权限校验
   if (to.path === '/leader-dashboard') {
     try {
       const raw = localStorage.getItem('userInfo')

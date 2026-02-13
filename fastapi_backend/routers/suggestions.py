@@ -11,12 +11,26 @@ from database import db
 from utils.helpers import normalize_date_str, time_to_decimal, format_time
 from utils.holiday_loader import load_holidays_dict
 from datetime import datetime, timedelta, date
+import math
 import os
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suggestions", tags=["智能建议"])
+
+
+def _floor_half_hours(h: float) -> float:
+    """按 0.5 小时向下取整，不满 0.5 舍去。如 4.4 -> 4.0"""
+    return math.floor(h * 2) / 2
+
+
+def _format_hours_display(h: float) -> str:
+    """格式化加班小时显示：先按 0.5 向下取整，整数显示为「4小时」，否则「4.5小时」"""
+    h = _floor_half_hours(h)
+    if h == int(h):
+        return f"{int(h)}小时"
+    return f"{h:.1f}小时"
 
 
 def _to_comparable_dt(val: Any) -> Optional[str]:
@@ -350,7 +364,7 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         st_str, et_str = format_time(start_dt), format_time(end_dt)
         suggestions.append(_sugg(
             st_str, et_str, 0,
-            f"【加班建议】检测到 {st_str} 到 {et_str} 的加班（约{duration:.1f}小时）"
+            f"【加班建议】检测到 {st_str} 到 {et_str} 的加班（约{_format_hours_display(duration)}）"
         ))
 
     return suggestions
@@ -422,7 +436,7 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
             morning_start_str = decimal_to_time_str(effective_start)
             suggestions.append(_sugg(
                 morning_start_str, "12:00", 0,
-                f"【加班建议】休息日加班，建议补录 {morning_start_str} 到 12:00 的加班（约{morning_hours:.1f}小时）"
+                f"【加班建议】休息日加班，建议补录 {morning_start_str} 到 12:00 的加班（约{_format_hours_display(morning_hours)}）"
             ))
 
         # 下午段：13:00 到 effective_end
@@ -431,7 +445,7 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
             afternoon_end_str = decimal_to_time_str(effective_end)
             suggestions.append(_sugg(
                 "13:00", afternoon_end_str, 0,
-                f"【加班建议】休息日加班，建议补录 13:00 到 {afternoon_end_str} 的加班（约{afternoon_hours:.1f}小时）"
+                f"【加班建议】休息日加班，建议补录 13:00 到 {afternoon_end_str} 的加班（约{_format_hours_display(afternoon_hours)}）"
             ))
     else:
         # 不跨越午休时间，直接计算
@@ -441,7 +455,7 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
             end_str = decimal_to_time_str(effective_end)
             suggestions.append(_sugg(
                 start_str, end_str, 0,
-                f"【加班建议】休息日加班，建议补录 {start_str} 到 {end_str} 的加班（约{total_hours:.1f}小时）"
+                f"【加班建议】休息日加班，建议补录 {start_str} 到 {end_str} 的加班（约{_format_hours_display(total_hours)}）"
             ))
     
     return suggestions

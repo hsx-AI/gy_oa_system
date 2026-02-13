@@ -181,14 +181,6 @@ const rawFeatureGroups = [
         iconPath: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'
       },
       {
-        id: 'manual',
-        title: '考勤手动填报',
-        description: '请假与加班申请填报，换休票管理及个人记录查询',
-        path: '/attendance/manual',
-        color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        iconPath: 'M8 7V3m8 4V3m-9 8h10M5 21h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z'
-      },
-      {
         id: 'businesstrip',
         title: '公出管理',
         description: '公出申请提交、审批与外出记录统计',

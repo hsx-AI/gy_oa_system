@@ -562,12 +562,14 @@ async def overtime_validate(req: OvertimeValidateRequest):
             continue
         parsed.append((it.id, (it.applicant or "").strip(), start_dt, end_dt))
 
-    # 1) 列表内重复：任意两条重叠则都标为「时间段重复」
+    # 1) 列表内重复：仅同一申请人下，两条时间段重叠则标为「时间段重复」（不同申请人同时间段不视为重复）
     duplicate_ids = set()
     for i in range(len(parsed)):
+        id_i, app_i, s1, e1 = parsed[i]
         for j in range(i + 1, len(parsed)):
-            id_i, _, s1, e1 = parsed[i]
-            id_j, _, s2, e2 = parsed[j]
+            id_j, app_j, s2, e2 = parsed[j]
+            if (app_i or "") != (app_j or ""):
+                continue
             if _intervals_overlap(s1, e1, s2, e2):
                 duplicate_ids.add(id_i)
                 duplicate_ids.add(id_j)

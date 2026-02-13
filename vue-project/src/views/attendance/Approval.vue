@@ -271,16 +271,16 @@
       <div v-if="rejectModalVisible" class="modal-overlay" @click.self="rejectModalVisible = false">
         <div class="modal-card modal-reject">
           <h3 class="modal-title">驳回原因</h3>
-          <p class="modal-hint">请填写驳回原因，申请人将看到该原因。</p>
+          <p class="modal-hint">选填驳回原因，申请人将看到该原因。</p>
           <textarea
             v-model="rejectReasonInput"
             class="modal-textarea"
-            placeholder="请输入驳回原因（必填）"
+            placeholder="请输入驳回原因（选填）"
             rows="4"
           ></textarea>
           <div class="modal-footer">
             <button type="button" class="btn btn-secondary" @click="rejectModalVisible = false">取消</button>
-            <button type="button" class="btn btn-reject" :disabled="!rejectReasonInput.trim()" @click="confirmReject">确认驳回</button>
+            <button type="button" class="btn btn-reject" @click="confirmReject">确认驳回</button>
           </div>
         </div>
       </div>
@@ -514,12 +514,9 @@ function formatAttendanceTimes(rec) {
 }
 
 async function handleApprove(type, item) {
-  const typeName = type === 'leave' ? '请假' : type === 'overtime' ? '加班' : '公出'
-  if (!confirm(`确认通过该${typeName}申请？`)) return
   try {
     const fn = type === 'leave' ? leaveApproveAction : type === 'overtime' ? overtimeApproveAction : businessTripApproveAction
     await fn(item.id, { action: 'approve' })
-    alert('已通过')
     detailVisible.value = false
     refreshList(type)
   } catch (e) {
@@ -548,7 +545,6 @@ function openBatchRejectModal(type) {
 
 async function confirmReject() {
   const reason = (rejectReasonInput.value || '').trim()
-  if (!reason) return
   const target = rejectTarget.value
   if (!target) return
   const { type, batch } = target
@@ -819,22 +815,33 @@ async function batchApprove(type) {
   cursor: not-allowed;
 }
 
-/* 智能校验：蓝色主按钮风格，与批量通过同结构 */
+/* 智能校验：渐变 + 脉动光晕，突出亮点功能 */
 .btn-validate {
-  padding: 6px 14px;
+  padding: 8px 18px;
   font-size: var(--font-size-sm);
-  color: #2563eb;
-  background: #dbeafe;
-  border: 1px solid #3b82f6;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #3b82f6 0%, #6366f1 50%, #8b5cf6 100%);
+  background-size: 200% 200%;
+  border: none;
   border-radius: var(--radius-sm);
   cursor: pointer;
+  box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4);
+  animation: validate-glow 2.5s ease-in-out infinite;
 }
 .btn-validate:hover:not(:disabled) {
-  background: #bfdbfe;
+  background: linear-gradient(135deg, #2563eb 0%, #4f46e5 50%, #7c3aed 100%);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.5);
+  transform: translateY(-1px);
 }
 .btn-validate:disabled {
-  opacity: 0.6;
+  opacity: 0.7;
   cursor: not-allowed;
+  animation: none;
+}
+@keyframes validate-glow {
+  0%, 100% { box-shadow: 0 2px 8px rgba(99, 102, 241, 0.4); }
+  50% { box-shadow: 0 2px 16px rgba(99, 102, 241, 0.65); }
 }
 
 .btn-reject {

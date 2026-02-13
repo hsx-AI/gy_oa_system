@@ -7,7 +7,7 @@ from dateutil.relativedelta import relativedelta
 def compute_expire_date(sj) -> str:
     """
     根据获得时间计算过期日期
-    规则：9月前获得的限当年12月31日；9月1日-12月31日获得的延长3个月
+    规则：换休票有效期均为 1 年（获得日 + 1 年）
     """
     if sj is None:
         return ""
@@ -16,14 +16,10 @@ def compute_expire_date(sj) -> str:
             sj = datetime.strptime(sj[:10], "%Y-%m-%d")
         except (ValueError, TypeError):
             return ""
-    if not hasattr(sj, "month"):
+    if not hasattr(sj, "year"):
         return ""
-    y, m = sj.year, sj.month
-    if m < 9:
-        return f"{y}-12-31"
-    else:
-        exp = sj + relativedelta(months=3)
-        return f"{exp.year}-{exp.month:02d}-{exp.day:02d}"
+    exp = sj + relativedelta(years=1)
+    return f"{exp.year}-{exp.month:02d}-{exp.day:02d}"
 
 
 def parse_expire_for_sort(exp_str: str) -> tuple:

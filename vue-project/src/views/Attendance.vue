@@ -9,6 +9,10 @@
             <p class="page-subtitle">基于打卡数据的智能分析和填报</p>
           </div>
           <div class="header-actions">
+            <div class="manual-entry-wrap">
+              <router-link to="/attendance/manual" class="btn btn-manual-entry">考勤手动填报</router-link>
+              <p class="manual-entry-hint">当智能填报无法满足需要时可进行手动填报。</p>
+            </div>
             <!-- 月份选择器 -->
             <div class="month-selector">
               <label class="month-label">选择月份：</label>
@@ -254,7 +258,7 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, queryAttendance, getBusinessTripList } from '@/api/attendance'
+import { getSuggestions, queryAttendance, getBusinessTripList, getAttendanceDates } from '@/api/attendance'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 
@@ -351,12 +355,40 @@ const handleBusinessTripReturnFill = async () => {
 // 选中的月份（格式：YYYY-MM）
 const selectedMonth = ref('')
 
-// 初始化当前月份
+// 默认当前月份（无考勤数据时使用）
 const initCurrentMonth = () => {
   const now = new Date()
   const year = now.getFullYear()
   const month = String(now.getMonth() + 1).padStart(2, '0')
   selectedMonth.value = `${year}-${month}`
+}
+
+// 选择距离当前最近的有考勤记录的月份
+const initMonthWithLatestData = async () => {
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  if (!userInfo.name || !userInfo.dept) {
+    initCurrentMonth()
+    return
+  }
+  try {
+    const res = await getAttendanceDates({ name: userInfo.name, dept: userInfo.dept })
+    const dates = (res && res.dates) || []
+    if (dates.length === 0) {
+      initCurrentMonth()
+      return
+    }
+    // dates 为 YYYY-MM-DD 字符串，取最后一条所在月份
+    const sorted = [...dates].sort()
+    const lastDate = sorted[sorted.length - 1]
+    const ymd = String(lastDate).trim()
+    if (ymd.length >= 7) {
+      selectedMonth.value = ymd.slice(0, 7) // YYYY-MM
+    } else {
+      initCurrentMonth()
+    }
+  } catch {
+    initCurrentMonth()
+  }
 }
 
 // 智能建议
@@ -398,9 +430,9 @@ const loadSuggestions = async () => {
   }
 }
 
-// 页面加载时初始化月份并获取数据
-onMounted(() => {
-  initCurrentMonth()
+// 页面加载时：优先选中有考勤记录的最近月份，再拉取建议与记录
+onMounted(async () => {
+  await initMonthWithLatestData()
   loadSuggestions()
   loadAttendanceRecords()
 })
@@ -509,6 +541,37 @@ watch(selectedMonth, () => {
   min-width: 150px;
   padding: var(--spacing-sm) var(--spacing-base);
   cursor: pointer;
+}
+
+.btn-manual-entry {
+  display: inline-flex;
+  align-items: center;
+  padding: var(--spacing-sm) var(--spacing-lg);
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-primary);
+  background: transparent;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+  transition: all 0.2s ease;
+}
+.btn-manual-entry:hover {
+  background: var(--color-primary-lightest, #eff6ff);
+  border-color: var(--color-primary);
+}
+
+.manual-entry-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+.manual-entry-hint {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary, #6b7280);
+  line-height: 1.3;
 }
 
 /* 筛选面板 */
