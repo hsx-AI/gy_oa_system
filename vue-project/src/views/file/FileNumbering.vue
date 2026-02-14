@@ -4,7 +4,7 @@
       <div class="header-content">
         <div class="header-info">
           <h1 class="header-title">文件编号管理</h1>
-          <p class="header-subtitle">技术文件、技术管理文件、管理文件的编号规则与记录查询</p>
+          <p class="header-subtitle">技术文件、技术管理文件、管理文件、工艺过程策划表的编号规则与记录查询</p>
         </div>
         <div class="header-actions">
           <button class="btn" @click="goTechCategory">技术分类录入</button>
@@ -36,11 +36,18 @@
       >
         管理文件编号
       </div>
+      <div 
+        class="tab-item" 
+        :class="{ active: currentTab === 'gygch' }"
+        @click="currentTab = 'gygch'"
+      >
+        工艺过程策划表
+      </div>
     </div>
 
     <div class="content mt-xl">
       <!-- 搜索栏（技术文件 / 技术管理 / 管理文件） -->
-      <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage'">
+      <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage' || currentTab === 'gygch'">
         <template v-if="currentTab === 'tech'">
           <input v-model="searchKeyword" type="text" placeholder="搜索编号/文件名/项目..." class="search-input">
           <button type="button" class="btn btn-primary" @click="loadTechList">查询</button>
@@ -51,17 +58,22 @@
           <button type="button" class="btn btn-primary" @click="loadJsglList">查询</button>
           <button type="button" class="btn" @click="searchKeywordJsgl = ''; loadJsglList()">重置</button>
         </template>
-        <template v-else>
+        <template v-else-if="currentTab === 'manage'">
           <input v-model="searchKeywordManage" type="text" placeholder="搜索编号/内容..." class="search-input">
           <button type="button" class="btn btn-primary" @click="loadManageList">查询</button>
           <button type="button" class="btn" @click="searchKeywordManage = ''; loadManageList()">重置</button>
+        </template>
+        <template v-else-if="currentTab === 'gygch'">
+          <input v-model="searchKeywordGygch" type="text" placeholder="搜索编号/内容/工艺部室..." class="search-input">
+          <button type="button" class="btn btn-primary" @click="loadGygchList">查询</button>
+          <button type="button" class="btn" @click="searchKeywordGygch = ''; loadGygchList()">重置</button>
         </template>
       </div>
 
       <!-- 列表 -->
       <div class="card">
         <div class="card-header">
-          <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : '管理文件列表' }}</h3>
+          <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : currentTab === 'manage' ? '管理文件列表' : '工艺过程策划表列表' }}</h3>
         </div>
         <div class="card-body">
           <template v-if="currentTab === 'tech'">
@@ -201,6 +213,51 @@
               共 {{ manageTotal }} 条，当前页 {{ filteredManageList.length }} 条
             </div>
           </template>
+          <template v-else-if="currentTab === 'gygch'">
+            <div v-if="gygchListLoading" class="empty-text">加载中...</div>
+            <div v-else-if="filteredGygchList.length === 0" class="empty-text">暂无工艺过程策划表编号记录</div>
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>编号单位</th>
+                    <th>编制人</th>
+                    <th>年代</th>
+                    <th>工艺部室</th>
+                    <th>编号内容</th>
+                    <th>编号时间</th>
+                    <th>编号代码</th>
+                    <th>PDF 文件</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in filteredGygchList" :key="row.id">
+                    <td>{{ row.bz }}</td>
+                    <td>{{ row.xm }}</td>
+                    <td>{{ row.bhyear }}</td>
+                    <td>{{ row.room_code }}</td>
+                    <td>{{ row.neirong || '—' }}</td>
+                    <td>{{ row.bhtime || '—' }}</td>
+                    <td>
+                      <span class="bianhao-code">{{ row.bianhao_code }}</span>
+                      <button type="button" class="btn-copy-small" @click="copyText(row.bianhao_code)" title="复制">复制</button>
+                    </td>
+                    <td class="file-actions">
+                      <button v-if="!row.has_pdf" type="button" class="btn-copy-small btn-upload" title="请上传终版PDF文件仅支持PDF" @click="triggerUpload('gygch', row.bianhao_code)">请上传</button>
+                      <template v-else>
+                        <button type="button" class="btn-copy-small btn-delete" title="删除后可重新上传" @click="deletePdf('gygch', row.bianhao_code)">删除</button>
+                        <button type="button" class="btn-copy-small btn-preview" @click="openFile('gygch', row.bianhao_code, 0)">预览</button>
+                        <button type="button" class="btn-copy-small btn-download" @click="openFile('gygch', row.bianhao_code, 1)">下载</button>
+                      </template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="gygchTotal > 0" class="table-footer">
+              共 {{ gygchTotal }} 条，当前页 {{ filteredGygchList.length }} 条
+            </div>
+          </template>
           <p v-else class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</p>
         </div>
       </div>
@@ -217,7 +274,7 @@
     <!-- 获取编号弹窗（技术文件：自动填充添加人/科室，分类与项目下拉） -->
     <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
       <div class="modal-content">
-        <h2>获取{{ currentTab === 'tech' ? '技术' : currentTab === 'jsgl' ? '技术管理' : '管理' }}文件编号</h2>
+        <h2>获取{{ currentTab === 'tech' ? '技术' : currentTab === 'jsgl' ? '技术管理' : currentTab === 'manage' ? '管理' : '工艺过程策划表' }}编号</h2>
         <!-- 生成成功：显示编号 + 复制 -->
         <div v-if="generatedBianhao" class="result-block">
           <p class="result-label">编号已生成</p>
@@ -301,7 +358,32 @@
               <input v-model="form.content" type="text" placeholder="选填">
             </div>
           </template>
-          <div v-if="currentTab !== 'manage'" class="form-group">
+          <template v-else-if="currentTab === 'gygch'">
+            <div class="form-group">
+              <label>添加人</label>
+              <input v-model="form.xm" type="text" readonly class="readonly">
+            </div>
+            <div class="form-group">
+              <label>所属科室</label>
+              <input v-model="form.bz" type="text" readonly class="readonly">
+            </div>
+            <div class="form-group">
+              <label>年代</label>
+              <input v-model.number="form.bhyear" type="number" min="2000" max="2100" placeholder="不填默认当年">
+            </div>
+            <div class="form-group">
+              <label>工艺部室（组）</label>
+              <select v-model="form.room_code">
+                <option value="">请选择工艺部室</option>
+                <option v-for="item in gygchRoomCodesList" :key="item.value" :value="item.value">{{ item.label }}（{{ item.value }}）</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>编号内容/说明</label>
+              <input v-model="form.neirong" type="text" placeholder="选填">
+            </div>
+          </template>
+          <div v-if="currentTab !== 'manage' && currentTab !== 'gygch'" class="form-group">
             <label>{{ currentTab === 'jsgl' ? '编制内容' : '文件名称' }}</label>
             <input v-model="form.neirong" type="text" :placeholder="currentTab === 'jsgl' ? '请输入编制内容' : '请输入文件名称'">
           </div>
@@ -318,7 +400,7 @@
 <script setup>
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
+import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, getGygchRoomCodes, addBianhaoGygch, getBianhaoGygchList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
 import { getStatisticsPermission } from '@/api/attendance'
 
 const router = useRouter()
@@ -341,6 +423,11 @@ const manageListLoading = ref(false)
 const manageTotal = ref(0)
 const searchKeywordManage = ref('')
 const glFenleiList = ref([])
+const gygchList = ref([])
+const gygchListLoading = ref(false)
+const gygchTotal = ref(0)
+const searchKeywordGygch = ref('')
+const gygchRoomCodesList = ref([])
 const pdfInputRef = ref(null)
 const uploadTarget = ref({ type: '', code: '' })
 
@@ -351,7 +438,9 @@ const form = ref({
   flbianma: '',
   xmname: '',
   neirong: '',
-  content: ''
+  content: '',
+  bhyear: null,
+  room_code: ''
 })
 
 /** 统计权限 level：3=部长/副部长可看全部专业，1/2=仅本专业 */
@@ -432,6 +521,31 @@ async function loadGlFenlei() {
   }
 }
 
+async function loadGygchRoomCodes() {
+  try {
+    const res = await getGygchRoomCodes()
+    gygchRoomCodesList.value = (res.list || []).filter(Boolean)
+  } catch {
+    gygchRoomCodesList.value = []
+  }
+}
+
+async function loadGygchList() {
+  gygchListLoading.value = true
+  try {
+    const params = { page: 1, page_size: 100 }
+    if ((form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const res = await getBianhaoGygchList(params)
+    gygchList.value = (res.list || []).filter(Boolean)
+    gygchTotal.value = res.total ?? gygchList.value.length
+  } catch {
+    gygchList.value = []
+    gygchTotal.value = 0
+  } finally {
+    gygchListLoading.value = false
+  }
+}
+
 function onFenleiChange() {
   const flname = form.value.fenlei
   const item = bianhaoFlList.value.find((r) => r.flname === flname)
@@ -476,6 +590,19 @@ const filteredManageList = computed(() => {
       (r.xm && r.xm.toLowerCase().includes(kw)) ||
       (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
       (r.content && r.content.toLowerCase().includes(kw))
+  )
+})
+
+const filteredGygchList = computed(() => {
+  const kw = (searchKeywordGygch.value || '').trim().toLowerCase()
+  if (!kw) return gygchList.value
+  return gygchList.value.filter(
+    (r) =>
+      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+      (r.bz && r.bz.toLowerCase().includes(kw)) ||
+      (r.xm && r.xm.toLowerCase().includes(kw)) ||
+      (r.room_code && r.room_code.toLowerCase().includes(kw))
   )
 })
 
@@ -576,6 +703,7 @@ async function onPdfSelected(e) {
     if (type === 'tech') await loadTechList()
     else if (type === 'jsgl') await loadJsglList()
     else if (type === 'manage') await loadManageList()
+    else if (type === 'gygch') await loadGygchList()
   } catch (err) {
     alert(err.response?.data?.detail || err.message || '上传失败')
   }
@@ -594,6 +722,7 @@ async function deletePdf(type, code) {
     if (type === 'tech') await loadTechList()
     else if (type === 'jsgl') await loadJsglList()
     else if (type === 'manage') await loadManageList()
+    else if (type === 'gygch') await loadGygchList()
   } catch (err) {
     alert(err.response?.data?.detail || err.message || '删除失败')
   }
@@ -620,6 +749,10 @@ watch(currentTab, async (tab) => {
   } else if (tab === 'manage') {
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadManageList()
+  } else if (tab === 'gygch') {
+    if (!(form.value.bz || '').trim()) await loadUserDept()
+    await loadGygchRoomCodes()
+    await loadGygchList()
   }
 })
 
@@ -635,6 +768,10 @@ onMounted(async () => {
   } else if (currentTab.value === 'manage') {
     await loadUserDept()
     await loadManageList()
+  } else if (currentTab.value === 'gygch') {
+    await loadUserDept()
+    await loadGygchRoomCodes()
+    await loadGygchList()
   }
 })
 
@@ -656,6 +793,12 @@ watch(showModal, async (visible) => {
   } else if (currentTab.value === 'manage') {
     await loadUserDept()
     form.value.fenlei = ''
+  } else if (currentTab.value === 'gygch') {
+    await loadUserDept()
+    await loadGygchRoomCodes()
+    form.value.bhyear = new Date().getFullYear()
+    form.value.room_code = ''
+    form.value.neirong = ''
   }
 })
 
@@ -747,6 +890,33 @@ async function submitNumbering() {
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
         await loadManageList()
+      } else {
+        alert(res.message || '生成失败')
+      }
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message || '生成失败')
+    } finally {
+      submitLoading.value = false
+    }
+    return
+  }
+  if (currentTab.value === 'gygch') {
+    if (!f.room_code) {
+      alert('请选择工艺部室（组）')
+      return
+    }
+    submitLoading.value = true
+    try {
+      const res = await addBianhaoGygch({
+        xm: f.xm,
+        bz: f.bz,
+        bhyear: f.bhyear || undefined,
+        room_code: f.room_code,
+        neirong: (f.neirong || '').trim()
+      })
+      if (res.success) {
+        generatedBianhao.value = res.bianhao || ''
+        await loadGygchList()
       } else {
         alert(res.message || '生成失败')
       }

@@ -10,18 +10,20 @@ from pydantic import BaseModel
 from datetime import datetime
 from database import db
 import logging
+import uuid
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/file-numbering", tags=["文件编号"])
 
-# data 下三个子文件夹存放上传的 PDF：技术文件、技术管理、管理文件
+# data 下子文件夹存放上传的 PDF：技术文件、技术管理、管理文件、工艺过程策划表
 _BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _DATA_DIR = os.path.join(_BASE_DIR, "data")
 FILE_DIRS = {
     "tech": os.path.join(_DATA_DIR, "tech_files"),
     "jsgl": os.path.join(_DATA_DIR, "jsgl_files"),
     "manage": os.path.join(_DATA_DIR, "manage_files"),
+    "gygch": os.path.join(_DATA_DIR, "gygch_files"),
 }
 
 
@@ -450,6 +452,102 @@ async def get_bianhaogl_list(
         return {"success": True, "list": [_with_has_pdf(r, "manage") for r in (rows or [])], "total": total, "page": page, "pageSize": page_size}
     except Exception as e:
         logger.error(f"查询失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 工艺过程策划表编号 bianhao_gygch ====================
+# 编号规则：年代(4位) + 工艺部室代码(XXCH) + 顺序号(3位)，如 2015SFCH001（水发室2015年第一份）
+
+ROOM_CODES_GYGCH = [
+    {"value": "SFCH", "label": "水发室"},
+    # 可在此扩展其他工艺部室（组）代码
+]
+
+
+@router.get("/gygch/room-codes")
+async def get_gygch_room_codes():
+    """工艺过程策划表 - 工艺部室（组）代码选项"""
+    return {"success": True, "list": ROOM_CODES_GYGCH}
+
+
+class BianhaoGygchRequest(BaseModel):
+    xm: str
+    bz: str
+    bhyear: Optional[int] = None  # 年代，不传则当年
+    room_code: str  # 如 SFCH
+    neirong: str = ""
+
+
+@router.post("/gygch/add")
+async def add_bianhao_gygch(req: BianhaoGygchRequest):
+    """工艺过程策划表编号 - 写入 bianhao_gygch"""
+    try:
+        if (req.room_code or "").strip() not in [r["value"] for r in ROOM_CODES_GYGCH]:
+            raise HTTPException(status_code=400, detail="无效的工艺部室代码")
+        bhyear = req.bhyear or datetime.now().year
+        room_code = (req.room_code or "").strip()
+        max_rows = db.execute_query(
+            "SELECT seq FROM bianhao_gygch WHERE bhyear=%s AND room_code=%s ORDER BY seq DESC LIMIT 1",
+            (bhyear, room_code)
+        )
+        next_seq = 1 if not max_rows else (max_rows[0].get("seq") or 0) + 1
+        bianhao_code = f"{bhyear}{room_code}{str(next_seq).zfill(3)}"
+        bhtime = datetime.now().strftime("%Y-%m-%d")
+        rid = uuid.uuid4().hex
+        sql = """INSERT INTO bianhao_gygch (id, bz, xm, bhyear, room_code, seq, bianhao_code, neirong, bhtime)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+        db.execute_update(sql, (rid, req.bz, req.xm, bhyear, room_code, next_seq, bianhao_code, (req.neirong or "").strip(), bhtime))
+        return {"success": True, "message": "编号成功", "bianhao": bianhao_code}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"工艺过程策划表编号失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _fmt_gygch(r):
+    return {
+        "id": _row_id(r),
+        "bz": r.get("bz"),
+        "xm": r.get("xm"),
+        "bhyear": r.get("bhyear"),
+        "room_code": r.get("room_code"),
+        "seq": r.get("seq"),
+        "neirong": _str(r.get("neirong")),
+        "bhtime": _str(r.get("bhtime")),
+        "bianhao_code": _str(r.get("bianhao_code")) or "-",
+    }
+
+
+@router.get("/gygch/list")
+async def get_bianhao_gygch_list(
+    bz: Optional[str] = Query(None, description="所属科室"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100)
+):
+    """工艺过程策划表编号列表，按编号时间倒序"""
+    try:
+        where, params = [], ()
+        if (bz or "").strip():
+            where.append("bz=%s")
+            params = (bz.strip(),)
+        where_sql = " AND ".join(where) if where else "1=1"
+        cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao_gygch WHERE {where_sql}", params)
+        total = (cnt[0]["n"] or 0) if cnt else 0
+        offset = (page - 1) * page_size
+        rows = db.execute_query(
+            f"SELECT * FROM bianhao_gygch WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s",
+            (*params, page_size, offset)
+        )
+        def _with_has_pdf(r):
+            d = dict(_fmt_gygch(r))
+            d["id"] = _row_id(r)
+            code = d.get("bianhao_code") or ""
+            d["has_pdf"] = bool(code) and os.path.isfile(_file_path_by_code("gygch", code))
+            return d
+        return {"success": True, "list": [_with_has_pdf(r) for r in (rows or [])], "total": total, "page": page, "pageSize": page_size}
+    except Exception as e:
+        logger.error(f"查询工艺过程策划表列表失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

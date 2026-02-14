@@ -281,6 +281,14 @@ const rawFeatureGroups = [
         iconPath: 'M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z'
       },
       {
+        id: 'policy-query',
+        title: '部门制度查询',
+        description: '制度上传、制度查询、关键词搜索，支持 PDF、Word、Excel',
+        path: '/file/policy-query',
+        color: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+        iconPath: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
+      },
+      {
         id: 'db-manager',
         title: '数据库表管理',
         description: '系统管理员对数据库表进行增删改查',

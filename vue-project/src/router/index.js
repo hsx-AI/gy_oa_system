@@ -117,6 +117,12 @@ const routes = [
     component: () => import('../views/file/WorkNoManage.vue')
   },
   {
+    path: '/file/policy-query',
+    name: 'PolicyQuery',
+    component: () => import('../views/file/PolicyQuery.vue'),
+    meta: { title: '部门制度查询' }
+  },
+  {
     path: '/profile',
     name: 'EmployeeProfile',
     component: () => import('../views/EmployeeProfile.vue')

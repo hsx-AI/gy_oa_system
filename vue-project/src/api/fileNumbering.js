@@ -62,7 +62,22 @@ export function getBianhaoglList(params) {
   return request({ url: `${P}/bianhaogl/list`, method: 'get', params })
 }
 
-/** 上传编号对应 PDF（仅支持 PDF），按编号代码命名 type: tech | jsgl | manage, code: 编号代码 */
+/** 工艺过程策划表 - 工艺部室代码选项 */
+export function getGygchRoomCodes() {
+  return request({ url: `${P}/gygch/room-codes`, method: 'get' })
+}
+
+/** 工艺过程策划表编号-添加 */
+export function addBianhaoGygch(data) {
+  return request({ url: `${P}/gygch/add`, method: 'post', data })
+}
+
+/** 工艺过程策划表编号-列表 */
+export function getBianhaoGygchList(params) {
+  return request({ url: `${P}/gygch/list`, method: 'get', params })
+}
+
+/** 上传编号对应 PDF（仅支持 PDF），按编号代码命名 type: tech | jsgl | manage | gygch, code: 编号代码 */
 export function uploadNumberingPdf(type, code, file) {
   const form = new FormData()
   form.append('file', file)
