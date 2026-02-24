@@ -299,14 +299,101 @@ def _parse_llm_json_content(content: str) -> dict:
     """去掉大模型返回中的 markdown 代码块包裹并解析 JSON。"""
     if not content:
         raise json.JSONDecodeError("empty", "", 0)
+    
     text = content.strip()
+    
+    # 0. 首先去除<think>标签（Qwen模型特有）
+    if '<think>' in text.lower() and '</think>' in text.lower():
+        # 提取<think>标签之后的内容
+        think_end = text.lower().find('</think>') + 8  # </think>长度
+        text = text[think_end:].strip()
+    
+    # 1. 尝试多种方法提取JSON
+    
+    # 方法1: 直接解析
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        pass
+    
+    # 方法2: 查找最长的有效JSON对象
+    # 找到所有{和}的位置
+    stack = []
+    json_start = -1
+    json_end = -1
+    max_length = 0
+    best_start = -1
+    best_end = -1
+    
+    for i, char in enumerate(text):
+        if char == '{':
+            if not stack:
+                json_start = i
+            stack.append(i)
+        elif char == '}':
+            if stack:
+                start = stack.pop()
+                if not stack:  # 找到完整的JSON对象
+                    json_end = i
+                    length = json_end - json_start + 1
+                    if length > max_length:
+                        max_length = length
+                        best_start = json_start
+                        best_end = json_end
+    
+    if best_start != -1 and best_end != -1:
+        json_str = text[best_start:best_end+1]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+    
+    # 方法3: 尝试去除markdown代码块
     if text.startswith("```"):
-        text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
+        lines = text.split('\n')
+        if len(lines) > 1:
+            text = '\n'.join(lines[1:])
         if text.endswith("```"):
-            text = text.rsplit("```", 1)[0].strip()
+            text = text[:-3].strip()
         else:
-            text = text.replace("```json", "").replace("```", "").strip()
-    return json.loads(text)
+            text = text.replace("```", "").strip()
+    
+    # 方法4: 简单查找第一个{和最后一个}
+    start_idx = text.find('{')
+    end_idx = text.rfind('}')
+    
+    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
+        json_str = text[start_idx:end_idx+1]
+        try:
+            return json.loads(json_str)
+        except json.JSONDecodeError:
+            pass
+    
+    # 方法5: 尝试清理常见问题
+    # 移除可能的中文标点后的内容
+    import re
+    # 查找JSON模式
+    json_pattern = r'\{[^{}]*\{[^{}]*\}[^{}]*\}|\{[^{}]*\}'
+    matches = re.findall(json_pattern, text, re.DOTALL)
+    
+    for match in matches:
+        try:
+            # 尝试清理匹配的文本
+            clean_match = match.strip()
+            # 移除开头和结尾的非JSON字符
+            while clean_match and not clean_match.startswith('{'):
+                clean_match = clean_match[1:]
+            while clean_match and not clean_match.endswith('}'):
+                clean_match = clean_match[:-1]
+            
+            if clean_match:
+                return json.loads(clean_match)
+        except json.JSONDecodeError:
+            continue
+    
+    # 所有方法都失败
+    logger.warning(f"JSON解析失败，原始内容前500字符: {content[:500]}")
+    raise json.JSONDecodeError("无法解析JSON", content, 0)
 
 
 def _infer_festival_from_date(date_str: str) -> str:
@@ -391,7 +478,8 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
         "2. 文中写“X 月 Y 日（周六/周日）上班”视为“上班”；\n"
         "3. 如果一句话提到了利用某个节日假期调休，例如“利用冰雪节假日调休 1 天”，"
         "   只要有明确日期，也按放假或调休上班标记到对应日期；\n"
-        "4. 节日名称请尽量归纳为：元旦、春节、清明、劳动节、端午节、中秋节、国庆节、高温防暑休假 等简短中文。"
+        "4. 节日名称请尽量归纳为：元旦、春节、清明、劳动节、端午节、中秋节、国庆节、高温防暑休假 等简短中文。\n"
+        "5. **重要**：不要输出任何思考过程或解释，只返回要求的JSON格式。不要使用<think>标签或其他标记。"
     )
 
     user_prompt = (
@@ -432,8 +520,14 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
                 stream=False,
             )
             content = (completion.choices[0].message.content or "").strip()
+            # 添加调试日志
+            logger.debug(f"Ollama原始响应内容 (前500字符): {content[:500] if content else '空响应'}")
             data = _parse_llm_json_content(content)
             logger.info("假期解析使用本地大模型成功: %s", config["base_url"])
+        except json.JSONDecodeError as e:
+            logger.warning(f"JSON解析失败，原始内容: {content[:500] if content else '空响应'}, 错误: {e}")
+            content = ""
+            data = None
         except Exception as e:
             logger.warning("本地大模型调用失败，尝试公网兜底: %s", e)
             content = ""
@@ -513,4 +607,3 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
     except Exception as e:
         logger.exception("解析或保存假期数据失败")
         raise HTTPException(status_code=500, detail=f"解析大模型返回的假期数据失败: {str(e)}")
-
