@@ -372,13 +372,6 @@
               <input v-model.number="form.bhyear" type="number" min="2000" max="2100" placeholder="不填默认当年">
             </div>
             <div class="form-group">
-              <label>工艺部室（组）</label>
-              <select v-model="form.room_code">
-                <option value="">请选择工艺部室</option>
-                <option v-for="item in gygchRoomCodesList" :key="item.value" :value="item.value">{{ item.label }}（{{ item.value }}）</option>
-              </select>
-            </div>
-            <div class="form-group">
               <label>编号内容/说明</label>
               <input v-model="form.neirong" type="text" placeholder="选填">
             </div>
@@ -400,7 +393,7 @@
 <script setup>
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, getGygchRoomCodes, addBianhaoGygch, getBianhaoGygchList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
+import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
 import { getStatisticsPermission } from '@/api/attendance'
 
 const router = useRouter()
@@ -427,7 +420,6 @@ const gygchList = ref([])
 const gygchListLoading = ref(false)
 const gygchTotal = ref(0)
 const searchKeywordGygch = ref('')
-const gygchRoomCodesList = ref([])
 const pdfInputRef = ref(null)
 const uploadTarget = ref({ type: '', code: '' })
 
@@ -439,8 +431,7 @@ const form = ref({
   xmname: '',
   neirong: '',
   content: '',
-  bhyear: null,
-  room_code: ''
+  bhyear: null
 })
 
 /** 统计权限 level：3=部长/副部长可看全部专业，1/2=仅本专业 */
@@ -521,14 +512,6 @@ async function loadGlFenlei() {
   }
 }
 
-async function loadGygchRoomCodes() {
-  try {
-    const res = await getGygchRoomCodes()
-    gygchRoomCodesList.value = (res.list || []).filter(Boolean)
-  } catch {
-    gygchRoomCodesList.value = []
-  }
-}
 
 async function loadGygchList() {
   gygchListLoading.value = true
@@ -751,7 +734,6 @@ watch(currentTab, async (tab) => {
     await loadManageList()
   } else if (tab === 'gygch') {
     if (!(form.value.bz || '').trim()) await loadUserDept()
-    await loadGygchRoomCodes()
     await loadGygchList()
   }
 })
@@ -770,7 +752,6 @@ onMounted(async () => {
     await loadManageList()
   } else if (currentTab.value === 'gygch') {
     await loadUserDept()
-    await loadGygchRoomCodes()
     await loadGygchList()
   }
 })
@@ -795,9 +776,7 @@ watch(showModal, async (visible) => {
     form.value.fenlei = ''
   } else if (currentTab.value === 'gygch') {
     await loadUserDept()
-    await loadGygchRoomCodes()
     form.value.bhyear = new Date().getFullYear()
-    form.value.room_code = ''
     form.value.neirong = ''
   }
 })
@@ -901,8 +880,8 @@ async function submitNumbering() {
     return
   }
   if (currentTab.value === 'gygch') {
-    if (!f.room_code) {
-      alert('请选择工艺部室（组）')
+    if (!(f.bz || '').trim()) {
+      alert('科室信息为空，请重新登录')
       return
     }
     submitLoading.value = true
@@ -911,7 +890,6 @@ async function submitNumbering() {
         xm: f.xm,
         bz: f.bz,
         bhyear: f.bhyear || undefined,
-        room_code: f.room_code,
         neirong: (f.neirong || '').trim()
       })
       if (res.success) {

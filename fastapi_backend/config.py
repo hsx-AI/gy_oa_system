@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     
     # 数据库配置
     MYSQL_HOST: str = "localhost"
-    MYSQL_PORT: int = 13306
+    MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "zzqzzq0406"
-    MYSQL_DB: str = "gy_oa_system"
+    MYSQL_PASSWORD: str = "123456"
+    MYSQL_DB: str = "GY_OA_system"
     
     # CORS配置
     CORS_ORIGINS: list = ["*"]
@@ -38,7 +38,13 @@ class Settings(BaseSettings):
 
     # Embedding 模型路径，用于制度 AI 深度搜索。留空则使用 BAAI/bge-small-zh-v1.5（首次自动下载）
     # 若已手动下载模型，可设置为本地路径，如: models/bge-small-zh-v1.5
-    EMBEDDING_MODEL_PATH: str = "/home/zns/model/bge-small-zh-v1.5"
+    #
+    # 【无公网服务器迁移】默认下载缓存位置（未设置 EMBEDDING_MODEL_PATH 且未设置 HF_HOME 时）：
+    #   Windows: C:\Users\<用户名>\.cache\huggingface\hub\
+    #   Linux:   ~/.cache/huggingface/hub\
+    # 模型目录名类似: models--BAAI--bge-small-zh-v1.5。迁移时将有网机器上整个 .cache/huggingface
+    # 拷到服务器相同路径，或下载到某目录后在此填写该目录路径（如 /data/models/bge-small-zh-v1.5）。
+    EMBEDDING_MODEL_PATH: str = ""
 
     # 向量切片参数：每块字符数、块间重叠字符数。切片越小，匹配越精准，匹配切片越易展示
     VECTOR_CHUNK_SIZE: int = 100

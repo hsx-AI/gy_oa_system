@@ -40,18 +40,48 @@ def _get_dakaman() -> Optional[str]:
     return None
 
 
+# 本地大模型默认地址与模型名（当 webconfig 未配置时使用）
+DEFAULT_LLM_BASE_URL = "http://10.42.60.250:11434/v1"
+DEFAULT_LLM_MODEL = "qwen3:8b"
+
+
 def _get_llm_api_key() -> Optional[str]:
-    """
-    从 webconfig 表读取大模型 API Key。
-    建议在 webconfig 表增加一列 deepseek_api_key，并在 id=1 这行配置具体的 Key。
-    """
+    """从 webconfig 表读取公网大模型 API Key（DeepSeek 等），用于本地不可用时的兜底。"""
     try:
         rows = db.execute_query("SELECT deepseek_api_key FROM webconfig WHERE id = %s LIMIT 1", ("1",))
         if rows and rows[0].get("deepseek_api_key") is not None:
             return (rows[0]["deepseek_api_key"] or "").strip() or None
     except Exception as e:
         logger.debug(f"读取 webconfig.deepseek_api_key 失败: {e}")
-    return None
+    return os.getenv("DEEPSEEK_API_KEY") or None
+
+
+def _get_llm_config() -> dict:
+    """
+    从 webconfig 表读取大模型配置：本地 URL、模型名、公网 API Key。
+    返回: {"base_url": str, "model": str, "api_key": str|None}
+    """
+    base_url = DEFAULT_LLM_BASE_URL
+    model = DEFAULT_LLM_MODEL
+    api_key = None
+    try:
+        rows = db.execute_query(
+            "SELECT llm_base_url, llm_model, deepseek_api_key FROM webconfig WHERE id = %s LIMIT 1",
+            ("1",),
+        )
+        if rows:
+            r = rows[0]
+            if r.get("llm_base_url") is not None and (r.get("llm_base_url") or "").strip():
+                base_url = (r["llm_base_url"] or "").strip()
+            if r.get("llm_model") is not None and (r.get("llm_model") or "").strip():
+                model = (r["llm_model"] or "").strip()
+            if r.get("deepseek_api_key") is not None and (r.get("deepseek_api_key") or "").strip():
+                api_key = (r["deepseek_api_key"] or "").strip()
+    except Exception as e:
+        logger.debug(f"读取 webconfig 大模型配置失败（可能无 llm_base_url/llm_model 列）: {e}")
+    if not api_key:
+        api_key = os.getenv("DEEPSEEK_API_KEY") or None
+    return {"base_url": base_url, "model": model, "api_key": api_key}
 
 
 @router.get("", response_model=HolidayResponse)
@@ -265,6 +295,20 @@ async def upload_holiday_file(
         raise HTTPException(status_code=500, detail="上传假期文件失败，请检查文件格式")
 
 
+def _parse_llm_json_content(content: str) -> dict:
+    """去掉大模型返回中的 markdown 代码块包裹并解析 JSON。"""
+    if not content:
+        raise json.JSONDecodeError("empty", "", 0)
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text.rsplit("```", 1)[0].strip()
+        else:
+            text = text.replace("```json", "").replace("```", "").strip()
+    return json.loads(text)
+
+
 def _infer_festival_from_date(date_str: str) -> str:
     """
     根据日期推断节日名称（仅处理固定日期的节日），用于大模型未返回 festival 时的兜底。
@@ -303,7 +347,7 @@ async def parse_holiday_text(req: HolidayParseRequest):
     """
     使用大模型解析一段放假通知文本，自动生成并保存某年的假期与调休设置。
     仅打卡管理员可操作。
-    需要在环境变量中配置 DEEPSEEK_API_KEY。
+    优先使用 webconfig 中的本地大模型（llm_base_url、llm_model），不可用时再使用公网 API（deepseek_api_key 或 DEEPSEEK_API_KEY）。
     """
     try:
         return await _parse_holiday_text_impl(req)
@@ -320,14 +364,6 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
     if not dakaman or (current_user or "").strip() != dakaman:
         raise HTTPException(status_code=403, detail="仅打卡管理员可使用大模型解析假期")
 
-    # 优先从 webconfig 表读取 API Key，便于在页面外部配置
-    api_key = _get_llm_api_key()
-    # 兼容：若表中未配置，则退回环境变量（可选）
-    if not api_key:
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-    if not api_key:
-        raise HTTPException(status_code=500, detail="未在 webconfig.deepseek_api_key 或 DEEPSEEK_API_KEY 环境变量中配置大模型 API Key")
-
     try:
         from openai import OpenAI
     except ImportError:
@@ -339,10 +375,12 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
     except ValueError:
         raise HTTPException(status_code=400, detail="年份格式不正确")
 
-    client = OpenAI(
-        api_key=api_key,
-        base_url="https://api.deepseek.com"
-    )
+    config = _get_llm_config()
+    if not config.get("base_url") and not config.get("api_key"):
+        raise HTTPException(
+            status_code=500,
+            detail="未配置大模型：请在 webconfig 中设置 llm_base_url/llm_model（本地）或 deepseek_api_key（公网兜底）",
+        )
 
     system_prompt = (
         "你是一个假期与调休解析助手。用户会给你一整段中文放假通知，"
@@ -376,31 +414,62 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
     )
 
     content = ""
-    try:
-        completion = client.chat.completions.create(
-            model="deepseek-chat",
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            temperature=0,
-            stream=False,
+    data = None
+    # 优先使用本地大模型
+    if config.get("base_url") and config.get("model"):
+        try:
+            local_client = OpenAI(
+                base_url=config["base_url"],
+                api_key=config.get("api_key") or "ollama",
+            )
+            completion = local_client.chat.completions.create(
+                model=config["model"],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                stream=False,
+            )
+            content = (completion.choices[0].message.content or "").strip()
+            data = _parse_llm_json_content(content)
+            logger.info("假期解析使用本地大模型成功: %s", config["base_url"])
+        except Exception as e:
+            logger.warning("本地大模型调用失败，尝试公网兜底: %s", e)
+            content = ""
+            data = None
+
+    # 本地不可用时使用公网 API（DeepSeek）
+    if data is None and config.get("api_key"):
+        try:
+            deepseek_client = OpenAI(
+                api_key=config["api_key"],
+                base_url="https://api.deepseek.com",
+            )
+            completion = deepseek_client.chat.completions.create(
+                model="deepseek-chat",
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                stream=False,
+            )
+            content = (completion.choices[0].message.content or "").strip()
+            data = _parse_llm_json_content(content)
+            logger.info("假期解析使用公网 DeepSeek 兜底成功")
+        except Exception as e:
+            logger.error("公网大模型兜底也失败: %s", e)
+            raise HTTPException(
+                status_code=500,
+                detail="本地大模型不可用且公网 API 调用失败，请检查网络与 webconfig.deepseek_api_key 配置",
+            )
+
+    if data is None:
+        raise HTTPException(
+            status_code=500,
+            detail="本地大模型不可用且未配置公网 API Key（webconfig.deepseek_api_key 或 DEEPSEEK_API_KEY），无法解析假期",
         )
-        content = (completion.choices[0].message.content or "").strip()
-        # 去掉可能的 markdown 代码块包裹
-        if content.startswith("```"):
-            content = content.split("\n", 1)[-1] if "\n" in content else content[3:]
-            if content.endswith("```"):
-                content = content.rsplit("```", 1)[0].strip()
-            else:
-                content = content.replace("```json", "").replace("```", "").strip()
-        data = json.loads(content)
-    except json.JSONDecodeError as e:
-        logger.error(f"大模型返回非 JSON 或格式错误: {e}, content=%s", content[:500] if content else "")
-        raise HTTPException(status_code=500, detail="大模型返回格式有误，请重试或稍后重试")
-    except Exception as e:
-        logger.error(f"调用大模型解析假期失败: {e}")
-        raise HTTPException(status_code=500, detail="调用大模型解析假期失败，请检查服务器网络与 DEEPSEEK_API_KEY 配置")
 
     try:
         days = data.get("days") or []

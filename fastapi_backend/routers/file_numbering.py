@@ -456,36 +456,48 @@ async def get_bianhaogl_list(
 
 
 # ==================== 工艺过程策划表编号 bianhao_gygch ====================
-# 编号规则：年代(4位) + 工艺部室代码(XXCH) + 顺序号(3位)，如 2015SFCH001（水发室2015年第一份）
-
-ROOM_CODES_GYGCH = [
-    {"value": "SFCH", "label": "水发室"},
-    # 可在此扩展其他工艺部室（组）代码
-]
+# 编号规则：年代(4位) + 科室代码(前两字拼音首字母+CH) + 顺序号(3位)
+# 如 2015SFCH001（水发室2015年第一份）、2026ZHCH002（综合技术室2026年第二份）
+# room_code 由用户所在科室(yggl.lsys)自动推导，无需手动选择
 
 
-@router.get("/gygch/room-codes")
-async def get_gygch_room_codes():
-    """工艺过程策划表 - 工艺部室（组）代码选项"""
-    return {"success": True, "list": ROOM_CODES_GYGCH}
+def _lsys_to_room_code(lsys: str) -> str:
+    """将科室名称转为编号代码：取前两个汉字的拼音首字母大写 + CH。
+    如 水发室 -> SFCH, 综合技术室 -> ZHCH"""
+    lsys = (lsys or "").strip()
+    if not lsys:
+        raise HTTPException(status_code=400, detail="科室名称为空，无法生成编号代码")
+    try:
+        from pypinyin import pinyin, Style
+        chars = [c for c in lsys if '\u4e00' <= c <= '\u9fff'][:2]
+        if len(chars) < 2:
+            raise HTTPException(status_code=400, detail=f"科室「{lsys}」名称过短，需至少两个汉字")
+        initials = pinyin(chars, style=Style.FIRST_LETTER)
+        code = "".join(i[0].upper() for i in initials) + "CH"
+        return code
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"科室名称转编号代码失败: {e}")
+        raise HTTPException(status_code=400, detail=f"科室「{lsys}」拼音转换失败: {e}")
 
 
 class BianhaoGygchRequest(BaseModel):
     xm: str
     bz: str
-    bhyear: Optional[int] = None  # 年代，不传则当年
-    room_code: str  # 如 SFCH
+    bhyear: Optional[int] = None
     neirong: str = ""
 
 
 @router.post("/gygch/add")
 async def add_bianhao_gygch(req: BianhaoGygchRequest):
-    """工艺过程策划表编号 - 写入 bianhao_gygch"""
+    """工艺过程策划表编号 - room_code 由 bz(科室) 自动推导"""
     try:
-        if (req.room_code or "").strip() not in [r["value"] for r in ROOM_CODES_GYGCH]:
-            raise HTTPException(status_code=400, detail="无效的工艺部室代码")
+        bz = (req.bz or "").strip()
+        if not bz:
+            raise HTTPException(status_code=400, detail="科室不能为空")
+        room_code = _lsys_to_room_code(bz)
         bhyear = req.bhyear or datetime.now().year
-        room_code = (req.room_code or "").strip()
         max_rows = db.execute_query(
             "SELECT seq FROM bianhao_gygch WHERE bhyear=%s AND room_code=%s ORDER BY seq DESC LIMIT 1",
             (bhyear, room_code)
@@ -496,8 +508,8 @@ async def add_bianhao_gygch(req: BianhaoGygchRequest):
         rid = uuid.uuid4().hex
         sql = """INSERT INTO bianhao_gygch (id, bz, xm, bhyear, room_code, seq, bianhao_code, neirong, bhtime)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
-        db.execute_update(sql, (rid, req.bz, req.xm, bhyear, room_code, next_seq, bianhao_code, (req.neirong or "").strip(), bhtime))
-        return {"success": True, "message": "编号成功", "bianhao": bianhao_code}
+        db.execute_update(sql, (rid, bz, req.xm, bhyear, room_code, next_seq, bianhao_code, (req.neirong or "").strip(), bhtime))
+        return {"success": True, "message": "编号成功", "bianhao": bianhao_code, "room_code": room_code}
     except HTTPException:
         raise
     except Exception as e:
