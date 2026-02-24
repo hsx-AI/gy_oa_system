@@ -37,7 +37,10 @@ def _get_model():
         from sentence_transformers import SentenceTransformer
         path = _get_model_path()
         logger.info(f"加载向量模型: {path}")
-        _model = SentenceTransformer(path)
+        # 强制使用CPU，避免CUDA兼容性问题
+        # 设置环境变量确保完全使用CPU
+        os.environ['CUDA_VISIBLE_DEVICES'] = ''
+        _model = SentenceTransformer(path, device='cpu')
         return _model
     except Exception as e:
         logger.error(f"加载向量模型失败: {e}")

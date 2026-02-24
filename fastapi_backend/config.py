@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     
     # 数据库配置
     MYSQL_HOST: str = "localhost"
-    MYSQL_PORT: int = 3306
+    MYSQL_PORT: int = 13306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "123456"
-    MYSQL_DB: str = "GY_oa_system"
+    MYSQL_PASSWORD: str = "zzqzzq0406"
+    MYSQL_DB: str = "gy_oa_system"
     
     # CORS配置
     CORS_ORIGINS: list = ["*"]
@@ -38,7 +38,7 @@ class Settings(BaseSettings):
 
     # Embedding 模型路径，用于制度 AI 深度搜索。留空则使用 BAAI/bge-small-zh-v1.5（首次自动下载）
     # 若已手动下载模型，可设置为本地路径，如: models/bge-small-zh-v1.5
-    EMBEDDING_MODEL_PATH: str = ""
+    EMBEDDING_MODEL_PATH: str = "/home/zns/model/bge-small-zh-v1.5"
 
     # 向量切片参数：每块字符数、块间重叠字符数。切片越小，匹配越精准，匹配切片越易展示
     VECTOR_CHUNK_SIZE: int = 100
