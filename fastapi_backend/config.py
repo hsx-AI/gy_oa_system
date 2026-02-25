@@ -16,10 +16,10 @@ class Settings(BaseSettings):
     
     # 数据库配置
     MYSQL_HOST: str = "localhost"
-    MYSQL_PORT: int = 13306
+    MYSQL_PORT: int = 3306
     MYSQL_USER: str = "root"
-    MYSQL_PASSWORD: str = "zzqzzq0406"
-    MYSQL_DB: str = "gy_oa_system"
+    MYSQL_PASSWORD: str = "123456"
+    MYSQL_DB: str = "GY_OA_system"
     
     # CORS配置
     CORS_ORIGINS: list = ["*"]

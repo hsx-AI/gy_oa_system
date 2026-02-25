@@ -81,15 +81,32 @@ class MySQLDatabase:
                     pass
         self._sem.release()
 
+    def _ping_or_discard(self, conn: pymysql.Connection) -> Optional[pymysql.Connection]:
+        """检测池中取出的连接是否仍然存活，断开则丢弃并返回 None"""
+        try:
+            conn.ping(reconnect=True)
+            return conn
+        except Exception:
+            try:
+                conn.close()
+            except Exception:
+                pass
+            return None
+
     def get_connection(self) -> Optional[Any]:
         """从池中获取连接或新建（受 POOL_SIZE 限制，避免 WinError 10048）"""
         self._sem.acquire()
         try:
+            conn = None
             with self._lock:
-                if self._pool:
-                    conn = self._pool.pop()
-                else:
-                    conn = self._create_conn()
+                while self._pool:
+                    candidate = self._pool.pop()
+                    alive = self._ping_or_discard(candidate)
+                    if alive is not None:
+                        conn = alive
+                        break
+            if conn is None:
+                conn = self._create_conn()
             if conn is None:
                 self._sem.release()
                 return None
