@@ -256,7 +256,7 @@
           <h3 class="chart-subtitle">人均</h3>
           <div class="bar-chart-wrap">
             <div class="bar-chart-total bar-chart-single">
-              <div v-for="row in deptComparisonSorted" :key="'pc-' + row.lsys" class="bar-group">
+              <div v-for="row in deptComparisonSortedPc" :key="'pc-' + row.lsys" class="bar-group">
                 <div class="bar-col">
                   <div
                     class="bar bar-has-value"
@@ -422,6 +422,11 @@ const deptComparisonSorted = computed(() => {
   const list = deptComparison.value?.list || []
   if (!list.length) return []
   return [...list].sort((a, b) => (compareChartTotalValue(b) - compareChartTotalValue(a)))
+})
+const deptComparisonSortedPc = computed(() => {
+  const list = deptComparison.value?.list || []
+  if (!list.length) return []
+  return [...list].sort((a, b) => (compareChartPerCapitaValue(b) - compareChartPerCapitaValue(a)))
 })
 const compareChartMaxTotal = computed(() => {
   if (compareChartType.value === 'overtime') return maxCompareOvertime.value
