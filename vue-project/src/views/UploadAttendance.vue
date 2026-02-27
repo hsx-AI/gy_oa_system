@@ -287,19 +287,13 @@ const handleUpload = async () => {
   uploadProgress.value = 0
   uploadError.value = ''
   
-  // 模拟进度（因为实际上传可能没有进度事件）
-  const progressInterval = setInterval(() => {
-    if (uploadProgress.value < 90) {
-      uploadProgress.value += 10
-    }
-  }, 200)
-  
   try {
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const uploader = (userInfo.name || userInfo.userName || '').trim()
-    const response = await uploadAttendanceExcel(selectedFile.value, uploader)
+    const response = await uploadAttendanceExcel(selectedFile.value, uploader, {
+      onProgress(pct) { uploadProgress.value = Math.min(pct, 99) }
+    })
     
-    clearInterval(progressInterval)
     uploadProgress.value = 100
     uploadStatus.value = 'success'
     
@@ -320,7 +314,6 @@ const handleUpload = async () => {
     alert(`上传成功！\n${response.message}\n成功: ${response.success_count} 条\n失败: ${response.fail_count} 条`)
     
   } catch (error) {
-    clearInterval(progressInterval)
     uploadStatus.value = 'error'
     uploadProgress.value = 0
     const msg = error.response?.data?.detail || error.message || '上传失败，请检查文件格式'

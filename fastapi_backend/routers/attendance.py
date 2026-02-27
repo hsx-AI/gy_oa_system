@@ -2,7 +2,7 @@
 """
 考勤数据管理API路由 - 新版（使用SQLite）
 """
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Form
+from fastapi import APIRouter, BackgroundTasks, File, UploadFile, HTTPException, Query, Form
 from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime, date as date_type
@@ -176,10 +176,53 @@ async def get_upload_config():
     return {"success": True, "dakaman": dakaman or "", "admin2": admin2}
 
 
+def _generate_suggestions_bg(records: list):
+    """后台任务：为上传涉及的每人每月生成智能建议，不阻塞上传响应"""
+    try:
+        from routers.suggestions import generate_suggestions_for_month
+        attendance_db.ensure_suggestions_table()
+        seen = set()
+        for rec in records:
+            name = (rec.get("employee_name") or "").strip()
+            dept = (rec.get("department") or "").strip()
+            ad = rec.get("attendance_date")
+            if not name or not dept or not ad:
+                continue
+            y, m = None, None
+            if isinstance(ad, datetime):
+                y, m = ad.year, ad.month
+            elif isinstance(ad, date_type):
+                y, m = ad.year, ad.month
+            elif isinstance(ad, str):
+                parts = ad.replace("/", "-").split("-")
+                if len(parts) >= 2:
+                    try:
+                        y, m = int(parts[0]), int(parts[1])
+                    except (ValueError, IndexError):
+                        continue
+                else:
+                    continue
+            else:
+                continue
+            seen.add((name, dept, y, m))
+        for (name, dept, y, m) in seen:
+            attendance_db.delete_suggestions_for_month(name, dept, y, m)
+        for (name, dept, y, m) in seen:
+            try:
+                suggestions_list = generate_suggestions_for_month(name, dept, y, m)
+                attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
+            except Exception as e:
+                logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
+        logger.info(f"[后台] 智能建议生成完成，共处理 {len(seen)} 个人月组合")
+    except Exception as e:
+        logger.warning(f"[后台] 上传后生成智能建议失败: {e}")
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_excel(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    uploader: Optional[str] = Form(None)
+    uploader: Optional[str] = Form(None),
 ):
     """
     上传并处理考勤Excel文件。仅 webconfig 表中 dakaman 对应用户可上传。
@@ -255,46 +298,8 @@ async def upload_excel(
             f"成功: {success_count}, 失败: {fail_count}"
         )
 
-        # 为本次上传涉及到的每人每月生成智能建议并写入表（选月时只读表，不再实时计算）
-        # 先批量删除本批涉及的 (name, dept, year, month)，再生成并插入，避免重复上传导致建议重复
-        try:
-            from routers.suggestions import generate_suggestions_for_month
-            attendance_db.ensure_suggestions_table()
-            seen = set()
-            for rec in mapped_records:
-                name = (rec.get("employee_name") or "").strip()
-                dept = (rec.get("department") or "").strip()
-                ad = rec.get("attendance_date")
-                if not name or not dept or not ad:
-                    continue
-                y, m = None, None
-                if isinstance(ad, datetime):
-                    y, m = ad.year, ad.month
-                elif isinstance(ad, date_type):
-                    y, m = ad.year, ad.month
-                elif isinstance(ad, str):
-                    parts = ad.replace("/", "-").split("-")
-                    if len(parts) >= 2:
-                        try:
-                            y, m = int(parts[0]), int(parts[1])
-                        except (ValueError, IndexError):
-                            continue
-                    else:
-                        continue
-                else:
-                    continue
-                seen.add((name, dept, y, m))
-            # 先删除本批所有涉及月份的建议，再统一生成并插入
-            for (name, dept, y, m) in seen:
-                attendance_db.delete_suggestions_for_month(name, dept, y, m)
-            for (name, dept, y, m) in seen:
-                try:
-                    suggestions_list = generate_suggestions_for_month(name, dept, y, m)
-                    attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
-                except Exception as e:
-                    logger.warning(f"生成智能建议失败 {(name, dept, y, m)}: {e}")
-        except Exception as e:
-            logger.warning(f"上传后生成智能建议失败: {e}")
+        # 智能建议在后台异步生成，不阻塞上传响应
+        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records))
         
         return UploadResponse(
             success=True,

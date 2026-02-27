@@ -433,7 +433,7 @@ export function getUploadConfig() {
  * @param {File} file - Excel 文件对象
  * @param {string} uploader - 当前登录用户姓名，后端校验与 webconfig.dakaman 一致
  */
-export function uploadAttendanceExcel(file, uploader = '') {
+export function uploadAttendanceExcel(file, uploader = '', { onProgress } = {}) {
   const formData = new FormData()
   formData.append('file', file)
   if (uploader) formData.append('uploader', uploader)
@@ -442,10 +442,13 @@ export function uploadAttendanceExcel(file, uploader = '') {
     url: '/attendance/upload',
     method: 'post',
     data: formData,
-    timeout: 120000,  // 文件上传超时设为 120 秒（Excel 处理可能较慢）
-    headers: {
-      'Content-Type': 'multipart/form-data'
-    }
+    timeout: 600000,
+    onUploadProgress: onProgress
+      ? (e) => {
+          const pct = e.total ? Math.round((e.loaded / e.total) * 100) : 0
+          onProgress(pct)
+        }
+      : undefined
   })
 }
 
