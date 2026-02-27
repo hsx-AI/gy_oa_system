@@ -57,7 +57,15 @@
             获得换休票：{{ overtimeExchangeTickets }} 张（1天=8小时=2张，以0.25为单位，不足0.25张舍弃）
           </p>
           <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
-            本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元
+            <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8">
+              本次加班费：{{ specialHolidayName }}加班满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
+            </template>
+            <template v-else-if="isSpecialHoliday">
+              本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}加班满8小时可获固定200元奖励）
+            </template>
+            <template v-else>
+              本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元
+            </template>
           </p>
         </div>
         <div class="form-group">
@@ -89,7 +97,7 @@
 
 <script setup>
 import { ref, reactive, computed, watch } from 'vue'
-import { getApprovers, getOvertimeWebconfig, submitOvertimeRegister } from '@/api/attendance'
+import { getApprovers, getOvertimeWebconfig, submitOvertimeRegister, getHolidays } from '@/api/attendance'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 
 const props = defineProps({
@@ -120,6 +128,41 @@ const loadingApprovers = ref(false)
 const zhibanfei = ref(15)
 /** 从智能建议入口进入时锁定日期与时间，不可编辑 */
 const timeLocked = computed(() => !!props.prefill?.locked)
+
+const SPECIAL_FESTIVALS = new Set(['春节', '国庆节', '高温防暑休假'])
+const SPECIAL_DAY_PAY = 200
+const holidayMap = ref({})
+
+function normalizeDate(d) {
+  if (!d) return ''
+  const parts = String(d).split('-')
+  if (parts.length < 3) return d
+  return `${parts[0]}-${parts[1].padStart(2, '0')}-${parts[2].padStart(2, '0')}`
+}
+
+function loadHolidaysForYear(year) {
+  if (!year) return
+  getHolidays(year).then(res => {
+    if (res.success && res.holidays) {
+      const map = {}
+      for (const h of res.holidays) {
+        if (h.date && h.festival) map[normalizeDate(h.date)] = h.festival
+      }
+      holidayMap.value = { ...holidayMap.value, ...map }
+    }
+  }).catch(() => {})
+}
+
+const isSpecialHoliday = computed(() => {
+  if (!form.date) return false
+  const fest = holidayMap.value[form.date] || ''
+  return SPECIAL_FESTIVALS.has(fest)
+})
+
+const specialHolidayName = computed(() => {
+  if (!form.date) return ''
+  return holidayMap.value[form.date] || ''
+})
 
 // 加班获得换休票：早八晚五8小时工作制，午休1小时(12:00-13:00)不计入；1天=8小时=2张，以0.25为单位，不足0.25张舍弃
 function calcOvertimeExchangeTickets(st, et) {
@@ -181,6 +224,9 @@ const overtimePayBillableHours = computed(() => {
 
 const overtimePay = computed(() => {
   if (form.needExchangeTicket !== '否') return '0.00'
+  if (isSpecialHoliday.value && overtimePayBillableHours.value >= 8) {
+    return SPECIAL_DAY_PAY.toFixed(2)
+  }
   return (overtimePayBillableHours.value * zhibanfei.value).toFixed(2)
 })
 
@@ -206,6 +252,15 @@ function onPasteTime(e, field) {
   }
 }
 
+watch(() => form.date, (newDate) => {
+  if (newDate) {
+    const y = parseInt(newDate.slice(0, 4), 10)
+    if (y && !Object.keys(holidayMap.value).some(d => d.startsWith(String(y)))) {
+      loadHolidaysForYear(y)
+    }
+  }
+})
+
 function initDateOptions() {
   const today = new Date()
   const opts = []
@@ -225,6 +280,7 @@ watch(() => props.visible, (v) => {
     getOvertimeWebconfig().then((res) => {
       if (res.success && res.zhibanfei != null) zhibanfei.value = Number(res.zhibanfei)
     }).catch(() => {})
+    loadHolidaysForYear(new Date().getFullYear())
     initDateOptions()
     if (props.prefill.date) {
       form.date = String(props.prefill.date).slice(0, 10)
