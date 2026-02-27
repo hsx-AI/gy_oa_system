@@ -135,11 +135,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>开始时间</label>
-              <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on">
+              <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on" step="1">
             </div>
             <div class="form-group half">
               <label>结束时间</label>
-              <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on">
+              <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on" step="1">
             </div>
           </div>
 
@@ -191,9 +191,10 @@
             </div>
             <div class="form-group checkbox-group">
               <label class="checkbox-label">
-                <input type="checkbox" v-model="form.needSecondApproval">
+                <input type="checkbox" v-model="form.needSecondApproval" :disabled="secondApprovalAutoRequired">
                 需要二级审批
               </label>
+              <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">换休超过2天自动需要二级审批</p>
             </div>
           </div>
 
@@ -337,6 +338,12 @@ const exchangeTicketConsume = computed(() => {
   return d <= 0 ? 0 : Math.round(d * 4) / 2
 })
 const materialFileRef = ref(null)
+
+const secondApprovalAutoRequired = computed(() => form.type === '换休' && (form.duration || 0) > 2)
+
+watch(secondApprovalAutoRequired, (required) => {
+  if (required) form.needSecondApproval = true
+})
 
 // 假期表缓存：按年缓存 { "YYYY-MM-DD": "类型" }，用于时长计算（排除假期、计入调休上班）
 const holidayMapCache = ref({})

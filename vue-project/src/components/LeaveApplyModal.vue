@@ -38,11 +38,13 @@
         <div class="form-row">
           <div class="form-group half">
             <label>开始时间</label>
-            <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on" :disabled="timeLocked">
+            <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on" step="1" :disabled="timeLocked">
+            <p v-if="timeLocked" class="hint-text">由智能建议自动填充，不可修改</p>
           </div>
           <div class="form-group half">
             <label>结束时间</label>
-            <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on" :disabled="timeLocked">
+            <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on" step="1">
+            <p v-if="timeLocked" class="hint-text">可修改结束时间以申请多天连续请假</p>
           </div>
         </div>
         <div class="form-row">
@@ -83,9 +85,10 @@
           </div>
           <div class="form-group half checkbox-group">
             <label class="checkbox-label">
-              <input type="checkbox" v-model="form.needSecondApproval">
+              <input type="checkbox" v-model="form.needSecondApproval" :disabled="secondApprovalAutoRequired">
               需要二级审批
             </label>
+            <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">换休超过2天自动需要二级审批</p>
           </div>
         </div>
         <div class="form-group" v-if="form.needSecondApproval">
@@ -159,6 +162,12 @@ const approvers2 = ref([])
 const loadingApprovers = ref(false)
 const materialFileRef = ref(null)
 
+const secondApprovalAutoRequired = computed(() => form.type === '换休' && (form.duration || 0) > 2)
+
+watch(secondApprovalAutoRequired, (required) => {
+  if (required) form.needSecondApproval = true
+})
+
 const holidayMapCache = ref({})
 
 function parseLocalDate(str) {
@@ -219,7 +228,7 @@ watch(() => props.visible, async (v) => {
     }
     if (props.prefill.locked) form.reason = ''
     else form.reason = props.prefill.reason || ''
-    form.needSecondApproval = false
+    form.needSecondApproval = secondApprovalAutoRequired.value
     form.approver2 = ''
     if (form.name) {
       fetchApprovers()
