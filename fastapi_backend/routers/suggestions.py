@@ -480,9 +480,63 @@ def _parse_record_date(date_obj):
     return None
 
 
-def generate_suggestions_for_month(name: str, dept: str, year: int, month: int) -> List[Dict]:
+def generate_suggestions_for_month_with_records(
+        name: str, dept: str, year: int, month: int,
+        records: List[Dict], holidays: Dict[str, str]) -> List[Dict]:
+    """同 generate_suggestions_for_month，但直接接受已查好的 records 和 holidays，避免重复查库。"""
+    start_date = f"{year}-{month:02d}-01"
+    existing_dates = set()
+    for record in records:
+        dt = _parse_record_date(record.get("attendance_date"))
+        if dt:
+            existing_dates.add(dt.strftime("%Y-%m-%d"))
+    first_day_of_month = datetime(year, month, 1)
+    if month == 12:
+        last_day_of_month = datetime(year + 1, 1, 1) - timedelta(days=1)
+    else:
+        last_day_of_month = datetime(year, month + 1, 1) - timedelta(days=1)
+    today = datetime.now()
+    check_end_date = today if (year == today.year and month == today.month) else last_day_of_month
+    suggestions_list = []
+    check_date = first_day_of_month
+    while check_date <= check_end_date:
+        check_date_str = check_date.strftime("%Y-%m-%d")
+        is_work, is_weekend, is_hol, holiday_type = is_workday(check_date, holidays)
+        if is_work and check_date_str not in existing_dates:
+            suggestions_list.append({
+                "date": check_date_str, "dayType": "工作日",
+                "suggestion": "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）",
+                "start_time": _time_to_datetime(check_date_str, "08:00"),
+                "end_time": _time_to_datetime(check_date_str, "17:00"),
+                "status": 1,
+            })
+        check_date += timedelta(days=1)
+    for record in records:
+        date_obj = _parse_record_date(record.get("attendance_date"))
+        if not date_obj:
+            continue
+        is_work, is_weekend, is_hol, holiday_type = is_workday(date_obj, holidays)
+        record_suggestions = analyze_workday(record, date_obj) if is_work else analyze_restday(record, date_obj)
+        day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
+        date_str = date_obj.strftime("%Y-%m-%d")
+        for item in record_suggestions:
+            st = item.get("start_time") or ""
+            et = item.get("end_time") or ""
+            suggestions_list.append({
+                "date": date_str, "dayType": day_type,
+                "suggestion": item.get("message") or "",
+                "start_time": _time_to_datetime(date_str, st),
+                "end_time": _time_to_datetime(date_str, et),
+                "status": item.get("status", 0),
+            })
+    return suggestions_list
+
+
+def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
+                                   holidays_cache: Dict[str, Dict] = None) -> List[Dict]:
     """
     为指定人、指定年月生成智能建议（供上传后写入表或离线使用）。
+    holidays_cache: 可选，{year_str: holidays_dict}，避免同年重复查库。
     返回 list of dict: { "date": "YYYY-MM-DD", "dayType": "工作日|周末|假期日", "suggestion": "..." }
     """
     start_date = f"{year}-{month:02d}-01"
@@ -497,7 +551,13 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int) 
         dt = _parse_record_date(record.get("attendance_date"))
         if dt:
             existing_dates.add(dt.strftime("%Y-%m-%d"))
-    holidays = load_holidays(str(year))
+    year_str = str(year)
+    if holidays_cache is not None and year_str in holidays_cache:
+        holidays = holidays_cache[year_str]
+    else:
+        holidays = load_holidays(year_str)
+        if holidays_cache is not None:
+            holidays_cache[year_str] = holidays
     data_year, data_month = year, month
     first_day_of_month = datetime(data_year, data_month, 1)
     if data_month == 12:

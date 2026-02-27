@@ -5,7 +5,7 @@
 from fastapi import APIRouter, BackgroundTasks, File, UploadFile, HTTPException, Query, Form
 from typing import Optional, List
 from pydantic import BaseModel
-from datetime import datetime, date as date_type
+from datetime import datetime, date as date_type, timedelta
 import os
 import tempfile
 import logging
@@ -177,10 +177,16 @@ async def get_upload_config():
 
 
 def _generate_suggestions_bg(records: list):
-    """后台任务：为上传涉及的每人每月生成智能建议，不阻塞上传响应"""
+    """后台任务：为上传涉及的每人每月生成智能建议，不阻塞上传响应。
+    优化：按月份批量查询考勤记录（1条SQL/月），缓存假期数据，批量写入建议。"""
+    import time as _time
+    from collections import defaultdict
+    t0 = _time.time()
     try:
-        from routers.suggestions import generate_suggestions_for_month
+        from routers.suggestions import (generate_suggestions_for_month_with_records,
+                                         load_holidays, _parse_record_date)
         attendance_db.ensure_suggestions_table()
+
         seen = set()
         for rec in records:
             name = (rec.get("employee_name") or "").strip()
@@ -205,15 +211,49 @@ def _generate_suggestions_bg(records: list):
             else:
                 continue
             seen.add((name, dept, y, m))
-        for (name, dept, y, m) in seen:
-            attendance_db.delete_suggestions_for_month(name, dept, y, m)
+
+        if not seen:
+            return
+
+        attendance_db.delete_suggestions_batch(list(seen))
+
+        months = set()
+        for (_, _, y, m) in seen:
+            months.add((y, m))
+
+        holidays_cache: dict = {}
+        month_records: dict = {}
+        for (y, m) in months:
+            start_date = f"{y}-{m:02d}-01"
+            if m == 12:
+                end_date = f"{y}-12-31"
+            else:
+                last = (date_type(y, m + 1, 1) - timedelta(days=1))
+                end_date = last.strftime("%Y-%m-%d")
+            all_recs = attendance_db.get_all_records_by_date_range(start_date, end_date)
+            grouped = defaultdict(list)
+            for r in all_recs:
+                key = ((r.get("employee_name") or "").strip(),
+                       (r.get("department") or "").strip())
+                grouped[key].append(r)
+            month_records[(y, m)] = grouped
+
+            year_str = str(y)
+            if year_str not in holidays_cache:
+                holidays_cache[year_str] = load_holidays(year_str)
+
         for (name, dept, y, m) in seen:
             try:
-                suggestions_list = generate_suggestions_for_month(name, dept, y, m)
+                person_records = month_records.get((y, m), {}).get((name, dept), [])
+                holidays = holidays_cache[str(y)]
+                suggestions_list = generate_suggestions_for_month_with_records(
+                    name, dept, y, m, person_records, holidays)
                 attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
             except Exception as e:
                 logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
-        logger.info(f"[后台] 智能建议生成完成，共处理 {len(seen)} 个人月组合")
+
+        elapsed = round(_time.time() - t0, 1)
+        logger.info(f"[后台] 智能建议生成完成，共处理 {len(seen)} 个人月组合，耗时 {elapsed}s")
     except Exception as e:
         logger.warning(f"[后台] 上传后生成智能建议失败: {e}")
 

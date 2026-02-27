@@ -180,6 +180,29 @@ class MySQLDatabase:
             if conn:
                 conn.close()
 
+    def execute_many(self, sql: str, params_list: list) -> int:
+        """批量执行 INSERT/UPDATE/DELETE，一次连接提交多行，返回受影响总行数"""
+        if not params_list:
+            return 0
+        conn = None
+        try:
+            conn = self.get_connection()
+            if not conn:
+                raise Exception("无法连接到数据库")
+            with conn.cursor() as cursor:
+                cursor.executemany(sql, params_list)
+                affected = cursor.rowcount
+            conn.commit()
+            return affected
+        except Exception as e:
+            logger.error(f"批量执行失败: {str(e)}")
+            if conn:
+                conn.rollback()
+            return -1
+        finally:
+            if conn:
+                conn.close()
+
     def execute_insert(self, sql: str, params: tuple = None) -> Optional[int]:
         """执行插入操作，返回新插入行的ID"""
         conn = None

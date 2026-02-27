@@ -330,9 +330,27 @@ class AttendanceDatabase:
             logger.error(f"删除智能建议失败: {str(e)}")
             return 0
 
+    def delete_suggestions_batch(self, keys: list) -> int:
+        """批量删除多个人月组合的建议。keys: [(name, dept, year, month), ...]"""
+        if not keys:
+            return 0
+        try:
+            conditions = " OR ".join(
+                ["(employee_name = %s AND department = %s AND year = %s AND month = %s)"] * len(keys)
+            )
+            sql = f"DELETE FROM attendance_suggestions WHERE {conditions}"
+            params = []
+            for k in keys:
+                params.extend(k)
+            n = db.execute_update(sql, tuple(params))
+            return n
+        except Exception as e:
+            logger.error(f"批量删除智能建议失败: {str(e)}")
+            return 0
+
     def insert_suggestions(self, employee_name: str, department: str, year: int, month: int,
                            suggestions: List[Dict]) -> int:
-        """批量插入智能建议。每项为 { date, dayType, suggestion/message, start_time, end_time, status }；start_time/end_time 须为完整 YYYY-MM-DD HH:MM:SS"""
+        """批量插入智能建议（使用 executemany 一次提交）"""
         if not suggestions:
             return 0
         try:
@@ -341,7 +359,7 @@ class AttendanceDatabase:
                 (employee_name, department, year, month, day_type, message, start_time, end_time, status)
                 VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
             """
-            count = 0
+            rows = []
             for s in suggestions:
                 msg = (s.get("suggestion") or s.get("message") or "").strip()
                 if not msg:
@@ -354,12 +372,14 @@ class AttendanceDatabase:
                 if status is None:
                     status = 0
                 day_type = s.get("dayType") or s.get("day_type") or ""
-                db.execute_update(sql, (
+                rows.append((
                     employee_name, department, year, month, day_type, msg,
                     start_t, end_t, status
                 ))
-                count += 1
-            return count
+            if not rows:
+                return 0
+            result = db.execute_many(sql, rows)
+            return result if result >= 0 else 0
         except Exception as e:
             logger.error(f"插入智能建议失败: {str(e)}")
             return 0
