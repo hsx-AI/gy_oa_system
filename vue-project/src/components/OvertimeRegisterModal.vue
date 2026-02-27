@@ -108,8 +108,8 @@ const form = reactive({
   registerMethod: '书面',
   needExchangeTicket: '否',
   date: '',
-  startTime: '08:00',
-  endTime: '17:00',
+  startTime: '08:00:00',
+  endTime: '17:00:00',
   content: '',
   approver: ''
 })
@@ -158,7 +158,8 @@ function calcOvertimeWorkHours(st, et) {
     const parts = s.split(':')
     const h = parseInt(parts[0] || '0', 10)
     const m = parseInt(parts[1] || '0', 10)
-    return h * 60 + m
+    const sec = parseInt(parts[2] || '0', 10)
+    return h * 60 + m + sec / 60
   }
   const startMins = toMins(st)
   const endMins = toMins(et)
@@ -231,14 +232,14 @@ watch(() => props.visible, (v) => {
     } else {
       form.date = dateOptions.value[0] || new Date().toISOString().slice(0, 10)
     }
-    // type="time" 需要 HH:mm 格式（小时前导零），否则如 8:27 无法正确填充
     const toTime = (t) => {
-      if (!t) return '08:00'
-      const s = String(t).replace(/^\d{4}-\d{2}-\d{2}T?/, '')  // 去掉日期部分
+      if (!t) return '08:00:00'
+      const s = String(t).replace(/^\d{4}-\d{2}-\d{2}T?/, '')
       const parts = s.split(':')
       const h = String(parseInt(parts[0] || '8', 10)).padStart(2, '0')
       const m = String(parseInt(parts[1] || '0', 10)).padStart(2, '0')
-      return `${h}:${m}`
+      const sec = String(parseInt(parts[2] || '0', 10)).padStart(2, '0')
+      return `${h}:${m}:${sec}`
     }
     form.startTime = toTime(props.prefill.startTime)
     form.endTime = toTime(props.prefill.endTime)

@@ -9,6 +9,7 @@ import uuid
 import subprocess
 import shutil
 import asyncio
+import tempfile
 from pathlib import Path
 from fastapi import APIRouter, HTTPException, Query, File, UploadFile
 from fastapi.responses import FileResponse
@@ -51,7 +52,8 @@ def _ensure_policy_dir():
 
 
 def _convert_to_pdf_sync(source_path: str) -> Optional[str]:
-    """使用 LibreOffice 将 Word/Excel 转为 PDF，返回 PDF 路径"""
+    """使用 LibreOffice 将 Word/Excel 转为 PDF，返回 PDF 路径。
+    为每次转换创建独立用户配置目录，避免并发锁冲突导致 .doc 等格式转换失败。"""
     if not os.path.isfile(source_path):
         return None
     base_name = Path(source_path).stem
@@ -62,21 +64,31 @@ def _convert_to_pdf_sync(source_path: str) -> Optional[str]:
     out_dir = PDF_CACHE_DIR
     cmd = _get_libreoffice_cmd()
     try:
-        result = subprocess.run(
-            [cmd, "--headless", "--convert-to", "pdf", "--outdir", out_dir, source_path],
-            capture_output=True,
-            timeout=60,
-        )
-        if result.returncode != 0:
-            logger.error(f"LibreOffice 转换失败: {result.stderr.decode('utf-8', errors='ignore')}")
-            return None
+        with tempfile.TemporaryDirectory(prefix="lo_profile_") as profile_dir:
+            profile_url = "file:///" + profile_dir.replace("\\", "/")
+            result = subprocess.run(
+                [
+                    cmd, "--headless", "--norestore",
+                    f"-env:UserInstallation={profile_url}",
+                    "--convert-to", "pdf",
+                    "--outdir", out_dir,
+                    source_path,
+                ],
+                capture_output=True,
+                timeout=120,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="ignore")
+                logger.error(f"LibreOffice 转换失败 (rc={result.returncode}): {stderr}")
+                return None
         if os.path.isfile(pdf_path):
             return pdf_path
+        logger.error(f"LibreOffice 转换完成但未找到输出文件: {pdf_path}")
     except FileNotFoundError:
         logger.warning("未找到 LibreOffice，请安装 libreoffice 或 soffice")
         return None
     except subprocess.TimeoutExpired:
-        logger.error("LibreOffice 转换超时")
+        logger.error("LibreOffice 转换超时(120s)")
         return None
     except Exception as e:
         logger.error(f"LibreOffice 转换异常: {e}")

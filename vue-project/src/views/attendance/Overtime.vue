@@ -455,8 +455,8 @@ onMounted(async () => {
     const d = String(q.prefillDate).slice(0, 10)
     if (d && !dateOptions.value.includes(d)) dateOptions.value.unshift(d)
     form.date = d
-    form.startTime = (q.prefillStart || '08:00').slice(0, 5)
-    form.endTime = (q.prefillEnd || '17:00').slice(0, 5)
+    form.startTime = (q.prefillStart || '08:00:00').length >= 8 ? q.prefillStart : (q.prefillStart || '08:00') + ':00'
+    form.endTime = (q.prefillEnd || '17:00:00').length >= 8 ? q.prefillEnd : (q.prefillEnd || '17:00') + ':00'
     if (q.prefillContent) form.content = q.prefillContent
     showRegisterModal.value = true
     router.replace({ path: '/attendance/overtime' })

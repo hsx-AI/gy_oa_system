@@ -294,6 +294,7 @@
                 v-model="returnForm.actualStartTime"
                 name="btActualStartTime"
                 autocomplete="on"
+                step="1"
               >
             </div>
             <div class="form-group half">
@@ -303,6 +304,7 @@
                 v-model="returnForm.actualReturnTime"
                 name="btActualReturnTime"
                 autocomplete="on"
+                step="1"
               >
             </div>
           </div>
@@ -518,6 +520,17 @@ onMounted(async () => {
   }
 })
 
+// 从考勤页跳转过来时：action=apply 自动打开公出登记弹窗
+watch(
+  () => [route.query.action, loadingList.value],
+  () => {
+    if (route.query.action !== 'apply' || loadingList.value) return
+    showApplyModal.value = true
+    router.replace({ path: '/attendance/business-trip' })
+  },
+  { flush: 'post' }
+)
+
 // 从考勤页「公出返回」跳转过来时：列表加载完成后自动打开返回登记弹窗并预选公出单
 watch(
   () => [route.query.action, route.query.id, myRecordList.value.length, loadingList.value],
@@ -532,8 +545,26 @@ watch(
         ? candidates[0].id
         : ''
     returnForm.recordId = preselectedId
-    returnForm.actualStartTime = ''
-    returnForm.actualReturnTime = ''
+
+    const suggDate = (route.query.date || '').slice(0, 10)
+    if (suggDate && /^\d{4}-\d{2}-\d{2}$/.test(suggDate)) {
+      returnForm.actualStartTime = `${suggDate}T08:00:00`
+      returnForm.actualReturnTime = `${suggDate}T17:00:00`
+    } else if (preselectedId) {
+      const rec = candidates.find(r => r.id === preselectedId)
+      const d = (rec?.assignTime || '').slice(0, 10)
+      if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        returnForm.actualStartTime = `${d}T08:00:00`
+        returnForm.actualReturnTime = `${d}T17:00:00`
+      } else {
+        returnForm.actualStartTime = ''
+        returnForm.actualReturnTime = ''
+      }
+    } else {
+      returnForm.actualStartTime = ''
+      returnForm.actualReturnTime = ''
+    }
+
     showReturnModal.value = true
     router.replace({ path: '/attendance/business-trip' })
   },

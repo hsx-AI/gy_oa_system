@@ -51,8 +51,9 @@ function parseLocalDateTime(str) {
   if (parts.length < 3) return null
   const [y, mo, day] = parts
   if (!timePart) return new Date(y, mo - 1, day, 0, 0, 0, 0)
-  const [h, m] = timePart.split(':').map(Number)
-  return new Date(y, mo - 1, day, h || 0, m || 0, 0, 0)
+  const tp = timePart.split(':').map(Number)
+  const h = tp[0] || 0, m = tp[1] || 0, sec = tp[2] || 0
+  return new Date(y, mo - 1, day, h, m, sec, 0)
 }
 
 /**
@@ -100,10 +101,11 @@ export function calcDurationFromTimes(startStr, endStr, holidayMap = null) {
       d.setTime(d.getTime() + dayMs)
     }
 
+    if (workMs <= 0) return 0
     const workHours = workMs / (1000 * 60 * 60)
     const days = workHours / 8
     const rounded = Math.ceil(days * 4) / 4
-    return rounded < 0.25 ? 0.25 : Math.round(rounded * 100) / 100
+    return Math.max(0.25, Math.round(rounded * 100) / 100)
   } catch {
     return 0
   }

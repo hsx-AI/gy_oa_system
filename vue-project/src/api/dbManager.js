@@ -66,6 +66,7 @@ export function ygglFillByExcel(params, formData) {
     url: '/db-manager/yggl-fill-by-excel',
     method: 'post',
     params,
-    data: formData
+    data: formData,
+    timeout: 120000
   })
 }

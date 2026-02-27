@@ -72,14 +72,19 @@
         <div class="preview-body">
           <div v-show="previewLoading" class="preview-loading">
             <div class="loading-spinner"></div>
-            <p>正在加载中...</p>
+            <p>正在转换并加载中，doc 格式可能较慢…</p>
+          </div>
+          <div v-if="previewError" class="preview-error">
+            <p>预览加载失败，可能该文件格式暂不支持在线预览。</p>
+            <button type="button" class="btn btn-primary" @click="openFile(previewFileId, 1); closePreviewModal()">下载文件</button>
           </div>
           <iframe
-            v-show="!previewLoading"
+            v-show="!previewLoading && !previewError"
             ref="previewIframeRef"
             class="preview-iframe"
             :src="previewUrl"
             @load="onPreviewLoad"
+            @error="onPreviewError"
           ></iframe>
         </div>
       </div>
@@ -209,6 +214,8 @@ const showPreviewModal = ref(false)
 const previewLoading = ref(false)
 const previewUrl = ref('')
 const previewIframeRef = ref(null)
+const previewError = ref(false)
+const previewFileId = ref('')
 const showDeepSearchModal = ref(false)
 const deepSearchKeyword = ref('')
 const deepSearchLoading = ref(false)
@@ -308,8 +315,10 @@ function openFile(id, download) {
     window.open(url, '_blank', 'noopener')
     return
   }
+  previewFileId.value = id
   previewUrl.value = url
   previewLoading.value = true
+  previewError.value = false
   showPreviewModal.value = true
 }
 
@@ -317,6 +326,8 @@ function closePreviewModal() {
   showPreviewModal.value = false
   previewUrl.value = ''
   previewLoading.value = false
+  previewError.value = false
+  previewFileId.value = ''
   previewIframeRef.value = null
 }
 
@@ -345,6 +356,11 @@ async function doDeepSearch() {
 
 function onPreviewLoad() {
   previewLoading.value = false
+}
+
+function onPreviewError() {
+  previewLoading.value = false
+  previewError.value = true
 }
 
 async function doDelete(id) {
@@ -740,6 +756,21 @@ button {
   background: var(--color-bg-lighter, #f8f9fa);
 }
 .preview-loading p {
+  margin: 0;
+  font-size: var(--font-size-base);
+  color: var(--color-text-secondary);
+}
+.preview-error {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-lg);
+  background: var(--color-bg-lighter, #f8f9fa);
+}
+.preview-error p {
   margin: 0;
   font-size: var(--font-size-base);
   color: var(--color-text-secondary);

@@ -16,3 +16,21 @@ const app = createApp(App)
 
 app.use(router)
 app.mount('#app')
+
+// 全局节流：日期/时间/数字输入框的滚轮滚动太快难以选择，限制为每 200ms 生效一次
+;(() => {
+  const THROTTLE_MS = 200
+  const SCROLL_TYPES = new Set(['datetime-local', 'time', 'date', 'number'])
+  let lastWheelTime = 0
+  document.addEventListener('wheel', (e) => {
+    const el = e.target
+    if (el.tagName === 'INPUT' && SCROLL_TYPES.has(el.type) && document.activeElement === el) {
+      const now = Date.now()
+      if (now - lastWheelTime < THROTTLE_MS) {
+        e.preventDefault()
+      } else {
+        lastWheelTime = now
+      }
+    }
+  }, { passive: false, capture: true })
+})()

@@ -9,9 +9,12 @@
             <p class="page-subtitle">基于打卡数据的智能分析和填报</p>
           </div>
           <div class="header-actions">
-            <div class="manual-entry-wrap">
-              <router-link to="/attendance/manual" class="btn btn-manual-entry">考勤手动填报</router-link>
-              <p class="manual-entry-hint">当智能填报无法满足需要时可进行手动填报。</p>
+            <div v-if="canApprove" class="header-btn-wrap">
+              <router-link to="/attendance/approvals" class="btn btn-header-link">考勤审批</router-link>
+            </div>
+            <div class="header-btn-wrap">
+              <router-link to="/attendance/manual" class="btn btn-header-link">手动填报</router-link>
+              <p class="header-btn-hint">智能填报无法满足时可手动填报</p>
             </div>
             <!-- 月份选择器 -->
             <div class="month-selector">
@@ -142,7 +145,7 @@
                 </button>
                 <button 
                   class="auto-fill-btn btn-business-trip"
-                  @click.stop="handleBusinessTripReturnFill"
+                  @click.stop="handleBusinessTripReturnFill(suggestion)"
                   title="公出返回登记"
                 >
                   <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -258,32 +261,34 @@
 <script setup>
 import { ref, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, queryAttendance, getBusinessTripList, getAttendanceDates } from '@/api/attendance'
+import { getSuggestions, queryAttendance, getBusinessTripList, getAttendanceDates, checkCanApprove } from '@/api/attendance'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 
 const router = useRouter()
+
+const canApprove = ref(false)
 
 const overtimeModalVisible = ref(false)
 const overtimePrefill = ref({})
 const leaveModalVisible = ref(false)
 const leavePrefill = ref({})
 
-// 时间格式化为 HH:mm，供 type="time" 使用（需前导零）
 const toTimeValue = (t) => {
-  if (!t) return '08:00'
+  if (!t) return '08:00:00'
   const parts = String(t).split(':')
   const h = String(parseInt(parts[0] || 0, 10)).padStart(2, '0')
   const m = String(parseInt(parts[1] || 0, 10)).padStart(2, '0')
-  return `${h}:${m}`
+  const s = String(parseInt(parts[2] || 0, 10)).padStart(2, '0')
+  return `${h}:${m}:${s}`
 }
 
 // 处理加班自动填报：本页弹窗，无需跳转，可连续填报
 const handleOvertimeFill = (suggestion) => {
   if (!suggestion) return
-  const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2})\s*到\s*(\d{1,2}:\d{2})/)
-  const startTime = timeMatch ? toTimeValue(timeMatch[1]) : '08:00'
-  const endTime = timeMatch ? toTimeValue(timeMatch[2]) : '17:00'
+  const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
+  const startTime = timeMatch ? toTimeValue(timeMatch[1]) : '08:00:00'
+  const endTime = timeMatch ? toTimeValue(timeMatch[2]) : '17:00:00'
   const date = suggestion.date ? suggestion.date.slice(0, 10) : ''
   overtimePrefill.value = {
     date,
@@ -298,12 +303,14 @@ const handleOvertimeFill = (suggestion) => {
 // 处理请假自动填报：本页弹窗，无需跳转，可连续填报
 const handleLeaveFill = (suggestion) => {
   if (!suggestion) return
-  const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2})\s*到\s*(\d{1,2}:\d{2})/)
+  const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
   let duration = 0.25
   if (timeMatch) {
-    const [sh, sm] = timeMatch[1].split(':').map(Number)
-    const [eh, em] = timeMatch[2].split(':').map(Number)
-    let hours = (eh + em / 60) - (sh + sm / 60)
+    const parts1 = timeMatch[1].split(':').map(Number)
+    const parts2 = timeMatch[2].split(':').map(Number)
+    const sh = parts1[0], sm = parts1[1], ss = parts1[2] || 0
+    const eh = parts2[0], em = parts2[1], es = parts2[2] || 0
+    let hours = (eh + em / 60 + es / 3600) - (sh + sm / 60 + ss / 3600)
     if (sh <= 12 && eh >= 13) hours -= 1
     duration = Math.round((hours / 8) * 4) / 4
     if (duration < 0.25) duration = 0.25
@@ -312,7 +319,12 @@ const handleLeaveFill = (suggestion) => {
     duration = 1
   }
   const date = suggestion.date ? suggestion.date.slice(0, 10) : ''
-  const fmt = (t) => t ? t.split(':').map(p => p.padStart(2, '0')).join(':') : '08:00'
+  const fmt = (t) => {
+    if (!t) return '08:00:00'
+    const p = t.split(':').map(v => v.padStart(2, '0'))
+    while (p.length < 3) p.push('00')
+    return p.join(':')
+  }
   const startTime = date && timeMatch ? `${date}T${fmt(timeMatch[1])}` : ''
   const endTime = date && timeMatch ? `${date}T${fmt(timeMatch[2])}` : ''
   leavePrefill.value = {
@@ -327,26 +339,30 @@ const handleLeaveFill = (suggestion) => {
 }
 
 // 公出返回：跳转公出管理并打开返回登记；无符合条件时提示
-const handleBusinessTripReturnFill = async () => {
+const handleBusinessTripReturnFill = async (suggestion) => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = userInfo.name || userInfo.userName || ''
   if (!name) {
     alert('请先登录')
     return
   }
+  const suggDate = suggestion?.date ? String(suggestion.date).slice(0, 10) : ''
   try {
     const res = await getBusinessTripList({ name, year: new Date().getFullYear() })
     const data = res?.data || []
     const candidates = data.filter(r => r.status === '已通过' && Number(r.fhdjStatus) !== 1)
     if (candidates.length === 0) {
-      alert('请先填写公出申请或等待审核通过。')
+      if (confirm('暂无已通过的公出申请，是否前往填写公出登记？')) {
+        router.push({ path: '/attendance/business-trip', query: { action: 'apply' } })
+      }
       return
     }
+    const q = { action: 'return' }
+    if (suggDate) q.date = suggDate
     if (candidates.length === 1) {
-      router.push({ path: '/attendance/business-trip', query: { action: 'return', id: candidates[0].id } })
-      return
+      q.id = candidates[0].id
     }
-    router.push({ path: '/attendance/business-trip', query: { action: 'return' } })
+    router.push({ path: '/attendance/business-trip', query: q })
   } catch (e) {
     alert('获取公出记录失败，请稍后重试。')
   }
@@ -435,6 +451,13 @@ onMounted(async () => {
   await initMonthWithLatestData()
   loadSuggestions()
   loadAttendanceRecords()
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (userInfo.name || userInfo.userName || '').trim()
+  if (name) {
+    checkCanApprove({ name }).then(res => {
+      canApprove.value = !!res?.canApprove
+    }).catch(() => {})
+  }
 })
 
 // 考勤记录
@@ -543,7 +566,7 @@ watch(selectedMonth, () => {
   cursor: pointer;
 }
 
-.btn-manual-entry {
+.btn-header-link {
   display: inline-flex;
   align-items: center;
   padding: var(--spacing-sm) var(--spacing-lg);
@@ -556,17 +579,23 @@ watch(selectedMonth, () => {
   text-decoration: none;
   transition: all 0.2s ease;
 }
-.btn-manual-entry:hover {
+.btn-header-link:hover {
   background: var(--color-primary-lightest, #eff6ff);
-  border-color: var(--color-primary);
 }
-
-.manual-entry-wrap {
+.header-btn-wrap {
   display: flex;
   flex-direction: column;
-  align-items: flex-start;
-  gap: 4px;
+  align-items: center;
+  gap: 3px;
 }
+.header-btn-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--color-text-tertiary, #9ca3af);
+  line-height: 1.2;
+  white-space: nowrap;
+}
+
 .manual-entry-hint {
   margin: 0;
   font-size: 12px;

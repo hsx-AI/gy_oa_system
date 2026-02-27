@@ -69,7 +69,10 @@
             </svg>
             统计结果
           </h2>
-          <p class="section-desc">{{ selectedLsys || '全员' }} {{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}（单价 {{ overtimePayZhibanfei }} 元/小时）</p>
+          <p class="section-desc">
+            {{ selectedLsys || '全员' }} {{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}
+            （单价 {{ overtimePayZhibanfei }} 元/小时，十一、高温假、春节三个假期单日值班满8小时固定奖励200元/天，超出8小时不额外奖励）
+          </p>
           <div v-if="overtimePayByMonth.length > 0" class="table-wrap">
             <h3 class="subsection-title">按月份</h3>
             <table class="data-table">
