@@ -289,8 +289,8 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     # 迟到：第一次打卡在 8:00 之后且在 12:00 之前
     if WORK_AM_START < first_val < WORK_AM_END:
         suggestions.append(_sugg(
-            "08:00", format_time(first_time), 1,
-            f"【考勤建议】检测到迟到，建议补录 8:00 到 {format_time(first_time)} 的考勤"
+            "08:00:00", format_time(first_time), 1,
+            f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(first_time)} 的考勤"
         ))
 
     # -------------------------------------------------
@@ -373,91 +373,55 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
 def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     """
     分析休息日/假期打卡记录，生成建议。返回 List[dict] 含 start_time, end_time, status=0, message。
-    逻辑说明：
-    1. 休息日加班以第一次打卡和最后一次打卡的时间区间来计算
-    2. 如果区间跨越午休时间（12:00-13:00），则分上下午两段建议
-    3. 如果开始打卡在午休时段内（12:00-13:00），则从13:00开始计算
-    4. 如果结束打卡在午休时段内（12:00-13:00），则到12:00结束
+    逻辑：取第一次到最后一次打卡的完整区间，跨午休时自动扣除1小时，合并为一条建议。
     """
     suggestions: List[dict] = []
-    
+
     times = collect_valid_times(record)
     if not times:
         return suggestions
-    
-    times.sort()  # 确保时间排序
+
+    times.sort()
     first_time = times[0]
     last_time = times[-1]
-    
+
     start_val = time_to_decimal(first_time)
     end_val = time_to_decimal(last_time)
-    
-    # 如果开始和结束时间一样，没有有效的加班区间
+
     if start_val >= end_val:
         return suggestions
-    
-    NOON_START = 12  # 午休开始
-    NOON_END = 13    # 午休结束
-    
-    # 调整开始时间：如果在午休时段内，从13:00开始
+
+    NOON_START = 12
+    NOON_END = 13
+    RESTDAY_OVERTIME_MIN_HOURS = 1.0
+
     effective_start = start_val
     if NOON_START <= start_val < NOON_END:
         effective_start = NOON_END
-    
-    # 调整结束时间：如果在午休时段内，到12:00结束
+
     effective_end = end_val
     if NOON_START < end_val <= NOON_END:
         effective_end = NOON_START
-    
-    # 检查调整后是否还有有效区间
+
     if effective_start >= effective_end:
         return suggestions
-    
-    def decimal_to_time_str(h: float) -> str:
-        """将小数小时转换为时间字符串 HH:MM"""
-        hour = int(h)
-        minute = int(round((h - hour) * 60))
-        if minute == 60:
-            hour += 1
-            minute = 0
-        return f"{hour}:{minute:02d}"
-    
-    # 判断是否跨越午休时间（调整后的区间）
+
     cross_noon = effective_start < NOON_START and effective_end > NOON_END
-    
-    # 单个时间段小于 1 小时的不做建议（与工作日加班一致）
-    RESTDAY_OVERTIME_MIN_HOURS = 1.0
-
     if cross_noon:
-        # 跨越午休时间，需要分段建议
-        # 上午段：effective_start 到 12:00
-        morning_hours = NOON_START - effective_start
-        if morning_hours >= RESTDAY_OVERTIME_MIN_HOURS:
-            morning_start_str = decimal_to_time_str(effective_start)
-            suggestions.append(_sugg(
-                morning_start_str, "12:00", 0,
-                f"【加班建议】休息日加班，建议补录 {morning_start_str} 到 12:00 的加班（约{_format_hours_display(morning_hours)}）"
-            ))
-
-        # 下午段：13:00 到 effective_end
-        afternoon_hours = effective_end - NOON_END
-        if afternoon_hours >= RESTDAY_OVERTIME_MIN_HOURS:
-            afternoon_end_str = decimal_to_time_str(effective_end)
-            suggestions.append(_sugg(
-                "13:00", afternoon_end_str, 0,
-                f"【加班建议】休息日加班，建议补录 13:00 到 {afternoon_end_str} 的加班（约{_format_hours_display(afternoon_hours)}）"
-            ))
+        total_hours = (effective_end - effective_start) - (NOON_END - NOON_START)
     else:
-        # 不跨越午休时间，直接计算
         total_hours = effective_end - effective_start
-        if total_hours >= RESTDAY_OVERTIME_MIN_HOURS:
-            start_str = decimal_to_time_str(effective_start)
-            end_str = decimal_to_time_str(effective_end)
-            suggestions.append(_sugg(
-                start_str, end_str, 0,
-                f"【加班建议】休息日加班，建议补录 {start_str} 到 {end_str} 的加班（约{_format_hours_display(total_hours)}）"
-            ))
-    
+
+    if total_hours < RESTDAY_OVERTIME_MIN_HOURS:
+        return suggestions
+
+    start_str = format_time(first_time)
+    end_str = format_time(last_time)
+    suggestions.append(_sugg(
+        start_str, end_str, 0,
+        f"【加班建议】休息日加班，建议补录 {start_str} 到 {end_str} 的加班（约{_format_hours_display(total_hours)}）"
+    ))
+
     return suggestions
 
 

@@ -132,18 +132,20 @@ def time_to_decimal(time_obj: Any) -> float:
 
 
 def format_time(time_obj: Any) -> str:
-    """格式化时间显示"""
+    """格式化时间显示（含秒 HH:MM:SS）"""
     if time_obj is None:
         return ""
     
     if isinstance(time_obj, datetime):
-        return time_obj.strftime("%H:%M")
+        return time_obj.strftime("%H:%M:%S")
     
     if isinstance(time_obj, str):
-        # 如果已经是字符串，尝试格式化
         if ":" in time_obj:
             parts = time_obj.split(":")
-            return f"{parts[0]}:{parts[1]}"
+            h = parts[0].zfill(2)
+            m = parts[1].zfill(2) if len(parts) > 1 else "00"
+            s = parts[2].zfill(2) if len(parts) > 2 else "00"
+            return f"{h}:{m}:{s}"
     
     return str(time_obj)
 
