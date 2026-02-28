@@ -77,7 +77,22 @@ export function getBianhaoGygchList(params) {
   return request({ url: `${P}/gygch/list`, method: 'get', params })
 }
 
-/** 上传编号对应 PDF（仅支持 PDF），按编号代码命名 type: tech | jsgl | manage | gygch, code: 编号代码 */
+/** 生产数字化编号 - 项目缩写选项 */
+export function getScszhFenlei() {
+  return request({ url: `${P}/scszh/fenlei`, method: 'get' })
+}
+
+/** 生产数字化编号 - 添加 */
+export function addBianhaoScszh(data) {
+  return request({ url: `${P}/scszh/add`, method: 'post', data })
+}
+
+/** 生产数字化编号 - 列表 */
+export function getBianhaoScszhList(params) {
+  return request({ url: `${P}/scszh/list`, method: 'get', params })
+}
+
+/** 上传编号对应 PDF（仅支持 PDF），按编号代码命名 type: tech | jsgl | manage | gygch | scszh, code: 编号代码 */
 export function uploadNumberingPdf(type, code, file) {
   const form = new FormData()
   form.append('file', file)

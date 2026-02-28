@@ -4,7 +4,7 @@
       <div class="header-content">
         <div class="header-info">
           <h1 class="header-title">文件编号管理</h1>
-          <p class="header-subtitle">技术文件、技术管理文件、管理文件、工艺过程策划表的编号规则与记录查询</p>
+          <p class="header-subtitle">技术文件、技术管理文件、管理文件、工艺过程策划表、生产数字化的编号规则与记录查询</p>
         </div>
         <div class="header-actions">
           <button class="btn" @click="goTechCategory">技术分类录入</button>
@@ -43,11 +43,18 @@
       >
         工艺过程策划表
       </div>
+      <div 
+        class="tab-item" 
+        :class="{ active: currentTab === 'scszh' }"
+        @click="currentTab = 'scszh'"
+      >
+        生产数字化编号
+      </div>
     </div>
 
     <div class="content mt-xl">
       <!-- 搜索栏（技术文件 / 技术管理 / 管理文件） -->
-      <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage' || currentTab === 'gygch'">
+      <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage' || currentTab === 'gygch' || currentTab === 'scszh'">
         <template v-if="currentTab === 'tech'">
           <input v-model="searchKeyword" type="text" placeholder="搜索编号/文件名/项目..." class="search-input">
           <button type="button" class="btn btn-primary" @click="loadTechList">查询</button>
@@ -68,12 +75,17 @@
           <button type="button" class="btn btn-primary" @click="loadGygchList">查询</button>
           <button type="button" class="btn" @click="searchKeywordGygch = ''; loadGygchList()">重置</button>
         </template>
+        <template v-else-if="currentTab === 'scszh'">
+          <input v-model="searchKeywordScszh" type="text" placeholder="搜索编号/内容/项目..." class="search-input">
+          <button type="button" class="btn btn-primary" @click="loadScszhList">查询</button>
+          <button type="button" class="btn" @click="searchKeywordScszh = ''; loadScszhList()">重置</button>
+        </template>
       </div>
 
       <!-- 列表 -->
       <div class="card">
         <div class="card-header">
-          <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : currentTab === 'manage' ? '管理文件列表' : '工艺过程策划表列表' }}</h3>
+          <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : currentTab === 'manage' ? '管理文件列表' : currentTab === 'gygch' ? '工艺过程策划表列表' : '生产数字化编号列表' }}</h3>
         </div>
         <div class="card-body">
           <template v-if="currentTab === 'tech'">
@@ -258,6 +270,51 @@
               共 {{ gygchTotal }} 条，当前页 {{ filteredGygchList.length }} 条
             </div>
           </template>
+          <template v-else-if="currentTab === 'scszh'">
+            <div v-if="scszhListLoading" class="empty-text">加载中...</div>
+            <div v-else-if="filteredScszhList.length === 0" class="empty-text">暂无生产数字化编号记录</div>
+            <div v-else class="table-wrap">
+              <table class="data-table">
+                <thead>
+                  <tr>
+                    <th>编号单位</th>
+                    <th>编制人</th>
+                    <th>项目</th>
+                    <th>编号内容</th>
+                    <th>备注</th>
+                    <th>编号时间</th>
+                    <th>编号代码</th>
+                    <th>PDF 文件</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="row in filteredScszhList" :key="row.id">
+                    <td>{{ row.bz }}</td>
+                    <td>{{ row.xm }}</td>
+                    <td>{{ row.fenlei }}</td>
+                    <td>{{ row.neirong }}</td>
+                    <td>{{ row.content || '—' }}</td>
+                    <td>{{ row.bhtime || '—' }}</td>
+                    <td>
+                      <span class="bianhao-code">{{ row.bianhao_code }}</span>
+                      <button type="button" class="btn-copy-small" @click="copyText(row.bianhao_code)" title="复制">复制</button>
+                    </td>
+                    <td class="file-actions">
+                      <button v-if="!row.has_pdf" type="button" class="btn-copy-small btn-upload" title="请上传终版PDF文件仅支持PDF" @click="triggerUpload('scszh', row.bianhao_code)">请上传</button>
+                      <template v-else>
+                        <button type="button" class="btn-copy-small btn-delete" title="删除后可重新上传" @click="deletePdf('scszh', row.bianhao_code)">删除</button>
+                        <button type="button" class="btn-copy-small btn-preview" @click="openFile('scszh', row.bianhao_code, 0)">预览</button>
+                        <button type="button" class="btn-copy-small btn-download" @click="openFile('scszh', row.bianhao_code, 1)">下载</button>
+                      </template>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <div v-if="scszhTotal > 0" class="table-footer">
+              共 {{ scszhTotal }} 条，当前页 {{ filteredScszhList.length }} 条
+            </div>
+          </template>
           <p v-else class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</p>
         </div>
       </div>
@@ -274,7 +331,7 @@
     <!-- 获取编号弹窗（技术文件：自动填充添加人/科室，分类与项目下拉） -->
     <div v-if="showModal" class="modal-overlay" @click.self="closeModal">
       <div class="modal-content">
-        <h2>获取{{ currentTab === 'tech' ? '技术' : currentTab === 'jsgl' ? '技术管理' : currentTab === 'manage' ? '管理' : '工艺过程策划表' }}编号</h2>
+        <h2>获取{{ currentTab === 'tech' ? '技术' : currentTab === 'jsgl' ? '技术管理' : currentTab === 'manage' ? '管理' : currentTab === 'gygch' ? '工艺过程策划表' : '生产数字化' }}编号</h2>
         <!-- 生成成功：显示编号 + 复制 -->
         <div v-if="generatedBianhao" class="result-block">
           <p class="result-label">编号已生成</p>
@@ -376,7 +433,32 @@
               <input v-model="form.neirong" type="text" placeholder="选填">
             </div>
           </template>
-          <div v-if="currentTab !== 'manage' && currentTab !== 'gygch'" class="form-group">
+          <template v-else-if="currentTab === 'scszh'">
+            <div class="form-group">
+              <label>添加人</label>
+              <input v-model="form.xm" type="text" readonly class="readonly">
+            </div>
+            <div class="form-group">
+              <label>所属科室</label>
+              <input v-model="form.bz" type="text" readonly class="readonly">
+            </div>
+            <div class="form-group">
+              <label>项目</label>
+              <select v-model="form.fenlei">
+                <option value="">请选择项目</option>
+                <option v-for="item in scszhFenleiList" :key="item.value" :value="item.value">{{ item.label }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>编制内容</label>
+              <input v-model="form.neirong" type="text" placeholder="请输入编制内容">
+            </div>
+            <div class="form-group">
+              <label>备注</label>
+              <input v-model="form.content" type="text" placeholder="选填">
+            </div>
+          </template>
+          <div v-if="currentTab !== 'manage' && currentTab !== 'gygch' && currentTab !== 'scszh'" class="form-group">
             <label>{{ currentTab === 'jsgl' ? '编制内容' : '文件名称' }}</label>
             <input v-model="form.neirong" type="text" :placeholder="currentTab === 'jsgl' ? '请输入编制内容' : '请输入文件名称'">
           </div>
@@ -393,7 +475,7 @@
 <script setup>
 import { ref, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
+import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, getScszhFenlei, addBianhaoScszh, getBianhaoScszhList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
 import { getStatisticsPermission } from '@/api/attendance'
 
 const router = useRouter()
@@ -420,6 +502,11 @@ const gygchList = ref([])
 const gygchListLoading = ref(false)
 const gygchTotal = ref(0)
 const searchKeywordGygch = ref('')
+const scszhList = ref([])
+const scszhListLoading = ref(false)
+const scszhTotal = ref(0)
+const searchKeywordScszh = ref('')
+const scszhFenleiList = ref([])
 const pdfInputRef = ref(null)
 const uploadTarget = ref({ type: '', code: '' })
 
@@ -513,6 +600,31 @@ async function loadGlFenlei() {
 }
 
 
+async function loadScszhFenlei() {
+  try {
+    const res = await getScszhFenlei()
+    scszhFenleiList.value = (res.list || []).filter(Boolean)
+  } catch {
+    scszhFenleiList.value = []
+  }
+}
+
+async function loadScszhList() {
+  scszhListLoading.value = true
+  try {
+    const params = { page: 1, page_size: 100 }
+    if ((form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const res = await getBianhaoScszhList(params)
+    scszhList.value = (res.list || []).filter(Boolean)
+    scszhTotal.value = res.total ?? scszhList.value.length
+  } catch {
+    scszhList.value = []
+    scszhTotal.value = 0
+  } finally {
+    scszhListLoading.value = false
+  }
+}
+
 async function loadGygchList() {
   gygchListLoading.value = true
   try {
@@ -586,6 +698,20 @@ const filteredGygchList = computed(() => {
       (r.bz && r.bz.toLowerCase().includes(kw)) ||
       (r.xm && r.xm.toLowerCase().includes(kw)) ||
       (r.room_code && r.room_code.toLowerCase().includes(kw))
+  )
+})
+
+const filteredScszhList = computed(() => {
+  const kw = (searchKeywordScszh.value || '').trim().toLowerCase()
+  if (!kw) return scszhList.value
+  return scszhList.value.filter(
+    (r) =>
+      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+      (r.bz && r.bz.toLowerCase().includes(kw)) ||
+      (r.xm && r.xm.toLowerCase().includes(kw)) ||
+      (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
+      (r.content && r.content.toLowerCase().includes(kw))
   )
 })
 
@@ -687,6 +813,7 @@ async function onPdfSelected(e) {
     else if (type === 'jsgl') await loadJsglList()
     else if (type === 'manage') await loadManageList()
     else if (type === 'gygch') await loadGygchList()
+    else if (type === 'scszh') await loadScszhList()
   } catch (err) {
     alert(err.response?.data?.detail || err.message || '上传失败')
   }
@@ -706,6 +833,7 @@ async function deletePdf(type, code) {
     else if (type === 'jsgl') await loadJsglList()
     else if (type === 'manage') await loadManageList()
     else if (type === 'gygch') await loadGygchList()
+    else if (type === 'scszh') await loadScszhList()
   } catch (err) {
     alert(err.response?.data?.detail || err.message || '删除失败')
   }
@@ -735,12 +863,16 @@ watch(currentTab, async (tab) => {
   } else if (tab === 'gygch') {
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadGygchList()
+  } else if (tab === 'scszh') {
+    if (!(form.value.bz || '').trim()) await loadUserDept()
+    await loadScszhList()
   }
 })
 
 onMounted(async () => {
   await loadJsglFenlei()
   await loadGlFenlei()
+  await loadScszhFenlei()
   if (currentTab.value === 'tech') {
     await loadUserDept()
     await loadTechList()
@@ -753,6 +885,9 @@ onMounted(async () => {
   } else if (currentTab.value === 'gygch') {
     await loadUserDept()
     await loadGygchList()
+  } else if (currentTab.value === 'scszh') {
+    await loadUserDept()
+    await loadScszhList()
   }
 })
 
@@ -778,6 +913,11 @@ watch(showModal, async (visible) => {
     await loadUserDept()
     form.value.bhyear = new Date().getFullYear()
     form.value.neirong = ''
+  } else if (currentTab.value === 'scszh') {
+    await loadUserDept()
+    form.value.fenlei = ''
+    form.value.neirong = ''
+    form.value.content = ''
   }
 })
 
@@ -895,6 +1035,37 @@ async function submitNumbering() {
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
         await loadGygchList()
+      } else {
+        alert(res.message || '生成失败')
+      }
+    } catch (e) {
+      alert(e.response?.data?.detail || e.message || '生成失败')
+    } finally {
+      submitLoading.value = false
+    }
+    return
+  }
+  if (currentTab.value === 'scszh') {
+    if (!f.neirong?.trim()) {
+      alert('请输入编制内容')
+      return
+    }
+    if (!f.fenlei) {
+      alert('请选择项目')
+      return
+    }
+    submitLoading.value = true
+    try {
+      const res = await addBianhaoScszh({
+        xm: f.xm,
+        bz: f.bz,
+        fenlei: f.fenlei,
+        neirong: f.neirong.trim(),
+        content: (f.content || '').trim()
+      })
+      if (res.success) {
+        generatedBianhao.value = res.bianhao || ''
+        await loadScszhList()
       } else {
         alert(res.message || '生成失败')
       }

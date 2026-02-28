@@ -24,6 +24,7 @@ FILE_DIRS = {
     "jsgl": os.path.join(_DATA_DIR, "jsgl_files"),
     "manage": os.path.join(_DATA_DIR, "manage_files"),
     "gygch": os.path.join(_DATA_DIR, "gygch_files"),
+    "scszh": os.path.join(_DATA_DIR, "scszh_files"),
 }
 
 
@@ -594,6 +595,139 @@ async def upload_numbering_pdf(
         raise
     except Exception as e:
         logger.error(f"PDF 上传失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 生产数字化编号 bianhao_scszh ====================
+# 编号规则：生产数字化（项目缩写）纪字【年份】xx号
+# 如 生产数字化（线）纪字【2026】1号
+# 项目缩写固定：线(线圈数字化车间)、冲(冲剪数字化车间)、金(金工数字化车间)、焊(焊接数字化车间)
+
+FENLEI_SCSZH = [
+    {"value": "线", "label": "线 - 线圈数字化车间"},
+    {"value": "冲", "label": "冲 - 冲剪数字化车间"},
+    {"value": "金", "label": "金 - 金工数字化车间"},
+    {"value": "焊", "label": "焊 - 焊接数字化车间"},
+]
+
+
+def _ensure_scszh_table():
+    """确保 bianhao_scszh 表存在"""
+    try:
+        db.execute_update("""
+            CREATE TABLE IF NOT EXISTS bianhao_scszh (
+                id INT AUTO_INCREMENT PRIMARY KEY,
+                xm VARCHAR(100) DEFAULT NULL,
+                bz VARCHAR(200) DEFAULT NULL,
+                fenlei VARCHAR(50) NOT NULL COMMENT '项目缩写：线/冲/金/焊',
+                neirong TEXT DEFAULT NULL COMMENT '编号内容',
+                content VARCHAR(500) DEFAULT NULL COMMENT '备注',
+                bhtime VARCHAR(50) DEFAULT NULL,
+                bhyear INT DEFAULT NULL,
+                bianhao1 VARCHAR(50) DEFAULT NULL COMMENT '项目缩写',
+                bianhao2 INT DEFAULT NULL COMMENT '顺序号',
+                bianhao3 VARCHAR(10) DEFAULT NULL COMMENT '顺序号字符串',
+                yj VARCHAR(10) DEFAULT '0',
+                INDEX idx_fenlei_year (bianhao1, bhyear)
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """, ())
+    except Exception as e:
+        logger.warning(f"创建 bianhao_scszh 表: {e}")
+
+
+_ensure_scszh_table()
+
+
+@router.get("/scszh/fenlei")
+async def get_scszh_fenlei():
+    return {"success": True, "list": FENLEI_SCSZH}
+
+
+class BianhaoScszhRequest(BaseModel):
+    xm: str
+    bz: str
+    fenlei: str
+    neirong: str
+    content: str = ""
+
+
+@router.post("/scszh/add")
+async def add_bianhao_scszh(req: BianhaoScszhRequest):
+    """生产数字化编号 - 写入 bianhao_scszh"""
+    try:
+        if not req.neirong.strip():
+            raise HTTPException(status_code=400, detail="编号内容不能为空")
+        valid_values = [f["value"] for f in FENLEI_SCSZH]
+        if req.fenlei not in valid_values:
+            raise HTTPException(status_code=400, detail=f"无效项目缩写，可选：{valid_values}")
+        bhyear = datetime.now().year
+        max_rows = db.execute_query(
+            "SELECT bianhao2 FROM bianhao_scszh WHERE bianhao1=%s AND bhyear=%s ORDER BY bianhao2 DESC LIMIT 1",
+            (req.fenlei, bhyear)
+        )
+        next_num = 1 if not max_rows else (max_rows[0].get("bianhao2") or 0) + 1
+        bhtime = datetime.now().strftime("%Y-%m-%d")
+        sql = """INSERT INTO bianhao_scszh (xm,bz,fenlei,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,yj,content)
+                 VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'0',%s)"""
+        db.execute_update(sql, (req.xm, req.bz, req.fenlei, req.neirong.strip(), bhtime, bhyear,
+                                req.fenlei, next_num, str(next_num), (req.content or "").strip()))
+        code = f"生产数字化（{req.fenlei}）纪字【{bhyear}】{next_num}号"
+        return {"success": True, "message": "编号成功", "bianhao": code}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"生产数字化编号失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+def _fmt_scszh(r):
+    """生产数字化编号列表格式化"""
+    fl = r.get("fenlei") or r.get("bianhao1") or ""
+    by = _str(r.get("bhyear"))
+    seq = r.get("bianhao2") or 0
+    return {
+        "id": _row_id(r), "xm": r.get("xm"), "bz": r.get("bz"), "fenlei": fl,
+        "neirong": r.get("neirong"), "content": _str(r.get("content")),
+        "bhtime": _str(r.get("bhtime")), "bhyear": by,
+        "bianhao1": fl, "bianhao2": seq, "bianhao3": r.get("bianhao3"),
+        "bianhao_code": f"生产数字化（{fl}）纪字【{by}】{seq}号" if (fl and by) else "-"
+    }
+
+
+@router.get("/scszh/list")
+async def get_bianhao_scszh_list(
+    bz: Optional[str] = Query(None, description="所属科室"),
+    px: Optional[str] = Query(None, description="按项目缩写筛选"),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(30, ge=1, le=100)
+):
+    """生产数字化编号列表"""
+    try:
+        where, params = [], ()
+        if (bz or "").strip():
+            where.append("bz=%s")
+            params = (bz.strip(),)
+        if (px or "").strip():
+            where.append("fenlei=%s")
+            params = params + (px.strip(),)
+        where_sql = " AND ".join(where) if where else "1=1"
+        cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao_scszh WHERE {where_sql}", params)
+        total = (cnt[0]["n"] or 0) if cnt else 0
+        offset = (page - 1) * page_size
+        rows = db.execute_query(
+            f"SELECT * FROM bianhao_scszh WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s",
+            (*params, page_size, offset)
+        )
+
+        def _with_has_pdf(r):
+            d = dict(_fmt_scszh(r))
+            code = d.get("bianhao_code") or ""
+            d["has_pdf"] = bool(code and code != "-") and os.path.isfile(_file_path_by_code("scszh", code))
+            return d
+
+        return {"success": True, "list": [_with_has_pdf(r) for r in (rows or [])], "total": total, "page": page, "pageSize": page_size}
+    except Exception as e:
+        logger.error(f"查询失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
