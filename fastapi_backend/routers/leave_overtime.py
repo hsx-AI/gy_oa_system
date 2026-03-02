@@ -369,6 +369,16 @@ async def register_overtime(req: OvertimeRegisterRequest):
             date_part = datetime.now().strftime("%Y-%m-%d")
         time_from = f"{date_part} {st}"
         time_to = f"{date_part} {et}"
+        # 加班开始时间不能早于 8:00，8:00 之前不计入加班
+        try:
+            from datetime import datetime as dt_parse
+            start_dt = dt_parse.strptime(st, "%H:%M:%S")
+            if start_dt.hour < 8:
+                raise HTTPException(status_code=400, detail="加班开始时间不能早于 8:00，8:00 之前不计入加班")
+        except HTTPException:
+            raise
+        except Exception:
+            pass  # 非时间格式时跳过，由后续逻辑处理
         hours = _calc_hours(st, et, req.date)
         hours = round_overtime_hours_down(hours)  # 时长最小单位 0.5 小时，向下取整后写入
 
@@ -467,7 +477,9 @@ async def get_overtime_list(
         if status == "approved":
             query += " AND jiabanzt = 4"
         elif status == "processing":
+            # 含已驳回(22)，便于用户在「审批中/已驳回」中看到被驳回的申请
             query += " AND jiabanzt IN (0, 1, 3, 5, 22)"
+        # status == "all" 时不加 jiabanzt 条件，返回全部状态（含已驳回）
         query += " ORDER BY timedate DESC, timefrom DESC"
         try:
             rows = db.execute_query(query, tuple(params))
@@ -490,6 +502,10 @@ async def get_overtime_list(
         records = []
         for row in rows:
             jiabanzt = row.get("jiabanzt")
+            try:
+                jiabanzt = int(jiabanzt) if jiabanzt is not None else None
+            except (TypeError, ValueError):
+                jiabanzt = None
             if jiabanzt in (0, 1):
                 current_approver = (row.get("spr") or "").strip()
             elif jiabanzt == 3:

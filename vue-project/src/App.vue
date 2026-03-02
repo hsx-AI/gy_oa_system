@@ -46,7 +46,7 @@
             </svg>
             <span>统计汇总</span>
           </router-link>
-          <router-link v-if="canSeeOvertimePay" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="1" x2="12" y2="23" />
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
@@ -202,7 +202,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUploadConfig, getOvertimePayPermission } from '@/api/attendance'
+import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 
 const route = useRoute()
@@ -239,8 +239,7 @@ const canSeeLeaderDashboard = computed(() => {
   return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
 })
 
-// 是否显示加班费统计入口（部长/副部长 或 人事管理员 webconfig.admin2）
-const canSeeOvertimePay = ref(false)
+// 加班费统计：全员可访问，页面内按权限显示本人/本室/全部门
 
 // 是否显示数据库表管理入口（仅 webconfig.admin1 系统管理员）
 const canAccessDbManager = ref(false)
@@ -279,7 +278,6 @@ const onDocumentClick = (e) => {
 const handleLogout = () => {
   localStorage.removeItem('userInfo')
   currentUser.value = { name: '', dept: '', username: '' }
-  canSeeOvertimePay.value = false
   canAccessDbManager.value = false
   admin2.value = ''
   showUserMenu.value = false
@@ -294,23 +292,17 @@ const loadUserInfo = () => {
       currentUser.value = JSON.parse(userInfo)
       const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
       if (name) {
-        getOvertimePayPermission({ name }).then(res => {
-          canSeeOvertimePay.value = !!(res && res.canView)
-        }).catch(() => { canSeeOvertimePay.value = false })
         getDbManagerPermission({ current_user: name }).then(res => {
           canAccessDbManager.value = !!(res && res.canAccess)
         }).catch(() => { canAccessDbManager.value = false })
       } else {
-        canSeeOvertimePay.value = false
         canAccessDbManager.value = false
       }
     } else {
-      canSeeOvertimePay.value = false
       canAccessDbManager.value = false
     }
   } catch (error) {
     console.error('加载用户信息失败:', error)
-    canSeeOvertimePay.value = false
     canAccessDbManager.value = false
   }
 }

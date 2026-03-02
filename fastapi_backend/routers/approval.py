@@ -322,18 +322,31 @@ async def get_pending_overtime(approver: str = Query(...)):
         for r in rows:
             tf = r.get("timefrom") or ""
             tt = r.get("timeto") or ""
+            # 统一为 HH:MM:SS，与打卡精确到秒一致，避免智能校验误判「打卡不实」
             if isinstance(tf, datetime):
-                tf = tf.strftime("%H:%M") if tf else ""
+                tf = tf.strftime("%H:%M:%S") if tf else ""
             elif tf and " " in str(tf):
-                tf = str(tf).split(" ")[-1][:8]
+                tf = str(tf).split(" ")[-1].strip()
+                if tf and len(tf) == 5 and ":" in tf:
+                    tf = tf + ":00"
+                tf = (tf or "")[:8] if tf else ""
             else:
-                tf = str(tf)[:8] if tf else ""
+                tf = str(tf).strip() if tf else ""
+                if tf and len(tf) == 5 and ":" in tf:
+                    tf = tf + ":00"
+                tf = (tf or "")[:8] if tf else ""
             if isinstance(tt, datetime):
-                tt = tt.strftime("%H:%M") if tt else ""
+                tt = tt.strftime("%H:%M:%S") if tt else ""
             elif tt and " " in str(tt):
-                tt = str(tt).split(" ")[-1][:8]
+                tt = str(tt).split(" ")[-1].strip()
+                if tt and len(tt) == 5 and ":" in tt:
+                    tt = tt + ":00"
+                tt = (tt or "")[:8] if tt else ""
             else:
-                tt = str(tt)[:8] if tt else ""
+                tt = str(tt).strip() if tt else ""
+                if tt and len(tt) == 5 and ":" in tt:
+                    tt = tt + ":00"
+                tt = (tt or "")[:8] if tt else ""
             hours = r.get("jbf") or r.get("tian1") or 0
             try:
                 hours = float(hours)
@@ -519,10 +532,44 @@ def _intervals_overlap(s1: str, e1: str, s2: str, e2: str) -> bool:
     return s1 < e2 and s2 < e1
 
 
+def _truncate_to_minute(dt_str: str) -> str:
+    """将 YYYY-MM-DD HH:MM:SS 截断到分钟，便于与打卡按分钟对齐比较"""
+    if not dt_str or len(dt_str) < 19:
+        return dt_str or ""
+    return dt_str[:17] + "00"
+
+
+def _overtime_segments_for_noon(date_ymd: str, start_dt: str, end_dt: str) -> List[tuple]:
+    """
+    若加班区间横跨午休(12:00-13:00)，拆成两段：12点前一段、13点后一段；
+    否则返回整段。用于智能校验时分别检查两段是否都被打卡覆盖（午休外出吃饭不判为打卡不实）。
+    """
+    if not date_ymd or not start_dt or not end_dt or start_dt >= end_dt:
+        return [(start_dt, end_dt)] if start_dt and end_dt else []
+    noon_start = f"{date_ymd} 12:00:00"
+    noon_end = f"{date_ymd} 13:00:00"
+    # 横跨午休：开始 < 13:00 且 结束 > 12:00
+    if start_dt < noon_end and end_dt > noon_start:
+        segs = []
+        if start_dt < noon_start:
+            segs.append((start_dt, noon_start))
+        if end_dt > noon_end:
+            segs.append((noon_end, end_dt))
+        if segs:
+            return segs
+    return [(start_dt, end_dt)]
+
+
 def _interval_contained_in(s_start: str, s_end: str, punch_starts: List[str], punch_ends: List[str]) -> bool:
-    """加班区间 [s_start, s_end] 是否被某段打卡区间包含"""
+    """加班区间 [s_start, s_end] 是否被某段打卡区间包含。按分钟对齐比较，避免秒级差异误判「打卡不实」。"""
+    s_start_m = _truncate_to_minute(s_start)
+    s_end_m = _truncate_to_minute(s_end)
     for p_start, p_end in zip(punch_starts, punch_ends):
-        if p_start and p_end and p_start <= s_start and s_end <= p_end:
+        if not p_start or not p_end:
+            continue
+        p_start_m = _truncate_to_minute(p_start)
+        p_end_m = _truncate_to_minute(p_end)
+        if p_start_m <= s_start_m and s_end_m <= p_end_m:
             return True
     return False
 
@@ -588,8 +635,13 @@ async def overtime_validate(req: OvertimeValidateRequest):
             continue
         _, applicant, start_dt, end_dt = rec
 
-        # 2) 打卡校验：查该人当日打卡，构建 (time_1,time_2),(time_3,time_4)... 区间，看是否包含
         date_ymd = start_dt[:10]
+        # 加班开始时间不能早于 8:00，8:00 之前不计入加班
+        if start_dt < f"{date_ymd} 08:00:00":
+            results.append({"id": it.id, "pass": False, "reason": "开始时间不能早于8:00"})
+            continue
+
+        # 2) 打卡校验：查该人当日打卡，构建 (time_1,time_2),(time_3,time_4)... 区间，看是否包含
         try:
             att_records = attendance_db.query_by_date_range(date_ymd, date_ymd, name=applicant)
         except Exception:
@@ -613,17 +665,22 @@ async def overtime_validate(req: OvertimeValidateRequest):
                     if t1 and t2 and t1 < t2:
                         punch_starts.append(t1[:19])
                         punch_ends.append(t2[:19])
-                if _interval_contained_in(start_dt, end_dt, punch_starts, punch_ends):
+                segments = _overtime_segments_for_noon(date_ymd, start_dt, end_dt)
+                all_contained = all(
+                    _interval_contained_in(seg_start, seg_end, punch_starts, punch_ends)
+                    for seg_start, seg_end in segments
+                )
+                if all_contained:
                     punch_contained = True
                     break
         if not punch_contained:
             results.append({"id": it.id, "pass": False, "reason": "打卡不实"})
             continue
 
-        # 3) jiaban 表查重：同人、非本条，时间段重叠
+        # 3) jiaban 表查重：同人、非本条、且排除已驳回(22)，时间段重叠才算重复申报
         try:
             other_rows = db.execute_query(
-                "SELECT id, timefrom, timeto FROM jiaban WHERE xm = %s AND id != %s",
+                "SELECT id, timefrom, timeto FROM jiaban WHERE xm = %s AND id != %s AND (jiabanzt IS NULL OR jiabanzt != 22)",
                 (applicant, it.id)
             ) or []
         except Exception:

@@ -504,6 +504,20 @@ export function exportAttendanceExceptions(params) {
   })
 }
 
+/**
+ * 导出异常处理表：按月全员请假信息 XLS（员工代码、姓名、部门、请假开始/结束时间、请假类别）
+ * @param {Object} params - { year, month, current_user }
+ */
+export function exportLeaveHandlerTable(params) {
+  return request({
+    url: '/attendance/leave-handler-export',
+    method: 'get',
+    params,
+    responseType: 'blob',
+    timeout: 120000
+  })
+}
+
 // ==================== 加班/请假统计 API ====================
 
 /**

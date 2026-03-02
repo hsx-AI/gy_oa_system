@@ -501,6 +501,119 @@ async def export_attendance_exceptions(
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 
+def _parse_datetime_for_excel(val) -> Optional[datetime]:
+    """将 DB 返回的 timefrom/timeto 转为 datetime，用于 Excel 的 DATE TIME 列。"""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    if "." in s:
+        s = s.split(".")[0]
+    s = s[:19]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+@router.get("/leave-handler-export")
+async def export_leave_handler_table(
+    year: int = Query(..., description="年份"),
+    month: int = Query(..., ge=1, le=12, description="月份 1-12"),
+    current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
+):
+    """
+    导出异常处理表：按月全员请假信息，XLS（Excel）格式。
+    列顺序：A 员工代码(string) B 姓名(string) C 部门(string，固定「智能制造工艺部」)
+    D 请假开始时间(DATE TIME) E 实际请假结束时间(DATE TIME) F 请假类别(string)。
+    数据来源：qj 表（已通过 qjzt=4），员工代码来自 yggl.gh。
+    """
+    allowed, _ = _can_see_attendance_exceptions(current_user or "")
+    if not allowed:
+        raise HTTPException(
+            status_code=403,
+            detail="仅班组长/主任/副主任或打卡管理员可导出异常处理表",
+        )
+    try:
+        try:
+            from openpyxl import Workbook
+            from openpyxl.styles import Font, Alignment
+        except ImportError:
+            raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
+
+        month_str = f"{year}-{month:02d}"
+        # 全员请假：qj 已通过，按月份筛选；员工代码取 yggl.gh
+        sql = """
+            SELECT qj.xm AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
+                   TRIM(yggl.gh) AS gh
+            FROM qj
+            LEFT JOIN yggl ON qj.xm = yggl.name
+            WHERE qj.qjzt = 4
+              AND (qj.timefrom LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)
+            ORDER BY qj.timefrom ASC
+        """
+        rows = db.execute_query(sql, (f"{month_str}%", month_str)) or []
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "异常处理表"
+
+        headers = ["员工代码", "姓名", "部门", "请假开始时间", "实际请假结束时间", "请假类别"]
+        ws.append(headers)
+        for col, _ in enumerate(headers, 1):
+            c = ws.cell(row=1, column=col)
+            c.font = Font(bold=True)
+            c.alignment = Alignment(horizontal="center")
+
+        dept_fixed = "智能制造工艺部"
+        for r in rows:
+            gh = (r.get("gh") or "").strip()
+            xm = (r.get("xm") or "").strip()
+            timefrom_val = r.get("timefrom")
+            timeto_val = r.get("timeto")
+            qjfs = (r.get("qjfs") or "").strip()
+
+            dt_start = _parse_datetime_for_excel(timefrom_val)
+            dt_end = _parse_datetime_for_excel(timeto_val)
+
+            row_data = [
+                gh,
+                xm,
+                dept_fixed,
+                dt_start if dt_start is not None else (timefrom_val if timefrom_val is not None else ""),
+                dt_end if dt_end is not None else (timeto_val if timeto_val is not None else ""),
+                qjfs,
+            ]
+            ws.append(row_data)
+
+        # 设置 D、E 列为日期时间格式（对已写入的 datetime 对象生效）
+        for row_idx in range(2, ws.max_row + 1):
+            for col_letter in ("D", "E"):
+                cell = ws[f"{col_letter}{row_idx}"]
+                if isinstance(cell.value, datetime):
+                    cell.number_format = "yyyy-mm-dd hh:mm:ss"
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename_ascii = f"leave_handler_{year}{month:02d}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename_ascii}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"导出异常处理表失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+
+
 @router.get("/query", response_model=AttendanceQueryResponse)
 async def query_attendance(
     name: Optional[str] = Query(None, description="员工姓名"),

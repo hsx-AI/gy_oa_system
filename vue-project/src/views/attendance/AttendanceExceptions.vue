@@ -17,7 +17,10 @@
             />
           </div>
           <button class="btn btn-outline" type="button" @click="handleExport" :disabled="exporting || loading">
-            {{ exporting ? '导出中…' : '导出报表' }}
+            {{ exporting ? '导出中…' : '导出考勤异常表' }}
+          </button>
+          <button class="btn btn-outline" type="button" @click="handleLeaveHandlerExport" :disabled="exportingLeaveHandler || loading">
+            {{ exportingLeaveHandler ? '导出中…' : '导出异常处理表（上传公司系统）' }}
           </button>
         </div>
       </div>
@@ -107,13 +110,14 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getAttendanceExceptions, exportAttendanceExceptions } from '@/api/attendance'
+import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable } from '@/api/attendance'
 
 const loading = ref(false)
 const loadError = ref('')
 const records = ref([])
 const selectedDept = ref('')
 const exporting = ref(false)
+const exportingLeaveHandler = ref(false)
 
 const now = new Date()
 const monthStr = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
@@ -229,6 +233,46 @@ async function handleExport() {
     alert(e?.message || '导出失败')
   } finally {
     exporting.value = false
+  }
+}
+
+async function handleLeaveHandlerExport() {
+  const match = (monthStr.value || '').match(/^(\d{4})-(\d{2})$/)
+  if (!match) {
+    alert('请先选择导出的年月')
+    return
+  }
+  const name = getCurrentUserName()
+  if (!name) {
+    alert('请先登录')
+    return
+  }
+  exportingLeaveHandler.value = true
+  try {
+    const year = parseInt(match[1], 10)
+    const month = parseInt(match[2], 10)
+    const blob = await exportLeaveHandlerTable({ year, month, current_user: name })
+    const isExcel = blob.type && (blob.type.includes('spreadsheet') || blob.type.includes('ms-excel'))
+    if (isExcel) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `异常处理表_${match[1]}${match[2]}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+    } else {
+      const text = await blob.text()
+      try {
+        const j = JSON.parse(text)
+        alert(j.detail || j.message || '导出失败')
+      } catch {
+        alert('导出失败')
+      }
+    }
+  } catch (e) {
+    alert(e?.message || '导出失败')
+  } finally {
+    exportingLeaveHandler.value = false
   }
 }
 

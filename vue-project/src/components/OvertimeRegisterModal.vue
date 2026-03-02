@@ -58,10 +58,10 @@
           </p>
           <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
             <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8">
-              本次加班费：{{ specialHolidayName }}加班满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
+              本次加班费：{{ specialHolidayName }}严格按照上下班打卡满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
             </template>
             <template v-else-if="isSpecialHoliday">
-              本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}加班满8小时可获固定200元奖励）
+              本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}严格按照上下班打卡满8小时可获固定200元奖励）
             </template>
             <template v-else>
               本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元

@@ -373,7 +373,10 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
 def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     """
     分析休息日/假期打卡记录，生成建议。返回 List[dict] 含 start_time, end_time, status=0, message。
-    逻辑：取第一次到最后一次打卡的完整区间，跨午休时自动扣除1小时，合并为一条建议。
+    逻辑：
+    - 打卡按 (time_1,time_2)、(time_3,time_4)... 成对为进出段。
+    - 若某段结束 <12:00 且下一段开始 >12:00（午休前离岗、午休后返岗，有跨越午休的离岗即分段），则必须按两段分别建议，不能合并，否则会多算。
+    - 否则（未在午休时段离岗）可合并为一段，跨午休时扣除 1 小时。
     """
     suggestions: List[dict] = []
 
@@ -382,21 +385,67 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
         return suggestions
 
     times.sort()
+    NOON_START = 12
+    NOON_END = 13
+    OT_START_HOUR = 8  # 加班开始时间不早于 8:00，8:00 之前不计入加班
+    RESTDAY_OVERTIME_MIN_HOURS = 1.0
+
+    # 按进出对划分：(times[0],times[1]), (times[2],times[3]), ...
+    pairs: List[tuple] = []
+    for i in range(0, len(times) - 1, 2):
+        pairs.append((times[i], times[i + 1]))
+
+    if not pairs:
+        return suggestions
+
+    # 判断是否存在「午休前离岗、午休后返岗」：某对结束 <12:00 且下一对开始 >12:00（有跨越午休的离岗即分段，否则会多算）
+    has_lunch_leave = False
+    for j in range(len(pairs) - 1):
+        end_val = time_to_decimal(pairs[j][1])
+        next_start_val = time_to_decimal(pairs[j + 1][0])
+        if end_val < NOON_START and next_start_val > NOON_START:
+            has_lunch_leave = True
+            break
+
+    if has_lunch_leave:
+        # 必须按段填报，每段单独一条建议；开始时间不早于 8:00；下午段若在 12:00-13:00 之间开始则建议从 13:00 起算
+        for s_time, e_time in pairs:
+            s_val = time_to_decimal(s_time)
+            e_val = time_to_decimal(e_time)
+            if s_val >= e_val:
+                continue
+            effective_start = max(s_val, OT_START_HOUR)
+            if NOON_START <= effective_start < NOON_END:
+                effective_start = NOON_END
+            if effective_start >= e_val:
+                continue
+            duration = e_val - effective_start
+            if duration < RESTDAY_OVERTIME_MIN_HOURS:
+                continue
+            if s_val < OT_START_HOUR:
+                start_str = "08:00:00"
+            elif NOON_START <= s_val < NOON_END:
+                start_str = "13:00:00"
+            else:
+                start_str = format_time(s_time)
+            end_str = format_time(e_time)
+            suggestions.append(_sugg(
+                start_str, end_str, 0,
+                f"【加班建议】休息日加班，建议补录 {start_str} 到 {end_str} 的加班（约{_format_hours_display(duration)}）"
+            ))
+        return suggestions
+
+    # 未在午休离岗：可合并为一段，跨午休时扣 1 小时；开始时间不早于 8:00
     first_time = times[0]
     last_time = times[-1]
-
     start_val = time_to_decimal(first_time)
     end_val = time_to_decimal(last_time)
 
     if start_val >= end_val:
         return suggestions
 
-    NOON_START = 12
-    NOON_END = 13
-    RESTDAY_OVERTIME_MIN_HOURS = 1.0
-
-    effective_start = start_val
-    if NOON_START <= start_val < NOON_END:
+    effective_start = max(start_val, OT_START_HOUR)
+    if NOON_START <= effective_start < NOON_END:
         effective_start = NOON_END
 
     effective_end = end_val
@@ -415,7 +464,7 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     if total_hours < RESTDAY_OVERTIME_MIN_HOURS:
         return suggestions
 
-    start_str = format_time(first_time)
+    start_str = "08:00:00" if start_val < OT_START_HOUR else format_time(first_time)
     end_str = format_time(last_time)
     suggestions.append(_sugg(
         start_str, end_str, 0,

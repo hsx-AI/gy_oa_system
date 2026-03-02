@@ -415,12 +415,32 @@ async def get_dept_overtime_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+def _apply_overtime_pay_scope(
+    scope: Optional[str],
+    current_user: Optional[str],
+    scope_lsys: Optional[str],
+    lsys: Optional[str],
+    name: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """按加班费统计页权限 scope 强制修正 lsys/name。返回 (lsys, name)。"""
+    if not current_user or not scope:
+        return lsys, name
+    if scope == "self":
+        return None, (current_user or "").strip()
+    if scope == "lsys" and scope_lsys:
+        return (scope_lsys or "").strip(), None
+    return lsys, name
+
+
 @router.get("/dept/overtime-pay-by-month")
 async def get_dept_overtime_pay_by_month(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年"),
     name: Optional[str] = Query(None, description="仅查某人（如普通员工查本人）"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
     加班费按月份统计。仅统计 jiaban 审核完成(jiabanzt=4)、换休票为否(hx 非「是」)，
@@ -429,9 +449,11 @@ async def get_dept_overtime_pay_by_month(
       超出 8 小时部分不再额外计算；
     - 其他日期或不足 8 小时部分，按 webconfig.zhibanfei（默认 15 元/小时）计算；
     支持 name=某人 仅查本人；month=1~12 仅查该月。
+    当传入 current_user+scope 时按权限强制过滤：self 仅本人，lsys 仅本室，all 不限制。
     返回: { success, zhibanfei, list: [{ month, monthLabel, hours, pay }] }
     """
     try:
+        lsys, name = _apply_overtime_pay_scope(scope, current_user, scope_lsys, lsys, name)
         if year is None:
             year = datetime.now().year
         zhibanfei = 15.0
@@ -501,14 +523,19 @@ async def get_dept_overtime_pay_by_employee(
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年"),
     name: Optional[str] = Query(None, description="仅查某人（如普通员工查本人）"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
     科室员工加班费明细：指定科室、年份，按人汇总（审核通过且换休票为否）。
     激励规则与 /dept/overtime-pay-by-month 相同。
     支持 name=某人 仅查本人；month=1~12 仅查该月。
+    当传入 current_user+scope 时按权限强制过滤。
     返回: { success, zhibanfei, list: [{ name, hours, pay }] }
     """
     try:
+        lsys, name = _apply_overtime_pay_scope(scope, current_user, scope_lsys, lsys, name)
         if year is None:
             year = datetime.now().year
         zhibanfei = 15.0
@@ -568,11 +595,14 @@ async def get_dept_overtime_pay_by_employee(
 async def get_overtime_pay_export(
     year: int = Query(..., description="年份"),
     month: int = Query(..., ge=1, le=12, description="月份（必选，用于按月工资报表）"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
     按月导出加班费工资报表数据：全员 + 各科室。
     以 yggl 名单为准，当月无加班记录者本月加班费为 0，保证科室人全。
-    加班费计算采用与统计页面相同的节日激励规则。
+    当传入 current_user+scope 时按权限过滤：self 仅导出本人，lsys 仅本室，all 不限制。
     返回: { success, zhibanfei, all: [{ name, pay }], byDept: [{ lsys, list: [{ name, pay }] }] }
     """
     try:
@@ -636,6 +666,16 @@ async def get_overtime_pay_export(
                 pay = round(agg["pay"], 2)
                 dept_list.append({"name": emp_name, "pay": pay})
             by_dept.append({"lsys": lsys, "list": dept_list})
+
+        # 按权限 scope 过滤导出结果
+        if current_user and scope == "self":
+            list_all = [x for x in list_all if (x.get("name") or "").strip() == (current_user or "").strip()]
+            by_dept = []
+        elif scope == "lsys" and scope_lsys:
+            lsys_val = (scope_lsys or "").strip()
+            by_dept = [x for x in by_dept if (x.get("lsys") or "").strip() == lsys_val]
+            dept_names = {n.get("name") for d in by_dept for n in (d.get("list") or [])}
+            list_all = [x for x in list_all if (x.get("name") or "") in dept_names]
 
         return {"success": True, "zhibanfei": zhibanfei, "all": list_all, "byDept": by_dept}
     except Exception as e:

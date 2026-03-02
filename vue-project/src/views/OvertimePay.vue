@@ -10,7 +10,7 @@
     <div class="container">
       <div v-if="!canView" class="no-permission card">
         <div class="no-permission-content">
-          <p>您暂无权限查看加班费统计，仅部长/副部长或人事管理员可访问。</p>
+          <p>您暂无权限查看加班费统计。</p>
           <router-link to="/" class="btn btn-primary">返回首页</router-link>
         </div>
       </div>
@@ -18,12 +18,16 @@
       <template v-else>
         <div class="filter-section card">
           <div class="filter-form">
-            <div class="form-item">
+            <div class="form-item" v-if="scope !== 'self'">
               <label class="form-label">科室</label>
-              <select v-model="selectedLsys" class="form-select" :disabled="!lsysList.length">
+              <select v-model="selectedLsys" class="form-select" :disabled="!lsysList.length || scope === 'lsys'">
                 <option value="">全员</option>
                 <option v-for="d in lsysList" :key="d" :value="d">{{ d }}</option>
               </select>
+            </div>
+            <div class="form-item" v-if="scope === 'self'">
+              <label class="form-label">范围</label>
+              <span class="scope-self-label">本人</span>
             </div>
             <div class="form-item">
               <label class="form-label">年份</label>
@@ -70,7 +74,7 @@
             统计结果
           </h2>
           <p class="section-desc">
-            {{ selectedLsys || '全员' }} {{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}
+            {{ scope === 'self' ? '本人' : (selectedLsys || '全员') }} {{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}
             （单价 {{ overtimePayZhibanfei }} 元/小时，十一、高温假、春节三个假期单日值班满8小时固定奖励200元/天，超出8小时不额外奖励）
           </p>
           <div v-if="overtimePayByMonth.length > 0" class="table-wrap">
@@ -144,6 +148,9 @@ import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, g
 
 const router = useRouter()
 const canView = ref(false)
+const scope = ref('self')  // self | lsys | all
+const scopeLsys = ref('')   // scope=lsys 时本室名称
+const currentUserName = ref('')
 const lsysList = ref([])
 const selectedLsys = ref('')
 const filterYear = ref(new Date().getFullYear())
@@ -163,8 +170,10 @@ const yearOptions = computed(() => {
 const fetchData = async () => {
   loading.value = true
   hasFetched.value = true
-  const payParams = { year: filterYear.value }
-  if (selectedLsys.value) payParams.lsys = selectedLsys.value
+  const payParams = { year: filterYear.value, current_user: currentUserName.value, scope: scope.value }
+  if (scope.value === 'lsys' && scopeLsys.value) payParams.scope_lsys = scopeLsys.value
+  if (scope.value === 'self') payParams.name = currentUserName.value
+  else if (selectedLsys.value) payParams.lsys = selectedLsys.value
   if (filterMonth.value) payParams.month = Number(filterMonth.value)
   try {
     const [resMonth, resEmp] = await Promise.all([
@@ -197,7 +206,10 @@ async function downloadExcel() {
   try {
     const res = await getOvertimePayExport({
       year: filterYear.value,
-      month: Number(filterMonth.value)
+      month: Number(filterMonth.value),
+      current_user: currentUserName.value,
+      scope: scope.value,
+      ...(scope.value === 'lsys' && scopeLsys.value ? { scope_lsys: scopeLsys.value } : {})
     })
     if (!res?.success || res.all === undefined) {
       alert('获取报表数据失败')
@@ -205,7 +217,7 @@ async function downloadExcel() {
     }
     const wb = XLSX.utils.book_new()
     const allSheet = sheetFromList(res.all || [])
-    XLSX.utils.book_append_sheet(wb, allSheet, '全员')
+    XLSX.utils.book_append_sheet(wb, allSheet, scope.value === 'self' ? '本人' : '全员')
     const byDept = res.byDept || []
     for (const dept of byDept) {
       const sheetName = (dept.lsys || '科室').slice(0, 31)
@@ -229,13 +241,24 @@ onMounted(async () => {
     router.replace('/login')
     return
   }
+  currentUserName.value = name
   try {
     const permRes = await getOvertimePayPermission({ name })
     canView.value = !!(permRes?.canView)
+    scope.value = permRes?.scope || 'self'
+    scopeLsys.value = (permRes?.lsys || '').trim()
     if (!canView.value) return
-    const listRes = await getDeptLsysList()
-    lsysList.value = (listRes?.list || []).filter(Boolean)
-    if (lsysList.value.length) selectedLsys.value = ''
+    if (scope.value === 'all') {
+      const listRes = await getDeptLsysList()
+      lsysList.value = (listRes?.list || []).filter(Boolean)
+      selectedLsys.value = ''
+    } else if (scope.value === 'lsys' && scopeLsys.value) {
+      lsysList.value = [scopeLsys.value]
+      selectedLsys.value = scopeLsys.value
+    } else {
+      lsysList.value = []
+      selectedLsys.value = ''
+    }
   } catch (e) {
     canView.value = false
   }
@@ -289,6 +312,11 @@ onMounted(async () => {
   border: 1px solid var(--color-border-base);
   border-radius: var(--radius-base);
   font-size: var(--font-size-sm);
+}
+.scope-self-label {
+  padding: var(--spacing-sm) var(--spacing-md);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
 }
 .btn {
   padding: var(--spacing-sm) var(--spacing-lg);

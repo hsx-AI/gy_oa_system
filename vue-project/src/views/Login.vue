@@ -296,10 +296,10 @@ function initCanvas(canvas) {
     ctx.save()
     ctx.translate(gx, gy)
 
-    // 经线（旋转）
-    const lonCount = 12
+    // 经线（旋转，覆盖整圈 0~2π）
+    const lonCount = 16
     for (let i = 0; i < lonCount; i++) {
-      const lonAngle = (i / lonCount) * Math.PI + globeAngle
+      const lonAngle = (i / lonCount) * Math.PI * 2 + globeAngle
       ctx.beginPath()
       for (let j = 0; j <= 60; j++) {
         const lat = (j / 60) * Math.PI
@@ -313,15 +313,17 @@ function initCanvas(canvas) {
         if (j === 0) ctx.moveTo(xr, yr)
         else ctx.lineTo(xr, yr)
       }
-      ctx.strokeStyle = `rgba(24,144,255,${0.12 + 0.12 * Math.sin(globeAngle + i)})`
+      ctx.strokeStyle = 'rgba(24,144,255,0.22)'
       ctx.lineWidth = 1
       ctx.stroke()
     }
 
-    // 纬线
+    // 纬线（按投影高度更均匀分布）
     const latCount = 8
     for (let i = 1; i < latCount; i++) {
-      const lat = (i / latCount) * Math.PI
+      const t = i / latCount
+      const yNorm = -1 + 2 * t
+      const lat = Math.acos(yNorm)
       ctx.beginPath()
       for (let j = 0; j <= 80; j++) {
         const lon = (j / 80) * Math.PI * 2 + globeAngle

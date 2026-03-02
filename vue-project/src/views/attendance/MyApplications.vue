@@ -95,11 +95,11 @@ function goDetail(req) {
 async function fetchList() {
   if (!userName) return
   loading.value = true
-  try {
+    try {
     const [leaveRes, overtimeRes, btRes] = await Promise.all([
-      getLeaveList({ name: userName, year: filterYear.value, status: 'all' }),
-      getOvertimeList({ name: userName, year: filterYear.value, status: 'all' }),
-      getBusinessTripList({ name: userName, year: filterYear.value, status: 'all' })
+      getLeaveList({ name: userName, year: filterYear.value, status: 'all', all_years: true }),
+      getOvertimeList({ name: userName, year: filterYear.value, status: 'all', all_years: true }),
+      getBusinessTripList({ name: userName, year: filterYear.value, status: 'all', all_years: true })
     ])
     const items = []
     ;(leaveRes.data || []).forEach(r => {
@@ -149,7 +149,9 @@ async function fetchList() {
       })
     })
     items.sort((a, b) => (b.time || '').localeCompare(a.time || ''))
-    listData.value = items
+    // 按所选年份过滤展示（数据已用 all_years 拉取，含往年已驳回等）
+    const yearStr = String(filterYear.value)
+    listData.value = yearStr ? items.filter(i => (i.time || '').slice(0, 4) === yearStr) : items
   } catch (e) {
     listData.value = []
   } finally {

@@ -125,7 +125,6 @@ import {
   getOvertimeList,
   getBusinessTripList,
   getUploadConfig,
-  getOvertimePayPermission
 } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
@@ -135,7 +134,6 @@ const router = useRouter()
 const dakaman = ref('')
 const admin2 = ref('')
 const canAccessDbManager = ref(false)
-const canSeeOvertimePay = ref(false)
 
 /** 根据 permission 字段判断当前用户是否可见该卡片 */
 function canShowFeature(permission) {
@@ -152,7 +150,7 @@ function canShowFeature(permission) {
     case 'leaderDashboard':
       return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
     case 'overtimePay':
-      return canSeeOvertimePay.value
+      return true
     case 'exceptions':
       return (!!d && name === d) || jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
     case 'employeeAdmin':
@@ -241,10 +239,9 @@ const rawFeatureGroups = [
       {
         id: 'overtime-pay',
         title: '加班费统计',
-        description: '人事管理员查看科室加班费汇总与导出',
+        description: '按权限查看本人/本室/全部门加班费汇总与导出',
         path: '/overtime-pay',
         permission: 'overtimePay',
-        tag: '人事',
         color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
         iconPath: 'M12 1v22M17 5H9.5a3.5 3.5 0 000 7h5a3.5 3.5 0 010 7H6'
       },
@@ -576,9 +573,6 @@ onMounted(() => {
     getDbManagerPermission({ current_user: name }).then(res => {
       canAccessDbManager.value = !!(res && res.canAccess)
     }).catch(() => { canAccessDbManager.value = false })
-    getOvertimePayPermission({ name }).then(res => {
-      canSeeOvertimePay.value = !!(res && res.canView)
-    }).catch(() => { canSeeOvertimePay.value = false })
   }
 })
 

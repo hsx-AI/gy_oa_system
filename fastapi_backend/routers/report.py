@@ -78,23 +78,36 @@ async def get_statistics_permission(name: str = Query(..., description="当前�
 @router.get("/overtime-pay-permission")
 async def get_overtime_pay_permission(name: str = Query(..., description="当前用户姓名")):
     """
-    加班费统计页权限：仅部长/副部长 或 人事管理员（webconfig.admin2）可访问该页面。
-    返回 { success, canView: true/false }
+    加班费统计页权限：全员可访问，按 yggl.jb 与 webconfig.admin2 返回可见范围。
+    返回 { success, canView: true, scope, lsys? }
+    - scope=all: 部长/副部长、人事管理员(admin2)，可见全部门；
+    - scope=lsys: 主任/副主任，可见本室(lsys)全部员工；
+    - scope=self: 其他员工，仅可见本人。
     """
-    can_view = False
-    user = _get_user_info(name)
+    name_stripped = (name or "").strip()
+    user = _get_user_info(name_stripped)
+    lsys = (user.get("lsys") or "").strip() if user else ""
+
+    # 部长/副部长 或 人事管理员(admin2) -> 全部门
     if user:
         jb = (user.get("jb") or "").strip()
         if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
-            can_view = True
-    if not can_view:
-        try:
-            wc = db.execute_query("SELECT admin2 FROM webconfig WHERE id = 1 LIMIT 1")
-            if wc and wc[0].get("admin2") and (name or "").strip() == (wc[0]["admin2"] or "").strip():
-                can_view = True
-        except Exception:
-            pass
-    return {"success": True, "canView": can_view}
+            return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
+    try:
+        wc = db.execute_query("SELECT admin2 FROM webconfig WHERE id = 1 LIMIT 1")
+        if wc and wc[0].get("admin2") and name_stripped == (wc[0]["admin2"] or "").strip():
+            return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
+    except Exception:
+        pass
+
+    # 主任/副主任 -> 本室(lsys)
+    if user:
+        jb = (user.get("jb") or "").strip()
+        if _jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb)):
+            return {"success": True, "canView": True, "scope": "lsys", "lsys": lsys}
+
+    # 其他 -> 仅本人
+    return {"success": True, "canView": True, "scope": "self", "lsys": lsys}
 
 
 @router.get("/statistics-employees")
