@@ -346,13 +346,18 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     OVERTIME_MIN_HOURS = 1 # 加班至少 1 小时
 
     def decimal_to_dt(base_date: datetime, h: float) -> datetime:
-        """将小时时间(如 17.5) 转为 datetime，用于 format_time"""
+        """将小时时间(如 17.5) 转为 datetime，含秒，与 time_to_decimal 精度一致"""
         hour = int(h)
-        minute = int(round((h - hour) * 60))
-        if minute == 60:
-            hour += 1
+        rest_sec = (h - hour) * 3600
+        minute = int(rest_sec // 60)
+        second = int(round(rest_sec - minute * 60))
+        if second >= 60:
+            second = 0
+            minute += 1
+        if minute >= 60:
             minute = 0
-        return base_date.replace(hour=hour, minute=minute, second=0, microsecond=0)
+            hour += 1
+        return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
     # -------------------------------------------------
     # 2. 迟到检测（仅检测迟到，早退由缺勤逻辑处理）
@@ -360,7 +365,7 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     first_time = times[0]
     first_val = time_to_decimal(first_time)
 
-    # 迟到：第一次打卡在 8:00 之后且在 12:00 之前
+    # 迟到：第一次打卡在 (8:00, 12:00) 内，整点 8:00:00/12:00:00 不报
     if WORK_AM_START < first_val < WORK_AM_END:
         suggestions.append(_sugg(
             "08:00:00", format_time(first_time), 1,
@@ -382,15 +387,15 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
 
     # -------------------------------------------------
     # 4. 缺勤检查逻辑：
-    #    规则：如果刷离时间在工作时间区间内（8–12 或 13–17），
-    #          则 "刷离时间 → 下次刷入时间" 为缺勤；
-    #          如果已是最后一个区间，则补到 17:00。
+    #    规则：如果刷离时间在工作时间区间内（开区间 8–12、13–17，整点 8/12/13/17 不报），
+    #          则 "刷离时间 → 下次刷入时间" 为缺勤；若为最后区间则补到 17:00。
     # -------------------------------------------------
     for idx, (t_in, t_out) in enumerate(intervals):
         out_val = time_to_decimal(t_out)
 
-        in_am = WORK_AM_START <= out_val <= WORK_AM_END
-        in_pm = WORK_PM_START <= out_val <= WORK_PM_END
+        # 四个边界均开区间：整点 8:00:00 / 12:00:00 / 13:00:00 / 17:00:00 不触发缺勤/早退
+        in_am = WORK_AM_START < out_val < WORK_AM_END
+        in_pm = WORK_PM_START < out_val < WORK_PM_END
 
         if not (in_am or in_pm):
             continue  # 刷离不在工作时间内，不视为工作时段缺勤起点
@@ -404,7 +409,7 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
                     f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(next_in)} 的考勤"
                 ))
         else:
-            # 情况 B：这是最后一个区间，且刷离早于 17:00，则从刷离到 17:00 视为缺勤
+            # 情况 B：最后区间且刷离早于 17:00（17:00:00 不报）
             if out_val < WORK_PM_END:
                 end_dt = date_obj.replace(hour=17, minute=0, second=0, microsecond=0)
                 suggestions.append(_sugg(

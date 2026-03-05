@@ -110,12 +110,12 @@ def normalize_date_str(date_obj: Any) -> str:
 
 
 def time_to_decimal(time_obj: Any) -> float:
-    """将时间转换为小时的小数形式"""
+    """将时间转换为小时的小数形式（含秒，与精确到秒的打卡一致）"""
     if time_obj is None:
         return 0.0
     
     if isinstance(time_obj, datetime):
-        return time_obj.hour + time_obj.minute / 60.0
+        return time_obj.hour + time_obj.minute / 60.0 + time_obj.second / 3600.0
     
     if isinstance(time_obj, str):
         try:
@@ -124,8 +124,9 @@ def time_to_decimal(time_obj: Any) -> float:
                 parts = time_obj.split(":")
                 hour = int(parts[0])
                 minute = int(parts[1]) if len(parts) > 1 else 0
-                return hour + minute / 60.0
-        except:
+                second = int(parts[2]) if len(parts) > 2 else 0
+                return hour + minute / 60.0 + second / 3600.0
+        except Exception:
             pass
     
     return 0.0
