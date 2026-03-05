@@ -126,7 +126,7 @@ const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
 const form = reactive({
   department: userInfo.dept || userInfo.department || '技术部',
   name: userInfo.name || userInfo.userName || '',
-  type: '事假',
+  type: '换休',
   shift: '白班',
   contactMethod: '电话',
   startTime: '',
@@ -217,7 +217,7 @@ function onMaterialFileChange(e) {
 
 watch(() => props.visible, async (v) => {
   if (v) {
-    form.type = props.prefill.type || '事假'
+    form.type = props.prefill.type || '换休'
     form.startTime = props.prefill.startTime || ''
     form.endTime = props.prefill.endTime || ''
     if (form.startTime && form.endTime) {
@@ -279,7 +279,7 @@ async function fetchApprovers() {
 }
 
 function resetForm() {
-  form.type = '事假'
+  form.type = '换休'
   form.contactMethod = '电话'
   form.material = ''
   form.materialFile = null

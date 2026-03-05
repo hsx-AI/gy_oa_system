@@ -346,7 +346,6 @@ async function handleSubmit() {
       approver: form.approver
     })
     if (res.success) {
-      alert('登记已提交')
       emit('close')
       emit('submitted')
     } else {

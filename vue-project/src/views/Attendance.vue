@@ -1028,9 +1028,10 @@ watch(selectedMonth, () => {
   transition: all var(--transition-base) var(--transition-ease);
 }
 
+/* 缺勤建议：淡红配色，与「正在审核」橙区分 */
 .suggestion-warning {
-  background: var(--color-warning-bg);
-  border-left-color: var(--color-warning);
+  background: #ffebee;
+  border-left-color: #e57373;
 }
 
 .suggestion-info {
@@ -1067,7 +1068,7 @@ watch(selectedMonth, () => {
 
 .suggestion-warning .suggestion-icon {
   background: white;
-  color: var(--color-warning);
+  color: #c62828;
 }
 
 .suggestion-info .suggestion-icon {
@@ -1106,6 +1107,11 @@ watch(selectedMonth, () => {
 
 .badge-warning {
   background: var(--color-warning);
+  color: white;
+}
+
+.suggestion-warning .badge-warning {
+  background: #c62828;
   color: white;
 }
 
