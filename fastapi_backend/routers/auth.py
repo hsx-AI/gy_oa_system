@@ -123,6 +123,18 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
             {"expireDate": k, "count": round(v, 2)}
             for k, v in sorted(expire_groups.items(), key=lambda x: parse_expire_for_sort(x[0]))
         ]
+        # 换休票预扣减：正在审核中的换休/员工换休票请假所消耗的张数，从「可用」中扣除，避免多单同时审核导致扣成负数
+        hxp_pending = 0.0
+        try:
+            pending_rows = db.execute_query(
+                "SELECT COALESCE(SUM(CAST(COALESCE(hxpxh, tian * 2) AS DECIMAL(10,4))), 0) AS s FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND (TRIM(COALESCE(qjfs,'')) = %s OR TRIM(COALESCE(qjfs,'')) = %s)",
+                (name, "换休", "员工换休票"),
+            )
+            if pending_rows and pending_rows[0].get("s") is not None:
+                hxp_pending = float(pending_rows[0]["s"])
+        except Exception as e:
+            logger.debug(f"换休票预扣减查询失败: {e}")
+        hxp_available = max(0.0, total - hxp_pending)
         # 入厂时间 rcnf：只展示年份，不展示 -01-01
         rcnf_val = r.get("rcnf")
         if hasattr(rcnf_val, "strftime"):
@@ -180,7 +192,9 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
                 "level": (r.get("jb") or "").strip(),
                 "idNumber": (r.get("sfzh") or "").strip(),
                 "entryDate": entry_date,
-                "exchangeTickets": round(total, 2),
+                "exchangeTickets": round(hxp_available, 2),
+                "exchangeTicketsTotal": round(total, 2),
+                "exchangeTicketsPending": round(hxp_pending, 2),
                 "exchangeTicketDetails": details,
                 "paidLeaveRemaining": paid_leave_remaining,
                 "paidLeaveDetail": paid_leave_detail,

@@ -504,7 +504,7 @@ const handleLeaveFill = (suggestion) => {
   const startTime = date && timeMatch ? `${date}T${fmt(timeMatch[1])}` : ''
   const endTime = date && timeMatch ? `${date}T${fmt(timeMatch[2])}` : ''
   leavePrefill.value = {
-    type: '事假',
+    type: '换休',
     startTime,
     endTime,
     duration: String(duration),
