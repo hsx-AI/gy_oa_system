@@ -88,15 +88,23 @@ def _format_hours_display(h: float) -> str:
 
 
 def _to_comparable_dt(val: Any) -> Optional[str]:
-    """将 DB 返回的 datetime/date 转为可比较的字符串 YYYY-MM-DD HH:MM:SS"""
+    """将 DB 返回的 datetime/date 转为可比较的字符串，统一为 19 位 YYYY-MM-DD HH:MM:SS（闭区间比较，与历史请假/加班数据一致）"""
     if val is None:
         return None
     if hasattr(val, "strftime"):
-        return val.strftime("%Y-%m-%d %H:%M:%S") if hasattr(val, "hour") else val.strftime("%Y-%m-%d") + " 00:00:00"
+        out = val.strftime("%Y-%m-%d %H:%M:%S") if hasattr(val, "hour") else val.strftime("%Y-%m-%d") + " 00:00:00"
+        return out[:19]
     s = str(val).strip()
     if "." in s:
         s = s.split(".")[0]
-    return s[:19] if len(s) >= 19 else (s + " 00:00:00" if len(s) == 10 else s)
+    if len(s) >= 19:
+        return s[:19]
+    if len(s) == 10:
+        return s + " 00:00:00"
+    # 历史数据可能为 YYYY-MM-DD HH:MM（16 位），补全为 HH:MM:00 再比较，避免与建议的 19 位不一致导致“已申报”不匹配
+    if len(s) == 16 and s[10] == " " and ":" in s[11:]:
+        return s + ":00"
+    return s
 
 
 def _interval_covered(

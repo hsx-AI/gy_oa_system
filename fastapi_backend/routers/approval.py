@@ -526,10 +526,10 @@ def _parse_overtime_datetime(date_str: str, time_str: str) -> Optional[str]:
 
 
 def _intervals_overlap(s1: str, e1: str, s2: str, e2: str) -> bool:
-    """两段时间是否有交集（重叠）"""
+    """两段时间是否有交集（重叠），闭区间 [s,e] 语义，与历史请假/加班数据一致"""
     if not all([s1, e1, s2, e2]):
         return False
-    return s1 < e2 and s2 < e1
+    return s1 <= e2 and s2 <= e1
 
 
 def _truncate_to_minute(dt_str: str) -> str:
@@ -693,7 +693,14 @@ async def overtime_validate(req: OvertimeValidateRequest):
                 r_start = r_start.split(".")[0]
             if "." in r_end:
                 r_end = r_end.split(".")[0]
-            if r_start and r_end and _intervals_overlap(start_dt, end_dt, r_start[:19], r_end[:19]):
+            # 统一为 19 位 YYYY-MM-DD HH:MM:SS 再比较，与历史数据可能为 HH:MM 一致
+            if len(r_start) == 16 and r_start[10:11] == " ":
+                r_start = r_start + ":00"
+            if len(r_end) == 16 and r_end[10:11] == " ":
+                r_end = r_end + ":00"
+            r_start = r_start[:19]
+            r_end = r_end[:19]
+            if r_start and r_end and _intervals_overlap(start_dt, end_dt, r_start, r_end):
                 overlap_with_db = True
                 break
         if overlap_with_db:
