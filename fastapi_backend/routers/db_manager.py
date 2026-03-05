@@ -130,12 +130,21 @@ async def get_table_rows(
     page_size: int = Query(50, ge=1, le=500),
     search_column: Optional[str] = Query(None, description="要搜索的列名"),
     search_keyword: Optional[str] = Query(None, description="搜索关键词（模糊匹配）"),
+    sort_column: Optional[str] = Query(None, description="排序列名"),
+    sort_order: Optional[str] = Query("asc", description="排序方向：asc 升序 / desc 降序"),
 ):
-    """分页查询指定表数据。仅系统管理员可访问。支持按列模糊搜索。"""
+    """分页查询指定表数据。仅系统管理员可访问。支持按列模糊搜索、按列排序。"""
     _require_system_admin(current_user)
     _validate_identifier(table_name)
 
     try:
+        cols = db.execute_query(
+            "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
+            (table_name,),
+        )
+        col_names = {c["name"] for c in (cols or []) if c.get("name")}
+
         safe_table = f"`{table_name}`"
         where_clause = ""
         count_params: list = []
@@ -143,12 +152,6 @@ async def get_table_rows(
 
         if search_column and search_keyword is not None and (search_keyword.strip() or ""):
             _validate_identifier(search_column, "列名")
-            cols = db.execute_query(
-                "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
-                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s",
-                (table_name,),
-            )
-            col_names = {c["name"] for c in (cols or []) if c.get("name")}
             if search_column not in col_names:
                 raise HTTPException(status_code=400, detail=f"列 {search_column} 不存在于该表")
             where_clause = f" WHERE `{search_column}` LIKE %s"
@@ -160,8 +163,15 @@ async def get_table_rows(
         total = db.execute_scalar(count_sql, tuple(count_params)) if count_params else db.execute_scalar(count_sql)
         total = total or 0
 
+        order_clause = ""
+        if sort_column and (sort_order or "").strip().lower() in ("asc", "desc"):
+            _validate_identifier(sort_column, "列名")
+            if sort_column not in col_names:
+                raise HTTPException(status_code=400, detail=f"列 {sort_column} 不存在于该表")
+            order_clause = f" ORDER BY `{sort_column}` {sort_order.strip().lower()}"
+
         offset = (page - 1) * page_size
-        select_sql = f"SELECT * FROM {safe_table}{where_clause} LIMIT %s OFFSET %s"
+        select_sql = f"SELECT * FROM {safe_table}{where_clause}{order_clause} LIMIT %s OFFSET %s"
         select_params.extend([page_size, offset])
         rows = db.execute_query(select_sql, tuple(select_params))
 

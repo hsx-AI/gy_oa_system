@@ -25,6 +25,7 @@ router = APIRouter(prefix="/business-trip", tags=["公出管理"])
 
 class BusinessTripApplyRequest(BaseModel):
     """公出登记请求"""
+    tripScope: str = "境内公出"  # gclx 公出类型：市内公出/境内公出/境外公出
     targetUnit: str          # wpdw 委派单位
     assignTime: str = ""     # wpsj 委派时间(可选)
     noticeNo: str            # tzdbh 通知单编号
@@ -34,7 +35,7 @@ class BusinessTripApplyRequest(BaseModel):
     workNo: str = ""         # gzh 工作号
     projectName: str = ""    # xmmc 项目名称
     location: str            # gcdd 公出地点
-    startTime: str           # gcsj 出发/公出时间
+    startTime: str           # yjcfsj 预计出发时间
     endTime: str             # yjfhsj 预计返回时间
     amount: float = 0        # qkje 请款金额
     phone: str               # lxdh 联系电话
@@ -65,21 +66,25 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
         rid = _next_id()
 
         yjfhsj = _to_dt(req.endTime)
+        yjcfsj = _to_dt(req.startTime) if req.startTime else None
         wpsj = _to_dt(req.assignTime) if req.assignTime else None
 
         qkje = str(req.amount) if req.amount else "无"
         gzh = req.workNo or "无"
         xmmc = req.projectName or "无"
 
-        # gcsj 不在登记时填写，留待公出返回登记时填入实际公出时间
-        # 审批状态：bldzt/szrzt 登记时写入 1,1
+        # gclx 公出类型；gcsj 不在登记时填写，留待返回登记时填入；bldzt/szrzt 登记时写入 1,1
+        gclx = (req.tripScope or "").strip() or "境内公出"
+        if gclx not in ("市内公出", "境内公出", "境外公出"):
+            gclx = "境内公出"
         sql = """
-            INSERT INTO gcsqb (id, wpdw, gcr, gzh, gcdw, lxdh, wpsj, yjfhsj, xmmc,
+            INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj, yjfhsj, yjcfsj, xmmc,
                 tzdbh, bcgczrs, gcdd, qkje, gcrw, szr, bld, gcsj, sjfhtime, bldzt, szrzt)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, 1, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, 1, 1)
         """
         params = (
             rid,
+            gclx,
             req.targetUnit or "",
             req.name or "",
             gzh,
@@ -87,6 +92,7 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
             req.phone or "",
             wpsj,
             yjfhsj,
+            yjcfsj,
             xmmc,
             req.noticeNo or "",
             str(req.totalPeople),
@@ -140,6 +146,7 @@ def _row_to_record(row) -> dict:
             current_approver = (row.get("bld") or "").strip()
     rec = {
         "id": row.get("id"),
+        "tripScope": row.get("gclx") or "",
         "targetUnit": row.get("wpdw") or "",
         "person": row.get("gcr") or "",
         "assignTime": _fmt_dt(row.get("wpsj")),
@@ -169,25 +176,26 @@ async def get_business_trip_list(
         if year is None and not all_years:
             year = datetime.now().year
 
+        # 年份筛选用 COALESCE(wpsj, yjfhsj)，避免市内公出（wpsj 为空）被筛掉
         if all_years:
-            base_where = " WHERE gcr = %s ORDER BY wpsj DESC"
+            base_where = " WHERE gcr = %s ORDER BY COALESCE(wpsj, yjfhsj) DESC"
             params = (name,)
         else:
-            base_where = " WHERE gcr = %s AND (wpsj LIKE %s OR YEAR(wpsj) = %s) ORDER BY wpsj DESC"
+            base_where = " WHERE gcr = %s AND (COALESCE(wpsj, yjfhsj) LIKE %s OR YEAR(COALESCE(wpsj, yjfhsj)) = %s) ORDER BY COALESCE(wpsj, yjfhsj) DESC"
             params = (name, f"{year}%", year)
         try:
             # bld=部领导, szr=室主任；审批中时展示当前审批人
             query = (
-                "SELECT id, wpdw, gcr, wpsj, xmmc, gcdd, gcsj, sjfhtime, fhdj_status, "
+                "SELECT id, gclx, wpdw, gcr, wpsj, xmmc, gcdd, gcsj, sjfhtime, fhdj_status, "
                 "bldzt, szrzt, szrpztime, bldpztime, bhyy, bld, szr FROM gcsqb" + base_where
             )
             rows = db.execute_query(query, params)
         except Exception as e:
             msg = str(e).lower()
             if "unknown column" in msg and (
-                "szrpztime" in msg or "bldpztime" in msg or "fhdj_status" in msg or "bhyy" in msg or "bld" in msg or "szr" in msg
+                "gclx" in msg or "szrpztime" in msg or "bldpztime" in msg or "fhdj_status" in msg or "bhyy" in msg or "bld" in msg or "szr" in msg
             ):
-                # 兼容老表结构：无 fhdj_status / szrpztime / bldpztime / bhyy / bld / szr 列
+                # 兼容老表结构：无 gclx / fhdj_status / szrpztime / bldpztime / bhyy / bld / szr 列
                 query = (
                     "SELECT id, wpdw, gcr, wpsj, xmmc, gcdd, gcsj, sjfhtime, "
                     "bldzt, szrzt FROM gcsqb" + base_where
@@ -225,7 +233,7 @@ async def get_business_trip_all_records(
         order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
         if is_leader:
             sql = f"""
-                SELECT g.id, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
                 {f"WHERE (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
@@ -236,7 +244,7 @@ async def get_business_trip_all_records(
             if not lsys:
                 return {"success": True, "data": [], "total": 0, "scope": "dept"}
             sql = f"""
-                SELECT g.id, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
                 INNER JOIN yggl y ON g.gcr = y.name AND y.lsys = %s

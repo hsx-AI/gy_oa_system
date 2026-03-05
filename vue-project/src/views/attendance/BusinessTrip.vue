@@ -53,6 +53,7 @@
             <table class="record-table">
               <thead>
                 <tr>
+                  <th>公出类型</th>
                   <th>委派单位</th>
                   <th>公出人</th>
                   <th>委派时间</th>
@@ -68,6 +69,7 @@
               </thead>
               <tbody>
                 <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
+                  <td>{{ r.tripScope || '—' }}</td>
                   <td>{{ r.targetUnit }}</td>
                   <td>{{ r.person }}</td>
                   <td>{{ r.assignTime }}</td>
@@ -130,8 +132,20 @@
       <div class="modal-content">
         <h2>公出登记</h2>
         <form name="business-trip-form" @submit.prevent="submitApplication" class="application-form" autocomplete="on">
-          <!-- 基础信息 -->
+          <!-- 公出类型：市内 / 境内 / 境外 -->
           <div class="form-row">
+            <div class="form-group full">
+              <label>公出类型 <span class="label-required">*</span></label>
+              <select v-model="tripScope" name="tripScope" autocomplete="on">
+                <option value="市内公出">市内公出</option>
+                <option value="境内公出">境内公出</option>
+                <option value="境外公出">境外公出</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 基础信息（委派单位仅境内/境外显示） -->
+          <div class="form-row" v-if="!isCityTrip">
             <div class="form-group half">
               <label>委派单位</label>
               <select v-model="form.targetUnit" name="targetUnit" autocomplete="on">
@@ -150,18 +164,18 @@
                 <option value="其他">其他</option>
               </select>
             </div>
-            <div class="form-group half">
+            <div class="form-group half" v-if="!isCityTrip">
               <label>委派时间 <span class="label-optional">（可选）</span></label>
               <input type="date" v-model="form.assignTime" name="assignTime" autocomplete="on" placeholder="选填">
             </div>
           </div>
 
           <div class="form-row">
-            <div class="form-group half">
+            <div class="form-group half" v-if="!isCityTrip">
               <label>通知单编号 <span class="label-optional">（选填）</span></label>
               <input id="bt-noticeNo" type="text" v-model="form.noticeNo" name="noticeNo" autocomplete="on" placeholder="选填">
             </div>
-            <div class="form-group half">
+            <div class="form-group half" :class="{ full: isCityTrip }">
               <label>填报单位</label>
               <input type="text" v-model="form.department" readonly>
             </div>
@@ -178,8 +192,8 @@
             </div>
           </div>
 
-          <!-- 公出详情 -->
-          <div class="form-row">
+          <!-- 公出详情（工作号、项目名称仅境内/境外） -->
+          <div class="form-row" v-if="!isCityTrip">
             <div class="form-group half">
               <label>工作号 <span class="label-optional">（选填）</span></label>
               <input id="bt-workNo" type="text" v-model="form.workNo" name="workNo" autocomplete="on" placeholder="选填">
@@ -193,7 +207,8 @@
           <div class="form-row">
             <div class="form-group full">
               <label>公出地点</label>
-              <input id="bt-location" type="text" v-model="form.location" name="location" autocomplete="street-address" placeholder="请输入公出地点">
+              <input v-if="isCityTrip" id="bt-location" type="text" :value="'市内'" readonly class="readonly-input">
+              <input v-else id="bt-location" type="text" v-model="form.location" name="location" autocomplete="street-address" placeholder="请输入公出地点">
             </div>
           </div>
 
@@ -210,11 +225,11 @@
           </div>
 
           <div class="form-row">
-            <div class="form-group half">
+            <div class="form-group half" v-if="!isCityTrip">
               <label>请款金额 <span class="label-optional">（选填）</span></label>
               <input type="number" v-model="form.amount" name="amount" autocomplete="on" min="0" step="0.01" placeholder="选填">
             </div>
-            <div class="form-group half">
+            <div class="form-group half" :class="{ full: isCityTrip }">
               <label>联系电话</label>
               <input id="bt-phone" type="text" v-model="form.phone" name="btPhone" autocomplete="tel" placeholder="请输入联系电话">
             </div>
@@ -423,6 +438,10 @@ function initUserInfo() {
 
 const userInfo = initUserInfo()
 const canApprove = ref(false)
+// 公出类型：市内公出 / 境内公出 / 境外公出
+const tripScope = ref('市内公出')
+const isCityTrip = computed(() => tripScope.value === '市内公出')
+
 const form = reactive({
   targetUnit: '项目管理部',
   assignTime: '', // 委派时间（可选）
@@ -450,7 +469,7 @@ const resetForm = () => {
   form.totalPeople = 1
   form.workNo = ''
   form.projectName = ''
-  form.location = ''
+  form.location = tripScope.value === '市内公出' ? '市内' : ''
   form.startTime = ''
   form.endTime = ''
   form.amount = 0
@@ -460,6 +479,22 @@ const resetForm = () => {
   form.responsiblePerson = ''
   form.confirmed = false
 }
+
+// 切换公出类型时：市内则固定地点并清空选填项
+watch(tripScope, (scope) => {
+  if (scope === '市内公出') {
+    form.location = '市内'
+    form.assignTime = ''
+    form.noticeNo = ''
+    form.workNo = ''
+    form.projectName = ''
+    form.amount = 0
+  }
+})
+// 打开登记弹窗时，若为市内公出则确保地点为市内
+watch(showApplyModal, (visible) => {
+  if (visible && tripScope.value === '市内公出') form.location = '市内'
+})
 
 const fetchBusinessTripList = async () => {
   loadingList.value = true
@@ -520,11 +555,22 @@ onMounted(async () => {
   }
 })
 
-// 从考勤页跳转过来时：action=apply 自动打开公出登记弹窗
+// 从考勤页跳转过来时：action=apply 自动打开公出登记弹窗，并按建议预填时间
 watch(
   () => [route.query.action, loadingList.value],
   () => {
     if (route.query.action !== 'apply' || loadingList.value) return
+    // 预填预计出发/返回日期（仅日期部分），若有传入
+    const d = (route.query.date || '').slice(0, 10)
+    if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
+      form.startTime = d
+      form.endTime = d
+    }
+    // 若直接传 startTime/endTime（完整时间），也兼容，只取日期部分
+    const s = (route.query.startTime || '').slice(0, 10)
+    const e = (route.query.endTime || '').slice(0, 10)
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) form.startTime = s
+    if (/^\d{4}-\d{2}-\d{2}$/.test(e)) form.endTime = e
     showApplyModal.value = true
     router.replace({ path: '/attendance/business-trip' })
   },
@@ -580,6 +626,7 @@ const toDateTime = (s) => {
 }
 
 const submitApplication = async () => {
+  if (isCityTrip.value) form.location = '市内'
   const tips = []
   if (!(form.location || '').trim()) tips.push('公出地点')
   if (!(form.task || '').trim()) tips.push('公出任务')
@@ -596,6 +643,7 @@ const submitApplication = async () => {
 
   try {
     const payload = {
+      tripScope: tripScope.value,
       targetUnit: form.targetUnit,
       assignTime: toDateTime(form.assignTime),
       noticeNo: form.noticeNo,

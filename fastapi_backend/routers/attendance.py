@@ -528,11 +528,12 @@ async def export_leave_handler_table(
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
 ):
     """
-    导出异常处理表：按月全员请假信息，XLS（Excel）格式。
+    导出异常处理表：按月全员请假信息 + 公出信息，XLS（Excel）格式。
     列顺序：A 员工代码(string) B 姓名(string) C 部门(string，固定「智能制造工艺部」)
-    D 请假开始时间(DATE TIME) E 实际请假结束时间(DATE TIME) F 请假类别(string)。
-    数据来源：qj 表（已通过 qjzt=4），员工代码来自 yggl.gh。
+    D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string，公出记为「公出」)。
+    数据来源：qj 表（已通过 qjzt=4）+ gcsqb 表（已通过 bldzt=2,szrzt=2，时间用 yjcfsj/yjfhsj）；员工代码来自 yggl.gh。
     """
+    import calendar
     allowed, _ = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
@@ -547,6 +548,10 @@ async def export_leave_handler_table(
             raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
 
         month_str = f"{year}-{month:02d}"
+        _, last_day = calendar.monthrange(year, month)
+        start_date = f"{year}-{month:02d}-01"
+        end_date = f"{year}-{month:02d}-{last_day:02d}"
+
         # 全员请假：qj 已通过，按月份筛选；员工代码取 yggl.gh
         sql = """
             SELECT qj.xm AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
@@ -558,6 +563,74 @@ async def export_leave_handler_table(
             ORDER BY qj.timefrom ASC
         """
         rows = db.execute_query(sql, (f"{month_str}%", month_str)) or []
+
+        # 公出：gcsqb 已通过，当月 yjcfsj 或 yjfhsj 落在该月即纳入；时间用 yjcfsj、yjfhsj
+        try:
+            gcsqb_sql = """
+                SELECT g.gcr AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto, g.gclx AS gclx, TRIM(y.gh) AS gh
+                FROM gcsqb g
+                LEFT JOIN yggl y ON g.gcr = y.name
+                WHERE g.bldzt = 2 AND g.szrzt = 2
+                  AND (g.yjcfsj IS NOT NULL OR g.yjfhsj IS NOT NULL)
+                  AND (
+                    (g.yjcfsj IS NOT NULL AND DATE(g.yjcfsj) >= %s AND DATE(g.yjcfsj) <= %s)
+                    OR (g.yjfhsj IS NOT NULL AND DATE(g.yjfhsj) >= %s AND DATE(g.yjfhsj) <= %s)
+                  )
+                ORDER BY g.yjcfsj ASC
+            """
+            gcsqb_rows = db.execute_query(gcsqb_sql, (start_date, end_date, start_date, end_date)) or []
+            for r in gcsqb_rows:
+                gclx = (r.get("gclx") or "").strip()
+                if not gclx:
+                    gclx = "公出"
+                rows.append({
+                    "gh": (r.get("gh") or "").strip(),
+                    "xm": (r.get("xm") or "").strip(),
+                    "timefrom": r.get("timefrom"),
+                    "timeto": r.get("timeto"),
+                    "qjfs": gclx,
+                })
+        except Exception as e:
+            logger.warning("导出异常处理表时查询公出失败（可能无 gcsqb/yjcfsj 列）: %s", e)
+
+        # 按开始时间、姓名排序，便于与请假一起统一输出
+        rows.sort(key=lambda x: (_parse_datetime_for_excel(x.get("timefrom")) or datetime.min, (x.get("xm") or "")))
+
+        # 3 月导出时，若 3 月 8 日为工作日（非周六日且非系统节假日），为全体女性增加半天请假（13:00-17:00，请假类别「三八节」）
+        if month == 3:
+            march8 = datetime(year, 3, 8)
+            weekday = march8.weekday()  # 0=周一, 5=周六, 6=周日
+            is_weekend = weekday >= 5
+            is_holiday = False
+            try:
+                from utils.holiday_loader import load_holidays_dict
+                holidays = load_holidays_dict(str(year))
+                march8_str = march8.strftime("%Y-%m-%d")
+                if march8_str in holidays:
+                    t = (holidays[march8_str] or "").strip()
+                    if "假" in t or "休" in t:
+                        is_holiday = True
+            except Exception:
+                pass
+            if not is_weekend and not is_holiday:
+                female_rows = db.execute_query(
+                    "SELECT TRIM(gh) AS gh, name AS xm FROM yggl "
+                    "WHERE (xbie LIKE %s OR xbie = %s) AND name IS NOT NULL AND TRIM(name) != '' "
+                    "AND RIGHT(TRIM(name), 1) != '1' AND (lsys IS NULL OR RIGHT(TRIM(lsys), 1) != '1') "
+                    "AND (TRIM(lsys) != %s OR lsys IS NULL) AND (COALESCE(zaizhi, 0) = 0)",
+                    ("%女%", "女", "部办"),
+                ) or []
+                march8_start = datetime(year, 3, 8, 13, 0, 0)
+                march8_end = datetime(year, 3, 8, 17, 0, 0)
+                for r in female_rows:
+                    rows.append({
+                        "gh": (r.get("gh") or "").strip(),
+                        "xm": (r.get("xm") or "").strip(),
+                        "timefrom": march8_start,
+                        "timeto": march8_end,
+                        "qjfs": "三八节",
+                    })
+                rows.sort(key=lambda x: (_parse_datetime_for_excel(x.get("timefrom")) or datetime.min, (x.get("xm") or "")))
 
         wb = Workbook()
         ws = wb.active

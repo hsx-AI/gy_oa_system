@@ -20,6 +20,60 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/suggestions", tags=["智能建议"])
 
 
+def _is_female_employee(name: str) -> bool:
+    """
+    根据 yggl.xbie 判断是否为女性员工。包含「女」字即视为女性。
+    """
+    name = (name or "").strip()
+    if not name:
+        return False
+    try:
+        rows = db.execute_query(
+            "SELECT xbie FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+            (name,),
+        )
+        if rows and rows[0].get("xbie") is not None:
+            xbie = (rows[0]["xbie"] or "").strip()
+            return "女" in xbie
+    except Exception as e:
+        logger.debug(f"查询员工性别失败 name={name}: {e}")
+    return False
+
+
+def _is_march8_pm_interval(date_str: Any, start_time: Any, end_time: Any) -> bool:
+    """
+    是否为 3 月 8 日下午 13:00-17:00 内的缺勤区间。
+    仅当 date 为任意年份的 03-08 且 [start,end] 完全落在 13:00-17:00 才返回 True。
+    """
+    if not date_str:
+        return False
+    s = str(date_str).strip()
+    if len(s) < 10:
+        return False
+    # 任意年份的 03-08
+    try:
+        md = s[5:10]
+    except Exception:
+        return False
+    if md != "03-08":
+        return False
+    s_start = _to_comparable_dt(start_time)
+    s_end = _to_comparable_dt(end_time)
+    if not s_start or not s_end or len(s_start) < 16 or len(s_end) < 16:
+        return False
+    try:
+        sh = int(s_start[11:13])
+        sm = int(s_start[14:16])
+        eh = int(s_end[11:13])
+        em = int(s_end[14:16])
+    except Exception:
+        return False
+    s_dec = sh + sm / 60.0
+    e_dec = eh + em / 60.0
+    # 完全落在 13:00-17:00 之间
+    return s_dec >= 13.0 and e_dec <= 17.0
+
+
 def _floor_half_hours(h: float) -> float:
     """按 0.5 小时向下取整，不满 0.5 舍去。如 4.4 -> 4.0"""
     return math.floor(h * 2) / 2
@@ -72,7 +126,8 @@ def _suggestion_handled(
     """
     判断建议时间区间 [start_time, end_time] 是否已处理完成。
     status=0(加班): 建议区间被某条 jiaban(已通过) 的 [timefrom,timeto] 包含或相等；
-    status=1(缺勤): 建议区间被某条 qj(已通过) 或 gcsqb(已通过且含 gcsj/sjfhtime) 的区间包含或相等。
+    status=1(缺勤): 建议区间被某条 qj(已通过) 或 gcsqb(已通过且含 yjcfsj/yjfhsj)
+                   的区间包含或相等（优先用预计出发/返回时间，不再依赖实际返回登记）。
     """
     s_start = _to_comparable_dt(start_time)
     s_end = _to_comparable_dt(end_time)
@@ -83,7 +138,13 @@ def _suggestion_handled(
     if status == 1:
         if _interval_covered(s_start, s_end, qj_rows, lambda r: (r.get("timefrom"), r.get("timeto"))):
             return True
-        return _interval_covered(s_start, s_end, gcsqb_rows, lambda r: (r.get("gcsj"), r.get("sjfhtime") or r.get("yjfhsj")))
+        # 公出：用预计出发/返回时间覆盖缺勤区间；若预计时间缺失再回退到实际时间
+        return _interval_covered(
+            s_start,
+            s_end,
+            gcsqb_rows,
+            lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
+        )
     return False
 
 
@@ -98,7 +159,7 @@ def _suggestion_under_review(
     """
     判断建议时间区间是否已被「已提交但未审批通过」的记录覆盖（正在审核）。
     status=0: 被 jiaban(jiabanzt in 0,1,3) 覆盖；
-    status=1: 被 qj(qjzt in 0,1,3) 或 gcsqb(未双审通过) 覆盖。
+    status=1: 被 qj(qjzt in 0,1,3) 或 gcsqb(未双审通过，按 yjcfsj/yjfhsj 时间段) 覆盖。
     """
     s_start = _to_comparable_dt(start_time)
     s_end = _to_comparable_dt(end_time)
@@ -109,7 +170,12 @@ def _suggestion_under_review(
     if status == 1:
         if _interval_covered(s_start, s_end, qj_pending, lambda r: (r.get("timefrom"), r.get("timeto"))):
             return True
-        return _interval_covered(s_start, s_end, gcsqb_pending, lambda r: (r.get("gcsj"), r.get("sjfhtime") or r.get("yjfhsj")))
+        return _interval_covered(
+            s_start,
+            s_end,
+            gcsqb_pending,
+            lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
+        )
     return False
 
 
@@ -131,6 +197,7 @@ def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
             # 部办为领导，不纳入考勤异常管理
             if dept == "部办":
                 continue
+            is_female = _is_female_employee(name)
             rows = attendance_db.get_suggestions(name, dept, year, month)
             jiaban_rows, qj_rows, gcsqb_rows = [], [], []
             jiaban_pending, qj_pending, gcsqb_pending = [], [], []
@@ -144,8 +211,10 @@ def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
                     (name, year, month),
                 )
                 gcsqb_rows = db.execute_query(
-                    "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                    (name, year, month),
+                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                    "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                    (name, year),
                 )
                 jiaban_pending = db.execute_query(
                     "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -156,14 +225,19 @@ def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
                     (name, year, month),
                 )
                 gcsqb_pending = db.execute_query(
-                    "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                    (name, year, month),
+                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                    "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                    (name, year),
                 )
             except Exception as e:
                 logger.warning(f"查询已处理/审核中区间失败 name=%s: %s", name, e)
             for r in rows:
                 st = r.get("status") if r.get("status") is not None else 0
                 if st != 1:
+                    continue
+                # 每年 3 月 8 日下午 13:00-17:00，女性员工不视为缺勤异常
+                if is_female and _is_march8_pm_interval(r.get("date"), r.get("start_time"), r.get("end_time")):
                     continue
                 handled = _suggestion_handled(
                     r.get("start_time"), r.get("end_time"), st,
@@ -634,6 +708,7 @@ async def get_suggestions(
         return SuggestionResponse(success=False, suggestions=[])
 
     try:
+        is_female = _is_female_employee(name)
         if year is not None and month is not None and 1 <= month <= 12:
             attendance_db.ensure_suggestions_table()
             rows = attendance_db.get_suggestions(name, dept, year, month)
@@ -649,8 +724,10 @@ async def get_suggestions(
                     (name, year, month),
                 )
                 gcsqb_rows = db.execute_query(
-                    "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                    (name, year, month),
+                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                    "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                    (name, year),
                 )
                 jiaban_pending = db.execute_query(
                     "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -661,14 +738,19 @@ async def get_suggestions(
                     (name, year, month),
                 )
                 gcsqb_pending = db.execute_query(
-                    "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                    (name, year, month),
+                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                    "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                    (name, year),
                 )
             except Exception as e:
                 logger.warning(f"查询已处理/审核中区间失败: {e}")
             suggestions_list = []
             for r in rows:
                 st = r.get("status") if r.get("status") is not None else 0
+                # 每年 3 月 8 日下午 13:00-17:00，女性员工不提示缺勤/请假建议
+                if is_female and st == 1 and _is_march8_pm_interval(r.get("date"), r.get("start_time"), r.get("end_time")):
+                    continue
                 handled = _suggestion_handled(
                     r.get("start_time"), r.get("end_time"), st,
                     jiaban_rows, qj_rows, gcsqb_rows,
@@ -701,8 +783,10 @@ async def get_suggestions(
                 (name, now.year, now.month),
             )
             gcsqb_rows = db.execute_query(
-                "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                (name, now.year, now.month),
+                "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
+                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                (name, now.year),
             )
             jiaban_pending = db.execute_query(
                 "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -713,14 +797,19 @@ async def get_suggestions(
                 (name, now.year, now.month),
             )
             gcsqb_pending = db.execute_query(
-                "SELECT gcsj, sjfhtime, yjfhsj FROM gcsqb WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 AND gcsj IS NOT NULL AND YEAR(gcsj) = %s AND MONTH(gcsj) = %s",
-                (name, now.year, now.month),
+                "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
+                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
+                (name, now.year),
             )
         except Exception as e:
             logger.warning(f"查询已处理/审核中区间失败: {e}")
         out = []
         for s in suggestions_list:
             st = s.get("status", 0)
+            # 每年 3 月 8 日下午 13:00-17:00，女性员工不提示缺勤/请假建议
+            if is_female and st == 1 and _is_march8_pm_interval(s.get("date"), s.get("start_time"), s.get("end_time")):
+                continue
             handled = _suggestion_handled(
                 s.get("start_time"), s.get("end_time"), st,
                 jiaban_rows, qj_rows, gcsqb_rows,

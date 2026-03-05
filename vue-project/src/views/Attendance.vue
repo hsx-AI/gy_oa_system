@@ -146,13 +146,13 @@
                 <button 
                   class="auto-fill-btn btn-business-trip"
                   @click.stop="handleBusinessTripReturnFill(suggestion)"
-                  title="公出返回登记"
+                  title="调整公出申请并填充时间"
                 >
                   <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>
                     <polyline points="9 22 9 12 15 12 15 22"/>
                   </svg>
-                  公出返回
+                  公出登记
                 </button>
               </div>
             </template>
@@ -255,13 +255,161 @@
       @close="leaveModalVisible = false"
       @submitted="loadSuggestions"
     />
+
+    <!-- 公出申请弹窗（本页填写，无需跳转，与公出管理页保持一致） -->
+    <div v-if="businessTripModalVisible" class="modal-overlay" @click.self="businessTripModalVisible = false">
+      <div class="modal-content">
+        <h2>公出登记</h2>
+        <form @submit.prevent="handleBusinessTripSubmit" class="application-form" autocomplete="on">
+          <!-- 公出类型：市内 / 境内 / 境外 -->
+          <div class="form-row">
+            <div class="form-group full">
+              <label>公出类型 <span class="label-required">*</span></label>
+              <select v-model="btTripScope" name="tripScope" autocomplete="on">
+                <option value="市内公出">市内公出</option>
+                <option value="境内公出">境内公出</option>
+                <option value="境外公出">境外公出</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- 基础信息（委派单位仅境内/境外显示） -->
+          <div class="form-row" v-if="!btIsCityTrip">
+            <div class="form-group half">
+              <label>委派单位</label>
+              <select v-model="btForm.targetUnit" name="targetUnit" autocomplete="on">
+                <option value="项目管理部">项目管理部</option>
+                <option value="大电机研究所">大电机研究所</option>
+                <option value="采购部">采购部</option>
+                <option value="装备能源部">装备能源部</option>
+                <option value="质量检测部">质量检测部</option>
+                <option value="人力资源部">人力资源部</option>
+                <option value="市场部">市场部</option>
+                <option value="数字化部">数字化部</option>
+                <option value="科技创新部">科技创新部</option>
+                <option value="智能制造工艺部">智能制造工艺部</option>
+                <option value="新产业开发部">新产业发展部</option>
+                <option value="新能源事业部">新能源事业部</option>
+                <option value="其他">其他</option>
+              </select>
+            </div>
+            <div class="form-group half" v-if="!btIsCityTrip">
+              <label>委派时间 <span class="label-optional">（可选）</span></label>
+              <input type="date" v-model="btForm.assignTime" name="assignTime" autocomplete="on" placeholder="选填">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half" v-if="!btIsCityTrip">
+              <label>通知单编号 <span class="label-optional">（选填）</span></label>
+              <input id="bt-noticeNo" type="text" v-model="btForm.noticeNo" name="noticeNo" autocomplete="on" placeholder="选填">
+            </div>
+            <div class="form-group half" :class="{ full: btIsCityTrip }">
+              <label>填报单位</label>
+              <input type="text" v-model="btForm.department" readonly>
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half">
+              <label>公出人员姓名</label>
+              <input type="text" v-model="btForm.name" readonly>
+            </div>
+            <div class="form-group half">
+              <label>本次公出总人数</label>
+              <input type="number" v-model="btForm.totalPeople" name="totalPeople" autocomplete="on" min="1">
+            </div>
+          </div>
+
+          <!-- 公出详情（工作号、项目名称仅境内/境外） -->
+          <div class="form-row" v-if="!btIsCityTrip">
+            <div class="form-group half">
+              <label>工作号 <span class="label-optional">（选填）</span></label>
+              <input id="bt-workNo" type="text" v-model="btForm.workNo" name="workNo" autocomplete="on" placeholder="选填">
+            </div>
+            <div class="form-group half">
+              <label>项目名称 <span class="label-optional">（选填）</span></label>
+              <input id="bt-projectName" type="text" v-model="btForm.projectName" name="projectName" autocomplete="on" placeholder="选填">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group full">
+              <label>公出地点</label>
+              <input v-if="btIsCityTrip" id="bt-location" type="text" :value="'市内'" readonly class="readonly-input">
+              <input v-else id="bt-location" type="text" v-model="btForm.location" name="location" autocomplete="street-address" placeholder="请输入公出地点">
+            </div>
+          </div>
+
+          <!-- 时间与费用（仅选日期，不参与考勤统计） -->
+          <div class="form-row">
+            <div class="form-group half">
+              <label>出发时间</label>
+              <input type="date" v-model="btForm.startTime" name="btStartTime" autocomplete="on">
+            </div>
+            <div class="form-group half">
+              <label>预计返回时间</label>
+              <input type="date" v-model="btForm.endTime" name="btEndTime" autocomplete="on">
+            </div>
+          </div>
+
+          <div class="form-row">
+            <div class="form-group half" v-if="!btIsCityTrip">
+              <label>请款金额 <span class="label-optional">（选填）</span></label>
+              <input type="number" v-model="btForm.amount" name="amount" autocomplete="on" min="0" step="0.01" placeholder="选填">
+            </div>
+            <div class="form-group half" :class="{ full: btIsCityTrip }">
+              <label>联系电话</label>
+              <input id="bt-phone" type="text" v-model="btForm.phone" name="btPhone" autocomplete="tel" placeholder="请输入联系电话">
+            </div>
+          </div>
+
+          <div class="form-group">
+            <label>公出任务</label>
+            <textarea id="bt-task" v-model="btForm.task" name="btTask" autocomplete="on" rows="4" placeholder="请输入公出任务详情"></textarea>
+          </div>
+
+          <!-- 审批人 -->
+          <div class="form-row">
+            <div class="form-group half">
+              <label>部领导</label>
+              <select v-model="btForm.deptLeader" name="deptLeader" autocomplete="on" :disabled="btLoadingApprovers">
+                <option value="">请选择部领导</option>
+                <option v-for="person in btDeptLeaders" :key="person" :value="person">{{ person }}</option>
+              </select>
+            </div>
+            <div class="form-group half">
+              <label>室主任</label>
+              <select v-model="btForm.responsiblePerson" name="roomDirector" autocomplete="on" :disabled="btLoadingApprovers">
+                <option value="">请选择室主任</option>
+                <option v-for="person in btRoomDirectors" :key="person" :value="person">{{ person }}</option>
+              </select>
+            </div>
+          </div>
+
+          <div class="form-group checkbox-group">
+            <label class="checkbox-label text-danger">
+              <input type="checkbox" v-model="btForm.confirmed">
+              我确认已阅读并遵守《GYBG-047 智能制造工艺部公出人员管理办法》及公司相关规定。
+            </label>
+            <a :href="btManagementDocUrl" target="_blank" rel="noopener noreferrer" class="doc-link">点击阅读《GYBG-047 智能制造工艺部公出人员管理办法》</a>
+          </div>
+
+          <!-- 底部操作 -->
+          <div class="form-actions">
+            <button type="button" @click="businessTripModalVisible = false">取消</button>
+            <button type="submit" class="btn-primary">提交</button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, queryAttendance, getBusinessTripList, getAttendanceDates, checkCanApprove } from '@/api/attendance'
+import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers } from '@/api/attendance'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 
@@ -273,6 +421,34 @@ const overtimeModalVisible = ref(false)
 const overtimePrefill = ref({})
 const leaveModalVisible = ref(false)
 const leavePrefill = ref({})
+
+// 公出申请弹窗（考勤页内，与公出管理页一致）
+const businessTripModalVisible = ref(false)
+const btTripScope = ref('市内公出')
+const btIsCityTrip = computed(() => btTripScope.value === '市内公出')
+const btForm = reactive({
+  targetUnit: '项目管理部',
+  assignTime: '',
+  noticeNo: '',
+  department: '',
+  name: '',
+  totalPeople: 1,
+  workNo: '',
+  projectName: '',
+  location: '',
+  startTime: '',
+  endTime: '',
+  amount: 0,
+  phone: '',
+  task: '',
+  deptLeader: '',
+  responsiblePerson: '',
+  confirmed: false
+})
+const btDeptLeaders = ref([])
+const btRoomDirectors = ref([])
+const btLoadingApprovers = ref(false)
+const btManagementDocUrl = '/doc/gybg-047'
 
 const toTimeValue = (t) => {
   if (!t) return '08:00:00'
@@ -338,7 +514,7 @@ const handleLeaveFill = (suggestion) => {
   leaveModalVisible.value = true
 }
 
-// 公出返回：跳转公出管理并打开返回登记；无符合条件时提示
+// 公出：从考勤建议入口，在本页打开公出登记弹窗并预填时间（表单与公出管理页一致）
 const handleBusinessTripReturnFill = async (suggestion) => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = userInfo.name || userInfo.userName || ''
@@ -346,25 +522,99 @@ const handleBusinessTripReturnFill = async (suggestion) => {
     alert('请先登录')
     return
   }
-  const suggDate = suggestion?.date ? String(suggestion.date).slice(0, 10) : ''
+  const dept = userInfo.dept || userInfo.department || ''
+  const date = suggestion?.date ? String(suggestion.date).slice(0, 10) : ''
+
+  btTripScope.value = '市内公出'
+  btForm.targetUnit = '项目管理部'
+  btForm.assignTime = ''
+  btForm.noticeNo = ''
+  btForm.department = dept
+  btForm.name = name
+  btForm.totalPeople = 1
+  btForm.workNo = ''
+  btForm.projectName = ''
+  btForm.location = '市内'
+  btForm.startTime = date
+  btForm.endTime = date
+  btForm.amount = 0
+  btForm.phone = ''
+  btForm.task = ''
+  btForm.deptLeader = ''
+  btForm.responsiblePerson = ''
+  btForm.confirmed = false
+
+  // 获取当前用户对应的部领导与室主任列表
+  btLoadingApprovers.value = true
   try {
-    const res = await getBusinessTripList({ name, year: new Date().getFullYear() })
-    const data = res?.data || []
-    const candidates = data.filter(r => r.status === '已通过' && Number(r.fhdjStatus) !== 1)
-    if (candidates.length === 0) {
-      if (confirm('暂无已通过的公出申请，是否前往填写公出登记？')) {
-        router.push({ path: '/attendance/business-trip', query: { action: 'apply' } })
-      }
-      return
-    }
-    const q = { action: 'return' }
-    if (suggDate) q.date = suggDate
-    if (candidates.length === 1) {
-      q.id = candidates[0].id
-    }
-    router.push({ path: '/attendance/business-trip', query: q })
+    const [r1, r2] = await Promise.all([
+      getApprovers({ name, level: 'dept_leader' }),
+      getApprovers({ name, level: 'room_director' })
+    ])
+    btDeptLeaders.value = (r1.success && r1.approvers) ? r1.approvers.map(a => a.name) : []
+    btRoomDirectors.value = (r2.success && r2.approvers) ? r2.approvers.map(a => a.name) : []
   } catch (e) {
-    alert('获取公出记录失败，请稍后重试。')
+    console.error('获取公出审批人失败:', e)
+    btDeptLeaders.value = []
+    btRoomDirectors.value = []
+  } finally {
+    btLoadingApprovers.value = false
+  }
+
+  businessTripModalVisible.value = true
+}
+
+// 公出申请弹窗提交
+const handleBusinessTripSubmit = async () => {
+  const tips = []
+  if (btIsCityTrip.value) btForm.location = '市内'
+  if (!(btForm.location || '').trim()) tips.push('公出地点')
+  if (!(btForm.task || '').trim()) tips.push('公出任务')
+  if (!(btForm.phone || '').trim()) tips.push('联系电话')
+  if (!(btForm.startTime || '').trim()) tips.push('出发时间')
+  if (!(btForm.endTime || '').trim()) tips.push('预计返回时间')
+  if (!(btForm.deptLeader || '').trim()) tips.push('部领导')
+  if (!(btForm.responsiblePerson || '').trim()) tips.push('室主任')
+  if (!btForm.confirmed) tips.push('勾选并确认已阅读管理办法')
+  if (tips.length) {
+    alert('请完善后再提交：\n\n' + tips.map(t => '· ' + t).join('\n'))
+    return
+  }
+
+  const startTime = `${btForm.startTime}T08:00:00`
+  const endTime = `${btForm.endTime}T17:00:00`
+
+  try {
+    const payload = {
+      tripScope: btTripScope.value,
+      targetUnit: btForm.targetUnit,
+      assignTime: '',
+      noticeNo: '',
+      department: btForm.department,
+      name: btForm.name,
+      totalPeople: Number(btForm.totalPeople) || 1,
+      workNo: '',
+      projectName: '',
+      location: btForm.location,
+      startTime,
+      endTime,
+      amount: 0,
+      phone: btForm.phone,
+      task: btForm.task,
+      deptLeader: btForm.deptLeader,
+      responsiblePerson: btForm.responsiblePerson
+    }
+    const res = await submitBusinessTripApply(payload)
+    if (res.success) {
+      alert('公出申请已提交')
+      businessTripModalVisible.value = false
+      await loadSuggestions()
+    } else {
+      alert(res.message || '提交失败')
+    }
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e.message
+    alert(msg || '提交失败，请稍后重试')
   }
 }
 
@@ -659,6 +909,93 @@ watch(selectedMonth, () => {
   background: var(--color-bg-container);
   border-radius: var(--radius-md);
   border: 1px solid var(--color-border-lighter);
+}
+
+/* 公出申请弹窗样式（与公出管理页保持一致） */
+.modal-overlay {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+}
+
+.modal-content {
+  background: white;
+  padding: var(--spacing-xl);
+  border-radius: var(--radius-md);
+  width: 800px;
+  max-width: 95%;
+  max-height: 90vh;
+  overflow-y: auto;
+}
+
+.application-form {
+  margin-top: var(--spacing-lg);
+}
+
+.form-row {
+  display: flex;
+  gap: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+}
+
+.form-group {
+  margin-bottom: var(--spacing-lg);
+}
+
+.form-group.half {
+  flex: 1;
+  margin-bottom: 0;
+}
+
+.form-group.full {
+  flex: 1 1 100%;
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.form-group label {
+  display: block;
+  margin-bottom: var(--spacing-xs);
+  font-weight: 500;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+}
+
+.form-group input,
+.form-group select,
+.form-group textarea {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-base);
+  transition: border-color 0.2s;
+}
+
+.form-group input:focus,
+.form-group select:focus,
+.form-group textarea:focus {
+  border-color: var(--color-primary);
+  outline: none;
+}
+
+.form-group input[readonly] {
+  background-color: var(--color-bg-layout);
+  cursor: not-allowed;
+}
+
+.form-actions {
+  margin-top: var(--spacing-xl);
+  display: flex;
+  justify-content: flex-end;
+  gap: var(--spacing-md);
 }
 
 .suggestions-header {

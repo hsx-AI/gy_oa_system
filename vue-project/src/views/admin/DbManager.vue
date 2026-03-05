@@ -62,7 +62,13 @@
             <table class="data-table">
               <thead>
                 <tr>
-                  <th v-for="col in columns" :key="col.name">{{ col.name }}{{ col.isPk ? ' (主键)' : '' }}</th>
+                  <th v-for="col in columns" :key="col.name" class="sortable-th">
+                    <span>{{ col.name }}{{ col.isPk ? ' (主键)' : '' }}</span>
+                    <span class="sort-btns">
+                      <button type="button" class="sort-btn" :class="{ active: sortColumn === col.name && sortOrder === 'asc' }" title="升序" @click="setSort(col.name, 'asc')">↑</button>
+                      <button type="button" class="sort-btn" :class="{ active: sortColumn === col.name && sortOrder === 'desc' }" title="降序" @click="setSort(col.name, 'desc')">↓</button>
+                    </span>
+                  </th>
                   <th style="width: 120px;">操作</th>
                 </tr>
               </thead>
@@ -143,6 +149,8 @@ const page = ref(1)
 const pageSize = ref(50)
 const searchColumn = ref('')
 const searchKeyword = ref('')
+const sortColumn = ref('')
+const sortOrder = ref('asc')
 const loading = ref(false)
 const rowsLoading = ref(false)
 
@@ -179,6 +187,8 @@ function onTableChange() {
   page.value = 1
   searchColumn.value = ''
   searchKeyword.value = ''
+  sortColumn.value = ''
+  sortOrder.value = 'asc'
   if (!selectedTable.value) return
   loadColumns()
   loadRows()
@@ -210,6 +220,10 @@ function loadRows() {
     params.search_column = searchColumn.value
     params.search_keyword = searchKeyword.value
   }
+  if (sortColumn.value) {
+    params.sort_column = sortColumn.value
+    params.sort_order = sortOrder.value
+  }
   getDbManagerRows(selectedTable.value, params)
     .then(res => {
       if (res && res.success) {
@@ -232,6 +246,13 @@ function doSearch() {
 function clearSearch() {
   searchColumn.value = ''
   searchKeyword.value = ''
+  page.value = 1
+  loadRows()
+}
+
+function setSort(col, order) {
+  sortColumn.value = col
+  sortOrder.value = order
   page.value = 1
   loadRows()
 }
@@ -333,9 +354,36 @@ onMounted(async () => {
 .table-title { margin: 0; font-size: var(--font-size-lg); }
 .table-meta { color: var(--color-text-secondary); font-size: var(--font-size-sm); }
 .table-wrap { overflow-x: auto; }
-.data-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-sm); }
+.data-table { width: 100%; border-collapse: collapse; font-size: var(--font-size-sm); min-width: 600px; }
 .data-table th, .data-table td { padding: var(--spacing-sm) var(--spacing-base); border-bottom: 1px solid var(--color-border-lighter); text-align: left; }
 .data-table th { background: var(--color-bg-spotlight); }
+.sortable-th { white-space: nowrap; }
+.sortable-th .sort-btns { display: inline-flex; margin-left: 4px; vertical-align: middle; }
+.sort-btn {
+  padding: 0 4px;
+  min-width: 22px;
+  font-size: 12px;
+  line-height: 1.2;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  border-radius: 2px;
+}
+.sort-btn:hover { color: var(--color-primary); background: rgba(24, 144, 255, 0.1); }
+.sort-btn.active { color: var(--color-primary); font-weight: bold; }
+/* 操作列冻结：横向滚动时固定在右侧 */
+.data-table th:last-child,
+.data-table td:last-child {
+  position: sticky;
+  right: 0;
+  z-index: 1;
+  background: var(--color-bg-container);
+  box-shadow: -4px 0 8px rgba(0, 0, 0, 0.06);
+  white-space: nowrap;
+}
+.data-table th:last-child { background: var(--color-bg-spotlight); }
+.data-table tbody tr:hover td:last-child { background: var(--color-bg-spotlight); }
 .text-center { text-align: center; }
 .text-tertiary { color: var(--color-text-tertiary); }
 .link-btn { background: none; border: none; color: var(--color-primary); cursor: pointer; margin-right: 8px; font-size: var(--font-size-sm); }
