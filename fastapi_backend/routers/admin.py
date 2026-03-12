@@ -10,6 +10,7 @@ from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from database import db
+from routers.db_manager import _get_admin1
 from io import BytesIO
 from datetime import datetime
 import logging
@@ -49,6 +50,10 @@ def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
     if not (name or "").strip():
         return None
     name_stripped = name.strip()
+    # 系统管理员（webconfig.admin1）最高权限，等同部长+打卡管理员+人事管理员
+    admin1 = _get_admin1()
+    if admin1 and name_stripped == admin1:
+        return {"role": "full", "lsys": None}
     # 人事管理员（webconfig.admin2）权限等同于部长/副部长
     admin2 = _get_admin2()
     if admin2 and name_stripped == admin2:

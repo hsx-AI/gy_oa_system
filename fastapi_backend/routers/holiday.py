@@ -11,6 +11,7 @@ from models import HolidayResponse, Holiday
 from utils.holiday_loader import load_holidays_for_year
 from datetime import datetime
 from database import db
+from routers.db_manager import _get_admin1
 from io import BytesIO
 import os
 import json
@@ -118,11 +119,13 @@ async def save_holidays(
 ):
     """
     保存某一年的假期与调休设置（覆盖该年的 holiday 表）。
-    仅打卡管理员（webconfig.dakaman）可操作。
+    仅打卡管理员或系统管理员（webconfig.admin1）可操作。
     """
+    admin1 = _get_admin1()
     dakaman = _get_dakaman()
-    if not dakaman or (current_user or "").strip() != dakaman:
-        raise HTTPException(status_code=403, detail="仅打卡管理员可维护假期调休设置")
+    cu = (current_user or "").strip()
+    if not (admin1 and cu == admin1) and not (dakaman and cu == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可维护假期调休设置")
     year = (year or "").strip()
     if not year:
         raise HTTPException(status_code=400, detail="年份不能为空")
@@ -175,9 +178,11 @@ async def download_holiday_template(
     仅打卡管理员可操作。
     模板中预置元旦、春节、清明、五一、端午、中秋、国庆 7 个节日的大概日期行。
     """
+    admin1 = _get_admin1()
     dakaman = _get_dakaman()
-    if not dakaman or (current_user or "").strip() != dakaman:
-        raise HTTPException(status_code=403, detail="仅打卡管理员可下载假期模板")
+    cu = (current_user or "").strip()
+    if not (admin1 and cu == admin1) and not (dakaman and cu == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可下载假期模板")
     if not HAS_OPENPYXL:
         raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
     year = (year or "").strip()
@@ -236,9 +241,11 @@ async def upload_holiday_file(
     仅打卡管理员可操作。
     Excel 第一张表，前两列分别为：日期、类型。
     """
+    admin1 = _get_admin1()
     dakaman = _get_dakaman()
-    if not dakaman or (current_user or "").strip() != dakaman:
-        raise HTTPException(status_code=403, detail="仅打卡管理员可上传假期文件")
+    cu = (current_user or "").strip()
+    if not (admin1 and cu == admin1) and not (dakaman and cu == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可上传假期文件")
     if not HAS_OPENPYXL:
         raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法读取 Excel")
     year = (year or "").strip()
@@ -446,10 +453,11 @@ async def parse_holiday_text(req: HolidayParseRequest):
 
 
 async def _parse_holiday_text_impl(req: HolidayParseRequest):
+    admin1 = _get_admin1()
     dakaman = _get_dakaman()
-    current_user = req.current_user or ""
-    if not dakaman or (current_user or "").strip() != dakaman:
-        raise HTTPException(status_code=403, detail="仅打卡管理员可使用大模型解析假期")
+    current_user = (req.current_user or "").strip()
+    if not (admin1 and current_user == admin1) and not (dakaman and current_user == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可使用大模型解析假期")
 
     try:
         from openai import OpenAI

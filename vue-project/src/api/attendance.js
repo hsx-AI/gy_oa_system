@@ -429,6 +429,21 @@ export function getUploadConfig() {
 }
 
 /**
+ * 从打卡服务器拉取最新报表并上传（GET 服务约 30 秒返回，仅 dakaman 可操作，需配置 ATTENDANCE_REPORT_FETCH_URL）
+ * @param {string} uploader - 当前登录用户姓名
+ */
+export function fetchAndUploadAttendance(uploader = '') {
+  const formData = new FormData()
+  if (uploader) formData.append('uploader', uploader)
+  return request({
+    url: '/attendance/fetch-and-upload',
+    method: 'post',
+    data: formData,
+    timeout: 70000
+  })
+}
+
+/**
  * 上传考勤数据 Excel 文件（仅 dakaman 用户可上传，需传 uploader 为当前登录姓名）
  * @param {File} file - Excel 文件对象
  * @param {string} uploader - 当前登录用户姓名，后端校验与 webconfig.dakaman 一致

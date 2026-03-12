@@ -17,12 +17,27 @@
       <div class="upload-section card mt-xl">
         <div class="upload-header">
           <h3 class="section-title">文件上传</h3>
-          <button class="btn-text" @click="downloadTemplate">
-            <svg class="icon-sm mr-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
-            </svg>
-            下载模板
-          </button>
+          <div class="upload-header-actions">
+            <button
+              type="button"
+              class="btn btn-primary btn-sm"
+              :disabled="fetching"
+              @click="handleFetchAndUpload"
+              title="从打卡服务器拉取当天最新报表并导入（需在系统配置 ATTENDANCE_REPORT_FETCH_URL）"
+            >
+              <svg v-if="fetching" class="icon-sm mr-xs spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+              <svg v-else class="icon-sm mr-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              {{ fetching ? '获取中…（约30秒）' : '上传最新数据' }}
+            </button>
+            <button class="btn-text" @click="downloadTemplate">
+              <svg class="icon-sm mr-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
+              </svg>
+              下载模板
+            </button>
+          </div>
         </div>
 
         <div class="upload-area" :class="{ 'drag-over': isDragOver }" 
@@ -219,10 +234,12 @@
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { uploadAttendanceExcel } from '@/api/attendance'
+import { ref, computed, onMounted } from 'vue'
+import { uploadAttendanceExcel, getUploadConfig, fetchAndUploadAttendance } from '@/api/attendance'
 
 const fileInput = ref(null)
+const fetchReportUrl = ref('')
+const fetching = ref(false)
 const selectedFile = ref(null)
 const isDragOver = ref(false)
 const uploading = ref(false)
@@ -338,9 +355,50 @@ const handleUpload = async () => {
 }
 
 const downloadTemplate = () => {
-  // TODO: 实现下载模板功能
   console.log('下载模板')
   alert('模板下载功能暂未实现')
+}
+
+onMounted(async () => {
+  try {
+    const res = await getUploadConfig()
+    if (res.success && res.fetchReportUrl) fetchReportUrl.value = (res.fetchReportUrl || '').trim()
+  } catch {
+    fetchReportUrl.value = ''
+  }
+})
+
+const handleFetchAndUpload = async () => {
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const uploader = (userInfo.name || userInfo.userName || '').trim()
+  fetching.value = true
+  try {
+    const response = await fetchAndUploadAttendance(uploader)
+    uploadHistory.value.unshift({
+      id: Date.now(),
+      filename: '最新报表(拉取)',
+      date: new Date().toLocaleString('zh-CN'),
+      records: response.records_count || 0,
+      successCount: response.success_count || 0,
+      failCount: response.fail_count || 0,
+      status: `成功导入 ${response.success_count || 0} 条`,
+      statusType: 'success'
+    })
+    alert(`上传成功！\n${response.message}\n成功: ${response.success_count || 0} 条\n失败: ${response.fail_count || 0} 条`)
+  } catch (error) {
+    const msg = error.response?.data?.detail || error.message || '拉取或上传失败'
+    uploadHistory.value.unshift({
+      id: Date.now(),
+      filename: '最新报表(拉取)',
+      date: new Date().toLocaleString('zh-CN'),
+      records: 0,
+      status: '失败',
+      statusType: 'error'
+    })
+    alert(`上传失败: ${msg}`)
+  } finally {
+    fetching.value = false
+  }
 }
 
 const formatFileSize = (bytes) => {
@@ -376,6 +434,20 @@ const formatFileSize = (bytes) => {
   justify-content: space-between;
   align-items: center;
   margin-bottom: var(--spacing-lg);
+}
+
+.upload-header-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+}
+
+.upload-header-actions .spin {
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 .upload-area {

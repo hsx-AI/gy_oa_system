@@ -30,30 +30,62 @@ def _make_ticket(sfzh: str, name: str, expire_seconds: int) -> str:
     return f"{payload_b64}.{sig}"
 
 
+def _get_sixianghuibao_url(name: str) -> str:
+    """生成思想汇报系统免登 URL（使用用户名映射，不要求身份证号）。"""
+    base_url = (getattr(settings, "SSO_SIXIANGHUIBAO_BASE_URL", None) or "").strip().rstrip("/")
+    entry_path = (getattr(settings, "SSO_SIXIANGHUIBAO_ENTRY_PATH", None) or "/sso/entry").strip()
+    if not entry_path.startswith("/"):
+        entry_path = "/" + entry_path
+    expire = getattr(settings, "SSO_TICKET_EXPIRE_SECONDS", 120) or 120
+    # 思想汇报按用户名映射：ticket 的 sub 与 name 均传姓名/用户名
+    ticket = _make_ticket(name, name, expire)
+    return f"{base_url}{entry_path}?ticket={ticket}"
+
+
 @router.get("/link")
 async def get_sso_link(
-    target: str = Query(..., description="目标系统标识，如 B 表示人事档案系统"),
+    target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),
     name: str = Query(..., description="当前登录用户姓名，用于校验并生成 ticket"),
 ):
     """
-    生成免登链接：校验当前用户已登录（在 yggl 中存在且有身份证号），生成 ticket 并返回 B 系统入口 URL。
-    前端拿到 url 后执行 window.location.href = url 即可跳转并带 ticket 单点登录。
+    生成免登链接：校验当前用户已登录（在 yggl 中存在），生成 ticket 并返回目标系统入口 URL。
+    前端拿到 url 后执行 window.location.href = url 或 window.open(url) 即可跳转并带 ticket 单点登录。
     """
+    target = (target or "").strip().lower()
+    name = (name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="请传入当前用户姓名")
+
+    # 思想汇报管理子系统（用户名映射，不要求身份证号）
+    if target == "sixianghuibao":
+        if not (getattr(settings, "SSO_SIXIANGHUIBAO_BASE_URL", None) or "").strip():
+            raise HTTPException(status_code=503, detail="未配置思想汇报系统地址 SSO_SIXIANGHUIBAO_BASE_URL")
+        if not (settings.SSO_SECRET or "").strip():
+            raise HTTPException(status_code=503, detail="未配置 SSO 签名密钥 SSO_SECRET")
+        try:
+            rows = db.execute_query(
+                "SELECT name FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+                (name,),
+            )
+            if not rows:
+                raise HTTPException(status_code=401, detail="用户不存在或已离职，请先登录本系统")
+            url = _get_sixianghuibao_url(name)
+            return {"success": True, "url": url}
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("生成思想汇报 SSO 链接失败: %s", e)
+            raise HTTPException(status_code=500, detail="生成免登链接失败")
+
+    # 人事档案系统 B（需身份证号）
+    if target != "b":
+        raise HTTPException(status_code=400, detail="目标系统仅支持：B（人事档案）、sixianghuibao（思想汇报管理）")
     if not (settings.SSO_TARGET_B_BASE_URL or "").strip():
         raise HTTPException(status_code=503, detail="未配置目标系统地址 SSO_TARGET_B_BASE_URL")
     if not (settings.SSO_SECRET or "").strip():
         raise HTTPException(status_code=503, detail="未配置 SSO 签名密钥 SSO_SECRET")
 
-    target = (target or "").strip().upper()
-    if target != "B":
-        raise HTTPException(status_code=400, detail="暂仅支持 target=B（人事档案系统）")
-
-    name = (name or "").strip()
-    if not name:
-        raise HTTPException(status_code=400, detail="请传入当前用户姓名")
-
     try:
-        # 查 yggl：在职且含身份证号
         try:
             rows = db.execute_query(
                 "SELECT name, sfzh FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",

@@ -83,6 +83,18 @@ async def startup_event():
     print(f"[System] API文档地址: http://localhost:8000/docs")
     logger.info(f"API文档地址: http://localhost:8000/docs")
     logger.debug("调试日志已开启，将显示详细调试信息")
+    # 每日 0 点自动从打卡服务器拉取最新报表并上传
+    fetch_url = getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or ""
+    if (fetch_url or "").strip():
+        try:
+            from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from routers.attendance import run_fetch_and_upload_report
+            scheduler = AsyncIOScheduler()
+            scheduler.add_job(run_fetch_and_upload_report, "cron", hour=0, minute=0, id="fetch_attendance_report")
+            scheduler.start()
+            logger.info("已启用每日 0 点自动拉取打卡报表任务")
+        except Exception as e:
+            logger.warning("启用每日拉取打卡报表任务失败: %s", e)
 
 
 @app.get("/")

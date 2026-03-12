@@ -128,11 +128,12 @@ import {
 } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
-
 const router = useRouter()
 
 const dakaman = ref('')
 const admin2 = ref('')
+const admin1 = ref('')
+const personnelArchiveUrl = ref('')
 const canAccessDbManager = ref(false)
 
 /** 根据 permission 字段判断当前用户是否可见该卡片 */
@@ -142,19 +143,21 @@ function canShowFeature(permission) {
   const jb = (userJb.value || '').trim()
   const d = (dakaman.value || '').trim()
   const a2 = (admin2.value || '').trim()
+  const a1 = (admin1.value || '').trim()
+  const isAdmin1 = !!a1 && name === a1
   switch (permission) {
     case 'upload':
-      return !!d && name === d
+      return isAdmin1 || (!!d && name === d)
     case 'holidaySettings':
-      return !!d && name === d
+      return isAdmin1 || (!!d && name === d)
     case 'leaderDashboard':
-      return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
     case 'overtimePay':
       return true
     case 'exceptions':
-      return (!!d && name === d) || jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
+      return isAdmin1 || (!!d && name === d) || jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
     case 'employeeAdmin':
-      return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任') || (!!a2 && name === a2)
+      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任') || (!!a2 && name === a2)
     case 'dbManager':
     case 'ygglFill':
       return canAccessDbManager.value
@@ -262,9 +265,16 @@ const rawFeatureGroups = [
       {
         id: 'personnel-archive',
         title: '人事档案管理系统',
-        description: '跳转人事档案系统，使用本系统账号免登',
-        ssoTarget: 'B',
+        description: '跳转人事档案系统，需使用人事档案系统独立账号登录',
         color: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
+        tag: '外链',
+        iconPath: 'M12 14l9-5-9-5-9 5 9 5zM12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z'
+      },
+      {
+        id: 'sixianghuibao',
+        title: '思想汇报管理',
+        description: '跳转思想汇报审核平台，主系统登录后免登（用户名一致）',
+        color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
         tag: '外链',
         iconPath: 'M12 14l9-5-9-5-9 5 9 5zM12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z'
       },
@@ -566,8 +576,10 @@ onMounted(() => {
     if (res && res.success) {
       dakaman.value = res.dakaman != null ? String(res.dakaman).trim() : ''
       admin2.value = res.admin2 != null ? String(res.admin2).trim() : ''
+      admin1.value = res.admin1 != null ? String(res.admin1).trim() : ''
+      personnelArchiveUrl.value = res.personnelArchiveUrl != null ? String(res.personnelArchiveUrl).trim() : ''
     }
-  }).catch(() => { dakaman.value = ''; admin2.value = '' })
+  }).catch(() => { dakaman.value = ''; admin2.value = ''; admin1.value = ''; personnelArchiveUrl.value = '' })
   const name = userName.value?.trim()
   if (name) {
     getDbManagerPermission({ current_user: name }).then(res => {
@@ -578,21 +590,31 @@ onMounted(() => {
 
 async function navigateTo(feature) {
   if (!feature) return
-  if (feature.ssoTarget) {
+  if (feature.id === 'personnel-archive') {
+    const url = (personnelArchiveUrl.value || '').trim()
+    if (url) {
+      window.open(url, '_blank', 'noopener,noreferrer')
+    } else {
+      alert('人事档案系统链接未配置，请联系管理员')
+    }
+    return
+  }
+  if (feature.id === 'sixianghuibao') {
     const name = (userName.value || '').trim()
     if (!name) {
-      alert('请先登录后再使用单点登录')
+      alert('请先登录')
       return
     }
     try {
-      const res = await getSSOLink(feature.ssoTarget, name)
-      if (res?.url) {
-        window.location.href = res.url
+      const res = await getSSOLink('sixianghuibao', name)
+      if (res && res.success && res.url) {
+        window.open(res.url, '_blank', 'noopener,noreferrer')
       } else {
-        alert(res?.message || '获取跳转链接失败')
+        alert(res?.detail || '获取思想汇报系统链接失败，请联系管理员')
       }
     } catch (e) {
-      alert(e?.message || e?.response?.data?.detail || '获取免登链接失败，请稍后重试')
+      const msg = e?.response?.data?.detail || e?.message || '跳转失败'
+      alert(typeof msg === 'string' ? msg : (Array.isArray(msg) ? msg.join(' ') : '跳转失败'))
     }
     return
   }

@@ -105,6 +105,13 @@
             </svg>
             <span>制度查询</span>
           </router-link>
+          <a href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 14l9-5-9-5-9 5 9 5z" />
+              <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
+            </svg>
+            <span>思想汇报管理</span>
+          </a>
           <router-link v-if="canShowEmployeeAdmin" to="/admin/employees" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -204,6 +211,7 @@ import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
+import { getSSOLink } from '@/api/sso'
 
 const route = useRoute()
 const router = useRouter()
@@ -221,11 +229,15 @@ const userInfoRef = ref(null)
 const dakaman = ref('')
 // 人事管理员：webconfig.admin2，权限等同于部长/副部长（含员工在职管理）
 const admin2 = ref('')
+// 系统管理员：webconfig.admin1，最高权限（等同部长 + dakaman + admin2）
+const admin1 = ref('')
 
-// 是否显示员工在职管理入口（部长/副部长/科室主任/副主任 或 人事管理员 admin2）
+// 是否显示员工在职管理入口（部长/副部长/科室主任/副主任 或 人事管理员 admin2 或 系统管理员 admin1）
 const canShowEmployeeAdmin = computed(() => {
   const jb = (currentUser.value?.jb || '').trim()
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const a1 = (admin1.value || '').trim()
+  if (a1 && name === a1) return true
   const isLeaderOrDept = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
     jb === '主任' || (jb && jb.startsWith('主任')) ||
     jb === '副主任' || (jb && jb.includes('副主任'))
@@ -233,8 +245,11 @@ const canShowEmployeeAdmin = computed(() => {
   return isLeaderOrDept || isAdmin2
 })
 
-// 是否显示领导人看板（仅 yggl 表中 jb 为 部长/副部长 可见）
+// 是否显示领导人看板（部长/副部长 或 系统管理员 admin1）
 const canSeeLeaderDashboard = computed(() => {
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const a1 = (admin1.value || '').trim()
+  if (a1 && name === a1) return true
   const jb = (currentUser.value?.jb || '').trim()
   return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
 })
@@ -244,18 +259,21 @@ const canSeeLeaderDashboard = computed(() => {
 // 是否显示数据库表管理入口（仅 webconfig.admin1 系统管理员）
 const canAccessDbManager = ref(false)
 
-// 是否显示打卡数据上传（仅 webconfig.dakaman 用户可见）
+// 是否显示打卡数据上传（webconfig.dakaman 或 系统管理员 admin1）
 const canShowUpload = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   const d = (dakaman.value || '').trim()
-  return !!d && name === d
+  const a1 = (admin1.value || '').trim()
+  return (!!d && name === d) || (!!a1 && name === a1)
 })
 
-// 是否显示考勤异常管理（班组长/主任/副主任 或 打卡管理员可见；部长/副部长/员工不可见）
+// 是否显示考勤异常管理（班组长/主任/副主任 或 打卡管理员 或 系统管理员 admin1）
 const canShowAttendanceExceptions = computed(() => {
   const jb = (currentUser.value?.jb || '').trim()
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const a1 = (admin1.value || '').trim()
   const d = (dakaman.value || '').trim()
+  if (a1 && name === a1) return true
   if (d && name === d) return true
   return jb === '组长' || (jb && jb.startsWith('组长')) ||
     jb === '主任' || (jb && jb.startsWith('主任')) ||
@@ -280,6 +298,7 @@ const handleLogout = () => {
   currentUser.value = { name: '', dept: '', username: '' }
   canAccessDbManager.value = false
   admin2.value = ''
+  admin1.value = ''
   showUserMenu.value = false
   router.push('/login')
 }
@@ -312,14 +331,15 @@ watch(() => route.path, () => {
   loadUserInfo()
 }, { immediate: true })
 
-// 加载打卡/人事配置（dakaman、admin2）
+// 加载打卡/人事/系统管理员配置（dakaman、admin2、admin1）
 const loadUploadConfig = () => {
   getUploadConfig().then(res => {
     if (res && res.success) {
       if (res.dakaman != null) dakaman.value = res.dakaman || ''
       if (res.admin2 != null) admin2.value = res.admin2 || ''
+      if (res.admin1 != null) admin1.value = res.admin1 || ''
     }
-  }).catch(() => { dakaman.value = ''; admin2.value = '' })
+  }).catch(() => { dakaman.value = ''; admin2.value = ''; admin1.value = '' })
 }
 
 onMounted(() => {
@@ -330,6 +350,26 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
 })
+
+// 跳转思想汇报管理（单点登录）
+async function goSixianghuibao() {
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  if (!name) {
+    alert('请先登录')
+    return
+  }
+  try {
+    const res = await getSSOLink('sixianghuibao', name)
+    if (res && res.success && res.url) {
+      window.open(res.url, '_blank', 'noopener,noreferrer')
+    } else {
+      alert(res?.detail || '获取思想汇报系统链接失败，请联系管理员')
+    }
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '跳转失败'
+    alert(typeof msg === 'string' ? msg : (Array.isArray(msg) ? msg.join(' ') : '跳转失败'))
+  }
+}
 
 // 不显示导航的路由
 const noNavRoutes = ['/login']

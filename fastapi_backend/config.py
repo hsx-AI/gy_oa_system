@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # 上传文件存储路径（相对于项目根目录）
     UPLOAD_DIR: str = "uploads"
 
+    # 打卡服务器报表拉取：GET 请求 URL，请求后约 30 秒返回当天最新报表文件。用于「上传最新数据」与每日 0 点自动上传
+    ATTENDANCE_REPORT_FETCH_URL: str = "http://10.42.60.250:6648/run?token=18400021209"
+
     # LibreOffice 可执行路径，用于 Word/Excel 转 PDF 预览。留空则自动查找 libreoffice/soffice
     LIBREOFFICE_CMD: str = ""
 
@@ -50,15 +53,24 @@ class Settings(BaseSettings):
     VECTOR_CHUNK_SIZE: int = 100
     VECTOR_CHUNK_OVERLAP: int = 30
 
-    # 单点登录（跳转人事档案等外部系统）
+    # 人事档案管理系统入口地址（独立密码，不再免登；前端首页「人事档案管理系统」卡片跳转此链接）
+    PERSONNEL_ARCHIVE_URL: str = "http://10.42.60.223:8088/user/userinfouser"
+
+    # 单点登录（跳转其他外部系统，人事档案已改为独立密码见上）
     # 目标系统 B 的入口地址（不含路径，如 https://hr.example.com）
     SSO_TARGET_B_BASE_URL: str = ""
     # B 系统接收 ticket 的路径（如 /sso/entry），完整跳转 URL = BASE_URL + 该路径 + ?ticket=xxx
     SSO_TARGET_B_ENTRY_PATH: str = "/sso/entry"
     # 与 B 系统约定的签名密钥（用于生成 ticket，B 端用同一密钥校验）
-    SSO_SECRET: str = ""
+    SSO_SECRET: str = "18400021209"
     # ticket 有效秒数
     SSO_TICKET_EXPIRE_SECONDS: int = 120
+
+    # 思想汇报管理子系统单点登录（与主系统用户名一致，通过用户名映射登录）
+    # 思想汇报系统站点根 URL（不含路径，如 http://10.42.60.xxx:8173）
+    SSO_SIXIANGHUIBAO_BASE_URL: str = "http://10.42.60.223:5173"
+    # 思想汇报系统接收 ticket 的路径（需与子系统路由一致，默认 /api/sso/entry）
+    SSO_SIXIANGHUIBAO_ENTRY_PATH: str = "/api/sso/entry"
 
     class Config:
         env_file = ".env"

@@ -204,9 +204,13 @@ router.beforeEach(async (to, _from, next) => {
         return
       }
       const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
       const jb = (user.jb || '').trim()
-      const allowed = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-      if (allowed) next()
+      const res = await getUploadConfig()
+      const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
+      const allowedByAdmin1 = admin1 && name === admin1
+      const allowedByJb = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      if (allowedByAdmin1 || allowedByJb) next()
       else next('/')
     } catch {
       next('/')
@@ -224,7 +228,8 @@ router.beforeEach(async (to, _from, next) => {
       const name = (user.name || user.userName || '').trim()
       const res = await getUploadConfig()
       const dakaman = (res && res.dakaman != null ? res.dakaman : '').trim()
-      if (dakaman && name === dakaman) {
+      const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
+      if ((dakaman && name === dakaman) || (admin1 && name === admin1)) {
         next()
       } else {
         next('/')
@@ -246,11 +251,13 @@ router.beforeEach(async (to, _from, next) => {
       const jb = (user.jb || '').trim()
       const res = await getUploadConfig()
       const dakaman = (res && res.dakaman != null ? res.dakaman : '').trim()
+      const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
       const isDakaman = dakaman && name === dakaman
+      const isAdmin1 = admin1 && name === admin1
       const isDeptLeader = jb === '组长' || (jb && jb.startsWith('组长')) ||
         jb === '主任' || (jb && jb.startsWith('主任')) ||
         jb === '副主任' || (jb && jb.includes('副主任'))
-      if (isDakaman || isDeptLeader) {
+      if (isAdmin1 || isDakaman || isDeptLeader) {
         next()
       } else {
         next('/')
@@ -270,6 +277,12 @@ router.beforeEach(async (to, _from, next) => {
       const user = JSON.parse(raw)
       const name = (user.name || user.userName || '').trim()
       const jb = (user.jb || '').trim()
+      const res = await getUploadConfig()
+      const admin1Name = (res && res.admin1 != null ? res.admin1 : '').trim()
+      if (admin1Name && name === admin1Name) {
+        next()
+        return
+      }
       const isLeaderOrDept = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
         jb === '主任' || (jb && jb.startsWith('主任')) ||
         jb === '副主任' || (jb && jb.includes('副主任'))
@@ -277,7 +290,6 @@ router.beforeEach(async (to, _from, next) => {
         next()
         return
       }
-      const res = await getUploadConfig()
       const admin2Name = (res && res.admin2 != null ? res.admin2 : '').trim()
       if (admin2Name && name === admin2Name) {
         next()

@@ -15,6 +15,7 @@ from pydantic import BaseModel
 from datetime import datetime
 from database import db
 from routers.approvers import _get_user_info, _jb_match
+from routers.db_manager import _get_admin1
 import logging
 import uuid
 
@@ -226,9 +227,15 @@ async def get_business_trip_all_records(
         user = _get_user_info(name)
         if not user:
             return {"success": True, "data": [], "total": 0, "scope": "none"}
-        jb = (user.get("jb") or "").strip()
-        lsys = (user.get("lsys") or "").strip()
-        is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+        name_stripped = (name or "").strip()
+        admin1 = _get_admin1()
+        if admin1 and name_stripped == admin1:
+            is_leader = True
+            lsys = ""
+        else:
+            jb = (user.get("jb") or "").strip()
+            lsys = (user.get("lsys") or "").strip()
+            is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
 
         order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
         if is_leader:

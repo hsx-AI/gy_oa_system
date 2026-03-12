@@ -10,6 +10,7 @@ import calendar
 from database import db
 from collections import defaultdict
 from routers.approvers import _get_user_info, _jb_match
+from routers.db_manager import _get_admin1
 from utils.helpers import format_datetime_plain
 import logging
 
@@ -88,7 +89,10 @@ async def get_overtime_pay_permission(name: str = Query(..., description="当前
     user = _get_user_info(name_stripped)
     lsys = (user.get("lsys") or "").strip() if user else ""
 
-    # 部长/副部长 或 人事管理员(admin2) -> 全部门
+    # 系统管理员(admin1)、部长/副部长、人事管理员(admin2) -> 全部门
+    admin1 = _get_admin1()
+    if admin1 and name_stripped == admin1:
+        return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
     if user:
         jb = (user.get("jb") or "").strip()
         if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):

@@ -13,12 +13,13 @@ from io import BytesIO
 
 from fastapi.responses import StreamingResponse
 
+from config import settings
 from attendance_db import attendance_db
 from database import db
 from utils.excel_processor import ExcelProcessor
 from routers.suggestions import get_attendance_exception_keys
 from routers.approvers import _get_user_info, _jb_match
-from routers.approvers import _get_user_info, _jb_match
+from routers.db_manager import _get_admin1
 
 logger = logging.getLogger(__name__)
 
@@ -40,13 +41,16 @@ def _can_see_attendance_exceptions(current_user: str) -> tuple:
     """
     判断当前用户是否有权查看考勤异常。
     返回 (allowed: bool, lsys: str|None)。
-    - 打卡管理员(dakaman)：可看全部，lsys 为 None 表示不按科室过滤。
-    - 班组长/主任/副主任：仅可看本室，返回其 lsys 用于过滤。
+    - 系统管理员(admin1)、打卡管理员(dakaman)：可看全部。
+    - 班组长/主任/副主任：仅可看本室。
     - 部长/副部长/员工等：无权限。
     """
     current_user = (current_user or "").strip()
     if not current_user:
         return False, None
+    admin1 = _get_admin1()
+    if admin1 and current_user == admin1:
+        return True, None
     dakaman = _get_dakaman()
     if dakaman and current_user == dakaman:
         return True, None
@@ -173,7 +177,17 @@ async def get_upload_config():
             admin2 = (wc[0]["admin2"] or "").strip() or ""
     except Exception:
         pass
-    return {"success": True, "dakaman": dakaman or "", "admin2": admin2}
+    fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
+    admin1 = _get_admin1()
+    personnel_archive_url = (getattr(settings, "PERSONNEL_ARCHIVE_URL", None) or "").strip()
+    return {
+        "success": True,
+        "dakaman": dakaman or "",
+        "admin2": admin2,
+        "admin1": admin1 or "",
+        "fetchReportUrl": fetch_url,
+        "personnelArchiveUrl": personnel_archive_url,
+    }
 
 
 def _generate_suggestions_bg(records: list):
@@ -258,6 +272,35 @@ def _generate_suggestions_bg(records: list):
         logger.warning(f"[后台] 上传后生成智能建议失败: {e}")
 
 
+def _process_attendance_file_path(temp_file_path: str, filename: str):
+    """
+    处理考勤文件（Excel），返回 (success, message, records_count, success_count, fail_count, mapped_records)。
+    不负责 log_upload、background_tasks、临时文件删除。
+    """
+    processor = ExcelProcessor(temp_file_path)
+    success, merged_records, error_msg = processor.process_file(start_row=6)
+    if not success:
+        return False, error_msg, 0, 0, 0, []
+
+    mapped_records = []
+    skipped_gh = []
+    for rec in merged_records:
+        gh = (rec.get("employee_id") or "").strip()
+        emp = attendance_db.get_employee_by_gh(gh) if gh else None
+        if not emp:
+            skipped_gh.append(gh or "(空)")
+            continue
+        rec["employee_name"] = emp.get("name") or ""
+        rec["department"] = emp.get("lsys") or ""
+        mapped_records.append(rec)
+    if skipped_gh:
+        logger.warning(f"上传跳过未在 yggl 中匹配到工号的记录，工号示例: {skipped_gh[:10]}{'...' if len(skipped_gh) > 10 else ''}")
+
+    success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
+    msg = f"文件处理完成！共处理 {len(mapped_records)} 条记录" + (f"，跳过未匹配工号 {len(skipped_gh)} 条" if skipped_gh else "")
+    return True, msg, len(mapped_records), success_count, fail_count, mapped_records
+
+
 @router.post("/upload", response_model=UploadResponse)
 async def upload_excel(
     background_tasks: BackgroundTasks,
@@ -277,13 +320,13 @@ async def upload_excel(
     - 同一人同一天的多次打卡会合并为一行
     """
     dakaman = _get_dakaman()
-    if dakaman:
-        uploader_name = (uploader or "").strip()
-        if uploader_name != dakaman:
-            raise HTTPException(
-                status_code=403,
-                detail="仅打卡管理员（webconfig.dakaman）可上传打卡数据"
-            )
+    admin1 = _get_admin1()
+    uploader_name = (uploader or "").strip()
+    if not (admin1 and uploader_name == admin1) and not (dakaman and uploader_name == dakaman):
+        raise HTTPException(
+            status_code=403,
+            detail="仅打卡管理员（webconfig.dakaman）或系统管理员（webconfig.admin1）可上传打卡数据"
+        )
 
     # 验证文件类型
     if not file.filename.endswith(('.xls', '.xlsx')):
@@ -299,55 +342,13 @@ async def upload_excel(
             temp_file_path = temp_file.name
         
         logger.info(f"开始处理文件: {file.filename}")
-        
-        # 处理Excel文件
-        processor = ExcelProcessor(temp_file_path)
-        success, merged_records, error_msg = processor.process_file(start_row=6)
-        
+        success, message, records_count, success_count, fail_count, mapped_records = _process_attendance_file_path(temp_file_path, file.filename)
         if not success:
-            attendance_db.log_upload(file.filename, 0, "失败", error_msg)
-            return UploadResponse(
-                success=False,
-                message=error_msg,
-                records_count=0
-            )
-
-        # 用工号(gh)映射 yggl：employee_name 用 yggl.name，department 用 yggl.lsys；未匹配工号的记录不录入
-        mapped_records = []
-        skipped_gh = []
-        for rec in merged_records:
-            gh = (rec.get("employee_id") or "").strip()
-            emp = attendance_db.get_employee_by_gh(gh) if gh else None
-            if not emp:
-                skipped_gh.append(gh or "(空)")
-                continue
-            rec["employee_name"] = emp.get("name") or ""
-            rec["department"] = emp.get("lsys") or ""
-            mapped_records.append(rec)
-        if skipped_gh:
-            logger.warning(f"上传跳过未在 yggl 中匹配到工号的记录，工号示例: {skipped_gh[:10]}{'...' if len(skipped_gh) > 10 else ''}")
-
-        # 批量插入数据库
-        success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
-        
-        # 记录上传日志
-        attendance_db.log_upload(
-            file.filename,
-            len(mapped_records),
-            "成功",
-            f"成功: {success_count}, 失败: {fail_count}"
-        )
-
-        # 智能建议在后台异步生成，不阻塞上传响应
+            attendance_db.log_upload(file.filename, 0, "失败", message)
+            return UploadResponse(success=False, message=message, records_count=0)
+        attendance_db.log_upload(file.filename, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
         background_tasks.add_task(_generate_suggestions_bg, list(mapped_records))
-        
-        return UploadResponse(
-            success=True,
-            message=f"文件处理完成！共处理 {len(mapped_records)} 条记录" + (f"，跳过未匹配工号 {len(skipped_gh)} 条" if skipped_gh else ""),
-            records_count=len(mapped_records),
-            success_count=success_count,
-            fail_count=fail_count
-        )
+        return UploadResponse(success=True, message=message, records_count=records_count, success_count=success_count, fail_count=fail_count)
     
     except Exception as e:
         error_msg = f"处理失败: {str(e)}"
@@ -364,28 +365,138 @@ async def upload_excel(
                 pass
 
 
-def _can_see_attendance_exceptions(current_user: str) -> tuple:
+@router.post("/fetch-and-upload", response_model=UploadResponse)
+async def fetch_and_upload(
+    background_tasks: BackgroundTasks,
+    uploader: Optional[str] = Form(None),
+):
     """
-    判断当前用户是否有权查看考勤异常。
-    返回 (allowed: bool, lsys: str|None)。
-    - 打卡管理员(dakaman)：可看全部，lsys 为 None 表示不按科室过滤。
-    - 班组长/主任/副主任：仅可看本室，返回其 lsys 用于过滤。
-    - 部长/副部长/员工等：无权限。
+    从打卡服务器 GET 拉取最新报表并导入。仅 dakaman 可操作。
+    需在 config 或 .env 中配置 ATTENDANCE_REPORT_FETCH_URL，拉取约需 30 秒。
     """
-    current_user = (current_user or "").strip()
-    if not current_user:
-        return False, None
     dakaman = _get_dakaman()
-    if dakaman and current_user == dakaman:
-        return True, None
-    user = _get_user_info(current_user)
-    if not user:
-        return False, None
-    jb = (user.get("jb") or "").strip()
-    if _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
-        lsys = (user.get("lsys") or "").strip()
-        return True, lsys if lsys else None
-    return False, None
+    admin1 = _get_admin1()
+    uploader_name = (uploader or "").strip()
+    if not (admin1 and uploader_name == admin1) and not (dakaman and uploader_name == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可执行拉取上传")
+    fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
+    if not fetch_url:
+        raise HTTPException(status_code=400, detail="未配置打卡报表拉取地址（ATTENDANCE_REPORT_FETCH_URL）")
+
+    import httpx
+    temp_file_path = None
+    try:
+        logger.info("开始从打卡服务器拉取最新报表: %s", fetch_url[:80] + "..." if len(fetch_url) > 80 else fetch_url)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.get(fetch_url)
+            resp.raise_for_status()
+            content = resp.content
+        if not content:
+            raise HTTPException(status_code=502, detail="拉取返回为空")
+        # 根据 Content-Disposition 或默认使用 .xlsx
+        suffix = ".xlsx"
+        cd = (resp.headers.get("content-disposition") or "").strip()
+        if "filename=" in cd:
+            import re
+            m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', cd, re.I) or re.search(r'filename=([^;\s]+)', cd, re.I)
+            if m:
+                fn = m.group(1).strip().lower()
+                if fn.endswith(".xls") and not fn.endswith(".xlsx"):
+                    suffix = ".xls"
+                elif fn.endswith(".xlsx"):
+                    suffix = ".xlsx"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            tmp.write(content)
+            temp_file_path = tmp.name
+        filename = "report" + suffix
+        success, message, records_count, success_count, fail_count, mapped_records = _process_attendance_file_path(temp_file_path, filename)
+        if not success:
+            attendance_db.log_upload(filename, 0, "失败", message)
+            return UploadResponse(success=False, message=message, records_count=0)
+        attendance_db.log_upload(filename, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
+        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records))
+        return UploadResponse(success=True, message=message, records_count=records_count, success_count=success_count, fail_count=fail_count)
+    except httpx.HTTPStatusError as e:
+        attendance_db.log_upload("report", 0, "失败", str(e.response.status_code))
+        raise HTTPException(status_code=502, detail=f"拉取失败: {e.response.status_code}")
+    except httpx.RequestError as e:
+        attendance_db.log_upload("report", 0, "失败", str(e))
+        raise HTTPException(status_code=502, detail=f"拉取请求失败: {str(e)}")
+    finally:
+        if temp_file_path and os.path.exists(temp_file_path):
+            try:
+                os.unlink(temp_file_path)
+            except Exception:
+                pass
+
+
+async def run_fetch_and_upload_report():
+    """供每日 0 点定时任务调用：从配置 URL 拉取报表并导入。失败时最多重试 3 次。"""
+    import asyncio
+    import httpx
+    dakaman = _get_dakaman()
+    fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
+    if not fetch_url or not dakaman:
+        logger.info("定时拉取跳过: 未配置 ATTENDANCE_REPORT_FETCH_URL 或 dakaman")
+        return
+    max_attempts = 4  # 1 次首次 + 最多重试 3 次
+    retry_delay_seconds = 30  # 每次失败后间隔 30 秒再重试
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        temp_file_path = None
+        try:
+            logger.info("[定时] 拉取打卡报表 第 %d/%d 次: %s", attempt, max_attempts, fetch_url[:80] + "..." if len(fetch_url) > 80 else fetch_url)
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(fetch_url)
+                resp.raise_for_status()
+                content = resp.content
+            if not content:
+                last_error = "拉取返回为空"
+                logger.warning("[定时] 第 %d 次: %s", attempt, last_error)
+                if attempt < max_attempts:
+                    await asyncio.sleep(retry_delay_seconds)
+                continue
+            suffix = ".xlsx"
+            cd = (resp.headers.get("content-disposition") or "").strip()
+            if "filename=" in cd:
+                import re
+                m = re.search(r'filename\*?=(?:UTF-8\'\')?["\']?([^"\';]+)["\']?', cd, re.I) or re.search(r'filename=([^;\s]+)', cd, re.I)
+                if m:
+                    fn = m.group(1).strip().lower()
+                    if fn.endswith(".xls") and not fn.endswith(".xlsx"):
+                        suffix = ".xls"
+                    elif fn.endswith(".xlsx"):
+                        suffix = ".xlsx"
+            with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+                tmp.write(content)
+                temp_file_path = tmp.name
+            report_name = "report" + suffix
+            success, message, records_count, success_count, fail_count, mapped_records = _process_attendance_file_path(temp_file_path, report_name)
+            if not success:
+                last_error = message
+                attendance_db.log_upload(report_name, 0, "失败", message)
+                logger.warning("[定时] 第 %d 次 处理失败: %s", attempt, message)
+                if attempt < max_attempts:
+                    await asyncio.sleep(retry_delay_seconds)
+                continue
+            attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
+            loop = asyncio.get_event_loop()
+            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records)))
+            logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
+            return
+        except Exception as e:
+            last_error = str(e)
+            logger.exception("[定时] 第 %d 次 拉取上传异常: %s", attempt, e)
+            attendance_db.log_upload("report", 0, "异常", f"第{attempt}次: {last_error}")
+            if attempt < max_attempts:
+                await asyncio.sleep(retry_delay_seconds)
+        finally:
+            if temp_file_path and os.path.exists(temp_file_path):
+                try:
+                    os.unlink(temp_file_path)
+                except Exception:
+                    pass
+    logger.error("[定时] 拉取打卡报表已重试 %d 次均失败，最后错误: %s", max_attempts, last_error)
 
 
 @router.get("/exceptions", response_model=AttendanceQueryResponse)

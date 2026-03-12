@@ -15,6 +15,7 @@ from attendance_db import attendance_db
 import math
 import uuid
 from routers.approvers import _get_user_info, _jb_match
+from routers.db_manager import _get_admin1
 from utils.helpers import format_datetime_plain
 import logging
 
@@ -43,8 +44,11 @@ def _fmt_dt(d):
 
 @router.get("/can-approve")
 async def can_approve(name: str = Query(...)):
-    """检查当前用户是否有审批权限（员工无权限；webconfig.dakaman 打卡管理员始终有权限，用于加班最后一环审批）"""
+    """检查当前用户是否有审批权限（员工无权限；admin1/dakaman 有审批权限）"""
     name_stripped = (name or "").strip()
+    admin1 = _get_admin1()
+    if admin1 and name_stripped == admin1:
+        return {"success": True, "canApprove": True, "jb": "系统管理员", "reason": "系统管理员等同部长及打卡管理员权限"}
     dakaman = _get_dakaman()
     if dakaman and name_stripped == dakaman:
         return {"success": True, "canApprove": True, "jb": "打卡管理员", "reason": "打卡管理员可审批加班最后一环"}
@@ -303,7 +307,8 @@ async def get_pending_overtime(approver: str = Query(...)):
         """
         rows = list(db.execute_query(query, (approver, approver)) or [])
         dakaman = _get_dakaman()
-        if dakaman and (approver or "").strip() == dakaman:
+        admin1 = _get_admin1()
+        if (dakaman and (approver or "").strip() == dakaman) or (admin1 and (approver or "").strip() == admin1):
             try:
                 rows_dk = db.execute_query(
                     """SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, content, spr, spr2, hx
