@@ -26,8 +26,8 @@
                 </div>
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
-                  <button type="button" class="todo-item__btn" @click="task.isReturnReminder ? router.push('/attendance/business-trip') : goApprove(task)">
-                    {{ task.isReturnReminder ? '去登记' : '处理' }}
+                  <button type="button" class="todo-item__btn" @click="task.isSixianghuibao ? goSixianghuibao() : (task.isReturnReminder ? router.push('/attendance/business-trip') : goApprove(task))">
+                    {{ task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理') }}
                   </button>
                 </div>
               </li>
@@ -127,7 +127,7 @@ import {
   getUploadConfig,
 } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { getSSOLink } from '@/api/sso'
+import { getSSOLink, getSixianghuibaoTodos } from '@/api/sso'
 const router = useRouter()
 
 const dakaman = ref('')
@@ -381,7 +381,10 @@ function formatRelativeTime(dtStr) {
   return dtStr.slice(0, 10)
 }
 
-// 展示的待办列表 = 审批待办 + 公出返回登记提醒（若有）
+// 思想汇报待办数量（由 OA 代理请求思想汇报 /api/integration/oa/todos）
+const sixianghuibaoTodoTotal = ref(0)
+
+// 展示的待办列表 = 审批待办 + 公出返回登记提醒 + 思想汇报待审核（若有）
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
   if (tripReturnPendingCount.value > 0) {
@@ -394,11 +397,33 @@ const displayTodoList = computed(() => {
       isReturnReminder: true
     })
   }
+  if (sixianghuibaoTodoTotal.value > 0) {
+    list.push({
+      uniqueId: 'sixianghuibao-todos',
+      type: '思想汇报待审核',
+      description: `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待审核`,
+      applicant: '思想汇报系统',
+      time: '',
+      isSixianghuibao: true
+    })
+  }
   return list
 })
 
 function goApprove(task) {
   router.push({ path: '/attendance/approvals', query: { type: task.tabType } })
+}
+
+async function goSixianghuibao() {
+  const name = (userName.value || '').trim()
+  if (!name) return
+  try {
+    const res = await getSSOLink('sixianghuibao', name)
+    if (res?.url) window.open(res.url, '_blank', 'noopener,noreferrer')
+    else alert(res?.detail || '获取思想汇报系统链接失败')
+  } catch (e) {
+    alert(e?.message || e?.response?.data?.detail || '获取思想汇报系统链接失败，请稍后重试')
+  }
 }
 
 function goMyApplications() {
@@ -476,6 +501,18 @@ async function fetchTodoList() {
     todoList.value = []
   } finally {
     todoLoading.value = false
+  }
+}
+
+/** 获取思想汇报系统待办数量（代理请求思想汇报 /api/integration/oa/todos），用于首页待办提醒 */
+async function fetchSixianghuibaoTodos() {
+  const name = (userName.value || '').trim()
+  if (!name) return
+  try {
+    const res = await getSixianghuibaoTodos({ name })
+    sixianghuibaoTodoTotal.value = Math.max(0, Number(res?.total) || 0)
+  } catch (e) {
+    sixianghuibaoTodoTotal.value = 0
   }
 }
 
@@ -588,6 +625,7 @@ onMounted(() => {
   userLsys.value = (info.dept || info.lsys || '').trim()
   fetchTodoList()
   fetchTripReturnPending()
+  fetchSixianghuibaoTodos()
   fetchRequestList()
   getUploadConfig().then(res => {
     if (res && res.success) {

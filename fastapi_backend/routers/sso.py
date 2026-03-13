@@ -42,6 +42,35 @@ def _get_sixianghuibao_url(name: str) -> str:
     return f"{base_url}{entry_path}?ticket={ticket}"
 
 
+@router.get("/sixianghuibao-todos")
+async def get_sixianghuibao_todos(
+    name: str = Query(..., description="当前用户姓名，与思想汇报系统 username 一致"),
+):
+    """
+    供 OA 首页待办提醒：代理请求思想汇报系统的 GET /api/integration/oa/todos，
+    返回该用户在思想汇报中的待办数量（待审核 + 被退回）。未配置或请求失败时返回 total=0。
+    """
+    base_url = (getattr(settings, "SSO_SIXIANGHUIBAO_BASE_URL", None) or "").strip().rstrip("/")
+    if not base_url:
+        return {"username": name, "pending_reviews": 0, "returned_reports": 0, "total": 0}
+    import httpx
+    url = f"{base_url}/api/integration/oa/todos"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params={"username": (name or "").strip()})
+            if resp.status_code == 200:
+                data = resp.json()
+                return {
+                    "username": data.get("username", name),
+                    "pending_reviews": data.get("pending_reviews", 0),
+                    "returned_reports": data.get("returned_reports", 0),
+                    "total": data.get("total", 0),
+                }
+    except Exception as e:
+        logger.warning("请求思想汇报待办失败: %s", e)
+    return {"username": name, "pending_reviews": 0, "returned_reports": 0, "total": 0}
+
+
 @router.get("/link")
 async def get_sso_link(
     target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),

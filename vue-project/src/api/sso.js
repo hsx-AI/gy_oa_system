@@ -13,3 +13,16 @@ export function getSSOLink(target, name) {
     params: { target, name }
   })
 }
+
+/**
+ * 获取思想汇报系统待办数量（供 OA 首页待办提醒）
+ * @param {Object} params - { name: 当前用户姓名 }
+ * @returns {Promise<{ username, pending_reviews, returned_reports, total }>}
+ */
+export function getSixianghuibaoTodos(params) {
+  return request({
+    url: '/sso/sixianghuibao-todos',
+    method: 'get',
+    params
+  })
+}
