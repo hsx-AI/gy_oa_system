@@ -128,6 +128,12 @@
             </svg>
             <span>数据库表管理</span>
           </router-link>
+          <router-link v-if="canAccessDbManager" to="/admin/health-monitor" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
+            </svg>
+            <span>系统健康监控</span>
+          </router-link>
           <router-link v-if="canAccessDbManager" to="/admin/yggl-fill" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -245,13 +251,19 @@ const canShowEmployeeAdmin = computed(() => {
   return isLeaderOrDept || isAdmin2
 })
 
-// 是否显示领导人看板（部长/副部长 或 系统管理员 admin1）
+// 是否显示领导人看板（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）
 const canSeeLeaderDashboard = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   const a1 = (admin1.value || '').trim()
   if (a1 && name === a1) return true
   const jb = (currentUser.value?.jb || '').trim()
-  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+  const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
+  const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+  const isZhjsDirector = lsys === '综合技术室' && (
+    jb === '主任' || (jb && jb.startsWith('主任')) ||
+    jb === '副主任' || (jb && jb.includes('副主任'))
+  )
+  return isMinister || isZhjsDirector
 })
 
 // 加班费统计：全员可访问，页面内按权限显示本人/本室/全部门

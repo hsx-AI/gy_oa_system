@@ -44,11 +44,11 @@ def _fmt_dt(d):
 
 @router.get("/can-approve")
 async def can_approve(name: str = Query(...)):
-    """检查当前用户是否有审批权限（员工无权限；admin1/dakaman 有审批权限）"""
+    """检查当前用户是否有审批权限（员工无权限；部长/主任等及 dakaman 有审批权限；admin1 等同部长但不含打卡管理员最终审批）"""
     name_stripped = (name or "").strip()
     admin1 = _get_admin1()
     if admin1 and name_stripped == admin1:
-        return {"success": True, "canApprove": True, "jb": "系统管理员", "reason": "系统管理员等同部长及打卡管理员权限"}
+        return {"success": True, "canApprove": True, "jb": "系统管理员", "reason": "系统管理员等同部长权限（不含打卡管理员最终审批加班）"}
     dakaman = _get_dakaman()
     if dakaman and name_stripped == dakaman:
         return {"success": True, "canApprove": True, "jb": "打卡管理员", "reason": "打卡管理员可审批加班最后一环"}
@@ -143,6 +143,7 @@ async def get_leave_detail(item_id: str):
 class ApproveRequest(BaseModel):
     action: str  # "approve" | "reject"
     reason: Optional[str] = ""
+    approver: Optional[str] = None  # 当前审批人姓名，用于加班最终环(jiabanzt=5)仅 dakaman 可操作时校验
 
 
 def _add_exchange_tickets(name: str, tickets: float):
@@ -277,6 +278,7 @@ class BatchApproveRequest(BaseModel):
     ids: List[str]  # 请假 id 支持 UUID 字符串
     action: str
     reason: Optional[str] = ""
+    approver: Optional[str] = None  # 加班批量审批时传当前审批人，用于 jiabanzt=5 仅 dakaman 校验
 
 
 @router.post("/leave/batch")
@@ -307,8 +309,8 @@ async def get_pending_overtime(approver: str = Query(...)):
         """
         rows = list(db.execute_query(query, (approver, approver)) or [])
         dakaman = _get_dakaman()
-        admin1 = _get_admin1()
-        if (dakaman and (approver or "").strip() == dakaman) or (admin1 and (approver or "").strip() == admin1):
+        # jiabanzt=5 仅打卡管理员可见，admin1 不充当 dakaman 最终审批
+        if dakaman and (approver or "").strip() == dakaman:
             try:
                 rows_dk = db.execute_query(
                     """SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, content, spr, spr2, hx
@@ -467,6 +469,15 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
         # 二级审批通过后进入打卡管理员审批
         db.execute_update("UPDATE jiaban SET jiabanzt = 5 WHERE id = %s", (item_id,))
     elif jiabanzt == 5:
+        # 仅 webconfig.dakaman 可做最终审批，admin1 不充当 dakaman
+        dakaman = _get_dakaman()
+        admin1 = _get_admin1()
+        cur_approver = (req.approver or "").strip()
+        if not dakaman or cur_approver != dakaman or (admin1 and cur_approver == admin1):
+            raise HTTPException(
+                status_code=403,
+                detail="加班最终审批仅限打卡管理员（webconfig.dakaman），系统管理员无权操作",
+            )
         # 打卡管理员通过后流程结束
         db.execute_update("UPDATE jiaban SET jiabanzt = 4 WHERE id = %s", (item_id,))
         final_approved = True
@@ -508,7 +519,10 @@ async def overtime_batch_approve(req: BatchApproveRequest):
     ok, fail = 0, 0
     for iid in req.ids:
         try:
-            await overtime_approve_action(iid, ApproveRequest(action=req.action, reason=req.reason))
+            await overtime_approve_action(
+                iid,
+                ApproveRequest(action=req.action, reason=req.reason, approver=req.approver),
+            )
             ok += 1
         except Exception:
             fail += 1

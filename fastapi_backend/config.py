@@ -35,6 +35,13 @@ class Settings(BaseSettings):
 
     # 打卡服务器报表拉取：GET 请求 URL，请求后约 30 秒返回当天最新报表文件。用于「上传最新数据」与每日 0 点自动上传
     ATTENDANCE_REPORT_FETCH_URL: str = "http://10.42.60.250:6648/run?token=18400021209"
+    # 定时任务时区（拉取打卡报表按此时区执行），如 Asia/Shanghai、UTC
+    SCHEDULER_TIMEZONE: str = "Asia/Shanghai"
+    # 每日拉取打卡数据的时间点（时、分）。例如 0 点 = hour=0, minute=0；凌晨 1:30 = hour=1, minute=30
+    SCHEDULER_HOUR: int = 0
+    SCHEDULER_MINUTE: int = 0
+    # 打卡数据自动获取服务健康检查 URL（GET 返回 {"status":"ok"} 表示正常）
+    ATTENDANCE_FETCH_HEALTH_URL: str = "http://10.42.60.250:6648/health?token=18400021209"
 
     # LibreOffice 可执行路径，用于 Word/Excel 转 PDF 预览。留空则自动查找 libreoffice/soffice
     LIBREOFFICE_CMD: str = ""
@@ -67,9 +74,9 @@ class Settings(BaseSettings):
     SSO_TICKET_EXPIRE_SECONDS: int = 120
 
     # 思想汇报管理子系统单点登录（与主系统用户名一致，通过用户名映射登录）
-    # 思想汇报系统站点根 URL（不含路径，如 http://10.42.60.xxx:8173）
-    SSO_SIXIANGHUIBAO_BASE_URL: str = "http://10.42.60.223:5173"
-    # 思想汇报系统接收 ticket 的路径（需与子系统路由一致，默认 /api/sso/entry）
+    # 【重要】必须填思想汇报的【后端】地址（FastAPI 端口 8173），不是前端 5173。用户先访问此后端换 ticket，后端再 302 到前端
+    SSO_SIXIANGHUIBAO_BASE_URL: str = "http://10.42.60.223:8173"
+    # 思想汇报后端接收 ticket 的路径（需与子系统路由一致，默认 /api/sso/entry）
     SSO_SIXIANGHUIBAO_ENTRY_PATH: str = "/api/sso/entry"
 
     class Config:

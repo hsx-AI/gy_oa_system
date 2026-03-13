@@ -139,6 +139,12 @@ const routes = [
     meta: { title: '数据库表管理' }
   },
   {
+    path: '/admin/health-monitor',
+    name: 'HealthMonitor',
+    component: () => import('../views/admin/HealthMonitor.vue'),
+    meta: { title: '系统健康监控' }
+  },
+  {
     path: '/admin/yggl-fill',
     name: 'YgglFill',
     component: () => import('../views/admin/YgglFill.vue'),
@@ -206,11 +212,16 @@ router.beforeEach(async (to, _from, next) => {
       const user = JSON.parse(raw)
       const name = (user.name || user.userName || '').trim()
       const jb = (user.jb || '').trim()
+      const lsys = (user.dept || user.lsys || '').trim()
       const res = await getUploadConfig()
       const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
       const allowedByAdmin1 = admin1 && name === admin1
       const allowedByJb = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-      if (allowedByAdmin1 || allowedByJb) next()
+      const allowedByZhjsDirector = lsys === '综合技术室' && (
+        jb === '主任' || (jb && jb.startsWith('主任')) ||
+        jb === '副主任' || (jb && jb.includes('副主任'))
+      )
+      if (allowedByAdmin1 || allowedByJb || allowedByZhjsDirector) next()
       else next('/')
     } catch {
       next('/')
@@ -301,7 +312,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/yggl-fill') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

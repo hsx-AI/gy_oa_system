@@ -50,7 +50,7 @@ def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
     if not (name or "").strip():
         return None
     name_stripped = name.strip()
-    # 系统管理员（webconfig.admin1）最高权限，等同部长+打卡管理员+人事管理员
+    # 系统管理员（webconfig.admin1）最高权限，等同部长+人事管理员（不含打卡管理员最终审批加班）
     admin1 = _get_admin1()
     if admin1 and name_stripped == admin1:
         return {"role": "full", "lsys": None}

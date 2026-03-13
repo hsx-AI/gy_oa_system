@@ -516,7 +516,8 @@ function formatAttendanceTimes(rec) {
 async function handleApprove(type, item) {
   try {
     const fn = type === 'leave' ? leaveApproveAction : type === 'overtime' ? overtimeApproveAction : businessTripApproveAction
-    await fn(item.id, { action: 'approve' })
+    const payload = type === 'overtime' ? { action: 'approve', approver: currentUser } : { action: 'approve' }
+    await fn(item.id, payload)
     detailVisible.value = false
     refreshList(type)
   } catch (e) {
@@ -557,13 +558,15 @@ async function confirmReject() {
   try {
     if (batch) {
       const fn = type === 'leave' ? leaveBatchApprove : type === 'overtime' ? overtimeBatchApprove : businessTripBatchApprove
-      await fn({ ids: target.ids, action: 'reject', reason })
+      const payload = type === 'overtime' ? { ids: target.ids, action: 'reject', reason, approver: currentUser } : { ids: target.ids, action: 'reject', reason }
+      await fn(payload)
       selectedLeaveIds.value = []
       selectedOvertimeIds.value = []
       selectedBusinessTripIds.value = []
     } else {
       const fn = type === 'leave' ? leaveApproveAction : type === 'overtime' ? overtimeApproveAction : businessTripApproveAction
-      await fn(id, { action: 'reject', reason })
+      const payload = type === 'overtime' ? { action: 'reject', reason, approver: currentUser } : { action: 'reject', reason }
+      await fn(id, payload)
       detailVisible.value = false
     }
     rejectModalVisible.value = false
@@ -589,7 +592,8 @@ async function batchApprove(type) {
   if (!confirm(`确认批量通过选中的 ${ids.length} 条${typeName}申请？`)) return
   try {
     const fn = type === 'leave' ? leaveBatchApprove : type === 'overtime' ? overtimeBatchApprove : businessTripBatchApprove
-    const res = await fn({ ids, action: 'approve' })
+    const payload = type === 'overtime' ? { ids, action: 'approve', approver: currentUser } : { ids, action: 'approve' }
+    const res = await fn(payload)
     alert(res.message || '操作完成')
     selectedLeaveIds.value = []
     selectedOvertimeIds.value = []

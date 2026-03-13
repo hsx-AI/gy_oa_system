@@ -434,10 +434,14 @@ async def run_fetch_and_upload_report():
     """供每日 0 点定时任务调用：从配置 URL 拉取报表并导入。失败时最多重试 3 次。"""
     import asyncio
     import httpx
-    dakaman = _get_dakaman()
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
-    if not fetch_url or not dakaman:
-        logger.info("定时拉取跳过: 未配置 ATTENDANCE_REPORT_FETCH_URL 或 dakaman")
+    if not fetch_url:
+        logger.warning("[定时] 拉取跳过: 未配置 ATTENDANCE_REPORT_FETCH_URL")
+        return
+    dakaman = _get_dakaman()
+    admin1 = _get_admin1()
+    if not dakaman and not admin1:
+        logger.warning("[定时] 拉取跳过: webconfig 中未配置 dakaman 或 admin1，无法执行定时任务")
         return
     max_attempts = 4  # 1 次首次 + 最多重试 3 次
     retry_delay_seconds = 30  # 每次失败后间隔 30 秒再重试

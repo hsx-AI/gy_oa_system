@@ -141,6 +141,7 @@ function canShowFeature(permission) {
   if (!permission) return true
   const name = (userName.value || '').trim()
   const jb = (userJb.value || '').trim()
+  const lsys = (userLsys.value || '').trim()
   const d = (dakaman.value || '').trim()
   const a2 = (admin2.value || '').trim()
   const a1 = (admin1.value || '').trim()
@@ -151,7 +152,8 @@ function canShowFeature(permission) {
     case 'holidaySettings':
       return isAdmin1 || (!!d && name === d)
     case 'leaderDashboard':
-      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
+        (lsys === '综合技术室' && (jb === '主任' || (jb && jb.startsWith('主任')) || jb === '副主任' || (jb && jb.includes('副主任'))))
     case 'overtimePay':
       return true
     case 'exceptions':
@@ -161,12 +163,16 @@ function canShowFeature(permission) {
     case 'dbManager':
     case 'ygglFill':
       return canAccessDbManager.value
+    case 'healthMonitor':
+      return isAdmin1
     default:
       return true
   }
 }
 
 const userJb = ref('')
+// 隶属科室（yggl.lsys），登录返回在 userInfo.dept 中
+const userLsys = ref('')
 
 const rawFeatureGroups = [
   {
@@ -304,6 +310,16 @@ const rawFeatureGroups = [
         tag: '系统',
         color: 'linear-gradient(135deg, #434343 0%, #000 100%)',
         iconPath: 'M21 12c0 1.66-4 3-9 3s-9-1.34-9-3M3 5v14c0 1.66 4 3 9 3s9-1.34 9-3V5M12 5c0 1.66-4 3-9 3S0 6.66 0 5'
+      },
+      {
+        id: 'health-monitor',
+        title: '系统健康监控',
+        description: '数据库、大模型、外链与打卡自动获取服务状态一览',
+        path: '/admin/health-monitor',
+        permission: 'healthMonitor',
+        tag: '系统',
+        color: 'linear-gradient(135deg, #0f766e 0%, #14b8a6 100%)',
+        iconPath: 'M22 12h-4l-3 9L9 3l-3 9H2'
       },
       {
         id: 'yggl-fill',
@@ -569,6 +585,7 @@ onMounted(() => {
   const info = getStoredUserInfo()
   userName.value = info.name || info.userName || ''
   userJb.value = info.jb || ''
+  userLsys.value = (info.dept || info.lsys || '').trim()
   fetchTodoList()
   fetchTripReturnPending()
   fetchRequestList()

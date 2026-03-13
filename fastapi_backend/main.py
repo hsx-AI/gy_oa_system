@@ -8,7 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, sso
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso
 import logging
 import time
 
@@ -71,6 +71,7 @@ app.include_router(file_numbering.router, prefix=settings.API_PREFIX)
 app.include_router(department_policy.router, prefix=settings.API_PREFIX)
 app.include_router(admin.router, prefix=settings.API_PREFIX)  # 员工在职管理
 app.include_router(db_manager.router, prefix=settings.API_PREFIX)
+app.include_router(health_monitor.router, prefix=settings.API_PREFIX)  # 系统健康监控（仅 admin1）
 app.include_router(sso.router, prefix=settings.API_PREFIX)  # 系统管理员-数据库表增删改查
 
 
@@ -83,18 +84,29 @@ async def startup_event():
     print(f"[System] API文档地址: http://localhost:8000/docs")
     logger.info(f"API文档地址: http://localhost:8000/docs")
     logger.debug("调试日志已开启，将显示详细调试信息")
-    # 每日 0 点自动从打卡服务器拉取最新报表并上传
+    # 每日指定时刻从打卡服务器拉取最新报表并上传（时间由 SCHEDULER_HOUR、SCHEDULER_MINUTE、SCHEDULER_TIMEZONE 配置）
     fetch_url = getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or ""
     if (fetch_url or "").strip():
         try:
             from apscheduler.schedulers.asyncio import AsyncIOScheduler
+            from apscheduler.triggers.cron import CronTrigger
             from routers.attendance import run_fetch_and_upload_report
-            scheduler = AsyncIOScheduler()
-            scheduler.add_job(run_fetch_and_upload_report, "cron", hour=0, minute=0, id="fetch_attendance_report")
+            tz = settings.SCHEDULER_TIMEZONE
+            hour = getattr(settings, "SCHEDULER_HOUR", 0)
+            minute = getattr(settings, "SCHEDULER_MINUTE", 0)
+            scheduler = AsyncIOScheduler(timezone=tz)
+            scheduler.add_job(
+                run_fetch_and_upload_report,
+                CronTrigger(hour=hour, minute=minute, timezone=tz),
+                id="fetch_attendance_report",
+            )
             scheduler.start()
-            logger.info("已启用每日 0 点自动拉取打卡报表任务")
+            time_str = f"{hour}:{minute:02d}"
+            logger.info("已启用每日 %s（%s）自动拉取打卡报表任务", time_str, tz)
+            print(f"[System] 已启用每日 {time_str}（{tz}）自动拉取打卡报表任务")
         except Exception as e:
             logger.warning("启用每日拉取打卡报表任务失败: %s", e)
+            print(f"[System] 警告: 每日 0 点拉取打卡报表任务未启用: {e}")
 
 
 @app.get("/")
