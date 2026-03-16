@@ -50,7 +50,7 @@
             </div>
             <div class="legacy-entry">
               <a
-                href="http://10.42.60.223"
+                href="http://10.42.60.230"
                 target="_blank"
                 rel="noopener noreferrer"
                 class="legacy-btn"

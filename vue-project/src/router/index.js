@@ -149,6 +149,12 @@ const routes = [
     name: 'YgglFill',
     component: () => import('../views/admin/YgglFill.vue'),
     meta: { title: '主表批量填充' }
+  },
+  {
+    path: '/admin/email',
+    name: 'EmailSender',
+    component: () => import('../views/admin/EmailSender.vue'),
+    meta: { title: '邮件发送' }
   }
   // 未来可以添加更多路由：
   // {
@@ -312,7 +318,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

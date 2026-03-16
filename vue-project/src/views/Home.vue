@@ -329,6 +329,16 @@ const rawFeatureGroups = [
         permission: 'ygglFill',
         color: 'linear-gradient(135deg, #a8edea 0%, #fed6e3 100%)',
         iconPath: 'M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12'
+      },
+      {
+        id: 'email-sender',
+        title: '邮件发送',
+        description: '通过企业邮箱向公司员工发送邮件',
+        path: '/admin/email',
+        permission: 'dbManager',
+        tag: '系统',
+        color: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+        iconPath: 'M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2zM22 6l-10 7L2 6'
       }
     ]
   }
