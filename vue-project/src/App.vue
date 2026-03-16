@@ -112,6 +112,16 @@
             </svg>
             <span>思想汇报管理</span>
           </a>
+          <a href="javascript:;" class="sidebar-item" @click.prevent="goPersonnelArchive">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            <span>人事档案系统</span>
+          </a>
           <router-link v-if="canShowEmployeeAdmin" to="/admin/employees" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -237,6 +247,8 @@ const dakaman = ref('')
 const admin2 = ref('')
 // 系统管理员：webconfig.admin1，最高权限（等同部长 + dakaman + admin2）
 const admin1 = ref('')
+// 人事档案系统外链地址（webconfig.personnelArchiveUrl）
+const personnelArchiveUrl = ref('')
 
 // 是否显示员工在职管理入口（部长/副部长/科室主任/副主任 或 人事管理员 admin2 或 系统管理员 admin1）
 const canShowEmployeeAdmin = computed(() => {
@@ -350,8 +362,9 @@ const loadUploadConfig = () => {
       if (res.dakaman != null) dakaman.value = res.dakaman || ''
       if (res.admin2 != null) admin2.value = res.admin2 || ''
       if (res.admin1 != null) admin1.value = res.admin1 || ''
+      if (res.personnelArchiveUrl != null) personnelArchiveUrl.value = String(res.personnelArchiveUrl).trim()
     }
-  }).catch(() => { dakaman.value = ''; admin2.value = ''; admin1.value = '' })
+  }).catch(() => { dakaman.value = ''; admin2.value = ''; admin1.value = ''; personnelArchiveUrl.value = '' })
 }
 
 onMounted(() => {
@@ -362,6 +375,16 @@ onMounted(() => {
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
 })
+
+// 跳转人事档案系统（外链，需独立账号登录）
+function goPersonnelArchive() {
+  const url = (personnelArchiveUrl.value || '').trim()
+  if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } else {
+    alert('人事档案系统链接未配置，请联系管理员')
+  }
+}
 
 // 跳转思想汇报管理（单点登录）
 async function goSixianghuibao() {

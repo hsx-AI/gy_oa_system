@@ -128,7 +128,7 @@
             </div>
             <div class="form-group half">
               <label>是否要换休票</label>
-              <select v-model="form.needExchangeTicket" name="needExchangeTicket" autocomplete="on">
+              <select v-model="form.needExchangeTicket" name="needExchangeTicket" autocomplete="on" :disabled="form.level === '平时加班'">
                 <option value="是">是</option>
                 <option value="否">否</option>
               </select>
@@ -375,6 +375,11 @@ const isSpecialHoliday = computed(() => {
 const specialHolidayName = computed(() => {
   if (!form.date) return ''
   return holidayMap.value[form.date] || ''
+})
+
+// 平时加班时锁定「是否要换休票」为否
+watch(() => form.level, (level) => {
+  if (level === '平时加班') form.needExchangeTicket = '否'
 })
 
 watch(() => form.date, (newDate) => {

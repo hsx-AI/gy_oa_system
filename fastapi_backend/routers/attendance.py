@@ -294,10 +294,14 @@ def _process_attendance_file_path(temp_file_path: str, filename: str):
         rec["department"] = emp.get("lsys") or ""
         mapped_records.append(rec)
     if skipped_gh:
-        logger.warning(f"上传跳过未在 yggl 中匹配到工号的记录，工号示例: {skipped_gh[:10]}{'...' if len(skipped_gh) > 10 else ''}")
+        unique_gh = sorted(set(skipped_gh))
+        logger.warning(
+            f"上传跳过未在 yggl 中匹配到的工号，共 {len(skipped_gh)} 条记录涉及 {len(unique_gh)} 个工号。"
+            f"未匹配工号完整列表: {unique_gh}"
+        )
 
     success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
-    msg = f"文件处理完成！共处理 {len(mapped_records)} 条记录" + (f"，跳过未匹配工号 {len(skipped_gh)} 条" if skipped_gh else "")
+    msg = f"文件处理完成！共处理 {len(mapped_records)} 条记录" + (f"，跳过未匹配工号 {len(skipped_gh)} 条（涉及 {len(set(skipped_gh))} 个工号）" if skipped_gh else "")
     return True, msg, len(mapped_records), success_count, fail_count, mapped_records
 
 

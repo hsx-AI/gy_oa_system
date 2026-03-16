@@ -41,10 +41,24 @@
             </div>
           </div>
 
-          <div class="tech-stats">
-            <div class="stat" v-for="(s, i) in stats" :key="i">
-              <span class="stat-num">{{ animatedStats[i] }}</span>
-              <span class="stat-label">{{ s.label }}</span>
+          <div class="tech-stats-row">
+            <div class="tech-stats">
+              <div class="stat" v-for="(s, i) in stats" :key="i">
+                <span class="stat-num">{{ animatedStats[i] }}</span>
+                <span class="stat-label">{{ s.label }}</span>
+              </div>
+            </div>
+            <div class="legacy-entry">
+              <a
+                href="http://10.42.60.223"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="legacy-btn"
+              >
+                <svg class="legacy-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
+                原考勤系统入口
+              </a>
+              <span class="legacy-note">原「230」系统入口</span>
             </div>
           </div>
         </div>
@@ -67,7 +81,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 21v-2a4 4 0 00-4-4H8a4 4 0 00-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
               </div>
               <input v-model="form.username" type="text" name="username" autocomplete="username"
-                     placeholder="请输入用户名" required
+                     placeholder="原230考勤系统你的用户名（汉字姓名）" required
                      @focus="focusField = 'user'" @blur="focusField = ''" />
               <div class="field-line"></div>
             </div>
@@ -77,7 +91,7 @@
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
               </div>
               <input v-model="form.password" :type="showPwd ? 'text' : 'password'" name="password"
-                     autocomplete="current-password" placeholder="请输入密码" required
+                     autocomplete="current-password" placeholder="原230考勤系统你的密码" required
                      @focus="focusField = 'pass'" @blur="focusField = ''" />
               <button type="button" class="toggle-pwd" @click="showPwd = !showPwd" tabindex="-1">
                 <svg v-if="showPwd" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
@@ -625,7 +639,15 @@ const handleLogin = async () => {
   color: rgba(255,255,255,0.4);
 }
 
-/* 数据统计 */
+/* 数据统计 + 原考勤系统入口 */
+.tech-stats-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
 .tech-stats {
   display: flex;
   gap: 32px;
@@ -649,6 +671,54 @@ const handleLogin = async () => {
   font-size: 12px;
   color: rgba(255,255,255,0.35);
   margin-top: 2px;
+}
+
+/* 原考勤系统入口：显眼按钮 + 备注 */
+.legacy-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.legacy-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 12px 24px;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1a1a1a;
+  background: linear-gradient(135deg, #ffc53d, #ff9c2e);
+  border: none;
+  border-radius: 10px;
+  text-decoration: none;
+  box-shadow: 0 4px 20px rgba(255, 156, 46, 0.5), 0 0 0 2px rgba(255, 255, 255, 0.2);
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+.legacy-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 28px rgba(255, 156, 46, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.3);
+}
+
+.legacy-btn-icon {
+  width: 18px;
+  height: 18px;
+  margin-right: 8px;
+  flex-shrink: 0;
+}
+
+.legacy-note {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.5);
+  white-space: nowrap;
+}
+
+@media (max-width: 900px) {
+  .tech-stats-row {
+    flex-direction: column;
+    align-items: flex-start;
+  }
 }
 
 /* ===== 右侧登录卡片 ===== */
