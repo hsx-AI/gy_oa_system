@@ -71,6 +71,9 @@ async def get_statistics_permission(name: str = Query(..., description="当前�
     lsys = (user.get("lsys") or "").strip()
     if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
         return {"success": True, "level": 3, "lsys": lsys, "name": name}
+    # 部办：文件编号等可看全部专业
+    if lsys == "部办":
+        return {"success": True, "level": 3, "lsys": lsys, "name": name}
     # 综合技术室主任/副主任：领导人看板权限等同部长（level 3，可选全员或任意科室）
     if lsys == "综合技术室" and (_jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb))):
         return {"success": True, "level": 3, "lsys": lsys, "name": name}

@@ -356,6 +356,11 @@ export function getLeaderFullAttendanceByMonth(params) {
   return request({ url: '/leader/full-attendance-by-month', method: 'get', params })
 }
 
+/** 满勤名单导出（与领导人看板满勤统计同一逻辑，返回各科室 fullNames） */
+export function getFullAttendanceExport(params) {
+  return request({ url: '/leader/full-attendance-export', method: 'get', params })
+}
+
 /** 领导人看板：科室横向对比（加班/请假/公出总数及人均） */
 export function getLeaderDeptComparison(params) {
   return request({ url: '/leader/dept-comparison', method: 'get', params })

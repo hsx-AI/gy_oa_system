@@ -60,9 +60,18 @@
                 <span v-if="exportLoading">生成中...</span>
                 <span v-else>下载 Excel 工资报表</span>
               </button>
+              <button
+                type="button"
+                class="btn btn-outline"
+                :disabled="fullAttendanceExportLoading"
+                @click="downloadFullAttendanceExcel"
+              >
+                <span v-if="fullAttendanceExportLoading">生成中...</span>
+                <span v-else>导出满勤名单</span>
+              </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。</p>
+          <p v-if="canView" class="filter-hint">下载报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。满勤名单按领导人看板满勤统计逻辑（根据打卡数据识别，无异常建议即满勤）。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -144,7 +153,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import * as XLSX from 'xlsx'
-import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport } from '@/api/attendance'
+import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getFullAttendanceExport } from '@/api/attendance'
 
 const router = useRouter()
 const canView = ref(false)
@@ -157,6 +166,7 @@ const filterYear = ref(new Date().getFullYear())
 const filterMonth = ref('')
 const loading = ref(false)
 const exportLoading = ref(false)
+const fullAttendanceExportLoading = ref(false)
 const hasFetched = ref(false)
 const overtimePayByMonth = ref([])
 const overtimePayByEmployee = ref([])
@@ -231,6 +241,45 @@ async function downloadExcel() {
     alert('下载失败，请稍后重试')
   } finally {
     exportLoading.value = false
+  }
+}
+
+async function downloadFullAttendanceExcel() {
+  fullAttendanceExportLoading.value = true
+  try {
+    const params = { year: filterYear.value }
+    if (filterMonth.value) params.month = Number(filterMonth.value)
+    if (scope.value !== 'self' && selectedLsys.value) params.lsys = selectedLsys.value
+    const res = await getFullAttendanceExport(params)
+    if (!res?.success || !res.byDept) {
+      alert('获取满勤名单失败')
+      return
+    }
+    const wb = XLSX.utils.book_new()
+    const summaryHeader = ['科室', '满勤人数', '总人数', '满勤率']
+    const summaryRows = (res.byDept || []).map((d) => [
+      d.lsys || '',
+      d.fullCount ?? 0,
+      d.totalPeople ?? 0,
+      (d.rate != null ? (d.rate * 100).toFixed(1) + '%' : '')
+    ])
+    const summarySheet = XLSX.utils.aoa_to_sheet([summaryHeader, ...summaryRows])
+    XLSX.utils.book_append_sheet(wb, summarySheet, '满勤汇总')
+    for (const dept of res.byDept || []) {
+      const nameHeader = ['序号', '姓名']
+      const nameRows = (dept.fullNames || []).map((name, i) => [i + 1, name])
+      const sheet = XLSX.utils.aoa_to_sheet([nameHeader, ...nameRows])
+      const sheetName = (dept.lsys || '科室').slice(0, 31)
+      XLSX.utils.book_append_sheet(wb, sheet, sheetName)
+    }
+    const monthLabel = filterMonth.value ? `${filterMonth.value}月` : '全年'
+    const fileName = `满勤名单_${filterYear.value}年${monthLabel}.xlsx`
+    XLSX.writeFile(wb, fileName)
+  } catch (e) {
+    console.error(e)
+    alert('导出失败，请稍后重试')
+  } finally {
+    fullAttendanceExportLoading.value = false
   }
 }
 

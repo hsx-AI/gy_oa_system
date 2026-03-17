@@ -155,6 +155,8 @@ def _row_to_record(row) -> dict:
         "location": row.get("gcdd") or "",
         "startTime": _fmt_dt(row.get("gcsj")),
         "actualReturnTime": _fmt_dt(row.get("sjfhtime")),
+        "expectedStartTime": _fmt_dt(row.get("yjcfsj")),
+        "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
         "fhdjStatus": int(row.get("fhdj_status") or 0),
         "status": status,
         "statusClass": status_class,
@@ -187,7 +189,7 @@ async def get_business_trip_list(
         try:
             # bld=部领导, szr=室主任；审批中时展示当前审批人
             query = (
-                "SELECT id, gclx, wpdw, gcr, wpsj, xmmc, gcdd, gcsj, sjfhtime, fhdj_status, "
+                "SELECT id, gclx, wpdw, gcr, wpsj, yjcfsj, yjfhsj, xmmc, gcdd, gcsj, sjfhtime, fhdj_status, "
                 "bldzt, szrzt, szrpztime, bldpztime, bhyy, bld, szr FROM gcsqb" + base_where
             )
             rows = db.execute_query(query, params)
@@ -198,7 +200,7 @@ async def get_business_trip_list(
             ):
                 # 兼容老表结构：无 gclx / fhdj_status / szrpztime / bldpztime / bhyy / bld / szr 列
                 query = (
-                    "SELECT id, wpdw, gcr, wpsj, xmmc, gcdd, gcsj, sjfhtime, "
+                    "SELECT id, wpdw, gcr, wpsj, yjcfsj, yjfhsj, xmmc, gcdd, gcsj, sjfhtime, "
                     "bldzt, szrzt FROM gcsqb" + base_where
                 )
                 rows = db.execute_query(query, params)
@@ -240,7 +242,7 @@ async def get_business_trip_all_records(
         order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
         if is_leader:
             sql = f"""
-                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
                 {f"WHERE (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
@@ -251,7 +253,7 @@ async def get_business_trip_all_records(
             if not lsys:
                 return {"success": True, "data": [], "total": 0, "scope": "dept"}
             sql = f"""
-                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
+                SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
                 INNER JOIN yggl y ON g.gcr = y.name AND y.lsys = %s

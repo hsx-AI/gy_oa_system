@@ -164,7 +164,7 @@
             <span>满勤率</span>
             <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
           </h2>
-          <p class="section-desc">{{ filterMonth ? '当月没有请假即视为满勤' : '全年没有请假即视为满勤' }}（仅统计已通过请假记录）。</p>
+          <p class="section-desc">{{ filterMonth ? '当月' : '全年' }}根据打卡数据识别，无异常建议即视为满勤。</p>
           <div v-if="fullAttendance.totalPeople != null" class="full-attendance-content">
             <div class="full-attendance-summary">
               <div v-if="fullAttendance.workdays != null" class="fa-item">
@@ -203,7 +203,7 @@
           </div>
           <div class="bar-chart-wrap full-count-chart">
             <div class="bar-chart-months">
-              <div v-for="item in fullAttendanceByMonth" :key="item.month" class="bar-month-group">
+              <div v-for="item in fullAttendanceByMonthFiltered" :key="item.month" class="bar-month-group">
                 <div class="bar-month-area">
                   <div
                     class="bar-month-bar"
@@ -471,8 +471,21 @@ const chartDeptOptions = computed(() => {
   return lsys.value ? [lsys.value] : []
 })
 
-const maxFullCountChart = computed(() => {
+/** 满勤柱状图只显示已过去的月份（当年只显示到当前月，未来年不显示） */
+const fullAttendanceByMonthFiltered = computed(() => {
   const list = fullAttendanceByMonth.value
+  if (!list.length) return []
+  const now = new Date()
+  const currentYear = now.getFullYear()
+  const currentMonth = now.getMonth() + 1
+  const y = filterYear.value
+  if (y > currentYear) return []
+  if (y < currentYear) return list
+  return list.filter((item) => item.month <= currentMonth)
+})
+
+const maxFullCountChart = computed(() => {
+  const list = fullAttendanceByMonthFiltered.value
   if (!list.length) return 1
   return Math.max(...list.map(i => i.fullCount), 1)
 })

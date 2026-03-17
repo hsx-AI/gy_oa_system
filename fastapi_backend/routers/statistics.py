@@ -768,15 +768,19 @@ async def get_dept_business_trip_stats(
                 by_person[gcr].append((start_d, end_d))
 
         list_data = []
+        today = date.today()
+        effective_year_end = min(year_end, today)
         for gcr, intervals in by_person.items():
             if not intervals:
                 continue
             if month and month_start and month_end:
-                clipped = [(max(s, month_start), min(e, month_end)) for s, e in intervals if s <= month_end and e >= month_start]
+                effective_month_end = min(month_end, today)
+                clipped = [(max(s, month_start), min(e, effective_month_end)) for s, e in intervals if s <= effective_month_end and e >= month_start]
             elif quarter and q_start and q_end:
-                clipped = [(max(s, q_start), min(e, q_end)) for s, e in intervals if s <= q_end and e >= q_start]
+                effective_q_end = min(q_end, today)
+                clipped = [(max(s, q_start), min(e, effective_q_end)) for s, e in intervals if s <= effective_q_end and e >= q_start]
             else:
-                clipped = [(max(s, year_start), min(e, year_end)) for s, e in intervals if s <= year_end and e >= year_start]
+                clipped = [(max(s, year_start), min(e, effective_year_end)) for s, e in intervals if s <= effective_year_end and e >= year_start]
             days = _merge_intervals_days(clipped)
             if days > 0:
                 list_data.append({"name": gcr, "days": round(days, 2)})
@@ -834,22 +838,17 @@ async def get_leader_full_attendance(
                 "byDept": []
             }
 
-        # 当月有请假的人员及其请假天数（仅已通过 qjzt=4）；排除名字末尾为1
-        leave_rows = db.execute_query(
-            """SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-               FROM qj
-               WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)
-               GROUP BY xm""",
-            (f"{month_str}%", f"{month_str}%", month_str)
+        # 当月在 attendance_suggestions 中有 status=1（异常/需请假）记录的人员
+        abnormal_rows = db.execute_query(
+            """SELECT employee_name AS name
+               FROM attendance_suggestions
+               WHERE status = 1 AND year = %s AND month = %s
+               GROUP BY employee_name""",
+            (year, month)
         )
-        # 满勤 = 当月没有请假 或 请假天数为 0
-        leave_days_map = {}
-        for r in leave_rows:
-            n = (r.get("name") or "").strip()
-            d = float(r.get("days") or 0)
-            if n:
-                leave_days_map[n] = d
-        full_count = sum(1 for n in names if leave_days_map.get(n, 0) <= 0)
+        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
+        abnormal_set.discard("")
+        full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
 
@@ -872,7 +871,7 @@ async def get_leader_full_attendance(
                 dept_names.setdefault(d, []).append(n)
             by_dept = []
             for d, nlist in dept_names.items():
-                fc = sum(1 for n in nlist if leave_days_map.get(n, 0) <= 0)
+                fc = sum(1 for n in nlist if n not in abnormal_set)
                 tot = len(nlist)
                 by_dept.append({
                     "lsys": d,
@@ -885,6 +884,95 @@ async def get_leader_full_attendance(
         return result
     except Exception as e:
         logger.error(f"满勤率查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/leader/full-attendance-export")
+async def get_leader_full_attendance_export(
+    year: int = Query(..., description="年份"),
+    month: Optional[int] = Query(None, description="月份，不传则全年"),
+    lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
+):
+    """
+    满勤名单导出：与领导人看板满勤统计同一逻辑（按打卡数据 attendance_suggestions 无 status=1 即满勤）。
+    返回 byDept 中每项含 fullNames（满勤人员姓名列表），用于 Excel 等导出。
+    """
+    try:
+        workdays = _count_workdays_in_month(year, month) if month else None
+        if lsys:
+            rows = db.execute_query(
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                (lsys, LEADER_EXCLUDE_LSYS)
+            )
+            names = [r["name"].strip() for r in rows if r.get("name")]
+        else:
+            rows = db.execute_query(
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                (LEADER_EXCLUDE_LSYS,)
+            )
+            names = [r["name"].strip() for r in rows if r.get("name")]
+
+        if not names:
+            return {"success": True, "workdays": workdays, "totalPeople": 0, "fullCount": 0, "rate": 0, "byDept": []}
+
+        if month:
+            abnormal_rows = db.execute_query(
+                """SELECT employee_name AS name FROM attendance_suggestions
+                   WHERE status = 1 AND year = %s AND month = %s GROUP BY employee_name""",
+                (year, month)
+            )
+        else:
+            abnormal_rows = db.execute_query(
+                """SELECT employee_name AS name FROM attendance_suggestions
+                   WHERE status = 1 AND year = %s GROUP BY employee_name""",
+                (year,)
+            )
+        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
+        abnormal_set.discard("")
+        full_count = sum(1 for n in names if n not in abnormal_set)
+        total = len(names)
+        rate = round(full_count / total, 4) if total else 0
+
+        by_dept = []
+        if lsys:
+            full_names = sorted([n for n in names if n not in abnormal_set])
+            by_dept.append({
+                "lsys": lsys.strip(),
+                "totalPeople": total,
+                "fullCount": full_count,
+                "rate": rate,
+                "fullNames": full_names
+            })
+        elif rows and len(rows) > 0 and "lsys" in (rows[0] or {}):
+            dept_names = {}
+            for r in rows:
+                n = (r.get("name") or "").strip()
+                d = (r.get("lsys") or "").strip()
+                if not n or d == LEADER_EXCLUDE_LSYS:
+                    continue
+                dept_names.setdefault(d, []).append(n)
+            for d, nlist in sorted(dept_names.items()):
+                fc = sum(1 for n in nlist if n not in abnormal_set)
+                tot = len(nlist)
+                full_names = sorted([n for n in nlist if n not in abnormal_set])
+                by_dept.append({
+                    "lsys": d,
+                    "totalPeople": tot,
+                    "fullCount": fc,
+                    "rate": round(fc / tot, 4) if tot else 0,
+                    "fullNames": full_names
+                })
+
+        return {
+            "success": True,
+            "workdays": workdays,
+            "totalPeople": total,
+            "fullCount": full_count,
+            "rate": rate,
+            "byDept": by_dept
+        }
+    except Exception as e:
+        logger.error(f"满勤名单导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -922,22 +1010,17 @@ async def get_leader_full_attendance_year(
                 "byDept": []
             }
 
-        # 该年度内每人请假总天数（仅已通过 qjzt=4）
-        leave_rows = db.execute_query(
-            """SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-               FROM qj
-               WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1'
-                 AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 4) = %s)
-               GROUP BY xm""",
-            (f"{year_prefix}%", f"{year_prefix}%", str(year))
+        # 该年度内在 attendance_suggestions 中有 status=1（异常/需请假）记录的人员
+        abnormal_rows = db.execute_query(
+            """SELECT employee_name AS name
+               FROM attendance_suggestions
+               WHERE status = 1 AND year = %s
+               GROUP BY employee_name""",
+            (year,)
         )
-        leave_days_map = {}
-        for r in leave_rows:
-            n = (r.get("name") or "").strip()
-            d = float(r.get("days") or 0)
-            if n:
-                leave_days_map[n] = d
-        full_count = sum(1 for n in names if leave_days_map.get(n, 0) <= 0)
+        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
+        abnormal_set.discard("")
+        full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
 
@@ -959,7 +1042,7 @@ async def get_leader_full_attendance_year(
                 dept_names.setdefault(d, []).append(n)
             by_dept = []
             for d, nlist in dept_names.items():
-                fc = sum(1 for n in nlist if leave_days_map.get(n, 0) <= 0)
+                fc = sum(1 for n in nlist if n not in abnormal_set)
                 tot = len(nlist)
                 by_dept.append({
                     "lsys": d,
@@ -1011,20 +1094,16 @@ async def get_leader_full_attendance_by_month(
                 })
                 continue
 
-            leave_rows = db.execute_query(
-                """SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                   FROM qj
-                   WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)
-                   GROUP BY xm""",
-                (f"{month_str}%", f"{month_str}%", month_str)
+            abnormal_rows = db.execute_query(
+                """SELECT employee_name AS name
+                   FROM attendance_suggestions
+                   WHERE status = 1 AND year = %s AND month = %s
+                   GROUP BY employee_name""",
+                (year, month)
             )
-            leave_days_map = {}
-            for r in leave_rows:
-                n = (r.get("name") or "").strip()
-                d = float(r.get("days") or 0)
-                if n:
-                    leave_days_map[n] = d
-            full_count = sum(1 for n in names if leave_days_map.get(n, 0) <= 0)
+            abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
+            abnormal_set.discard("")
+            full_count = sum(1 for n in names if n not in abnormal_set)
             total = len(names)
             list_data.append({
                 "month": month,
@@ -1110,13 +1189,16 @@ async def get_leader_dept_comparison(
             if start_d and end_d and end_d >= start_d:
                 by_person_trip[(gcr, lsys)].append((start_d, end_d))
         trip_by_lsys = defaultdict(float)
+        today = date.today()
+        effective_year_end = min(year_end, today)
         for (gcr, lsys), intervals in by_person_trip.items():
             if not intervals:
                 continue
             if month and month_start and month_end:
-                clipped = [(max(s, month_start), min(e, month_end)) for s, e in intervals if s <= month_end and e >= month_start]
+                effective_month_end = min(month_end, today)
+                clipped = [(max(s, month_start), min(e, effective_month_end)) for s, e in intervals if s <= effective_month_end and e >= month_start]
             else:
-                clipped = [(max(s, year_start), min(e, year_end)) for s, e in intervals if s <= year_end and e >= year_start]
+                clipped = [(max(s, year_start), min(e, effective_year_end)) for s, e in intervals if s <= effective_year_end and e >= year_start]
             days = _merge_intervals_days(clipped)
             if days > 0:
                 trip_by_lsys[lsys] += round(days, 2)
@@ -1210,16 +1292,17 @@ async def get_leader_rankings(
             list_trip = []
             year_start = date(year, 1, 1)
             year_end = date(year, 12, 31)
+            today = date.today()
+            effective_year_end = min(year_end, today)
             for (gcr, lsys), intervals in by_person.items():
                 if not intervals:
                     continue
                 if month and month_start and month_end:
-                    # 指定月份时：只保留区间与当月交集的并集天数
-                    clipped = [(max(s, month_start), min(e, month_end)) for s, e in intervals if s <= month_end and e >= month_start]
+                    effective_month_end = min(month_end, today)
+                    clipped = [(max(s, month_start), min(e, effective_month_end)) for s, e in intervals if s <= effective_month_end and e >= month_start]
                     days = _merge_intervals_days(clipped)
                 else:
-                    # 全年时：只统计该年内的天数，区间裁剪到 [year-01-01, year-12-31]
-                    clipped = [(max(s, year_start), min(e, year_end)) for s, e in intervals if s <= year_end and e >= year_start]
+                    clipped = [(max(s, year_start), min(e, effective_year_end)) for s, e in intervals if s <= effective_year_end and e >= year_start]
                     days = _merge_intervals_days(clipped)
                 if days > 0:
                     list_trip.append({"name": gcr, "lsys": lsys, "value": round(days, 2)})

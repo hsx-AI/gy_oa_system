@@ -30,6 +30,7 @@
       <div class="table-container card mt-xl">
         <div class="table-header">
           <h3 class="table-title">考勤异常列表</h3>
+          <span class="remind-tip">请提醒这些同事处理考勤</span>
           <div class="table-toolbar">
             <div class="dept-filter">
               <label class="dept-filter-label">所在单位</label>
@@ -351,6 +352,19 @@ onMounted(() => {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
   color: var(--color-text-primary);
+}
+
+.remind-tip {
+  color: #e53e3e;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  margin-left: 12px;
+  animation: remind-blink 1.2s ease-in-out infinite;
+}
+
+@keyframes remind-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
 }
 
 .table-toolbar {

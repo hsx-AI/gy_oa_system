@@ -68,7 +68,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
+                <tr v-for="(r, idx) in recordDisplayList" :key="r.id != null && r.id !== '' ? String(r.id) : `row-${idx}`" :data-record-id="r.id">
                   <td>{{ r.tripScope || '—' }}</td>
                   <td>{{ r.targetUnit }}</td>
                   <td>{{ r.person }}</td>
@@ -575,6 +575,36 @@ watch(
     router.replace({ path: '/attendance/business-trip' })
   },
   { flush: 'post' }
+)
+
+// 选择公出记录后，用该记录的预计出发/返回时间（yjcfsj、yjfhsj）预填实际出发时间、实际返回时间
+watch(
+  () => returnForm.recordId,
+  (id) => {
+    if (!id) {
+      returnForm.actualStartTime = ''
+      returnForm.actualReturnTime = ''
+      return
+    }
+    const rec = returnCandidates.value.find(r => r.id === id)
+    if (!rec) return
+    const toDatetimeLocal = (s) => {
+      if (!s || typeof s !== 'string') return ''
+      const t = s.trim().replace(' ', 'T').slice(0, 19)
+      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(t) ? t.slice(0, 16) : ''
+    }
+    const start = toDatetimeLocal(rec.expectedStartTime)
+    const end = toDatetimeLocal(rec.expectedReturnTime)
+    if (start) returnForm.actualStartTime = start
+    if (end) returnForm.actualReturnTime = end
+    if (!start && !end) {
+      const d = (rec.assignTime || '').slice(0, 10)
+      if (/^\d{4}-\d{2}-\d{2}$/.test(d)) {
+        returnForm.actualStartTime = `${d}T08:00`
+        returnForm.actualReturnTime = `${d}T17:00`
+      }
+    }
+  }
 )
 
 // 从考勤页「公出返回」跳转过来时：列表加载完成后自动打开返回登记弹窗并预选公出单

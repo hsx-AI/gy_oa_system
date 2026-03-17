@@ -44,7 +44,7 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in displayList" :key="r.id">
+                <tr v-for="(r, idx) in displayList" :key="r.id != null && r.id !== '' ? String(r.id) : `row-${idx}`">
                   <td>{{ r.targetUnit }}</td>
                   <td>{{ r.person }}</td>
                   <td>{{ r.assignTime }}</td>
