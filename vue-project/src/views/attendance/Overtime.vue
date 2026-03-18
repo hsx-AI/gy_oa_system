@@ -268,7 +268,7 @@ function initUserInfo() {
   return {
     department: userInfo.dept || userInfo.department || '技术部',
     name: userInfo.name || userInfo.userName || '当前用户',
-    gender: userInfo.gender || '男',
+    gender: userInfo.xbie || userInfo.gender || '男',
     jb: userInfo.jb || ''
   }
 }
