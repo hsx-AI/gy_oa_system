@@ -636,7 +636,11 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
 
     pairs: List[tuple] = []
     for i in range(0, len(times) - 1, 2):
-        pairs.append((times[i], times[i + 1]))
+        t_in = times[i]
+        t_out = times[i + 1]
+        dur = time_to_decimal(t_out) - time_to_decimal(t_in)
+        if dur >= RESTDAY_OVERTIME_MIN_HOURS:
+            pairs.append((t_in, t_out))
 
     if not pairs:
         return suggestions
