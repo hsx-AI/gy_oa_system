@@ -48,25 +48,6 @@
                 <span class="stat-label">{{ s.label }}</span>
               </div>
             </div>
-            <div class="legacy-entry">
-              <div class="legacy-highlight">
-                <div class="legacy-bubble">
-                  <span class="bubble-arrow"></span>
-                  访问原考勤系统「230」请点击此按钮 ↓↓↓
-                </div>
-                <div class="legacy-pulse-ring"></div>
-                <a
-                  href="http://10.42.60.223"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="legacy-btn"
-                >
-                  <svg class="legacy-btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h4a2 2 0 012 2v14a2 2 0 01-2 2h-4"/><polyline points="10 17 15 12 10 7"/><line x1="15" y1="12" x2="3" y2="12"/></svg>
-                  原考勤系统入口
-                </a>
-              </div>
-              <span class="legacy-note">新老系统交替期，原「230」系统仍可使用</span>
-            </div>
           </div>
         </div>
       </div>
@@ -427,7 +408,8 @@ const handleLogin = async () => {
       name: response.data.name || form.username,
       dept: response.data.dept || '未分配部门',
       username: form.username,
-      ...response.data
+      ...response.data,
+      showIntro: response.data.showIntro === true
     }
     localStorage.setItem('userInfo', JSON.stringify(userInfo))
     router.push('/')
@@ -678,99 +660,6 @@ const handleLogin = async () => {
   font-size: 12px;
   color: rgba(255,255,255,0.35);
   margin-top: 2px;
-}
-
-/* 原考勤系统入口：显眼按钮 + 备注 */
-.legacy-entry {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  margin-top: 8px;
-}
-.legacy-highlight {
-  position: relative;
-  display: inline-flex;
-  flex-direction: column;
-  align-items: center;
-}
-.legacy-bubble {
-  position: relative;
-  background: linear-gradient(135deg, #ff4d4f, #ff7a45);
-  color: #fff;
-  font-size: 14px;
-  font-weight: 700;
-  padding: 10px 20px;
-  border-radius: 10px;
-  margin-bottom: 14px;
-  white-space: nowrap;
-  box-shadow: 0 4px 20px rgba(255, 77, 79, 0.5);
-  animation: bubble-bounce 1.2s ease-in-out infinite;
-}
-.bubble-arrow {
-  position: absolute;
-  bottom: -8px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 0;
-  height: 0;
-  border-left: 9px solid transparent;
-  border-right: 9px solid transparent;
-  border-top: 9px solid #ff5a36;
-}
-.legacy-pulse-ring {
-  position: absolute;
-  bottom: 0;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 100%;
-  height: 53px;
-  border-radius: 14px;
-  border: 3px solid rgba(255, 156, 46, 0.7);
-  animation: pulse-ring 1.5s ease-out infinite;
-  pointer-events: none;
-}
-@keyframes bubble-bounce {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-6px); }
-}
-@keyframes pulse-ring {
-  0% { opacity: 1; transform: translateX(-50%) scale(1); }
-  100% { opacity: 0; transform: translateX(-50%) scale(1.25); }
-}
-
-.legacy-btn {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  padding: 12px 24px;
-  font-size: 16px;
-  font-weight: 700;
-  color: #1a1a1a;
-  background: linear-gradient(135deg, #ffc53d, #ff9c2e);
-  border: none;
-  border-radius: 10px;
-  text-decoration: none;
-  box-shadow: 0 4px 20px rgba(255, 156, 46, 0.5), 0 0 0 2px rgba(255, 255, 255, 0.2);
-  transition: transform 0.2s, box-shadow 0.2s;
-}
-
-.legacy-btn:hover {
-  transform: translateY(-2px);
-  box-shadow: 0 6px 28px rgba(255, 156, 46, 0.6), 0 0 0 2px rgba(255, 255, 255, 0.3);
-}
-
-.legacy-btn-icon {
-  width: 18px;
-  height: 18px;
-  margin-right: 8px;
-  flex-shrink: 0;
-}
-
-.legacy-note {
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.6);
-  white-space: nowrap;
-  margin-top: 6px;
 }
 
 @media (max-width: 900px) {

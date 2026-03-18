@@ -204,6 +204,13 @@
           </div>
         </header>
 
+        <!-- 原考勤系统入口（临时显眼条） -->
+        <div class="legacy-bar">
+          <span class="legacy-bar-text">访问原考勤系统「230」请点击</span>
+          <a href="http://10.42.60.223" target="_blank" rel="noopener noreferrer" class="legacy-bar-btn">原考勤系统入口</a>
+          <span class="legacy-bar-note">新老系统交替期，原「230」系统仍可使用</span>
+        </div>
+
         <main class="app-main">
           <router-view />
         </main>
@@ -226,13 +233,39 @@
         <router-view />
       </main>
     </template>
+
+    <!-- 首次登录 / 未读介绍 弹窗 -->
+    <div v-if="showIntroModal" class="intro-modal-overlay" @click.self="closeIntroModal">
+      <div class="intro-modal">
+        <div class="intro-modal-header">
+          <h2 class="intro-modal-title">欢迎使用集成办公平台</h2>
+          <button type="button" class="intro-modal-close" aria-label="关闭" @click="closeIntroModal">×</button>
+        </div>
+        <div class="intro-modal-body">
+          <section class="intro-section">
+            <h3>系统功能简介</h3>
+            <p>本平台集成考勤智能填报、公出管理、加班/请假审批、统计汇总、领导人看板、文件编号、制度查询、思想汇报与人事档案入口等功能，便于部门统一办公与考勤管理。</p>
+          </section>
+          <section class="intro-section intro-notice">
+            <h3>重要提醒</h3>
+            <p><strong>请已登录的同事知悉：</strong>本月起，部门内部考勤（加班、请假、公出等）处理请在本系统上填报。</p>
+            <p>左侧侧边栏「<strong>考勤智能填报</strong>」可极大简化填报流程；打卡数据每日 0 点更新，请及时处理考勤异常。</p>
+            <p>3 月份的加班/请假数据需重新填报，系统运行初期请各位谅解。</p>
+            <p class="intro-contact">系统问题请联系：智能室黄圣轩 7480 / 18400021209</p>
+          </section>
+        </div>
+        <div class="intro-modal-footer">
+          <button type="button" class="btn btn-primary" @click="closeIntroModal">知道了</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUploadConfig } from '@/api/attendance'
+import { getUploadConfig, setLoginStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 
@@ -361,6 +394,44 @@ const loadUserInfo = () => {
 watch(() => route.path, () => {
   loadUserInfo()
 }, { immediate: true })
+
+// 首次登录介绍弹窗：当用户 showIntro 为 true 且当前在主布局时显示
+const showIntroModal = ref(false)
+watch(
+  () => [route.path, currentUser.value?.showIntro],
+  () => {
+    if (route.path === '/login') {
+      showIntroModal.value = false
+      return
+    }
+    if (currentUser.value?.showIntro === true) {
+      showIntroModal.value = true
+    }
+  },
+  { immediate: true }
+)
+
+async function closeIntroModal() {
+  showIntroModal.value = false
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  if (!name) return
+  try {
+    await setLoginStatus({ name })
+  } catch (e) {
+    console.warn('设置登录状态失败:', e)
+  }
+  try {
+    const raw = localStorage.getItem('userInfo')
+    if (raw) {
+      const u = JSON.parse(raw)
+      u.showIntro = false
+      localStorage.setItem('userInfo', JSON.stringify(u))
+      currentUser.value = u
+    }
+  } catch (e) {
+    console.warn('更新本地用户信息失败:', e)
+  }
+}
 
 // 加载打卡/人事/系统管理员配置（dakaman、admin2、admin1）
 const loadUploadConfig = () => {
@@ -805,5 +876,139 @@ a.user-menu__item {
     gap: var(--spacing-base);
     text-align: center;
   }
+}
+
+/* 首次登录介绍弹窗 */
+.intro-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9999;
+  padding: var(--spacing-xl);
+}
+.intro-modal {
+  background: var(--color-bg-card, #fff);
+  border-radius: 12px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.25);
+  max-width: 520px;
+  width: 100%;
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+}
+.intro-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-xl) var(--spacing-xl) 0;
+}
+.intro-modal-title {
+  margin: 0;
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.intro-modal-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.intro-modal-close:hover {
+  background: var(--color-bg-spotlight);
+  color: var(--color-text-primary);
+}
+.intro-modal-body {
+  padding: var(--spacing-xl);
+  overflow-y: auto;
+}
+.intro-section {
+  margin-bottom: var(--spacing-lg);
+}
+.intro-section:last-child {
+  margin-bottom: 0;
+}
+.intro-section h3 {
+  margin: 0 0 var(--spacing-sm);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+.intro-section p {
+  margin: 0 0 var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  line-height: 1.6;
+  color: var(--color-text-secondary);
+}
+.intro-section p:last-child {
+  margin-bottom: 0;
+}
+.intro-notice {
+  padding: var(--spacing-base);
+  background: #fef2f2;
+  border-radius: 8px;
+  border-left: 4px solid #dc2626;
+}
+.intro-notice h3,
+.intro-notice p {
+  color: #b91c1c;
+  font-weight: 500;
+}
+.intro-notice p strong {
+  color: #991b1b;
+}
+.intro-contact {
+  margin-top: var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  color: #7f1d1d !important;
+}
+.intro-modal-footer {
+  padding: var(--spacing-lg) var(--spacing-xl) var(--spacing-xl);
+  border-top: 1px solid var(--color-border-lighter);
+}
+.intro-modal-footer .btn {
+  width: 100%;
+  padding: 10px 20px;
+}
+
+/* 原考勤系统入口条（主页面临时显眼条） */
+.legacy-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 8px 16px;
+  background: linear-gradient(90deg, #ff4d4f 0%, #ff7a45 100%);
+  color: #fff;
+  font-size: 14px;
+  flex-wrap: wrap;
+}
+.legacy-bar-text {
+  font-weight: 700;
+}
+.legacy-bar-btn {
+  display: inline-flex;
+  align-items: center;
+  padding: 6px 16px;
+  background: #ffc53d;
+  color: #1a1a1a;
+  font-weight: 700;
+  text-decoration: none;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+}
+.legacy-bar-btn:hover {
+  background: #ffd666;
+}
+.legacy-bar-note {
+  font-size: 12px;
+  opacity: 0.95;
 }
 </style>

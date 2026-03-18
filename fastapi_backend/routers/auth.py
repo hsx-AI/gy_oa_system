@@ -26,6 +26,11 @@ class LoginResponse(BaseModel):
     data: dict = {}
 
 
+class SetLoginStatusRequest(BaseModel):
+    """设置登录状态（已读首次登录介绍）"""
+    name: str  # 员工姓名
+
+
 @router.post("/login", response_model=LoginResponse)
 async def login(request: LoginRequest):
     """
@@ -43,8 +48,12 @@ async def login(request: LoginRequest):
             )
         
         # 先查是否存在该用户（在职），再校验密码，便于区分「无此用户」与「密码错误」
-        check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
-        user_rows = db.execute_query(check_user_sql, (request.admin,))
+        check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+        try:
+            user_rows = db.execute_query(check_user_sql, (request.admin,))
+        except Exception:
+            check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+            user_rows = db.execute_query(check_user_sql, (request.admin,))
         if not user_rows or len(user_rows) == 0:
             return LoginResponse(
                 success=False,
@@ -57,13 +66,16 @@ async def login(request: LoginRequest):
                 success=False,
                 message="密码错误，请重新输入"
             )
-        # 密码正确，构建返回数据
+        # 密码正确，构建返回数据；denglu_zt 为空表示未看过首次登录介绍
+        denglu_zt = user_data.get("denglu_zt")
+        show_intro = denglu_zt is None or (isinstance(denglu_zt, str) and denglu_zt.strip() == "")
         user_info = {
             "name": (user_data.get("name") or "").strip(),
             "dept": (user_data.get("lsys") or "").strip(),
             "jb": (user_data.get("jb") or "").strip(),
             "gh": (user_data.get("gh") or "").strip(),
-            "xbie": (user_data.get("xbie") or "").strip()
+            "xbie": (user_data.get("xbie") or "").strip(),
+            "showIntro": show_intro
         }
         return LoginResponse(
             success=True,
@@ -77,6 +89,23 @@ async def login(request: LoginRequest):
             success=False,
             message=f"登录失败: {str(e)}"
         )
+
+
+@router.post("/set-login-status")
+async def set_login_status(req: SetLoginStatusRequest):
+    """标记用户已看过首次登录介绍，更新 yggl.denglu_zt"""
+    name = (req.name or "").strip()
+    if not name:
+        return {"success": False, "message": "姓名为空"}
+    try:
+        sql = "UPDATE yggl SET denglu_zt=%s WHERE name=%s AND (COALESCE(zaizhi,0)=0)"
+        db.execute_update(sql, ("1", name))
+        return {"success": True, "message": "已更新"}
+    except Exception as e:
+        if "denglu_zt" in str(e).lower() or "unknown column" in str(e).lower():
+            return {"success": True, "message": "已更新"}
+        logger.error(f"设置登录状态失败: {str(e)}")
+        return {"success": False, "message": str(e)}
 
 
 @router.get("/profile")
