@@ -612,13 +612,14 @@ async def overtime_validate(req: OvertimeValidateRequest):
     1) 列表内时间段重复 -> 不通过，原因「时间段重复」
     2) 与打卡记录对比，加班区间未被某段打卡包含 -> 不通过，原因「打卡不实」
     3) 与 jiaban 表已有记录时间段重叠 -> 不通过，原因「重复申报」
+
+    性能优化：使用批量查询替代逐条查询。
     """
     results = []
     items = req.items or []
     if not items:
         return {"success": True, "results": results}
 
-    # 解析每条为 (id, applicant, start_dt_str, end_dt_str)
     parsed = []
     for it in items:
         start_dt = _parse_overtime_datetime(it.date, it.startTime)
@@ -628,91 +629,127 @@ async def overtime_validate(req: OvertimeValidateRequest):
             continue
         parsed.append((it.id, (it.applicant or "").strip(), start_dt, end_dt))
 
-    # 1) 列表内重复：仅同一申请人下，两条时间段重叠则标为「时间段重复」（不同申请人同时间段不视为重复）
-    duplicate_ids = set()
-    for i in range(len(parsed)):
-        id_i, app_i, s1, e1 = parsed[i]
-        for j in range(i + 1, len(parsed)):
-            id_j, app_j, s2, e2 = parsed[j]
-            if (app_i or "") != (app_j or ""):
-                continue
-            if _intervals_overlap(s1, e1, s2, e2):
-                duplicate_ids.add(id_i)
-                duplicate_ids.add(id_j)
+    # 快速索引
+    parsed_map = {p[0]: p for p in parsed}
 
+    # 1) 列表内重复
+    duplicate_ids = set()
+    by_applicant = {}
+    for id_, app, s, e in parsed:
+        by_applicant.setdefault(app, []).append((id_, s, e))
+    for app, group in by_applicant.items():
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                if _intervals_overlap(group[i][1], group[i][2], group[j][1], group[j][2]):
+                    duplicate_ids.add(group[i][0])
+                    duplicate_ids.add(group[j][0])
+
+    # ---------- 批量预取数据 ----------
+    applicants = list({p[1] for p in parsed})
+    dates = list({p[2][:10] for p in parsed})
+    if not applicants or not dates:
+        for it in items:
+            if it.id not in {r["id"] for r in results}:
+                results.append({"id": it.id, "pass": True, "reason": None})
+        return {"success": True, "results": results}
+
+    min_date = min(dates)
+    max_date = max(dates)
+
+    # 2a) 批量查打卡记录
+    att_map = {}
+    try:
+        ph = ",".join(["%s"] * len(applicants))
+        att_rows = db.execute_query(
+            f"SELECT * FROM attendance_records "
+            f"WHERE employee_name IN ({ph}) AND attendance_date >= %s AND attendance_date <= %s",
+            tuple(applicants) + (min_date, max_date),
+        )
+        for row in att_rows:
+            n = (row.get("employee_name") or "").strip()
+            d = row.get("attendance_date") or ""
+            if hasattr(d, "strftime"):
+                d = d.strftime("%Y-%m-%d")
+            else:
+                d = str(d)[:10]
+            att_map.setdefault((n, d), []).append(row)
+    except Exception:
+        pass
+
+    # 3a) 批量查 jiaban 已有记录
+    jiaban_map = {}
+    try:
+        item_ids = [p[0] for p in parsed]
+        ph_names = ",".join(["%s"] * len(applicants))
+        jiaban_rows = db.execute_query(
+            f"SELECT id, xm, timefrom, timeto FROM jiaban "
+            f"WHERE xm IN ({ph_names}) AND (jiabanzt IS NULL OR jiabanzt != 22)",
+            tuple(applicants),
+        ) or []
+        item_id_set = set(item_ids)
+        for row in jiaban_rows:
+            if row.get("id") in item_id_set:
+                continue
+            n = (row.get("xm") or "").strip()
+            jiaban_map.setdefault(n, []).append(row)
+    except Exception:
+        pass
+
+    # ---------- 逐条校验（纯内存） ----------
     for it in items:
         if it.id in duplicate_ids:
             results.append({"id": it.id, "pass": False, "reason": "时间段重复"})
             continue
-        # 找到该条解析
-        rec = None
-        for p in parsed:
-            if p[0] == it.id:
-                rec = p
-                break
+        rec = parsed_map.get(it.id)
         if not rec:
             continue
         _, applicant, start_dt, end_dt = rec
 
         date_ymd = start_dt[:10]
-        # 加班开始时间不能早于 8:00，8:00 之前不计入加班
         if start_dt < f"{date_ymd} 08:00:00":
             results.append({"id": it.id, "pass": False, "reason": "开始时间不能早于8:00"})
             continue
 
-        # 2) 打卡校验：查该人当日打卡，构建 (time_1,time_2),(time_3,time_4)... 区间，看是否包含
-        try:
-            att_records = attendance_db.query_by_date_range(date_ymd, date_ymd, name=applicant)
-        except Exception:
-            att_records = []
+        # 2b) 打卡校验（从预取数据中查找）
         punch_contained = False
-        if att_records:
-            for row in att_records:
-                punch_starts = []
-                punch_ends = []
-                for i in range(1, 10, 2):
-                    t1 = row.get(f"time_{i}")
-                    t2 = row.get(f"time_{i+1}")
-                    if t1 is None or t2 is None:
-                        continue
-                    t1 = format_datetime_plain(t1) if t1 else ""
-                    t2 = format_datetime_plain(t2) if t2 else ""
-                    if isinstance(t1, str) and " " not in t1 and len(t1) <= 8:
-                        t1 = f"{date_ymd} {t1}" if len(t1) > 5 else f"{date_ymd} {t1}:00"
-                    if isinstance(t2, str) and " " not in t2 and len(t2) <= 8:
-                        t2 = f"{date_ymd} {t2}" if len(t2) > 5 else f"{date_ymd} {t2}:00"
-                    if t1 and t2 and t1 < t2:
-                        punch_starts.append(t1[:19])
-                        punch_ends.append(t2[:19])
-                segments = _overtime_segments_for_noon(date_ymd, start_dt, end_dt)
-                all_contained = all(
-                    _interval_contained_in(seg_start, seg_end, punch_starts, punch_ends)
-                    for seg_start, seg_end in segments
-                )
-                if all_contained:
-                    punch_contained = True
-                    break
+        for row in att_map.get((applicant, date_ymd), []):
+            punch_starts = []
+            punch_ends = []
+            for i in range(1, 10, 2):
+                t1 = row.get(f"time_{i}")
+                t2 = row.get(f"time_{i+1}")
+                if t1 is None or t2 is None:
+                    continue
+                t1 = format_datetime_plain(t1) if t1 else ""
+                t2 = format_datetime_plain(t2) if t2 else ""
+                if isinstance(t1, str) and " " not in t1 and len(t1) <= 8:
+                    t1 = f"{date_ymd} {t1}" if len(t1) > 5 else f"{date_ymd} {t1}:00"
+                if isinstance(t2, str) and " " not in t2 and len(t2) <= 8:
+                    t2 = f"{date_ymd} {t2}" if len(t2) > 5 else f"{date_ymd} {t2}:00"
+                if t1 and t2 and t1 < t2:
+                    punch_starts.append(t1[:19])
+                    punch_ends.append(t2[:19])
+            segments = _overtime_segments_for_noon(date_ymd, start_dt, end_dt)
+            all_contained = all(
+                _interval_contained_in(seg_start, seg_end, punch_starts, punch_ends)
+                for seg_start, seg_end in segments
+            )
+            if all_contained:
+                punch_contained = True
+                break
         if not punch_contained:
             results.append({"id": it.id, "pass": False, "reason": "打卡不实"})
             continue
 
-        # 3) jiaban 表查重：同人、非本条、且排除已驳回(22)，时间段重叠才算重复申报
-        try:
-            other_rows = db.execute_query(
-                "SELECT id, timefrom, timeto FROM jiaban WHERE xm = %s AND id != %s AND (jiabanzt IS NULL OR jiabanzt != 22)",
-                (applicant, it.id)
-            ) or []
-        except Exception:
-            other_rows = []
+        # 3b) jiaban 查重（从预取数据中查找）
         overlap_with_db = False
-        for row in other_rows:
+        for row in jiaban_map.get(applicant, []):
             r_start = format_datetime_plain(row.get("timefrom")) or ""
             r_end = format_datetime_plain(row.get("timeto")) or ""
             if "." in r_start:
                 r_start = r_start.split(".")[0]
             if "." in r_end:
                 r_end = r_end.split(".")[0]
-            # 统一为 19 位 YYYY-MM-DD HH:MM:SS 再比较，与历史数据可能为 HH:MM 一致
             if len(r_start) == 16 and r_start[10:11] == " ":
                 r_start = r_start + ":00"
             if len(r_end) == 16 and r_end[10:11] == " ":
