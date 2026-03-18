@@ -50,6 +50,7 @@
             <span class="profile-value">
               {{ profile.exchangeTickets ?? '-' }}
               <span v-if="profile.exchangeTicketsPending != null && profile.exchangeTicketsPending > 0" class="profile-value-sub">（总额 {{ profile.exchangeTicketsTotal ?? '-' }}，审核中预扣 {{ profile.exchangeTicketsPending }}）</span>
+              <span class="profile-value-note">（已按照申报的保留数量进行核减，以后换休票都只有1年有效期）</span>
             </span>
           </div>
           <div v-if="profile.exchangeTicketDetails?.length" class="profile-row profile-row--details">
@@ -242,6 +243,11 @@ onMounted(fetchProfile)
 .profile-value-sub {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+  margin-left: 0.25em;
+}
+.profile-value-note {
+  font-size: var(--font-size-sm);
+  color: #e53e3e;
   margin-left: 0.25em;
 }
 .profile-loading, .profile-empty {

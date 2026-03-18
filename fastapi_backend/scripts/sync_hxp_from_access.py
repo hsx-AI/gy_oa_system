@@ -4,7 +4,7 @@
 
 步骤：
   1. 清空新库 hxp 表
-  2. 从 report1.mdb 的 yggl 表筛选 zaizhi=0 的行，将 hxp -> sl，name -> name，sj=今天，ly=老数据库迁移
+  2. 从 report1.mdb 的 yggl 表筛选 zaizhi=0 的行，将 (hxp + t2025 + t2026) -> sl，name -> name，sj=今天，ly=老数据库迁移
 
 使用：
   cd fastapi_backend
@@ -50,15 +50,14 @@ def clear_hxp():
 
 def read_yggl_from_access(mdb_path: str):
     """
-    从 Access 读取 yggl 表中 zaizhi=0 的 name, hxp。
-    返回 list of (name, sl) 其中 sl 来自旧库 hxp 字段。
+    从 Access 读取 yggl 表中 zaizhi=0 的 name, hxp, t2025, t2026。
+    返回 list of (name, sl) 其中 sl = hxp + t2025 + t2026 三字段之和。
     """
     import pyodbc
 
     if not os.path.isfile(mdb_path):
         raise FileNotFoundError(f"Access 文件不存在: {mdb_path}")
 
-    # 32 位 Access 驱动常见名；64 位多为 Microsoft Access Driver (*.mdb, *.accdb)
     conn_str = (
         f"DRIVER={{Microsoft Access Driver (*.mdb, *.accdb)}};"
         f"DBQ={os.path.abspath(mdb_path)};"
@@ -74,20 +73,23 @@ def read_yggl_from_access(mdb_path: str):
 
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT name, hxp FROM yggl WHERE zaizhi = 0"
+        "SELECT name, hxp, t2025, t2026 FROM yggl WHERE zaizhi = 0"
     )
     rows = cursor.fetchall()
     conn.close()
+
+    def _to_float(v):
+        try:
+            return float(v) if v is not None else 0
+        except (TypeError, ValueError):
+            return 0
 
     out = []
     for row in rows:
         name = (row[0] or "").strip() if row[0] is not None else ""
         if not name:
             continue
-        try:
-            sl = float(row[1]) if row[1] is not None else 0
-        except (TypeError, ValueError):
-            sl = 0
+        sl = _to_float(row[1]) + _to_float(row[2]) + _to_float(row[3])
         if sl < 0:
             sl = 0
         out.append((name, sl))
@@ -107,7 +109,7 @@ def main():
     print("=" * 60)
     print("换休票同步脚本（第一步）")
     print(f"Access 文件: {mdb_path}")
-    print(f"新库 hxp: sl=旧yggl.hxp, name=旧yggl.name, sj={today}, ly={ly_val}")
+    print(f"新库 hxp: sl=旧yggl.(hxp+t2025+t2026), name=旧yggl.name, sj={today}, ly={ly_val}")
     print("=" * 60)
 
     if args.dry_run:
@@ -128,7 +130,7 @@ def main():
 
     # 只同步 sl > 0 的也可以，这里按您要求全部同步（含 sl=0）
     nonzero = sum(1 for _, sl in rows if sl > 0)
-    print(f"  其中 sl（原 hxp）> 0 的有 {nonzero} 条")
+    print(f"  其中 sl（hxp+t2025+t2026）> 0 的有 {nonzero} 条")
 
     if args.dry_run:
         print("\n  预览前 10 条: name -> sl")
