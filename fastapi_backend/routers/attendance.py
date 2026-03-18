@@ -301,7 +301,13 @@ def _process_attendance_file_path(temp_file_path: str, filename: str):
         )
 
     success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
-    msg = f"文件处理完成！共处理 {len(mapped_records)} 条记录" + (f"，跳过未匹配工号 {len(skipped_gh)} 条（涉及 {len(set(skipped_gh))} 个工号）" if skipped_gh else "")
+    parts = [f"文件处理完成！Excel 合并后 {len(merged_records)} 人天"]
+    if skipped_gh:
+        parts.append(f"跳过未匹配工号 {len(skipped_gh)} 条（涉及 {len(set(skipped_gh))} 个工号: {', '.join(sorted(set(skipped_gh))[:20])}）")
+    parts.append(f"入库成功 {success_count} 条")
+    if fail_count:
+        parts.append(f"入库失败 {fail_count} 条（详见服务器日志）")
+    msg = "，".join(parts)
     return True, msg, len(mapped_records), success_count, fail_count, mapped_records
 
 

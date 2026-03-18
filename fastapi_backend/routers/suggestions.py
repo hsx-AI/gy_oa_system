@@ -221,8 +221,9 @@ def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
                 gcsqb_rows = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                    (name, year),
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
                 )
                 jiaban_pending = db.execute_query(
                     "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -235,8 +236,9 @@ def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
                 gcsqb_pending = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                    (name, year),
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
                 )
             except Exception as e:
                 logger.warning(f"查询已处理/审核中区间失败 name=%s: %s", name, e)
@@ -739,8 +741,9 @@ async def get_suggestions(
                 gcsqb_rows = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                    (name, year),
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
                 )
                 jiaban_pending = db.execute_query(
                     "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -753,8 +756,9 @@ async def get_suggestions(
                 gcsqb_pending = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                    (name, year),
+                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
                 )
             except Exception as e:
                 logger.warning(f"查询已处理/审核中区间失败: {e}")
@@ -798,8 +802,9 @@ async def get_suggestions(
             gcsqb_rows = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                (name, now.year),
+                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                (name, f"{now.year + 1}-01-01", f"{now.year}-01-01"),
             )
             jiaban_pending = db.execute_query(
                 "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
@@ -812,8 +817,9 @@ async def get_suggestions(
             gcsqb_pending = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) AND YEAR(COALESCE(yjcfsj, yjfhsj)) = %s",
-                (name, now.year),
+                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                (name, f"{now.year + 1}-01-01", f"{now.year}-01-01"),
             )
         except Exception as e:
             logger.warning(f"查询已处理/审核中区间失败: {e}")

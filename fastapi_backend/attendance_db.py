@@ -111,14 +111,43 @@ class AttendanceDatabase:
             else:
                 logger.warning(f"确保 attendance_records 唯一约束时出错（重复上传可能仍会重复录入）: {e}")
 
+    def _build_single_upsert_sql(self):
+        return """
+            INSERT INTO attendance_records
+            (id, employee_id, employee_name, department, attendance_date,
+             time_1, time_2, time_3, time_4, time_5,
+             time_6, time_7, time_8, time_9, time_10)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+            employee_name=VALUES(employee_name), department=VALUES(department),
+            time_1=VALUES(time_1), time_2=VALUES(time_2), time_3=VALUES(time_3),
+            time_4=VALUES(time_4), time_5=VALUES(time_5), time_6=VALUES(time_6),
+            time_7=VALUES(time_7), time_8=VALUES(time_8), time_9=VALUES(time_9),
+            time_10=VALUES(time_10), updated_at=CURRENT_TIMESTAMP
+        """
+
+    @staticmethod
+    def _record_to_params(record: Dict) -> tuple:
+        record_id = record.get("id") or uuid.uuid4().hex
+        return (
+            record_id,
+            record['employee_id'], record['employee_name'], record['department'],
+            record['attendance_date'],
+            record.get('time_1'), record.get('time_2'), record.get('time_3'),
+            record.get('time_4'), record.get('time_5'), record.get('time_6'),
+            record.get('time_7'), record.get('time_8'), record.get('time_9'),
+            record.get('time_10')
+        )
+
     def batch_insert_records(self, records: List[Dict]) -> tuple:
-        """批量插入记录。整批单连接 + 多行 INSERT 分块提交，减少往返，加快上传。"""
+        """批量插入记录。分块批量 INSERT，失败的块降级逐条重试，避免一条坏数据丢掉整块。"""
         if not records:
             return 0, 0
         self._ensure_attendance_unique_key_once()
-        chunk_size = 500  # 每 500 行一次 INSERT，平衡速度与单条 SQL 大小
+        chunk_size = 500
         success_count = 0
         fail_count = 0
+        single_sql = self._build_single_upsert_sql()
         conn = None
         try:
             conn = db.get_connection()
@@ -130,7 +159,7 @@ class AttendanceDatabase:
                     placeholders = ", ".join(
                         ["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(chunk)
                     )
-                    sql = f"""
+                    bulk_sql = f"""
                         INSERT INTO attendance_records
                         (id, employee_id, employee_name, department, attendance_date,
                          time_1, time_2, time_3, time_4, time_5,
@@ -145,22 +174,22 @@ class AttendanceDatabase:
                     """
                     params = []
                     for record in chunk:
-                        record_id = record.get("id") or uuid.uuid4().hex
-                        params.extend((
-                            record_id,
-                            record['employee_id'], record['employee_name'], record['department'],
-                            record['attendance_date'],
-                            record.get('time_1'), record.get('time_2'), record.get('time_3'),
-                            record.get('time_4'), record.get('time_5'), record.get('time_6'),
-                            record.get('time_7'), record.get('time_8'), record.get('time_9'),
-                            record.get('time_10')
-                        ))
+                        params.extend(self._record_to_params(record))
                     try:
-                        cursor.execute(sql, tuple(params))
+                        cursor.execute(bulk_sql, tuple(params))
                         success_count += len(chunk)
                     except Exception as e:
-                        logger.warning(f"分块插入失败（本块 {len(chunk)} 条）: {e}")
-                        fail_count += len(chunk)
+                        logger.warning(f"分块插入失败（本块 {len(chunk)} 条），降级逐条重试: {e}")
+                        for j, record in enumerate(chunk):
+                            try:
+                                cursor.execute(single_sql, self._record_to_params(record))
+                                success_count += 1
+                            except Exception as e2:
+                                fail_count += 1
+                                logger.warning(
+                                    f"  逐条插入失败 employee_id={record.get('employee_id')} "
+                                    f"date={record.get('attendance_date')}: {e2}"
+                                )
             if conn:
                 conn.commit()
         except Exception as e:

@@ -25,6 +25,17 @@ class ExcelProcessor:
         self.is_xls = file_path.lower().endswith('.xls')
         self.xlrd_book = None
         self.xlrd_sheet = None
+
+    @staticmethod
+    def _clean_employee_id(raw) -> str:
+        """清理工号：去浮点尾巴 (1234.0 → 1234)、去前后空格"""
+        if raw is None:
+            return ""
+        if isinstance(raw, float):
+            if raw == int(raw):
+                return str(int(raw))
+            return str(raw).strip()
+        return str(raw).strip()
     
     def load_file(self) -> bool:
         """加载 Excel 文件（支持 .xls 和 .xlsx）"""
@@ -151,6 +162,8 @@ class ExcelProcessor:
                     attendance_date = row[4].value
                     attendance_time = row[5].value
                     
+                    employee_id = self._clean_employee_id(employee_id)
+
                     # 跳过空行
                     if not employee_id or not employee_name:
                         continue
@@ -170,11 +183,11 @@ class ExcelProcessor:
                         parsed_time = self.parse_time_value(attendance_time)
                     
                     if not parsed_date or not parsed_time:
-                        logger.warning(f"第{row_idx+1}行数据不完整，跳过")
+                        logger.warning(f"第{row_idx+1}行数据不完整（employee_id={employee_id}, date={attendance_date}, time={attendance_time}），跳过")
                         continue
                     
                     record = {
-                        'employee_id': str(employee_id).strip() if employee_id else "",
+                        'employee_id': employee_id,
                         'employee_name': str(employee_name).strip() if employee_name else "",
                         'department': str(department1).strip() if department1 else "",
                         'attendance_date': parsed_date,
@@ -208,7 +221,7 @@ class ExcelProcessor:
                 if len(row) < 6:
                     continue
                 
-                employee_id = row[0].value  # A列：员工编号
+                employee_id = self._clean_employee_id(row[0].value)  # A列：员工编号
                 employee_name = row[1].value  # B列：姓名
                 department1 = row[2].value  # C列：部门1
                 department2 = row[3].value  # D列：部门2（暂时不用）
@@ -224,12 +237,12 @@ class ExcelProcessor:
                 parsed_time = self.parse_time_value(attendance_time)
                 
                 if not parsed_date or not parsed_time:
-                    logger.warning(f"第{row_idx}行数据不完整，跳过")
+                    logger.warning(f"第{row_idx}行数据不完整（employee_id={employee_id}, date={attendance_date}, time={attendance_time}），跳过")
                     continue
                 
                 # 添加记录
                 record = {
-                    'employee_id': str(employee_id).strip() if employee_id else "",
+                    'employee_id': employee_id,
                     'employee_name': str(employee_name).strip() if employee_name else "",
                     'department': str(department1).strip() if department1 else "",
                     'attendance_date': parsed_date,
