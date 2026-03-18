@@ -324,7 +324,7 @@ class OvertimeRegisterRequest(BaseModel):
 
 
 def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
-    """计算加班时长(小时)，原始值（未取整）。"""
+    """计算加班时长(小时)，扣除午休 12:00-13:00 实际重叠部分，原始值（未取整）。"""
     try:
         start_str = f"{date_str} {start_time}" if len(start_time) <= 8 else start_time
         end_str = f"{date_str} {end_time}" if len(end_time) <= 8 else end_time
@@ -333,7 +333,17 @@ def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
         from datetime import datetime as dt
         t1 = dt.strptime(start_str.replace("T", " "), "%Y-%m-%d %H:%M:%S")
         t2 = dt.strptime(end_str.replace("T", " "), "%Y-%m-%d %H:%M:%S")
-        return (t2 - t1).total_seconds() / 3600
+        total_mins = (t2 - t1).total_seconds() / 60
+        if total_mins <= 0:
+            return 0.0
+        start_mins = t1.hour * 60 + t1.minute + t1.second / 60
+        end_mins = t2.hour * 60 + t2.minute + t2.second / 60
+        lunch_start = 12 * 60
+        lunch_end = 13 * 60
+        if start_mins < lunch_end and end_mins > lunch_start:
+            overlap = min(end_mins, lunch_end) - max(start_mins, lunch_start)
+            total_mins = max(0, total_mins - overlap)
+        return total_mins / 60
     except Exception:
         return 0.0
 

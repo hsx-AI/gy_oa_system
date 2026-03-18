@@ -304,11 +304,11 @@ function calcOvertimeExchangeTickets(st, et) {
   const endMins = toMins(et)
   let mins = endMins - startMins
   if (mins <= 0) return 0
-  // 午休 12:00-13:00 不计入：若时段跨过午休则扣除 60 分钟
   const lunchStart = 12 * 60
   const lunchEnd = 13 * 60
   if (startMins < lunchEnd && endMins > lunchStart) {
-    mins = Math.max(0, mins - 60)
+    const overlap = Math.min(endMins, lunchEnd) - Math.max(startMins, lunchStart)
+    mins = Math.max(0, mins - overlap)
   }
   const hours = mins / 60
   const tickets = hours / 4  // 1小时=0.25张
@@ -409,7 +409,8 @@ function calcOvertimeWorkHours(st, et) {
   const lunchStart = 12 * 60
   const lunchEnd = 13 * 60
   if (startMins < lunchEnd && endMins > lunchStart) {
-    mins = Math.max(0, mins - 60)
+    const overlap = Math.min(endMins, lunchEnd) - Math.max(startMins, lunchStart)
+    mins = Math.max(0, mins - overlap)
   }
   return mins / 60
 }
