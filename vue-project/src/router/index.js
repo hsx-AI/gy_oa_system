@@ -155,6 +155,12 @@ const routes = [
     name: 'EmailSender',
     component: () => import('../views/admin/EmailSender.vue'),
     meta: { title: '邮件发送' }
+  },
+  {
+    path: '/admin/hxp-manage',
+    name: 'HxpManage',
+    component: () => import('../views/admin/HxpManage.vue'),
+    meta: { title: '换休票管理' }
   }
   // 未来可以添加更多路由：
   // {
@@ -316,6 +322,24 @@ router.beforeEach(async (to, _from, next) => {
     } catch {
       next('/')
     }
+    return
+  }
+  if (to.path === '/admin/hxp-manage') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) { next('/login'); return }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      if (!name) { next('/'); return }
+      const res = await getUploadConfig()
+      const a1 = (res?.admin1 || '').trim()
+      const a2 = (res?.admin2 || '').trim()
+      if ((a1 && name === a1) || (a2 && name === a2)) {
+        next()
+      } else {
+        next('/')
+      }
+    } catch { next('/') }
     return
   }
   if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email') {

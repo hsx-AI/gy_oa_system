@@ -130,6 +130,13 @@
             </svg>
             <span>员工在职管理</span>
           </router-link>
+          <router-link v-if="canManageHxp" to="/admin/hxp-manage" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="2" y="5" width="20" height="14" rx="2" />
+              <line x1="2" y1="10" x2="22" y2="10" />
+            </svg>
+            <span>换休票管理</span>
+          </router-link>
           <router-link v-if="canAccessDbManager" to="/admin/db-manager" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <ellipse cx="12" cy="5" rx="9" ry="3" />
@@ -302,6 +309,13 @@ const canShowEmployeeAdmin = computed(() => {
     jb === '副主任' || (jb && jb.includes('副主任'))
   const isAdmin2 = (admin2.value || '').trim() && name === (admin2.value || '').trim()
   return isLeaderOrDept || isAdmin2
+})
+
+const canManageHxp = computed(() => {
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const a1 = (admin1.value || '').trim()
+  const a2 = (admin2.value || '').trim()
+  return (a1 && name === a1) || (a2 && name === a2)
 })
 
 // 是否显示领导人看板（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）

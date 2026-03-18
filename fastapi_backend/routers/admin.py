@@ -13,6 +13,7 @@ from database import db
 from routers.db_manager import _get_admin1
 from io import BytesIO
 from datetime import datetime
+import uuid
 import logging
 
 try:
@@ -371,3 +372,114 @@ async def export_employees_excel(
     except Exception as e:
         logger.error(f"导出在职员工表失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 换休票批量增减 ====================
+
+class HxpBatchRequest(BaseModel):
+    current_user: str
+    names: List[str]
+    amount: float
+    action: str  # "add" | "subtract"
+    ly: str = ""
+
+
+@router.post("/hxp/batch")
+async def hxp_batch(req: HxpBatchRequest):
+    """
+    批量增减换休票。仅 admin1 / admin2 可操作。
+    add：为每人新增一条 hxp 记录，sj=当前时间。
+    subtract：按过期日期从早到晚扣减，不足则跳过。
+    """
+    name = (req.current_user or "").strip()
+    if not name:
+        raise HTTPException(status_code=403, detail="未登录")
+    a1 = _get_admin1()
+    a2 = _get_admin2()
+    if not ((a1 and name == a1) or (a2 and name == a2)):
+        raise HTTPException(status_code=403, detail="仅系统管理员或人事管理员可执行此操作")
+
+    names = [n.strip() for n in req.names if n.strip()]
+    if not names:
+        raise HTTPException(status_code=400, detail="姓名列表不能为空")
+    amount = round(req.amount, 3)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="数量必须大于 0")
+
+    from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
+    from datetime import date
+
+    results = []
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    today = date.today().strftime("%Y-%m-%d")
+
+    for emp_name in names:
+        emp_rows = db.execute_query(
+            "SELECT name FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (emp_name,),
+        )
+        if not emp_rows:
+            results.append({"name": emp_name, "ok": False, "msg": "未找到在职员工"})
+            continue
+
+        if req.action == "add":
+            hxp_id = uuid.uuid4().hex
+            ly = (req.ly or "").strip() or "管理员手动增加"
+            try:
+                db.execute_update(
+                    "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
+                    (hxp_id, emp_name, amount, now_str, ly),
+                )
+                results.append({"name": emp_name, "ok": True, "msg": f"+{amount}"})
+            except Exception as e:
+                results.append({"name": emp_name, "ok": False, "msg": str(e)})
+
+        elif req.action == "subtract":
+            try:
+                rows = db.execute_query(
+                    "SELECT id, sl, sj FROM hxp WHERE name = %s AND sl > 0 ORDER BY id",
+                    (emp_name,),
+                )
+                rows_with_exp = []
+                for r in rows:
+                    exp = compute_expire_date(r.get("sj"))
+                    if exp and exp < today:
+                        continue
+                    rows_with_exp.append((r, parse_expire_for_sort(exp) if exp else (9999, 12)))
+                rows_with_exp.sort(key=lambda x: x[1])
+
+                avail = sum(float(r.get("sl") or 0) for r, _ in rows_with_exp)
+                if avail < amount:
+                    results.append({"name": emp_name, "ok": False, "msg": f"余额不足（可用 {avail}）"})
+                    continue
+
+                remain = amount
+                for row, _ in rows_with_exp:
+                    if remain <= 0:
+                        break
+                    rid = row["id"]
+                    sl = float(row.get("sl") or 0)
+                    if sl <= 0:
+                        continue
+                    if remain >= sl:
+                        db.execute_update("DELETE FROM hxp WHERE id = %s", (rid,))
+                        remain = round(remain - sl, 3)
+                    else:
+                        db.execute_update(
+                            "UPDATE hxp SET sl = ROUND(sl - %s, 3) WHERE id = %s",
+                            (round(remain, 3), rid),
+                        )
+                        remain = 0
+                results.append({"name": emp_name, "ok": True, "msg": f"-{amount}"})
+            except Exception as e:
+                results.append({"name": emp_name, "ok": False, "msg": str(e)})
+        else:
+            raise HTTPException(status_code=400, detail="action 必须为 add 或 subtract")
+
+    ok_count = sum(1 for r in results if r["ok"])
+    fail_count = len(results) - ok_count
+    return {
+        "success": True,
+        "message": f"处理完成：成功 {ok_count}，失败 {fail_count}",
+        "results": results,
+    }
