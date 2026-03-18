@@ -187,66 +187,140 @@ def _suggestion_under_review(
     return False
 
 
-def get_attendance_exception_keys(year: int, month: int) -> List[tuple]:
+def get_attendance_exception_keys(year: int, month: int, include_buban: bool = False) -> List[tuple]:
     """
     计算指定年月下所有「考勤异常」的 (employee_name, department, date_str)。
     异常定义：智能建议中 status=1（需请假/缺勤）且既未完成请假/公出，也未在审核中覆盖。
-    返回列表用于过滤考勤记录，仅展示异常日的打卡数据。
+    include_buban=True 时包含部办人员（供打卡管理员使用）。
+
+    性能优化：使用批量查询替代逐人查询（6 条 SQL 代替 N×6 条）。
     """
     try:
         attendance_db.ensure_suggestions_table()
         employees = attendance_db.get_distinct_employees_for_suggestions(year, month)
-        exception_keys = []
+        emp_list = []
         for emp in employees:
             name = emp.get("employee_name")
             dept = (emp.get("department") or "").strip()
             if not name or not dept:
                 continue
-            # 部办为领导，不纳入考勤异常管理
-            if dept == "部办":
+            if dept == "部办" and not include_buban:
                 continue
-            is_female = _is_female_employee(name)
-            rows = attendance_db.get_suggestions(name, dept, year, month)
-            jiaban_rows, qj_rows, gcsqb_rows = [], [], []
-            jiaban_pending, qj_pending, gcsqb_pending = [], [], []
-            try:
-                jiaban_rows = db.execute_query(
-                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
-                )
-                qj_rows = db.execute_query(
-                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
-                )
-                gcsqb_rows = db.execute_query(
-                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
-                    "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
-                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
-                )
-                jiaban_pending = db.execute_query(
-                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
-                )
-                qj_pending = db.execute_query(
-                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
-                )
-                gcsqb_pending = db.execute_query(
-                    "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
-                    "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
-                    "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
-                )
-            except Exception as e:
-                logger.warning(f"查询已处理/审核中区间失败 name=%s: %s", name, e)
+            emp_list.append((name, dept))
+
+        if not emp_list:
+            return []
+
+        names = list({n for n, _ in emp_list})
+
+        # ---------- 批量查询性别 ----------
+        female_set = set()
+        try:
+            ph = ",".join(["%s"] * len(names))
+            gender_rows = db.execute_query(
+                f"SELECT name, xbie FROM yggl WHERE name IN ({ph}) AND COALESCE(zaizhi,0)=0",
+                tuple(names),
+            )
+            for r in gender_rows:
+                if "女" in (r.get("xbie") or ""):
+                    female_set.add((r.get("name") or "").strip())
+        except Exception:
+            pass
+
+        # ---------- 批量查询所有建议 ----------
+        all_suggestions = {}
+        try:
+            sugg_sql = """
+                SELECT employee_name, department, DATE(start_time) AS date,
+                       day_type AS dayType, message AS suggestion,
+                       start_time, end_time, status
+                FROM attendance_suggestions
+                WHERE year = %s AND month = %s AND status = 1
+                ORDER BY start_time
+            """
+            sugg_rows = db.execute_query(sugg_sql, (year, month))
+            for r in sugg_rows:
+                key = ((r.get("employee_name") or "").strip(), (r.get("department") or "").strip())
+                all_suggestions.setdefault(key, []).append({
+                    "date": str(r.get("date") or ""),
+                    "start_time": r.get("start_time"),
+                    "end_time": r.get("end_time"),
+                    "status": r.get("status") if r.get("status") is not None else 0,
+                })
+        except Exception as e:
+            logger.error(f"批量查询建议失败: {e}")
+            return []
+
+        # ---------- 批量查询已通过/审核中记录 ----------
+        year_start = f"{year}-01-01"
+        year_end = f"{year + 1}-01-01"
+
+        def _batch_by_name(rows, name_field="xm"):
+            m = {}
+            for r in rows:
+                n = (r.get(name_field) or "").strip()
+                if n:
+                    m.setdefault(n, []).append(r)
+            return m
+
+        jiaban_approved_map, jiaban_pending_map = {}, {}
+        qj_approved_map, qj_pending_map = {}, {}
+        gcsqb_approved_map, gcsqb_pending_map = {}, {}
+
+        try:
+            ph = ",".join(["%s"] * len(names))
+            jiaban_approved_map = _batch_by_name(db.execute_query(
+                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
+                tuple(names) + (year, month),
+            ))
+            qj_approved_map = _batch_by_name(db.execute_query(
+                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
+                tuple(names) + (year, month),
+            ))
+            gcsqb_approved_map = _batch_by_name(db.execute_query(
+                f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                f"WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
+                f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                tuple(names) + (year_end, year_start),
+            ))
+            jiaban_pending_map = _batch_by_name(db.execute_query(
+                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt IN (0,1,3,5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
+                tuple(names) + (year, month),
+            ))
+            qj_pending_map = _batch_by_name(db.execute_query(
+                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt IN (0,1,3) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
+                tuple(names) + (year, month),
+            ))
+            gcsqb_pending_map = _batch_by_name(db.execute_query(
+                f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+                f"WHERE gcr IN ({ph}) AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
+                f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+                tuple(names) + (year_end, year_start),
+            ))
+        except Exception as e:
+            logger.warning(f"批量查询已处理/审核中区间失败: {e}")
+
+        # ---------- 逐人判定异常 ----------
+        exception_keys = []
+        for name, dept in emp_list:
+            key = (name, dept)
+            rows = all_suggestions.get(key, [])
+            if not rows:
+                continue
+            is_female = name in female_set
+            jiaban_rows = jiaban_approved_map.get(name, [])
+            qj_rows = qj_approved_map.get(name, [])
+            gcsqb_rows = gcsqb_approved_map.get(name, [])
+            jiaban_pending = jiaban_pending_map.get(name, [])
+            qj_pending = qj_pending_map.get(name, [])
+            gcsqb_pending = gcsqb_pending_map.get(name, [])
+
             for r in rows:
                 st = r.get("status") if r.get("status") is not None else 0
                 if st != 1:
                     continue
-                # 每年 3 月 8 日下午 13:00-17:00，女性员工不视为缺勤异常
                 if is_female and _is_march8_pm_interval(r.get("date"), r.get("start_time"), r.get("end_time")):
                     continue
                 handled = _suggestion_handled(

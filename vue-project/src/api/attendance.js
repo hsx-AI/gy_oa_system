@@ -613,6 +613,15 @@ export function getOvertimeTypes() {
   })
 }
 
-
+/**
+ * 打卡管理员代处理考勤异常
+ */
+export function dakamanProcessException(data) {
+  return request({
+    url: '/attendance/dakaman-process',
+    method: 'post',
+    data,
+  })
+}
 
 

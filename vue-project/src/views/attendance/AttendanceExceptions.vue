@@ -59,16 +59,17 @@
                 <th>考勤时间6</th>
                 <th>考勤时间7</th>
                 <th>考勤时间8</th>
+                <th v-if="isDakaman">操作</th>
               </tr>
             </thead>
             <tbody>
               <tr v-if="loading">
-                <td colspan="11" class="text-center text-tertiary">
+                <td :colspan="isDakaman ? 12 : 11" class="text-center text-tertiary">
                   加载中…
                 </td>
               </tr>
               <tr v-else-if="filteredRecords.length === 0">
-                <td colspan="11" class="text-center text-tertiary">
+                <td :colspan="isDakaman ? 12 : 11" class="text-center text-tertiary">
                   {{ loadError ? loadError : (selectedDept ? '该科室暂无考勤异常记录' : '暂无考勤异常记录') }}
                 </td>
               </tr>
@@ -100,9 +101,51 @@
                   <td><span class="time-badge">{{ record.time_7 || '-' }}</span></td>
                   <td><span class="time-badge">{{ record.time_8 || '-' }}</span></td>
                 </template>
+                <td v-if="isDakaman">
+                  <button class="btn-process" @click="openProcessModal(record)" :disabled="processingId === recordKey(record)">
+                    {{ processingId === recordKey(record) ? '处理中…' : '代处理' }}
+                  </button>
+                </td>
               </tr>
             </tbody>
           </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 打卡管理员代处理弹窗 -->
+    <div v-if="processModal.show" class="modal-overlay" @click.self="closeProcessModal">
+      <div class="modal-content">
+        <h3 class="modal-title">代处理考勤异常</h3>
+        <div class="modal-body">
+          <p class="modal-info">
+            <strong>{{ processModal.record?.employee_name }}</strong>
+            <span class="text-secondary"> · {{ processModal.record?.department }}</span>
+            <span class="text-secondary"> · {{ processModal.record?.attendance_date }}</span>
+          </p>
+          <div class="modal-field">
+            <label>处理类型</label>
+            <div class="action-toggle">
+              <button type="button" class="toggle-btn" :class="{ active: processModal.processType === 'leave' }" @click="processModal.processType = 'leave'">请假</button>
+              <button type="button" class="toggle-btn" :class="{ active: processModal.processType === 'business_trip' }" @click="processModal.processType = 'business_trip'">公出</button>
+            </div>
+          </div>
+          <div v-if="processModal.processType === 'leave'" class="modal-field">
+            <label>请假类型</label>
+            <select v-model="processModal.leaveType" class="modal-select">
+              <option v-for="lt in leaveTypeOptions" :key="lt" :value="lt">{{ lt }}</option>
+            </select>
+          </div>
+          <div class="modal-field">
+            <label>备注</label>
+            <input type="text" v-model="processModal.reason" class="modal-input" placeholder="选填" />
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-outline" @click="closeProcessModal">取消</button>
+          <button class="btn btn-primary" @click="confirmProcess" :disabled="processingId !== null">
+            {{ processingId !== null ? '处理中…' : '确认提交' }}
+          </button>
         </div>
       </div>
     </div>
@@ -110,8 +153,8 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable } from '@/api/attendance'
+import { ref, reactive, computed, onMounted } from 'vue'
+import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable, dakamanProcessException } from '@/api/attendance'
 
 const loading = ref(false)
 const loadError = ref('')
@@ -119,6 +162,18 @@ const records = ref([])
 const selectedDept = ref('')
 const exporting = ref(false)
 const exportingLeaveHandler = ref(false)
+const isDakaman = ref(false)
+const processingId = ref(null)
+
+const leaveTypeOptions = ['换休', '带薪年休假', '事假', '病假', '婚假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假']
+
+const processModal = reactive({
+  show: false,
+  record: null,
+  processType: 'leave',
+  leaveType: '事假',
+  reason: '打卡管理员代处理',
+})
 
 const now = new Date()
 const monthStr = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
@@ -183,6 +238,7 @@ function loadExceptions() {
       if (res && res.success && Array.isArray(res.data)) {
         records.value = res.data
         selectedDept.value = ''
+        if (res.is_dakaman !== undefined) isDakaman.value = !!res.is_dakaman
       } else {
         records.value = []
         loadError.value = (res && res.message) || '加载失败'
@@ -274,6 +330,52 @@ async function handleLeaveHandlerExport() {
     alert(e?.message || '导出失败')
   } finally {
     exportingLeaveHandler.value = false
+  }
+}
+
+function recordKey(record) {
+  return `${record.employee_name}-${record.attendance_date}`
+}
+
+function openProcessModal(record) {
+  processModal.record = record
+  processModal.processType = 'leave'
+  processModal.leaveType = '事假'
+  processModal.reason = '打卡管理员代处理'
+  processModal.show = true
+}
+
+function closeProcessModal() {
+  processModal.show = false
+  processModal.record = null
+}
+
+async function confirmProcess() {
+  const rec = processModal.record
+  if (!rec) return
+  const key = recordKey(rec)
+  processingId.value = key
+  try {
+    const res = await dakamanProcessException({
+      current_user: getCurrentUserName(),
+      employee_name: rec.employee_name,
+      department: rec.department,
+      attendance_date: rec.attendance_date,
+      process_type: processModal.processType,
+      leave_type: processModal.leaveType,
+      reason: processModal.reason || '打卡管理员代处理',
+    })
+    if (res && res.success) {
+      records.value = records.value.filter(r => recordKey(r) !== key)
+      closeProcessModal()
+      alert(res.message || '处理成功')
+    } else {
+      alert(res?.message || '处理失败')
+    }
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '处理失败')
+  } finally {
+    processingId.value = null
   }
 }
 
@@ -491,5 +593,104 @@ onMounted(() => {
 
 .text-sm {
   font-size: var(--font-size-sm);
+}
+
+.btn-process {
+  padding: 4px 12px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-container);
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  transition: all 0.2s;
+}
+.btn-process:hover:not(:disabled) {
+  background: var(--color-primary);
+  color: #fff;
+}
+.btn-process:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 9000;
+}
+.modal-content {
+  background: var(--color-bg-container);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 8px 32px rgba(0,0,0,0.18);
+  width: 440px;
+  max-width: 90vw;
+  overflow: hidden;
+}
+.modal-title {
+  padding: 20px 24px 0;
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+}
+.modal-body {
+  padding: 16px 24px 8px;
+}
+.modal-info {
+  margin-bottom: 16px;
+  font-size: var(--font-size-base);
+}
+.modal-field {
+  margin-bottom: 14px;
+}
+.modal-field label {
+  display: block;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  margin-bottom: 4px;
+}
+.modal-select, .modal-input {
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+  background: var(--color-bg-container);
+  box-sizing: border-box;
+}
+.modal-footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  padding: 12px 24px 20px;
+}
+.action-toggle {
+  display: inline-flex;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  overflow: hidden;
+}
+.toggle-btn {
+  padding: 6px 18px;
+  border: none;
+  background: var(--color-bg-container);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: var(--font-size-sm);
+  transition: all 0.2s;
+}
+.toggle-btn + .toggle-btn {
+  border-left: 1px solid var(--color-border-base);
+}
+.toggle-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  font-weight: var(--font-weight-medium);
 }
 </style>

@@ -13,6 +13,7 @@ from io import BytesIO
 
 from fastapi.responses import StreamingResponse
 
+import uuid
 from config import settings
 from attendance_db import attendance_db
 from database import db
@@ -40,41 +41,43 @@ def _get_dakaman() -> Optional[str]:
 def _can_see_attendance_exceptions(current_user: str) -> tuple:
     """
     判断当前用户是否有权查看考勤异常。
-    返回 (allowed: bool, lsys: str|None)。
-    - 系统管理员(admin1)、打卡管理员(dakaman)：可看全部。
+    返回 (allowed: bool, lsys: str|None, is_dakaman: bool)。
+    - 系统管理员(admin1)、打卡管理员(dakaman)：可看全部（dakaman 含部办人员）。
     - 班组长/主任/副主任：仅可看本室。
     - 部长/副部长/员工等：无权限。
     """
     current_user = (current_user or "").strip()
     if not current_user:
-        return False, None
+        return False, None, False
+    dakaman = _get_dakaman()
+    is_dk = bool(dakaman and current_user == dakaman)
     admin1 = _get_admin1()
     if admin1 and current_user == admin1:
-        return True, None
-    dakaman = _get_dakaman()
-    if dakaman and current_user == dakaman:
-        return True, None
+        return True, None, True
+    if is_dk:
+        return True, None, True
     user = _get_user_info(current_user)
     if not user:
-        return False, None
+        return False, None, False
     jb = (user.get("jb") or "").strip()
     if _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
         lsys = (user.get("lsys") or "").strip()
-        return True, lsys if lsys else None
-    return False, None
+        return True, lsys if lsys else None, False
+    return False, None, False
 
 
-def _build_attendance_exceptions_data(year: int, month: int, filter_lsys: Optional[str]) -> List[dict]:
+def _build_attendance_exceptions_data(year: int, month: int, filter_lsys: Optional[str], include_buban: bool = False) -> List[dict]:
     """
     构建指定年月的考勤异常列表原始数据（不做权限检查）。
     filter_lsys 不为空时，仅保留该科室(department)的数据。
+    include_buban=True 时包含部办人员。
     """
     import calendar
 
     _, last_day = calendar.monthrange(year, month)
     start_date = f"{year}-{month:02d}-01"
     end_date = f"{year}-{month:02d}-{last_day:02d}"
-    exception_keys = get_attendance_exception_keys(year, month)
+    exception_keys = get_attendance_exception_keys(year, month, include_buban=include_buban)
     if not exception_keys:
         return []
     if filter_lsys:
@@ -150,6 +153,7 @@ class AttendanceQueryResponse(BaseModel):
     message: Optional[str] = None
     total: int = 0
     data: List[AttendanceRecord] = []
+    is_dakaman: bool = False
 
 
 class UploadResponse(BaseModel):
@@ -520,26 +524,27 @@ async def get_attendance_exceptions(
     current_user: Optional[str] = Query(None, description="当前登录用户姓名，用于权限校验"),
 ):
     """
-    考勤异常列表。权限：打卡管理员可看全部；各科室班组长/主任/副主任仅可看本室。
+    考勤异常列表。权限：打卡管理员可看全部（含部办）；各科室班组长/主任/副主任仅可看本室。
     返回指定年月内「智能建议需请假/缺勤且未完成请假或公出」的异常日对应的打卡记录。
     """
-    allowed, filter_lsys = _can_see_attendance_exceptions(current_user or "")
+    allowed, filter_lsys, is_dakaman = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
             detail="仅班组长/主任/副主任或打卡管理员可查看考勤异常",
         )
     try:
-        built = _build_attendance_exceptions_data(year, month, filter_lsys)
+        built = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=is_dakaman)
         if not built:
             msg = "本室无考勤异常" if filter_lsys else "无考勤异常"
-            return AttendanceQueryResponse(success=True, message=msg, total=0, data=[])
+            return AttendanceQueryResponse(success=True, message=msg, total=0, data=[], is_dakaman=is_dakaman)
         attendance_records = [AttendanceRecord(**rec) for rec in built]
         return AttendanceQueryResponse(
             success=True,
             message="查询成功",
             total=len(attendance_records),
             data=attendance_records,
+            is_dakaman=is_dakaman,
         )
     except HTTPException:
         raise
@@ -558,7 +563,7 @@ async def export_attendance_exceptions(
     导出指定月份的考勤异常列表为 Excel。
     权限同 /attendance/exceptions。
     """
-    allowed, filter_lsys = _can_see_attendance_exceptions(current_user or "")
+    allowed, filter_lsys, is_dakaman = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
@@ -571,7 +576,7 @@ async def export_attendance_exceptions(
         except ImportError:
             raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
 
-        rows = _build_attendance_exceptions_data(year, month, filter_lsys)
+        rows = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=is_dakaman)
         wb = Workbook()
         ws = wb.active
         ws.title = "考勤异常"
@@ -659,7 +664,7 @@ async def export_leave_handler_table(
     数据来源：qj 表（已通过 qjzt=4）+ gcsqb 表（已通过 bldzt=2,szrzt=2，时间用 yjcfsj/yjfhsj）；员工代码来自 yggl.gh。
     """
     import calendar
-    allowed, _ = _can_see_attendance_exceptions(current_user or "")
+    allowed, _, _ = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
@@ -922,5 +927,126 @@ async def clear_all_data(confirm: str = Query(..., description="确认码，输�
         raise HTTPException(status_code=500, detail=f"操作失败: {str(e)}")
 
 
+# ==================== 打卡管理员代处理考勤异常 ====================
+
+class DakamanProcessRequest(BaseModel):
+    current_user: str
+    employee_name: str
+    department: str
+    attendance_date: str  # YYYY-MM-DD
+    process_type: str  # leave | business_trip
+    leave_type: str = "事假"  # qjfs: 换休/带薪年休假/事假/病假 etc.
+    reason: str = "打卡管理员代处理"
+
+
+@router.post("/dakaman-process")
+async def dakaman_process_exception(req: DakamanProcessRequest):
+    """
+    打卡管理员(dakaman)代替员工处理考勤异常。
+    根据 attendance_suggestions 中该员工当日 status=1 的建议时间段，
+    自动创建已审批通过的请假/公出记录。
+    """
+    current_user = (req.current_user or "").strip()
+    dakaman = _get_dakaman()
+    admin1 = _get_admin1()
+    is_allowed = (dakaman and current_user == dakaman) or (admin1 and current_user == admin1)
+    if not is_allowed:
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可执行此操作")
+
+    emp_name = (req.employee_name or "").strip()
+    dept = (req.department or "").strip()
+    att_date = (req.attendance_date or "").strip()
+    if not emp_name or not dept or not att_date:
+        raise HTTPException(status_code=400, detail="参数不完整")
+
+    try:
+        date_parts = att_date.split("-")
+        year = int(date_parts[0])
+        month = int(date_parts[1])
+    except (ValueError, IndexError):
+        raise HTTPException(status_code=400, detail="日期格式错误")
+
+    suggestions = attendance_db.get_suggestions(emp_name, dept, year, month)
+    day_suggestions = [
+        s for s in suggestions
+        if str(s.get("date", ""))[:10] == att_date and s.get("status") == 1
+    ]
+    if not day_suggestions:
+        raise HTTPException(status_code=404, detail="该员工当日无需处理的缺勤异常")
+
+    emp_info = _get_user_info(emp_name)
+    lsys = (emp_info.get("lsys") or dept) if emp_info else dept
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    created_ids = []
+
+    for s in day_suggestions:
+        start_time = s.get("start_time")
+        end_time = s.get("end_time")
+        if not start_time or not end_time:
+            continue
+        st_str = str(start_time)[:19].replace("T", " ")
+        et_str = str(end_time)[:19].replace("T", " ")
+        if len(st_str) == 10:
+            st_str += " 00:00:00"
+        if len(et_str) == 10:
+            et_str += " 23:59:59"
+
+        new_id = uuid.uuid4().hex
+
+        if req.process_type == "leave":
+            from utils.helpers import normalize_datetime_for_db
+            st_norm = normalize_datetime_for_db(st_str)
+            et_norm = normalize_datetime_for_db(et_str)
+
+            try:
+                st_dt = datetime.strptime(st_norm[:19], "%Y-%m-%d %H:%M:%S")
+                et_dt = datetime.strptime(et_norm[:19], "%Y-%m-%d %H:%M:%S")
+                diff_hours = (et_dt - st_dt).total_seconds() / 3600
+                dur_days = round(diff_hours / 8, 2) if diff_hours > 0 else 0.5
+            except Exception:
+                dur_days = 0.5
+            xiaoshi = str(round(dur_days * 8, 2))
+
+            sql = """
+                INSERT INTO qj (id, bz, xm, qjfs, bc, gx, jy, smcl, smclwj, timefrom, timeto, timefromdate,
+                    tian, xiaoshi, qjtime, qjzt, spr, `2j`, spr2, content, lsys, hxpxh, hxwc, hxps)
+                VALUES (%s, %s, %s, %s, '白班', '', %s, '打卡管理员代处理', '', %s, %s, %s,
+                    %s, %s, %s, 4, %s, 0, '', %s, %s, 0, 0, 0)
+            """
+            params = (
+                new_id, dept, emp_name, req.leave_type,
+                req.reason or "打卡管理员代处理",
+                st_norm, et_norm, st_norm[:10],
+                str(dur_days), xiaoshi, now,
+                current_user, req.reason or "打卡管理员代处理", lsys,
+            )
+            db.execute_insert(sql, params)
+            created_ids.append(new_id)
+
+        elif req.process_type == "business_trip":
+            sql = """
+                INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj,
+                    yjfhsj, yjcfsj, xmmc, tzdbh, bcgczrs, gcdd, qkje, gcrw,
+                    szr, bld, gcsj, sjfhtime, bldzt, szrzt, sqsj, lsysjm)
+                VALUES (%s, '境内公出', '', %s, '', %s, '', %s,
+                    %s, %s, '', '', '1', '', 0, %s,
+                    %s, %s, %s, %s, 2, 2, %s, %s)
+            """
+            params = (
+                new_id, emp_name, dept, now,
+                et_str, st_str,
+                req.reason or "打卡管理员代处理",
+                current_user, current_user, st_str, et_str, now, lsys,
+            )
+            db.execute_insert(sql, params)
+            created_ids.append(new_id)
+        else:
+            raise HTTPException(status_code=400, detail="process_type 必须为 leave 或 business_trip")
+
+    return {
+        "success": True,
+        "message": f"已处理 {len(created_ids)} 条异常记录",
+        "ids": created_ids,
+    }
 
 
