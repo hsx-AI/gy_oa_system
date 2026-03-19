@@ -48,7 +48,7 @@ async def login(request: LoginRequest):
             )
         
         # 先查是否存在该用户（在职），再校验密码，便于区分「无此用户」与「密码错误」
-        check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+        check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
         try:
             user_rows = db.execute_query(check_user_sql, (request.admin,))
         except Exception:
@@ -69,13 +69,37 @@ async def login(request: LoginRequest):
         # 密码正确，构建返回数据；denglu_zt 为空表示未看过首次登录介绍
         denglu_zt = user_data.get("denglu_zt")
         show_intro = denglu_zt is None or (isinstance(denglu_zt, str) and denglu_zt.strip() == "")
+
+        # 查询未读通知：gx_gt 存最后已读通知 ID，NULL/空/'0' 视为 0
+        gx_gt_raw = user_data.get("gx_gt")
+        try:
+            last_read_id = int(gx_gt_raw) if gx_gt_raw and str(gx_gt_raw).strip() not in ("", "0") else 0
+        except (ValueError, TypeError):
+            last_read_id = 0
+
+        unread_notifications = []
+        try:
+            unread_rows = db.execute_query(
+                "SELECT id, content, publish_time FROM notifications WHERE id > %s ORDER BY id ASC",
+                (last_read_id,),
+            )
+            for nr in (unread_rows or []):
+                unread_notifications.append({
+                    "id": nr["id"],
+                    "content": (nr.get("content") or "").strip(),
+                    "time": str(nr.get("publish_time") or ""),
+                })
+        except Exception:
+            pass
+
         user_info = {
             "name": (user_data.get("name") or "").strip(),
             "dept": (user_data.get("lsys") or "").strip(),
             "jb": (user_data.get("jb") or "").strip(),
             "gh": (user_data.get("gh") or "").strip(),
             "xbie": (user_data.get("xbie") or "").strip(),
-            "showIntro": show_intro
+            "showIntro": show_intro,
+            "unreadNotifications": unread_notifications,
         }
         return LoginResponse(
             success=True,
@@ -105,6 +129,97 @@ async def set_login_status(req: SetLoginStatusRequest):
         if "denglu_zt" in str(e).lower() or "unknown column" in str(e).lower():
             return {"success": True, "message": "已更新"}
         logger.error(f"设置登录状态失败: {str(e)}")
+        return {"success": False, "message": str(e)}
+
+
+# ==================== 更新消息推送（多条历史通知） ====================
+
+class PublishNotificationRequest(BaseModel):
+    current_user: str
+    content: str
+
+
+class DismissNotificationRequest(BaseModel):
+    name: str
+    max_id: int
+
+
+@router.post("/notification/publish")
+async def publish_notification(req: PublishNotificationRequest):
+    """管理员(admin1)发布更新通知：向 notifications 表插入一条新记录"""
+    from routers.db_manager import _get_admin1
+    from datetime import datetime
+    name = (req.current_user or "").strip()
+    admin1 = _get_admin1()
+    if not admin1 or name != admin1:
+        return {"success": False, "message": "仅系统管理员可发布通知"}
+    content = (req.content or "").strip()
+    if not content:
+        return {"success": False, "message": "通知内容不能为空"}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        db.execute_update(
+            "INSERT INTO notifications (content, publish_time, publisher) VALUES (%s, %s, %s)",
+            (content, now, name),
+        )
+        return {"success": True, "message": "通知已发布，未读此通知的员工下次登录将看到弹窗"}
+    except Exception as e:
+        logger.error(f"发布通知失败: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.post("/notification/dismiss")
+async def dismiss_notification(req: DismissNotificationRequest):
+    """用户关闭通知弹窗后，将 gx_gt 更新为已读的最大通知 ID"""
+    name = (req.name or "").strip()
+    if not name:
+        return {"success": False, "message": "姓名为空"}
+    try:
+        db.execute_update(
+            "UPDATE yggl SET gx_gt = %s WHERE name = %s AND COALESCE(zaizhi,0) = 0",
+            (str(req.max_id), name),
+        )
+        return {"success": True}
+    except Exception as e:
+        logger.error(f"标记通知已读失败: {e}")
+        return {"success": False, "message": str(e)}
+
+
+@router.get("/notification/list")
+async def list_notifications():
+    """获取所有历史通知（供管理页面展示），按时间倒序"""
+    try:
+        rows = db.execute_query(
+            "SELECT id, content, publish_time, publisher FROM notifications ORDER BY id DESC"
+        )
+        items = []
+        for r in (rows or []):
+            items.append({
+                "id": r["id"],
+                "content": (r.get("content") or "").strip(),
+                "time": str(r.get("publish_time") or ""),
+                "publisher": (r.get("publisher") or "").strip(),
+            })
+        return {"success": True, "items": items}
+    except Exception as e:
+        return {"success": True, "items": []}
+
+
+@router.post("/notification/delete")
+async def delete_notification(req: dict):
+    """管理员删除一条通知"""
+    from routers.db_manager import _get_admin1
+    name = (req.get("current_user") or "").strip()
+    admin1 = _get_admin1()
+    if not admin1 or name != admin1:
+        return {"success": False, "message": "仅系统管理员可操作"}
+    nid = req.get("id")
+    if not nid:
+        return {"success": False, "message": "缺少通知ID"}
+    try:
+        db.execute_update("DELETE FROM notifications WHERE id = %s", (nid,))
+        return {"success": True, "message": "已删除"}
+    except Exception as e:
         return {"success": False, "message": str(e)}
 
 

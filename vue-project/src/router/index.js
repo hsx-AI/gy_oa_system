@@ -157,6 +157,12 @@ const routes = [
     meta: { title: '邮件发送' }
   },
   {
+    path: '/admin/notification',
+    name: 'NotificationManage',
+    component: () => import('../views/admin/NotificationManage.vue'),
+    meta: { title: '消息推送管理' }
+  },
+  {
     path: '/admin/hxp-manage',
     name: 'HxpManage',
     component: () => import('../views/admin/HxpManage.vue'),
@@ -342,7 +348,7 @@ router.beforeEach(async (to, _from, next) => {
     } catch { next('/') }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

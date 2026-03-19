@@ -166,6 +166,13 @@
             </svg>
             <span>邮件发送</span>
           </router-link>
+          <router-link v-if="canAccessDbManager" to="/admin/notification" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+              <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+            </svg>
+            <span>消息推送</span>
+          </router-link>
         </nav>
       </aside>
 
@@ -267,6 +274,26 @@
         </div>
       </div>
     </div>
+
+    <!-- 更新通知弹窗（支持多条未读） -->
+    <div v-if="showNotificationModal" class="notification-modal-overlay" @click.self="closeNotificationModal">
+      <div class="notification-modal">
+        <div class="notification-modal-header">
+          <h2 class="notification-modal-title">系统更新通知</h2>
+          <span v-if="unreadNotifications.length > 1" class="notification-count">{{ unreadNotifications.length }} 条未读</span>
+          <button type="button" class="notification-modal-close" aria-label="关闭" @click="closeNotificationModal">×</button>
+        </div>
+        <div class="notification-modal-body">
+          <div v-for="(n, idx) in unreadNotifications" :key="n.id" class="notification-item" :class="{ 'notification-item-border': idx > 0 }">
+            <div class="notification-item-time">{{ n.time }}</div>
+            <div class="notification-item-content" v-html="escapeHtml(n.content)"></div>
+          </div>
+        </div>
+        <div class="notification-modal-footer">
+          <button type="button" class="btn btn-primary" @click="closeNotificationModal">全部已读</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -276,6 +303,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { getUploadConfig, setLoginStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
+import { dismissNotification } from '@/api/admin'
 
 const route = useRoute()
 const router = useRouter()
@@ -446,6 +474,59 @@ async function closeIntroModal() {
   } catch (e) {
     console.warn('更新本地用户信息失败:', e)
   }
+}
+
+// 更新通知弹窗（多条未读）
+const showNotificationModal = ref(false)
+const unreadNotifications = ref([])
+
+function escapeHtml(text) {
+  if (!text) return ''
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>')
+}
+
+watch(
+  () => [route.path, currentUser.value?.unreadNotifications, showIntroModal.value],
+  () => {
+    if (route.path === '/login') {
+      showNotificationModal.value = false
+      return
+    }
+    if (showIntroModal.value) return
+    const list = currentUser.value?.unreadNotifications
+    if (Array.isArray(list) && list.length > 0) {
+      unreadNotifications.value = list
+      showNotificationModal.value = true
+    }
+  },
+  { immediate: true }
+)
+
+async function closeNotificationModal() {
+  showNotificationModal.value = false
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const maxId = unreadNotifications.value.length
+    ? Math.max(...unreadNotifications.value.map(n => n.id))
+    : 0
+  if (name && maxId > 0) {
+    try {
+      await dismissNotification({ name, max_id: maxId })
+    } catch (e) {
+      console.warn('标记通知已读失败:', e)
+    }
+  }
+  try {
+    const raw = localStorage.getItem('userInfo')
+    if (raw) {
+      const u = JSON.parse(raw)
+      u.unreadNotifications = []
+      localStorage.setItem('userInfo', JSON.stringify(u))
+      currentUser.value = u
+    }
+  } catch (e) {
+    console.warn('更新本地用户信息失败:', e)
+  }
+  unreadNotifications.value = []
 }
 
 // 加载打卡/人事/系统管理员配置（dakaman、admin2、admin1）
@@ -992,6 +1073,93 @@ a.user-menu__item {
 .intro-modal-footer .btn {
   width: 100%;
   padding: 10px 20px;
+}
+
+/* 更新通知弹窗 */
+.notification-modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10010;
+  background: rgba(0, 0, 0, .55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  animation: modalFadeIn .2s ease;
+}
+.notification-modal {
+  background: var(--color-bg-card, #fff);
+  border-radius: 16px;
+  width: 92%;
+  max-width: 500px;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 12px 48px rgba(0, 0, 0, .25);
+  overflow: hidden;
+  animation: modalSlideUp .25s ease;
+}
+.notification-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 18px 24px;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #fff;
+}
+.notification-modal-title {
+  font-size: 18px;
+  font-weight: 700;
+  margin: 0;
+}
+.notification-modal-close {
+  background: none;
+  border: none;
+  color: rgba(255,255,255,.8);
+  font-size: 24px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.notification-modal-close:hover {
+  color: #fff;
+}
+.notification-count {
+  font-size: 13px;
+  font-weight: 500;
+  opacity: .85;
+  margin-left: 8px;
+}
+.notification-modal-body {
+  padding: 20px 24px;
+  font-size: 14px;
+  line-height: 1.9;
+  color: var(--color-text-primary, #2d3748);
+  overflow-y: auto;
+  flex: 1;
+  max-height: 55vh;
+}
+.notification-item-border {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--color-border, #e2e8f0);
+}
+.notification-item-time {
+  font-size: 12px;
+  color: var(--color-text-tertiary, #a0aec0);
+  margin-bottom: 6px;
+}
+.notification-item-content {
+  line-height: 1.8;
+}
+.notification-modal-footer {
+  padding: 14px 24px 20px;
+  border-top: 1px solid var(--color-border-lighter, #edf2f7);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+}
+.notification-modal-footer .btn {
+  padding: 8px 28px;
 }
 
 /* 原考勤系统入口条（主页面临时显眼条） */

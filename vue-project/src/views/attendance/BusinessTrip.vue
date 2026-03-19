@@ -324,6 +324,8 @@
             </div>
           </div>
 
+          <p class="return-warning">请严格按照实际返回时间进行登记，系统会定期排查，并把不遵守公出纪律的情况上报主管领导。</p>
+
           <div class="form-actions">
             <button type="button" @click="showReturnModal = false">取消</button>
             <button type="submit" class="btn-primary">提交</button>
@@ -1119,6 +1121,18 @@ watch(showApplyModal, (visible) => {
   font-size: var(--font-size-xs);
   color: var(--color-text-tertiary);
   margin-top: 4px;
+}
+
+.return-warning {
+  color: #e53e3e;
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-bold);
+  margin: 12px 0 4px;
+  padding: 10px 14px;
+  background: #fff5f5;
+  border: 1px solid #feb2b2;
+  border-radius: var(--radius-base);
+  line-height: 1.6;
 }
 
 .text-danger {
