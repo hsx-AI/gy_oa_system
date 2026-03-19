@@ -257,8 +257,9 @@
     />
 
     <!-- 公出申请弹窗（本页填写，无需跳转，与公出管理页保持一致） -->
-    <div v-if="businessTripModalVisible" class="modal-overlay" @click.self="businessTripModalVisible = false">
+    <div v-if="businessTripModalVisible" class="modal-overlay">
       <div class="modal-content">
+        <button type="button" class="modal-close-btn" @click="businessTripModalVisible = false">&times;</button>
         <h2>公出登记</h2>
         <form @submit.prevent="handleBusinessTripSubmit" class="application-form" autocomplete="on">
           <!-- 公出类型：市内 / 境内 / 境外 -->
@@ -378,12 +379,16 @@
                 <option v-for="person in btDeptLeaders" :key="person" :value="person">{{ person }}</option>
               </select>
             </div>
-            <div class="form-group half">
+            <div class="form-group half" v-if="!isBuban">
               <label>室主任</label>
               <select v-model="btForm.responsiblePerson" name="roomDirector" autocomplete="on" :disabled="btLoadingApprovers">
                 <option value="">请选择室主任</option>
                 <option v-for="person in btRoomDirectors" :key="person" :value="person">{{ person }}</option>
               </select>
+            </div>
+            <div class="form-group half" v-else>
+              <label>室主任</label>
+              <input type="text" value="部办无需室主任审批" disabled>
             </div>
           </div>
 
@@ -448,6 +453,11 @@ const btForm = reactive({
 const btDeptLeaders = ref([])
 const btRoomDirectors = ref([])
 const btLoadingApprovers = ref(false)
+const isBuban = computed(() => {
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const dept = (userInfo.dept || userInfo.department || '').trim()
+  return dept === '部办'
+})
 const btManagementDocUrl = '/doc/gybg-047'
 
 const toTimeValue = (t) => {
@@ -535,8 +545,25 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   btForm.workNo = ''
   btForm.projectName = ''
   btForm.location = '市内'
-  btForm.startTime = date
-  btForm.endTime = date
+
+  // 从建议中提取时间段，填充 datetime-local 格式
+  const timeMatch = (suggestion?.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
+  if (date && timeMatch) {
+    const pad = (t) => {
+      const p = t.split(':')
+      const hh = String(parseInt(p[0] || 0, 10)).padStart(2, '0')
+      const mm = String(parseInt(p[1] || 0, 10)).padStart(2, '0')
+      return `${hh}:${mm}`
+    }
+    btForm.startTime = `${date}T${pad(timeMatch[1])}`
+    btForm.endTime = `${date}T${pad(timeMatch[2])}`
+  } else if (date) {
+    btForm.startTime = `${date}T08:00`
+    btForm.endTime = `${date}T17:00`
+  } else {
+    btForm.startTime = ''
+    btForm.endTime = ''
+  }
   btForm.amount = 0
   btForm.phone = ''
   btForm.task = ''
@@ -574,15 +601,15 @@ const handleBusinessTripSubmit = async () => {
   if (!(btForm.startTime || '').trim()) tips.push('出发时间')
   if (!(btForm.endTime || '').trim()) tips.push('预计返回时间')
   if (!(btForm.deptLeader || '').trim()) tips.push('部领导')
-  if (!(btForm.responsiblePerson || '').trim()) tips.push('室主任')
+  if (!isBuban.value && !(btForm.responsiblePerson || '').trim()) tips.push('室主任')
   if (!btForm.confirmed) tips.push('勾选并确认已阅读管理办法')
   if (tips.length) {
     alert('请完善后再提交：\n\n' + tips.map(t => '· ' + t).join('\n'))
     return
   }
 
-  const startTime = `${btForm.startTime}T08:00:00`
-  const endTime = `${btForm.endTime}T17:00:00`
+  const startTime = btForm.startTime.includes('T') ? btForm.startTime : `${btForm.startTime}T08:00`
+  const endTime = btForm.endTime.includes('T') ? btForm.endTime : `${btForm.endTime}T17:00`
 
   try {
     const payload = {
@@ -926,6 +953,7 @@ watch(selectedMonth, () => {
 }
 
 .modal-content {
+  position: relative;
   background: white;
   padding: var(--spacing-xl);
   border-radius: var(--radius-md);
@@ -996,6 +1024,37 @@ watch(selectedMonth, () => {
   display: flex;
   justify-content: flex-end;
   gap: var(--spacing-md);
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border-lighter);
+}
+.form-actions button {
+  padding: 8px 20px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-base);
+  cursor: pointer;
+  background: white;
+  font-size: var(--font-size-sm);
+}
+.form-actions .btn-primary {
+  background: var(--color-primary);
+  border-color: var(--color-primary);
+  color: white;
+}
+.modal-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 16px;
+  background: none;
+  border: none;
+  font-size: 24px;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  line-height: 1;
+  padding: 4px;
+  z-index: 1;
+}
+.modal-close-btn:hover {
+  color: var(--color-text-primary);
 }
 
 .suggestions-header {

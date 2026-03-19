@@ -60,8 +60,7 @@ def _file_path_by_code(ftype: str, code: str) -> str:
         raise HTTPException(status_code=400, detail="无效类型")
     if not code or not str(code).strip():
         raise HTTPException(status_code=400, detail="无效编号代码")
-    # 仅保留安全字符：字母数字、横线、下划线、方括号
-    safe = "".join(c for c in str(code).strip() if c.isalnum() or c in "-_[]")
+    safe = "".join(c for c in str(code).strip() if c.isalnum() or c in "-_[]﹝﹞（）【】")
     if not safe:
         raise HTTPException(status_code=400, detail="无效编号代码")
     return os.path.join(FILE_DIRS[ftype], f"{safe}.pdf")
@@ -401,7 +400,7 @@ async def add_bianhaogl(req: BianhaoglRequest):
         sql = """INSERT INTO bianhaogl (xm,bz,fenlei,cpname,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,yj,content)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'0',%s)"""
         db.execute_update(sql, (req.xm, req.bz, req.fenlei, req.xmname or "", req.neirong, bhtime, bhyear, req.fenlei, next_num, bianhao3, (req.content or "").strip()))
-        code = f"{req.fenlei}{bhyear}{bianhao3}"
+        code = f"{req.fenlei}﹝{bhyear}﹞{bianhao3}"
         return {"success": True, "message": "编号成功", "bianhao": code}
     except HTTPException:
         raise
@@ -418,7 +417,7 @@ def _fmt_gl_gl(r):
         "gzh": r.get("gzh") or "", "cpname": r.get("cpname") or "", "neirong": r.get("neirong"),
         "content": _str(r.get("content")),
         "bhtime": _str(r.get("bhtime")), "bhyear": by, "bianhao1": b1, "bianhao2": r.get("bianhao2"), "bianhao3": b3,
-        "bianhao_code": f"{b1}{by}{b3}" if (b1 and b3) else "-"
+        "bianhao_code": f"{b1}﹝{by}﹞{b3}" if (b1 and b3) else "-"
     }
 
 

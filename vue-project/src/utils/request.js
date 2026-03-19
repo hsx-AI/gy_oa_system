@@ -3,7 +3,7 @@ import axios from 'axios'
 // 创建 axios 实例
 const request = axios.create({
   baseURL: '/api', // 通过 Vite 代理转发到后端
-  timeout: 10000,
+  timeout: 120000,
   withCredentials: true,  // 重要！允许跨域请求携带 Cookie
   headers: {
     'Content-Type': 'application/json'

@@ -283,14 +283,86 @@ class BatchApproveRequest(BaseModel):
 
 @router.post("/leave/batch")
 async def leave_batch_approve(req: BatchApproveRequest):
-    """请假批量审批"""
+    """请假批量审批（批量 SQL 优化）"""
+    ids = [str(i).strip() for i in req.ids if str(i).strip()]
+    if not ids:
+        return {"success": True, "passed": 0, "failed": 0, "message": "无有效ID"}
+
+    if req.action == "reject":
+        ok, fail = 0, 0
+        for iid in ids:
+            try:
+                await leave_approve_action(iid, ApproveRequest(action="reject", reason=req.reason))
+                ok += 1
+            except Exception:
+                fail += 1
+        return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
+
+    ph = ",".join(["%s"] * len(ids))
+    rows = db.execute_query(
+        f"SELECT id, qjzt, `2j`, spr, spr2, xm, qjfs, hxpxh, tian FROM qj WHERE id IN ({ph})",
+        tuple(ids),
+    ) or []
+    row_map = {str(r["id"]): r for r in rows}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    ids_to_3 = []
+    ids_to_4_from_1 = []
+    ids_to_4_from_3 = []
+    final_rows = []
     ok, fail = 0, 0
-    for iid in req.ids:
-        try:
-            await leave_approve_action(iid, ApproveRequest(action=req.action, reason=req.reason))
-            ok += 1
-        except Exception:
+
+    for iid in ids:
+        r = row_map.get(iid)
+        if not r:
             fail += 1
+            continue
+        qjzt = r.get("qjzt")
+        need_2j = (r.get("2j") or 0) == 1
+        if qjzt == 1:
+            if need_2j:
+                ids_to_3.append(iid)
+            else:
+                ids_to_4_from_1.append(iid)
+                final_rows.append(r)
+            ok += 1
+        elif qjzt == 3:
+            ids_to_4_from_3.append(iid)
+            final_rows.append(r)
+            ok += 1
+        else:
+            fail += 1
+
+    if ids_to_3:
+        p = ",".join(["%s"] * len(ids_to_3))
+        db.execute_update(f"UPDATE qj SET qjzt = 3, sptime = %s WHERE id IN ({p})", (now,) + tuple(ids_to_3))
+    if ids_to_4_from_1:
+        p = ",".join(["%s"] * len(ids_to_4_from_1))
+        db.execute_update(f"UPDATE qj SET qjzt = 4, sptime = %s, sctime = %s WHERE id IN ({p})", (now, now) + tuple(ids_to_4_from_1))
+    if ids_to_4_from_3:
+        p = ",".join(["%s"] * len(ids_to_4_from_3))
+        db.execute_update(f"UPDATE qj SET qjzt = 4, sp2time = %s, sctime = %s WHERE id IN ({p})", (now, now) + tuple(ids_to_4_from_3))
+
+    for r in final_rows:
+        qjfs = (r.get("qjfs") or "").strip()
+        if qjfs in ("换休", "员工换休票"):
+            xm = (r.get("xm") or "").strip()
+            hxpxh_val = r.get("hxpxh")
+            try:
+                consume = float(hxpxh_val) if hxpxh_val is not None else 0
+            except (TypeError, ValueError):
+                tian = r.get("tian")
+                try:
+                    dur = float(tian) if tian is not None else 0
+                except (TypeError, ValueError):
+                    dur = 0
+                consume = round(round(dur * 4) / 2, 2)
+            if consume > 0 and xm:
+                try:
+                    _deduct_exchange_tickets(xm, consume)
+                except Exception as e:
+                    logger.warning(f"请假批量审批扣减换休票失败 xm={xm}: {e}")
+
     return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
 
 
@@ -515,17 +587,100 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
 
 @router.post("/overtime/batch")
 async def overtime_batch_approve(req: BatchApproveRequest):
-    """加班批量审批"""
+    """加班批量审批（批量 SQL 优化）"""
+    ids = [str(i).strip() for i in req.ids if str(i).strip()]
+    if not ids:
+        return {"success": True, "passed": 0, "failed": 0, "message": "无有效ID"}
+
+    if req.action == "reject":
+        ok, fail = 0, 0
+        for iid in ids:
+            try:
+                await overtime_approve_action(iid, ApproveRequest(action="reject", reason=req.reason, approver=req.approver))
+                ok += 1
+            except Exception:
+                fail += 1
+        return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
+
+    ph = ",".join(["%s"] * len(ids))
+    rows = db.execute_query(
+        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf FROM jiaban WHERE id IN ({ph})",
+        tuple(ids),
+    ) or []
+    row_map = {str(r["id"]): r for r in rows}
+
+    dakaman = _get_dakaman()
+    admin1 = _get_admin1()
+    cur_approver = (req.approver or "").strip()
+
+    ids_to_3 = []
+    ids_to_5_from_01 = []
+    ids_to_5_from_3 = []
+    ids_to_4 = []
+    final_rows = []
     ok, fail = 0, 0
-    for iid in req.ids:
-        try:
-            await overtime_approve_action(
-                iid,
-                ApproveRequest(action=req.action, reason=req.reason, approver=req.approver),
-            )
-            ok += 1
-        except Exception:
+
+    for iid in ids:
+        r = row_map.get(iid)
+        if not r:
             fail += 1
+            continue
+        jiabanzt = r.get("jiabanzt") or 0
+        has_spr2 = bool(r.get("spr2"))
+
+        if jiabanzt in (0, 1):
+            if has_spr2:
+                ids_to_3.append(iid)
+            else:
+                ids_to_5_from_01.append(iid)
+            ok += 1
+        elif jiabanzt == 3:
+            ids_to_5_from_3.append(iid)
+            ok += 1
+        elif jiabanzt == 5:
+            if not dakaman or cur_approver != dakaman or (admin1 and cur_approver == admin1):
+                fail += 1
+                continue
+            ids_to_4.append(iid)
+            final_rows.append(r)
+            ok += 1
+        else:
+            fail += 1
+
+    if ids_to_3:
+        p = ",".join(["%s"] * len(ids_to_3))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 3 WHERE id IN ({p})", tuple(ids_to_3))
+    if ids_to_5_from_01:
+        p = ",".join(["%s"] * len(ids_to_5_from_01))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 5 WHERE id IN ({p})", tuple(ids_to_5_from_01))
+    if ids_to_5_from_3:
+        p = ",".join(["%s"] * len(ids_to_5_from_3))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 5 WHERE id IN ({p})", tuple(ids_to_5_from_3))
+    if ids_to_4:
+        p = ",".join(["%s"] * len(ids_to_4))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 4 WHERE id IN ({p})", tuple(ids_to_4))
+
+    for r in final_rows:
+        hx = (r.get("hx") or r.get("HX") or "").strip()
+        need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
+        try:
+            hours = float(r.get("tian1") or r.get("jbf") or 0)
+        except (TypeError, ValueError):
+            hours = 0
+        xm = (r.get("xm") or "").strip()
+        rid = str(r["id"])
+
+        if need_exchange and hours > 0 and xm:
+            tickets = math.floor(hours) / 4
+            if tickets > 0:
+                try:
+                    _add_exchange_tickets(xm, tickets)
+                except Exception as e:
+                    logger.warning(f"加班批量审批添加换休票失败 xm={xm}: {e}")
+                db.execute_update("UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s", (tickets, rid))
+        else:
+            db.execute_update("UPDATE jiaban SET jbf = %s, hxp = 0 WHERE id = %s", (hours, rid))
+
     return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
 
 
@@ -950,12 +1105,60 @@ class BatchBusinessTripRequest(BaseModel):
 
 @router.post("/business-trip/batch")
 async def business_trip_batch_approve(req: BatchBusinessTripRequest):
-    """公出批量审批"""
+    """公出批量审批（批量 SQL 优化）"""
+    ids = [str(i).strip() for i in req.ids if str(i).strip()]
+    if not ids:
+        return {"success": True, "passed": 0, "failed": 0, "message": "无有效ID"}
+
+    if req.action == "reject":
+        ok, fail = 0, 0
+        for iid in ids:
+            try:
+                await business_trip_approve_action(iid, ApproveRequest(action="reject", reason=req.reason))
+                ok += 1
+            except Exception:
+                fail += 1
+        return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
+
+    ph = ",".join(["%s"] * len(ids))
+    rows = db.execute_query(
+        f"SELECT id, szrzt, bldzt FROM gcsqb WHERE id IN ({ph})",
+        tuple(ids),
+    ) or []
+    row_map = {str(r["id"]): r for r in rows}
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    ids_szr_approve = []
+    ids_bld_approve = []
     ok, fail = 0, 0
-    for iid in req.ids:
-        try:
-            await business_trip_approve_action(iid, ApproveRequest(action=req.action, reason=req.reason))
-            ok += 1
-        except Exception:
+
+    for iid in ids:
+        r = row_map.get(iid)
+        if not r:
             fail += 1
+            continue
+        szrzt = int(r.get("szrzt") or 0)
+        bldzt = int(r.get("bldzt") or 0)
+        if szrzt == 1 and bldzt == 1:
+            ids_szr_approve.append(iid)
+            ok += 1
+        elif szrzt == 2 and bldzt == 1:
+            ids_bld_approve.append(iid)
+            ok += 1
+        else:
+            fail += 1
+
+    if ids_szr_approve:
+        p = ",".join(["%s"] * len(ids_szr_approve))
+        db.execute_update(
+            f"UPDATE gcsqb SET szrzt = 2, szrpztime = %s WHERE id IN ({p})",
+            (now,) + tuple(ids_szr_approve),
+        )
+    if ids_bld_approve:
+        p = ",".join(["%s"] * len(ids_bld_approve))
+        db.execute_update(
+            f"UPDATE gcsqb SET bldzt = 2, bldpztime = %s WHERE id IN ({p})",
+            (now,) + tuple(ids_bld_approve),
+        )
+
     return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}

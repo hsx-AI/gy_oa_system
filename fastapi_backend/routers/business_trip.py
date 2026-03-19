@@ -46,13 +46,20 @@ class BusinessTripApplyRequest(BaseModel):
 
 
 def _to_dt(s: str) -> Optional[str]:
-    """datetime-local 转为 MySQL datetime"""
+    """datetime-local 转为 MySQL datetime，兼容各种前端格式"""
     if not s:
         return None
+    import re
     s = s.replace("T", " ").strip()
-    if len(s) <= 16:
-        s = s + ":00"
-    return s[:19]
+    m = re.match(r"(\d{4}-\d{2}-\d{2})\s+(\d{2}):(\d{2})(?::(\d{2}))?", s)
+    if m:
+        date_part = m.group(1)
+        hh, mm = m.group(2), m.group(3)
+        ss = m.group(4) or "00"
+        return f"{date_part} {hh}:{mm}:{ss}"
+    if len(s) == 10 and re.match(r"\d{4}-\d{2}-\d{2}", s):
+        return f"{s} 00:00:00"
+    return None
 
 
 def _next_id() -> str:
@@ -74,14 +81,32 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
         gzh = req.workNo or "无"
         xmmc = req.projectName or "无"
 
-        # gclx 公出类型；gcsj 不在登记时填写，留待返回登记时填入；bldzt/szrzt 登记时写入 1,1
+        # gclx 公出类型；gcsj 不在登记时填写，留待返回登记时填入
         gclx = (req.tripScope or "").strip() or "境内公出"
         if gclx not in ("市内公出", "境内公出", "境外公出"):
             gclx = "境内公出"
+
+        # 部办用户无室主任，szrzt 直接设为 2（已通过），仅需部领导审批
+        is_buban = False
+        dept_str = (req.department or "").strip()
+        if dept_str == "部办":
+            is_buban = True
+        else:
+            try:
+                emp = db.execute_query(
+                    "SELECT lsys FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+                    ((req.name or "").strip(),),
+                )
+                if emp and (emp[0].get("lsys") or "").strip() == "部办":
+                    is_buban = True
+            except Exception:
+                pass
+
+        szrzt_init = 2 if is_buban else 1
         sql = """
             INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj, yjfhsj, yjcfsj, xmmc,
                 tzdbh, bcgczrs, gcdd, qkje, gcrw, szr, bld, gcsj, sjfhtime, bldzt, szrzt)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, 1, 1)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NULL, NULL, 1, %s)
         """
         params = (
             rid,
@@ -102,6 +127,7 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
             req.task or "",
             req.responsiblePerson or "",
             req.deptLeader or "",
+            szrzt_init,
         )
         affected = db.execute_update(sql, params)
         if affected <= 0:

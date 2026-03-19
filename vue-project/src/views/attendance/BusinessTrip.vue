@@ -249,12 +249,16 @@
                 <option v-for="person in deptLeaders" :key="person" :value="person">{{ person }}</option>
               </select>
             </div>
-            <div class="form-group half">
+            <div class="form-group half" v-if="!isBuban">
               <label>室主任</label>
               <select v-model="form.responsiblePerson" name="roomDirector" autocomplete="on" :disabled="loadingApprovers">
                 <option value="">请选择室主任</option>
                 <option v-for="person in roomDirectors" :key="person" :value="person">{{ person }}</option>
               </select>
+            </div>
+            <div class="form-group half" v-else>
+              <label>室主任</label>
+              <input type="text" value="部办无需室主任审批" disabled>
             </div>
           </div>
 
@@ -350,6 +354,11 @@ const showReturnModal = ref(false)
 const deptLeaders = ref([])
 const roomDirectors = ref([])
 const loadingApprovers = ref(false)
+const isBuban = computed(() => {
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const dept = (userInfo.dept || userInfo.department || '').trim()
+  return dept === '部办'
+})
 
 const fetchApprovers = async () => {
   if (!form.name) return
@@ -664,7 +673,7 @@ const submitApplication = async () => {
   if (!(form.startTime || '').trim()) tips.push('出发时间')
   if (!(form.endTime || '').trim()) tips.push('预计返回时间')
   if (!(form.deptLeader || '').trim()) tips.push('部领导')
-  if (!(form.responsiblePerson || '').trim()) tips.push('室主任')
+  if (!isBuban.value && !(form.responsiblePerson || '').trim()) tips.push('室主任')
   if (!form.confirmed) tips.push('勾选并确认已阅读管理办法')
   if (tips.length) {
     alert('请完善后再提交：\n\n' + tips.map(t => '· ' + t).join('\n'))

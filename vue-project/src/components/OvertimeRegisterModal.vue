@@ -1,6 +1,7 @@
 <template>
-  <div v-if="visible" class="modal-overlay" @click.self="$emit('close')">
+  <div v-if="visible" class="modal-overlay">
     <div class="modal-content">
+      <button type="button" class="modal-close-btn" @click="$emit('close')">&times;</button>
       <h2>加班登记</h2>
       <p class="modal-hint">填报完成后可继续处理其他建议</p>
       <form @submit.prevent="handleSubmit" class="application-form" autocomplete="on">
@@ -366,7 +367,9 @@ async function handleSubmit() {
 
 <style scoped>
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: 700px; max-width: 95%; max-height: 90vh; overflow-y: auto; }
+.modal-content { position: relative; background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: 700px; max-width: 95%; max-height: 90vh; overflow-y: auto; }
+.modal-close-btn { position: absolute; top: 12px; right: 16px; background: none; border: none; font-size: 24px; color: var(--color-text-tertiary); cursor: pointer; line-height: 1; padding: 4px; z-index: 1; }
+.modal-close-btn:hover { color: var(--color-text-primary); }
 .modal-hint { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin: 0 0 var(--spacing-md); }
 .application-form { margin-top: var(--spacing-md); }
 .form-row { display: flex; gap: var(--spacing-lg); margin-bottom: var(--spacing-lg); }
