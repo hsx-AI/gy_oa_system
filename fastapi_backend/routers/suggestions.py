@@ -645,18 +645,9 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     if not pairs:
         return suggestions
 
-    segments: List[List[tuple]] = [[pairs[0]]]
-    for j in range(1, len(pairs)):
-        prev_end = time_to_decimal(segments[-1][-1][1])
-        curr_start = time_to_decimal(pairs[j][0])
-        if curr_start - prev_end > GAP_THRESHOLD_HOURS:
-            segments.append([pairs[j]])
-        else:
-            segments[-1].append(pairs[j])
-
-    for seg in segments:
+    for pair in pairs:
         seg_results = _generate_segment_suggestion(
-            seg, date_obj, NOON_START, NOON_END, OT_START_HOUR, RESTDAY_OVERTIME_MIN_HOURS
+            [pair], date_obj, NOON_START, NOON_END, OT_START_HOUR, RESTDAY_OVERTIME_MIN_HOURS
         )
         if seg_results:
             suggestions.extend(seg_results)

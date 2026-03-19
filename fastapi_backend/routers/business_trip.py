@@ -290,8 +290,8 @@ async def set_business_trip_return_time(item_id: str, body: ReturnTimeBody):
         if not sjfhtime:
             raise HTTPException(status_code=400, detail="实际返回时间不能为空")
 
-        sql = "UPDATE gcsqb SET gcsj = %s, sjfhtime = %s, fhdj_status = 1 WHERE id = %s"
-        n = db.execute_update(sql, (gcsj, sjfhtime, item_id))
+        sql = "UPDATE gcsqb SET gcsj = %s, sjfhtime = %s, yjcfsj = %s, yjfhsj = %s, fhdj_status = 1 WHERE id = %s"
+        n = db.execute_update(sql, (gcsj, sjfhtime, gcsj, sjfhtime, item_id))
         if n <= 0:
             raise HTTPException(status_code=404, detail="记录不存在")
         return {"success": True, "message": "公出返回登记已完成"}

@@ -216,11 +216,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>出发时间</label>
-              <input type="date" v-model="form.startTime" name="btStartTime" autocomplete="on">
+              <input type="datetime-local" v-model="form.startTime" name="btStartTime" autocomplete="on">
             </div>
             <div class="form-group half">
               <label>预计返回时间</label>
-              <input type="date" v-model="form.endTime" name="btEndTime" autocomplete="on">
+              <input type="datetime-local" v-model="form.endTime" name="btEndTime" autocomplete="on">
             </div>
           </div>
 
@@ -560,17 +560,15 @@ watch(
   () => [route.query.action, loadingList.value],
   () => {
     if (route.query.action !== 'apply' || loadingList.value) return
-    // 预填预计出发/返回日期（仅日期部分），若有传入
     const d = (route.query.date || '').slice(0, 10)
     if (d && /^\d{4}-\d{2}-\d{2}$/.test(d)) {
-      form.startTime = d
-      form.endTime = d
+      form.startTime = d + 'T08:00'
+      form.endTime = d + 'T17:00'
     }
-    // 若直接传 startTime/endTime（完整时间），也兼容，只取日期部分
-    const s = (route.query.startTime || '').slice(0, 10)
-    const e = (route.query.endTime || '').slice(0, 10)
-    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) form.startTime = s
-    if (/^\d{4}-\d{2}-\d{2}$/.test(e)) form.endTime = e
+    const s = (route.query.startTime || '').replace(' ', 'T').slice(0, 16)
+    const e = (route.query.endTime || '').replace(' ', 'T').slice(0, 16)
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(s)) form.startTime = s
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(e)) form.endTime = e
     showApplyModal.value = true
     router.replace({ path: '/attendance/business-trip' })
   },

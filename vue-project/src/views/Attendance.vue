@@ -345,11 +345,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>出发时间</label>
-              <input type="date" v-model="btForm.startTime" name="btStartTime" autocomplete="on">
+              <input type="datetime-local" v-model="btForm.startTime" name="btStartTime" autocomplete="on">
             </div>
             <div class="form-group half">
               <label>预计返回时间</label>
-              <input type="date" v-model="btForm.endTime" name="btEndTime" autocomplete="on">
+              <input type="datetime-local" v-model="btForm.endTime" name="btEndTime" autocomplete="on">
             </div>
           </div>
 
