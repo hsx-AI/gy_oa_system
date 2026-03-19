@@ -97,8 +97,9 @@ async def add_gzh(req: GzhAddRequest):
     try:
         year0 = req.jznf or datetime.now().year
         year1 = str(datetime.now().year)
-        sql = "INSERT INTO gzh (tjr, gzh, gzhname, year1, year0, ssks) VALUES (%s,%s,%s,%s,%s,%s)"
-        db.execute_update(sql, (req.tjr, req.gzh, req.xmm, year1, year0, req.ssks))
+        rid = uuid.uuid4().hex
+        sql = "INSERT INTO gzh (id, tjr, gzh, gzhname, year1, year0, ssks) VALUES (%s,%s,%s,%s,%s,%s,%s)"
+        db.execute_update(sql, (rid, req.tjr, req.gzh, req.xmm, year1, year0, req.ssks))
         return {"success": True, "message": "工作号录入成功"}
     except Exception as e:
         logger.error(f"添加工作号失败: {e}")
