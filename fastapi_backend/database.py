@@ -43,13 +43,16 @@ class _PooledConnection:
 
 class MySQLDatabase:
     """MySQL数据库连接类（带连接池）"""
-    
-    def __init__(self):
+
+    def __init__(self, database: Optional[str] = None):
+        """
+        :param database: 库名；不传则使用 settings.MYSQL_DB（主 OA 库）
+        """
         self.host = settings.MYSQL_HOST
         self.port = settings.MYSQL_PORT
         self.user = settings.MYSQL_USER
         self.password = settings.MYSQL_PASSWORD
-        self.db_name = settings.MYSQL_DB
+        self.db_name = database if database is not None else settings.MYSQL_DB
         self.charset = 'utf8mb4'
         self._pool: List[pymysql.Connection] = []
         self._lock = threading.Lock()
@@ -67,7 +70,7 @@ class MySQLDatabase:
                 cursorclass=pymysql.cursors.DictCursor,
             )
         except Exception as e:
-            logger.error(f"数据库连接失败: {str(e)}")
+            logger.error(f"数据库连接失败 [{self.db_name}]: {str(e)}")
             return None
 
     def _put_back(self, conn: pymysql.Connection):
@@ -227,5 +230,6 @@ class MySQLDatabase:
                 conn.close()
 
 
-# 创建全局数据库实例
+# 创建全局数据库实例（主库 + demo 库，同主机/端口/账号/密码）
 db = MySQLDatabase()
+db_demo = MySQLDatabase(settings.MYSQL_DB_DEMO)

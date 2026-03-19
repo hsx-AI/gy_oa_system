@@ -252,8 +252,9 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
             return []
 
         # ---------- 批量查询已通过/审核中记录 ----------
-        year_start = f"{year}-01-01"
-        year_end = f"{year + 1}-01-01"
+        # 用区间重叠：timefrom < month_end AND timeto >= month_start，匹配跨月记录
+        batch_month_start = f"{year}-{month:02d}-01"
+        batch_month_end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
 
         def _batch_by_name(rows, name_field="xm"):
             m = {}
@@ -270,34 +271,34 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
         try:
             ph = ",".join(["%s"] * len(names))
             jiaban_approved_map = _batch_by_name(db.execute_query(
-                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                tuple(names) + (year, month),
+                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt = 4 AND timefrom < %s AND timeto >= %s",
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
             qj_approved_map = _batch_by_name(db.execute_query(
-                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                tuple(names) + (year, month),
+                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt = 4 AND timefrom < %s AND timeto >= %s",
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
             gcsqb_approved_map = _batch_by_name(db.execute_query(
                 f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 f"WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
                 f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                 f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                tuple(names) + (year_end, year_start),
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
             jiaban_pending_map = _batch_by_name(db.execute_query(
-                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt IN (0,1,3,5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                tuple(names) + (year, month),
+                f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt IN (0,1,3,5) AND timefrom < %s AND timeto >= %s",
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
             qj_pending_map = _batch_by_name(db.execute_query(
-                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt IN (0,1,3) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                tuple(names) + (year, month),
+                f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt IN (0,1,3) AND timefrom < %s AND timeto >= %s",
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
             gcsqb_pending_map = _batch_by_name(db.execute_query(
                 f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 f"WHERE gcr IN ({ph}) AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
                 f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                 f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                tuple(names) + (year_end, year_start),
+                tuple(names) + (batch_month_end, batch_month_start),
             ))
         except Exception as e:
             logger.warning(f"批量查询已处理/审核中区间失败: {e}")
@@ -821,36 +822,39 @@ async def get_suggestions(
             rows = attendance_db.get_suggestions(name, dept, year, month)
             jiaban_rows, qj_rows, gcsqb_rows = [], [], []
             jiaban_pending, qj_pending, gcsqb_pending = [], [], []
+            # 用区间重叠查询，解决跨月请假/加班匹配不到的问题
+            month_start = f"{year}-{month:02d}-01"
+            month_end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
             try:
                 jiaban_rows = db.execute_query(
-                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
+                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt = 4 AND timefrom < %s AND timeto >= %s",
+                    (name, month_end, month_start),
                 )
                 qj_rows = db.execute_query(
-                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
+                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt = 4 AND timefrom < %s AND timeto >= %s",
+                    (name, month_end, month_start),
                 )
                 gcsqb_rows = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
                     "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                     "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
+                    (name, month_end, month_start),
                 )
                 jiaban_pending = db.execute_query(
-                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
+                    "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND timefrom < %s AND timeto >= %s",
+                    (name, month_end, month_start),
                 )
                 qj_pending = db.execute_query(
-                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                    (name, year, month),
+                    "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND timefrom < %s AND timeto >= %s",
+                    (name, month_end, month_start),
                 )
                 gcsqb_pending = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
                     "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                     "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                    (name, f"{year + 1}-01-01", f"{year}-01-01"),
+                    (name, month_end, month_start),
                 )
             except Exception as e:
                 logger.warning(f"查询已处理/审核中区间失败: {e}")
@@ -882,36 +886,38 @@ async def get_suggestions(
         suggestions_list = generate_suggestions_for_month(name, dept, now.year, now.month)
         jiaban_rows, qj_rows, gcsqb_rows = [], [], []
         jiaban_pending, qj_pending, gcsqb_pending = [], [], []
+        fb_month_start = f"{now.year}-{now.month:02d}-01"
+        fb_month_end = f"{now.year + 1}-01-01" if now.month == 12 else f"{now.year}-{now.month + 1:02d}-01"
         try:
             jiaban_rows = db.execute_query(
-                "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                (name, now.year, now.month),
+                "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt = 4 AND timefrom < %s AND timeto >= %s",
+                (name, fb_month_end, fb_month_start),
             )
             qj_rows = db.execute_query(
-                "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt = 4 AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                (name, now.year, now.month),
+                "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt = 4 AND timefrom < %s AND timeto >= %s",
+                (name, fb_month_end, fb_month_start),
             )
             gcsqb_rows = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
                 "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                 "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                (name, f"{now.year + 1}-01-01", f"{now.year}-01-01"),
+                (name, fb_month_end, fb_month_start),
             )
             jiaban_pending = db.execute_query(
-                "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                (name, now.year, now.month),
+                "SELECT timefrom, timeto FROM jiaban WHERE xm = %s AND jiabanzt IN (0, 1, 3, 5) AND timefrom < %s AND timeto >= %s",
+                (name, fb_month_end, fb_month_start),
             )
             qj_pending = db.execute_query(
-                "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND YEAR(timefrom) = %s AND MONTH(timefrom) = %s",
-                (name, now.year, now.month),
+                "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND timefrom < %s AND timeto >= %s",
+                (name, fb_month_end, fb_month_start),
             )
             gcsqb_pending = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
                 "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
                 "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-                (name, f"{now.year + 1}-01-01", f"{now.year}-01-01"),
+                (name, fb_month_end, fb_month_start),
             )
         except Exception as e:
             logger.warning(f"查询已处理/审核中区间失败: {e}")

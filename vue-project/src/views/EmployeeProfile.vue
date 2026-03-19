@@ -32,6 +32,13 @@
             <span class="profile-value">{{ profile.idNumber || '-' }}</span>
           </div>
           <div class="profile-row">
+            <span class="profile-label">手机号</span>
+            <span class="profile-value">
+              {{ profile.mobile || '-' }}
+              <span class="profile-value-sub">（与人事信息库同步，按身份证号匹配）</span>
+            </span>
+          </div>
+          <div class="profile-row">
             <span class="profile-label">入厂时间</span>
             <span class="profile-value">{{ profile.entryDate || '-' }}</span>
           </div>

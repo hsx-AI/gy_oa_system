@@ -344,6 +344,7 @@
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getApprovers, submitBusinessTripApply, getBusinessTripList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
+import { fetchProfileMobile } from '@/utils/employeeMobile'
 
 const router = useRouter()
 const route = useRoute()
@@ -758,8 +759,10 @@ const submitReturn = async () => {
   }
 }
 
-watch(showApplyModal, (visible) => {
-  if (visible && form.name) fetchApprovers()
+watch(showApplyModal, async (visible) => {
+  if (!visible || !form.name) return
+  fetchApprovers()
+  form.phone = await fetchProfileMobile(form.name)
 })
 
 </script>

@@ -6,7 +6,7 @@ import math
 import logging
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
-from database import db
+from database import db, db_demo
 
 logger = logging.getLogger(__name__)
 
@@ -327,6 +327,19 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
                 }
         except Exception as e:
             logger.debug(f"带薪休假计算失败: {e}")
+        # 手机号：demo 库 employee_info，以身份证号 id_card 与 yggl.sfzh 关联
+        mobile = ""
+        sfzh_clean = (r.get("sfzh") or "").strip().replace(" ", "")
+        if sfzh_clean:
+            try:
+                demo_rows = db_demo.execute_query(
+                    "SELECT mobile FROM employee_info WHERE id_card = %s LIMIT 1",
+                    (sfzh_clean,),
+                )
+                if demo_rows:
+                    mobile = str(demo_rows[0].get("mobile") or "").strip()
+            except Exception as e:
+                logger.debug("demo 库 employee_info 手机号查询失败: %s", e)
         return {
             "success": True,
             "data": {
@@ -335,6 +348,7 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
                 "department": (r.get("lsys") or "").strip(),
                 "level": (r.get("jb") or "").strip(),
                 "idNumber": (r.get("sfzh") or "").strip(),
+                "mobile": mobile,
                 "entryDate": entry_date,
                 "exchangeTickets": round(hxp_available, 2),
                 "exchangeTicketsTotal": round(total, 2),

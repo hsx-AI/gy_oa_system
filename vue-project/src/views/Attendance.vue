@@ -415,6 +415,7 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers } from '@/api/attendance'
+import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 
@@ -565,7 +566,7 @@ const handleBusinessTripReturnFill = async (suggestion) => {
     btForm.endTime = ''
   }
   btForm.amount = 0
-  btForm.phone = ''
+  btForm.phone = await fetchProfileMobile(name)
   btForm.task = ''
   btForm.deptLeader = ''
   btForm.responsiblePerson = ''

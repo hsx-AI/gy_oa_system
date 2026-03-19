@@ -13,7 +13,7 @@
                 </svg>
               </span>
               <span class="dashboard-card__title-text">待办事项</span>
-              <span class="dashboard-card__badge">{{ displayTodoList.length }}</span>
+              <span class="dashboard-card__badge">{{ totalBadgeCount }}</span>
             </h2>
             <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/attendance/pending-tasks')">查看全部</a>
           </header>
@@ -26,8 +26,8 @@
                 </div>
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
-                  <button type="button" class="todo-item__btn" @click="task.isSixianghuibao ? goSixianghuibao() : (task.isReturnReminder ? router.push('/attendance/business-trip') : goApprove(task))">
-                    {{ task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理') }}
+                  <button type="button" class="todo-item__btn" @click="task.isPersonnel ? goPersonnelArchive() : (task.isSixianghuibao ? goSixianghuibao() : (task.isReturnReminder ? router.push('/attendance/business-trip') : goApprove(task)))">
+                    {{ task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')) }}
                   </button>
                 </div>
               </li>
@@ -127,7 +127,7 @@ import {
   getUploadConfig,
 } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { getSSOLink, getSixianghuibaoTodos } from '@/api/sso'
+import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
 const router = useRouter()
 
 const dakaman = ref('')
@@ -394,7 +394,14 @@ function formatRelativeTime(dtStr) {
 // 思想汇报待办数量（由 OA 代理请求思想汇报 /api/integration/oa/todos）
 const sixianghuibaoTodoTotal = ref(0)
 
-// 展示的待办列表 = 审批待办 + 公出返回登记提醒 + 思想汇报待审核（若有）
+// 人事档案系统待办数量
+const personnelMyPending = ref(0)
+const personnelNeedAudit = ref(0)
+
+// 审批待办真实总数（不截断）
+const todoRealTotal = ref(0)
+
+// 展示的待办列表 = 审批待办(截断显示) + 公出返回登记提醒 + 思想汇报待审核 + 人事档案待办
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
   if (tripReturnPendingCount.value > 0) {
@@ -417,7 +424,37 @@ const displayTodoList = computed(() => {
       isSixianghuibao: true
     })
   }
+  if (personnelMyPending.value > 0) {
+    list.push({
+      uniqueId: 'personnel-my-pending',
+      type: '人事档案待审批',
+      description: `您有 ${personnelMyPending.value} 条人事档案待处理`,
+      applicant: '人事档案系统',
+      time: '',
+      isPersonnel: true
+    })
+  }
+  if (personnelNeedAudit.value > 0) {
+    list.push({
+      uniqueId: 'personnel-need-audit',
+      type: '人事档案需审核',
+      description: `您有 ${personnelNeedAudit.value} 条人事档案需您审核`,
+      applicant: '人事档案系统',
+      time: '',
+      isPersonnel: true
+    })
+  }
   return list
+})
+
+// badge 显示真实总数（审批项不截断）
+const totalBadgeCount = computed(() => {
+  let count = todoRealTotal.value
+  if (tripReturnPendingCount.value > 0) count += 1
+  if (sixianghuibaoTodoTotal.value > 0) count += 1
+  if (personnelMyPending.value > 0) count += 1
+  if (personnelNeedAudit.value > 0) count += 1
+  return count
 })
 
 function goApprove(task) {
@@ -506,9 +543,11 @@ async function fetchTodoList() {
       })
     })
     items.sort((a, b) => (b.applyTime || '').localeCompare(a.applyTime || ''))
+    todoRealTotal.value = items.length
     todoList.value = items.slice(0, 10)
   } catch (e) {
     todoList.value = []
+    todoRealTotal.value = 0
   } finally {
     todoLoading.value = false
   }
@@ -523,6 +562,29 @@ async function fetchSixianghuibaoTodos() {
     sixianghuibaoTodoTotal.value = Math.max(0, Number(res?.total) || 0)
   } catch (e) {
     sixianghuibaoTodoTotal.value = 0
+  }
+}
+
+/** 获取人事档案系统待办/需审核数量 */
+async function fetchPersonnelPending() {
+  const name = (userName.value || '').trim()
+  if (!name) return
+  try {
+    const res = await getPersonnelPendingCount({ name })
+    personnelMyPending.value = Math.max(0, Number(res?.myPendingCount) || 0)
+    personnelNeedAudit.value = Math.max(0, Number(res?.needAuditCount) || 0)
+  } catch (e) {
+    personnelMyPending.value = 0
+    personnelNeedAudit.value = 0
+  }
+}
+
+function goPersonnelArchive() {
+  const url = (personnelArchiveUrl.value || '').trim()
+  if (url) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+  } else {
+    alert('人事档案系统链接未配置，请联系管理员')
   }
 }
 
@@ -636,6 +698,7 @@ onMounted(() => {
   fetchTodoList()
   fetchTripReturnPending()
   fetchSixianghuibaoTodos()
+  fetchPersonnelPending()
   fetchRequestList()
   getUploadConfig().then(res => {
     if (res && res.success) {

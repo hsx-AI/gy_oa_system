@@ -318,7 +318,7 @@ const form = reactive({
   name: userInfo.name,
   type: '',  // 必选，默认为空，强制用户选择避免误填
   shift: '白班',
-  contactMethod: '电话',
+  contactMethod: '',
   startTime: '',
   endTime: '',
   duration: 0,
@@ -397,7 +397,7 @@ function onMaterialFileChange(e) {
 const resetForm = () => {
   form.type = '事假'
   form.shift = '白班'
-  form.contactMethod = '电话'
+  form.contactMethod = ''
   form.startTime = ''
   form.endTime = ''
   form.duration = 0
@@ -483,14 +483,18 @@ watch(showApplyModal, async (visible) => {
     try {
       const res = await getEmployeeProfile({ name: form.name })
       if (res.success && res.data) {
+        const m = res.data.mobile != null ? String(res.data.mobile).trim() : ''
+        form.contactMethod = m
         remainingTickets.value = Number(res.data.exchangeTickets) || 0
         paidLeaveRemaining.value = res.data.paidLeaveRemaining != null ? Number(res.data.paidLeaveRemaining) : null
         paidLeaveDetail.value = res.data.paidLeaveDetail || null
       } else {
+        form.contactMethod = ''
         paidLeaveRemaining.value = null
         paidLeaveDetail.value = null
       }
     } catch {
+      form.contactMethod = ''
       remainingTickets.value = 0
       paidLeaveRemaining.value = null
       paidLeaveDetail.value = null

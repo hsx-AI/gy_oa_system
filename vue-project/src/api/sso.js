@@ -26,3 +26,16 @@ export function getSixianghuibaoTodos(params) {
     params
   })
 }
+
+/**
+ * 获取人事档案系统待办数量（供 OA 首页待办提醒）
+ * @param {Object} params - { name: 当前用户姓名 }
+ * @returns {Promise<{ success, myPendingCount, needAuditCount }>}
+ */
+export function getPersonnelPendingCount(params) {
+  return request({
+    url: '/sso/personnel-pending',
+    method: 'get',
+    params
+  })
+}

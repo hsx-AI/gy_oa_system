@@ -71,6 +71,45 @@ async def get_sixianghuibao_todos(
     return {"username": name, "pending_reviews": 0, "returned_reports": 0, "total": 0}
 
 
+@router.get("/personnel-pending")
+async def get_personnel_pending_count(
+    name: str = Query(..., description="当前用户姓名，用于查询 yggl.sfzh"),
+):
+    """
+    代理请求人事档案系统的待办数量接口。
+    通过姓名查 yggl.sfzh，再调用 http://10.42.60.230:18080/file/api/message/pending-count?idCard=sfzh
+    """
+    result = {"myPendingCount": 0, "needAuditCount": 0}
+    name = (name or "").strip()
+    if not name:
+        return {"success": True, **result}
+    try:
+        rows = db.execute_query(
+            "SELECT sfzh FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (name,),
+        )
+        sfzh = (rows[0].get("sfzh") or "").strip() if rows else ""
+        if not sfzh:
+            return {"success": True, **result}
+    except Exception as e:
+        logger.warning("查询 sfzh 失败: %s", e)
+        return {"success": True, **result}
+
+    import httpx
+    url = "http://10.42.60.230:18080/file/api/message/pending-count"
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, params={"idCard": sfzh})
+            if resp.status_code == 200:
+                data = resp.json()
+                inner = data.get("data") or {}
+                result["myPendingCount"] = inner.get("myPendingCount", 0)
+                result["needAuditCount"] = inner.get("needAuditCount", 0)
+    except Exception as e:
+        logger.warning("请求人事档案系统待办数失败: %s", e)
+    return {"success": True, **result}
+
+
 @router.get("/link")
 async def get_sso_link(
     target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),

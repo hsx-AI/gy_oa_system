@@ -129,7 +129,7 @@ const form = reactive({
   name: userInfo.name || userInfo.userName || '',
   type: '换休',
   shift: '白班',
-  contactMethod: '电话',
+  contactMethod: '',
   startTime: '',
   endTime: '',
   duration: 0,
@@ -236,14 +236,18 @@ watch(() => props.visible, async (v) => {
       try {
         const res = await getEmployeeProfile({ name: form.name })
         if (res.success && res.data) {
+          const m = res.data.mobile != null ? String(res.data.mobile).trim() : ''
+          form.contactMethod = m
           remainingTickets.value = Number(res.data.exchangeTickets) || 0
           paidLeaveRemaining.value = res.data.paidLeaveRemaining != null ? Number(res.data.paidLeaveRemaining) : null
           paidLeaveDetail.value = res.data.paidLeaveDetail || null
         } else {
+          form.contactMethod = ''
           paidLeaveRemaining.value = null
           paidLeaveDetail.value = null
         }
       } catch {
+        form.contactMethod = ''
         remainingTickets.value = 0
         paidLeaveRemaining.value = null
         paidLeaveDetail.value = null
@@ -281,7 +285,7 @@ async function fetchApprovers() {
 
 function resetForm() {
   form.type = '换休'
-  form.contactMethod = '电话'
+  form.contactMethod = ''
   form.material = ''
   form.materialFile = null
   form.materialFileName = ''
