@@ -38,46 +38,6 @@ def _get_dakaman() -> Optional[str]:
     return None
 
 
-def _ensure_attendance_data_date_column():
-    """确保 webconfig 表有 attendance_data_date 列（DATE 类型）"""
-    try:
-        db.execute_query(
-            "SELECT attendance_data_date FROM webconfig LIMIT 1"
-        )
-    except Exception:
-        try:
-            db.execute_update(
-                "ALTER TABLE webconfig ADD COLUMN attendance_data_date DATE NULL COMMENT '考勤数据截止日期'"
-            )
-        except Exception:
-            pass
-
-
-def _save_attendance_data_date(date_str: str):
-    """将考勤数据截止日期写入 webconfig"""
-    _ensure_attendance_data_date_column()
-    db.execute_update(
-        "UPDATE webconfig SET attendance_data_date = %s WHERE id = 1",
-        (date_str,),
-    )
-
-
-def get_attendance_data_date() -> Optional[str]:
-    """读取 webconfig 中保存的考勤数据截止日期，供建议系统使用"""
-    _ensure_attendance_data_date_column()
-    try:
-        rows = db.execute_query(
-            "SELECT attendance_data_date FROM webconfig WHERE id = 1 LIMIT 1"
-        )
-        if rows:
-            raw = rows[0].get("attendance_data_date")
-            if raw:
-                if hasattr(raw, "strftime"):
-                    return raw.strftime("%Y-%m-%d")
-                return str(raw)[:10]
-    except Exception:
-        pass
-    return None
 
 
 def _can_see_attendance_exceptions(current_user: str) -> tuple:
@@ -217,23 +177,10 @@ async def get_upload_config():
     """
     dakaman = _get_dakaman()
     admin2 = ""
-    attendance_data_date = ""
     try:
         wc = db.execute_query("SELECT admin2 FROM webconfig WHERE id = 1 LIMIT 1")
         if wc and wc[0].get("admin2") is not None:
             admin2 = (wc[0]["admin2"] or "").strip() or ""
-    except Exception:
-        pass
-    try:
-        _ensure_attendance_data_date_column()
-        wc2 = db.execute_query("SELECT attendance_data_date FROM webconfig WHERE id = 1 LIMIT 1")
-        if wc2:
-            raw = wc2[0].get("attendance_data_date")
-            if raw:
-                if hasattr(raw, "strftime"):
-                    attendance_data_date = raw.strftime("%Y-%m-%d")
-                else:
-                    attendance_data_date = str(raw)[:10]
     except Exception:
         pass
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -246,12 +193,12 @@ async def get_upload_config():
         "admin1": admin1 or "",
         "fetchReportUrl": fetch_url,
         "personnelArchiveUrl": personnel_archive_url,
-        "attendanceDataDate": attendance_data_date,
     }
 
 
-def _generate_suggestions_bg(records: list):
+def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
     """后台任务：为上传涉及的每人每月生成智能建议，不阻塞上传响应。
+    cutoff_date_str: 'YYYY-MM-DD'，当月仅生成截止到此日期的建议。
     优化：按月份批量查询考勤记录（1条SQL/月），缓存假期数据，批量写入建议。"""
     import time as _time
     from collections import defaultdict
@@ -321,7 +268,8 @@ def _generate_suggestions_bg(records: list):
                 person_records = month_records.get((y, m), {}).get((name, dept), [])
                 holidays = holidays_cache[str(y)]
                 suggestions_list = generate_suggestions_for_month_with_records(
-                    name, dept, y, m, person_records, holidays)
+                    name, dept, y, m, person_records, holidays,
+                    cutoff_date_str=cutoff_date_str)
                 attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
             except Exception as e:
                 logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
@@ -399,13 +347,7 @@ async def upload_excel(
             detail="仅打卡管理员（webconfig.dakaman）或系统管理员（webconfig.admin1）可上传打卡数据"
         )
 
-    # 保存考勤数据截止日期到 webconfig
-    add = (attendance_data_date or "").strip()
-    if add:
-        try:
-            _save_attendance_data_date(add)
-        except Exception as e:
-            logger.warning("保存 attendance_data_date 失败: %s", e)
+    cutoff = (attendance_data_date or "").strip() or None
 
     # 验证文件类型
     if not file.filename.endswith(('.xls', '.xlsx')):
@@ -426,7 +368,7 @@ async def upload_excel(
             attendance_db.log_upload(file.filename, 0, "失败", message)
             return UploadResponse(success=False, message=message, records_count=0)
         attendance_db.log_upload(file.filename, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records))
+        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records), cutoff)
         return UploadResponse(success=True, message=message, records_count=records_count, success_count=success_count, fail_count=fail_count)
     
     except Exception as e:
@@ -459,12 +401,7 @@ async def fetch_and_upload(
     uploader_name = (uploader or "").strip()
     if not (admin1 and uploader_name == admin1) and not (dakaman and uploader_name == dakaman):
         raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可执行拉取上传")
-    add = (attendance_data_date or "").strip()
-    if add:
-        try:
-            _save_attendance_data_date(add)
-        except Exception as e:
-            logger.warning("保存 attendance_data_date 失败: %s", e)
+    cutoff = (attendance_data_date or "").strip() or None
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
     if not fetch_url:
         raise HTTPException(status_code=400, detail="未配置打卡报表拉取地址（ATTENDANCE_REPORT_FETCH_URL）")
@@ -500,7 +437,7 @@ async def fetch_and_upload(
             attendance_db.log_upload(filename, 0, "失败", message)
             return UploadResponse(success=False, message=message, records_count=0)
         attendance_db.log_upload(filename, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records))
+        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records), cutoff)
         return UploadResponse(success=True, message=message, records_count=records_count, success_count=success_count, fail_count=fail_count)
     except httpx.HTTPStatusError as e:
         attendance_db.log_upload("report", 0, "失败", str(e.response.status_code))
@@ -570,8 +507,9 @@ async def run_fetch_and_upload_report():
                     await asyncio.sleep(retry_delay_seconds)
                 continue
             attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
+            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records)))
+            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), yesterday))
             logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
             return
         except Exception as e:

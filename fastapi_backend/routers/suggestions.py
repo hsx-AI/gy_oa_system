@@ -19,22 +19,6 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suggestions", tags=["智能建议"])
 
-_attendance_data_date_cache: dict = {"value": None, "ts": 0}
-
-def _get_attendance_data_date_cached() -> Optional[str]:
-    """读取 webconfig 中的考勤数据截止日期（缓存 60 秒）"""
-    import time as _t
-    now = _t.time()
-    if now - _attendance_data_date_cache["ts"] < 60 and _attendance_data_date_cache["value"] is not None:
-        return _attendance_data_date_cache["value"]
-    try:
-        from routers.attendance import get_attendance_data_date
-        val = get_attendance_data_date()
-    except Exception:
-        val = None
-    _attendance_data_date_cache["value"] = val or ""
-    _attendance_data_date_cache["ts"] = now
-    return val or ""
 
 
 def _is_female_employee(name: str) -> bool:
@@ -694,8 +678,10 @@ def _parse_record_date(date_obj):
 
 def generate_suggestions_for_month_with_records(
         name: str, dept: str, year: int, month: int,
-        records: List[Dict], holidays: Dict[str, str]) -> List[Dict]:
-    """同 generate_suggestions_for_month，但直接接受已查好的 records 和 holidays，避免重复查库。"""
+        records: List[Dict], holidays: Dict[str, str],
+        cutoff_date_str: Optional[str] = None) -> List[Dict]:
+    """同 generate_suggestions_for_month，但直接接受已查好的 records 和 holidays，避免重复查库。
+    cutoff_date_str: 形如 'YYYY-MM-DD'，当月仅生成截止到此日期的建议；为 None 时用 today。"""
     start_date = f"{year}-{month:02d}-01"
     existing_dates = set()
     for record in records:
@@ -710,12 +696,11 @@ def generate_suggestions_for_month_with_records(
     today = datetime.now()
     if year == today.year and month == today.month:
         check_end_date = today
-        add_str = _get_attendance_data_date_cached()
-        if add_str:
+        if cutoff_date_str:
             try:
-                add_dt = datetime.strptime(add_str, "%Y-%m-%d")
-                if add_dt < check_end_date:
-                    check_end_date = add_dt
+                cutoff_dt = datetime.strptime(cutoff_date_str, "%Y-%m-%d")
+                if cutoff_dt < check_end_date:
+                    check_end_date = cutoff_dt
             except ValueError:
                 pass
     else:
@@ -738,6 +723,8 @@ def generate_suggestions_for_month_with_records(
         date_obj = _parse_record_date(record.get("attendance_date"))
         if not date_obj:
             continue
+        if date_obj > check_end_date:
+            continue
         is_work, is_weekend, is_hol, holiday_type = is_workday(date_obj, holidays)
         record_suggestions = analyze_workday(record, date_obj) if is_work else analyze_restday(record, date_obj)
         day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
@@ -756,10 +743,12 @@ def generate_suggestions_for_month_with_records(
 
 
 def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
-                                   holidays_cache: Dict[str, Dict] = None) -> List[Dict]:
+                                   holidays_cache: Dict[str, Dict] = None,
+                                   cutoff_date_str: Optional[str] = None) -> List[Dict]:
     """
     为指定人、指定年月生成智能建议（供上传后写入表或离线使用）。
     holidays_cache: 可选，{year_str: holidays_dict}，避免同年重复查库。
+    cutoff_date_str: 形如 'YYYY-MM-DD'，当月仅生成截止到此日期的建议；为 None 时用 today。
     返回 list of dict: { "date": "YYYY-MM-DD", "dayType": "工作日|周末|假期日", "suggestion": "..." }
     """
     start_date = f"{year}-{month:02d}-01"
@@ -790,12 +779,11 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
     today = datetime.now()
     if data_year == today.year and data_month == today.month:
         check_end_date = today
-        add_str = _get_attendance_data_date_cached()
-        if add_str:
+        if cutoff_date_str:
             try:
-                add_dt = datetime.strptime(add_str, "%Y-%m-%d")
-                if add_dt < check_end_date:
-                    check_end_date = add_dt
+                cutoff_dt = datetime.strptime(cutoff_date_str, "%Y-%m-%d")
+                if cutoff_dt < check_end_date:
+                    check_end_date = cutoff_dt
             except ValueError:
                 pass
     else:
@@ -818,6 +806,8 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
     for record in records:
         date_obj = _parse_record_date(record.get("attendance_date"))
         if not date_obj:
+            continue
+        if date_obj > check_end_date:
             continue
         is_work, is_weekend, is_holiday, holiday_type = is_workday(date_obj, holidays)
         record_suggestions = analyze_workday(record, date_obj) if is_work else analyze_restday(record, date_obj)
