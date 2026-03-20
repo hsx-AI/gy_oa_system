@@ -323,6 +323,47 @@ class OvertimeRegisterRequest(BaseModel):
     approver: str  # 审批人 spr
 
 
+def _recalc_overtime_hours_from_row(row: dict) -> float:
+    """从 timefrom/timeto 重新计算加班时长，避免依赖旧算法写入的 tian1/jbf。"""
+    tf = row.get("timefrom")
+    tt = row.get("timeto")
+    date_val = row.get("timedate")
+    if not tf or not tt:
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        if isinstance(tf, datetime):
+            tf_str = tf.strftime("%H:%M:%S")
+            date_str = tf.strftime("%Y-%m-%d")
+        else:
+            tf_str = str(tf).strip()
+            if " " in tf_str:
+                date_str, tf_str = tf_str.split(" ", 1)
+            else:
+                date_str = str(date_val or "")[:10]
+        if isinstance(tt, datetime):
+            tt_str = tt.strftime("%H:%M:%S")
+        else:
+            tt_str = str(tt).strip()
+            if " " in tt_str:
+                tt_str = tt_str.split(" ", 1)[1]
+        hours = _calc_hours(tf_str, tt_str, date_str)
+        return round_overtime_hours_down(hours)
+    except Exception:
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+
+
 def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
     """计算加班时长(小时)，扣除午休 12:00-13:00 实际重叠部分，原始值（未取整）。"""
     try:
@@ -343,7 +384,7 @@ def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
         if start_mins < lunch_end and end_mins > lunch_start:
             overlap = min(end_mins, lunch_end) - max(start_mins, lunch_start)
             total_mins = max(0, total_mins - overlap)
-        return total_mins / 60
+        return round(total_mins / 60, 4)
     except Exception:
         return 0.0
 
@@ -390,7 +431,7 @@ async def register_overtime(req: OvertimeRegisterRequest):
         except Exception:
             pass  # 非时间格式时跳过，由后续逻辑处理
         hours = _calc_hours(st, et, req.date)
-        hours = round_overtime_hours_down(hours)  # 时长最小单位 0.5 小时，向下取整后写入
+        hours = round_overtime_hours_down(hours)
 
         # 部门 bz 为空时从 yggl 按姓名补全，避免审批详情显示空
         bz = (req.department or "").strip()
@@ -524,12 +565,7 @@ async def get_overtime_list(
                 current_approver = dakaman
             else:
                 current_approver = ""
-            raw_t1 = row.get("tian1")
-            hours = raw_t1 if raw_t1 not in (None, "", 0, "0", 0.0) else (row.get("jbf") or 0)
-            try:
-                hours = float(hours)
-            except (TypeError, ValueError):
-                hours = 0
+            hours = _recalc_overtime_hours_from_row(row)
             # 从 timefrom/timeto 提取时间部分（可能为 datetime 或 str）
             tf = row.get("timefrom") or ""
             tt = row.get("timeto") or ""

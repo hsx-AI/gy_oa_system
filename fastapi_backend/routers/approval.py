@@ -16,12 +16,55 @@ import math
 import uuid
 from routers.approvers import _get_user_info, _jb_match
 from routers.db_manager import _get_admin1
+from routers.leave_overtime import _calc_hours, round_overtime_hours_down
 from utils.helpers import format_datetime_plain
 import logging
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/approval", tags=["审批"])
+
+
+def _recalc_overtime_hours(row: dict) -> float:
+    """从 timefrom/timeto 重新计算加班时长，避免依赖可能由旧算法写入的 tian1/jbf。"""
+    tf = row.get("timefrom")
+    tt = row.get("timeto")
+    date_val = row.get("timedate")
+    if not tf or not tt:
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        if isinstance(tf, datetime):
+            tf_str = tf.strftime("%H:%M:%S")
+            date_str = tf.strftime("%Y-%m-%d")
+        else:
+            tf_str = str(tf).strip()
+            if " " in tf_str:
+                date_str, tf_str = tf_str.split(" ", 1)
+            else:
+                date_str = str(date_val or "")[:10]
+        if isinstance(tt, datetime):
+            tt_str = tt.strftime("%H:%M:%S")
+        else:
+            tt_str = str(tt).strip()
+            if " " in tt_str:
+                tt_str = tt_str.split(" ", 1)[1]
+        hours = _calc_hours(tf_str, tt_str, date_str)
+        return round_overtime_hours_down(hours)
+    except Exception as e:
+        logger.debug("重算加班时长失败: %s", e)
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
 
 
 def _get_dakaman() -> Optional[str]:
@@ -426,15 +469,7 @@ async def get_pending_overtime(approver: str = Query(...)):
                 if tt and len(tt) == 5 and ":" in tt:
                     tt = tt + ":00"
                 tt = (tt or "")[:8] if tt else ""
-            raw_tian1 = r.get("tian1")
-            raw_jbf = r.get("jbf")
-            hours = raw_tian1 if raw_tian1 not in (None, "", 0, "0", 0.0) else raw_jbf
-            if hours is None:
-                hours = 0
-            try:
-                hours = float(hours)
-            except (TypeError, ValueError):
-                hours = 0
+            hours = _recalc_overtime_hours(r)
             hx_val = (r.get("hx") or "").strip()
             need_exchange_ticket = "是" if hx_val and str(hx_val) in ("是", "1", "true", "yes") else "否"
             items.append({
@@ -493,7 +528,7 @@ async def get_overtime_detail(item_id: str):
             "date": str(r.get("timedate") or "")[:10],
             "startTime": _fmt_dt(r.get("timefrom")),
             "endTime": _fmt_dt(r.get("timeto")),
-            "hours": float(r.get("tian1") or r.get("jbf") or 0),
+            "hours": _recalc_overtime_hours(r),
             "needExchangeTicket": need_exchange_ticket,
             "applyTime": _fmt_dt(r.get("jiabantime")),
             "content": r.get("content"),
@@ -560,14 +595,17 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
     else:
         raise HTTPException(status_code=400, detail="当前状态无法审批")
 
-    # 加班最终审批通过：hx=是 写 hxp 表并回写 jiaban.hxp、jiaban.jbf=0；hx=否 只写 jiaban.jbf（来自 tian1），jiaban.hxp=0
+    # 加班最终审批通过：重算时长 → hx=是 写 hxp 表；hx=否 写 jbf
     if final_approved:
         hx = (row.get("hx") or row.get("HX") or "").strip()
         need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
+        hours = _recalc_overtime_hours(row)
+        # 同步修正 tian1（以最新算法为准）
+        tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
         try:
-            hours = float(row.get("tian1") or row.get("jbf") or 0)
-        except (TypeError, ValueError):
-            hours = 0
+            db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, item_id))
+        except Exception:
+            pass
         xm = (row.get("xm") or "").strip()
 
         if need_exchange and hours > 0 and xm:
@@ -667,12 +705,14 @@ async def overtime_batch_approve(req: BatchApproveRequest):
     for r in final_rows:
         hx = (r.get("hx") or r.get("HX") or "").strip()
         need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
-        try:
-            hours = float(r.get("tian1") or r.get("jbf") or 0)
-        except (TypeError, ValueError):
-            hours = 0
+        hours = _recalc_overtime_hours(r)
         xm = (r.get("xm") or "").strip()
         rid = str(r["id"])
+        tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
+        try:
+            db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, rid))
+        except Exception:
+            pass
 
         if need_exchange and hours > 0 and xm:
             tickets = math.floor(hours) / 4

@@ -1,0 +1,29 @@
+import request from '@/utils/request'
+
+export function getDepartments() {
+  return request({ url: '/shift/departments', method: 'get' })
+}
+
+export function getShiftConfig(params) {
+  return request({ url: '/shift/config', method: 'get', params })
+}
+
+export function saveShiftConfig(data) {
+  return request({ url: '/shift/config', method: 'post', data })
+}
+
+export function getSchedule(params) {
+  return request({ url: '/shift/schedule', method: 'get', params })
+}
+
+export function saveSchedule(data) {
+  return request({ url: '/shift/schedule', method: 'post', data })
+}
+
+export function autoSchedule(data) {
+  return request({ url: '/shift/auto-schedule', method: 'post', data })
+}
+
+export function copyLastMonth(data) {
+  return request({ url: '/shift/copy-last-month', method: 'post', data })
+}
