@@ -19,6 +19,23 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suggestions", tags=["智能建议"])
 
+_attendance_data_date_cache: dict = {"value": None, "ts": 0}
+
+def _get_attendance_data_date_cached() -> Optional[str]:
+    """读取 webconfig 中的考勤数据截止日期（缓存 60 秒）"""
+    import time as _t
+    now = _t.time()
+    if now - _attendance_data_date_cache["ts"] < 60 and _attendance_data_date_cache["value"] is not None:
+        return _attendance_data_date_cache["value"]
+    try:
+        from routers.attendance import get_attendance_data_date
+        val = get_attendance_data_date()
+    except Exception:
+        val = None
+    _attendance_data_date_cache["value"] = val or ""
+    _attendance_data_date_cache["ts"] = now
+    return val or ""
+
 
 def _is_female_employee(name: str) -> bool:
     """
@@ -691,7 +708,18 @@ def generate_suggestions_for_month_with_records(
     else:
         last_day_of_month = datetime(year, month + 1, 1) - timedelta(days=1)
     today = datetime.now()
-    check_end_date = today if (year == today.year and month == today.month) else last_day_of_month
+    if year == today.year and month == today.month:
+        check_end_date = today
+        add_str = _get_attendance_data_date_cached()
+        if add_str:
+            try:
+                add_dt = datetime.strptime(add_str, "%Y-%m-%d")
+                if add_dt < check_end_date:
+                    check_end_date = add_dt
+            except ValueError:
+                pass
+    else:
+        check_end_date = last_day_of_month
     suggestions_list = []
     check_date = first_day_of_month
     while check_date <= check_end_date:
@@ -762,6 +790,14 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
     today = datetime.now()
     if data_year == today.year and data_month == today.month:
         check_end_date = today
+        add_str = _get_attendance_data_date_cached()
+        if add_str:
+            try:
+                add_dt = datetime.strptime(add_str, "%Y-%m-%d")
+                if add_dt < check_end_date:
+                    check_end_date = add_dt
+            except ValueError:
+                pass
     else:
         check_end_date = last_day_of_month
     suggestions_list = []

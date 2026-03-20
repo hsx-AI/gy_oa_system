@@ -426,7 +426,11 @@ async def get_pending_overtime(approver: str = Query(...)):
                 if tt and len(tt) == 5 and ":" in tt:
                     tt = tt + ":00"
                 tt = (tt or "")[:8] if tt else ""
-            hours = r.get("jbf") or r.get("tian1") or 0
+            raw_tian1 = r.get("tian1")
+            raw_jbf = r.get("jbf")
+            hours = raw_tian1 if raw_tian1 not in (None, "", 0, "0", 0.0) else raw_jbf
+            if hours is None:
+                hours = 0
             try:
                 hours = float(hours)
             except (TypeError, ValueError):
@@ -489,7 +493,7 @@ async def get_overtime_detail(item_id: str):
             "date": str(r.get("timedate") or "")[:10],
             "startTime": _fmt_dt(r.get("timefrom")),
             "endTime": _fmt_dt(r.get("timeto")),
-            "hours": r.get("jbf") or r.get("tian1"),
+            "hours": float(r.get("tian1") or r.get("jbf") or 0),
             "needExchangeTicket": need_exchange_ticket,
             "applyTime": _fmt_dt(r.get("jiabantime")),
             "content": r.get("content"),

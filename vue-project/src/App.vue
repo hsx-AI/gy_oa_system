@@ -53,6 +53,18 @@
             </svg>
             <span>加班费统计</span>
           </router-link>
+          <router-link to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="18" rx="2" />
+              <path d="M3 10h18" />
+              <path d="M8 2v4" />
+              <path d="M16 2v4" />
+              <path d="M7 14h2v2H7z" />
+              <path d="M11 14h2v2h-2z" />
+              <path d="M15 14h2v2h-2z" />
+            </svg>
+            <span>排班管理 <small style="color:#fbbf24;font-size:10px;">(正在开发)</small></span>
+          </router-link>
           <router-link v-if="canSeeLeaderDashboard" to="/leader-dashboard" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />

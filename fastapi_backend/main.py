@@ -8,7 +8,7 @@ from starlette.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule
 import logging
 import time
 
@@ -74,6 +74,7 @@ app.include_router(db_manager.router, prefix=settings.API_PREFIX)
 app.include_router(health_monitor.router, prefix=settings.API_PREFIX)  # 系统健康监控（仅 admin1）
 app.include_router(sso.router, prefix=settings.API_PREFIX)  # 系统管理员-数据库表增删改查
 app.include_router(email_sender.router, prefix=settings.API_PREFIX)  # 邮件发送（仅 admin1）
+app.include_router(shift_schedule.router, prefix=settings.API_PREFIX)  # 排班管理
 
 
 @app.on_event("startup")

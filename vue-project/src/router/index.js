@@ -163,6 +163,12 @@ const routes = [
     meta: { title: '消息推送管理' }
   },
   {
+    path: '/attendance/shift-schedule',
+    name: 'ShiftSchedule',
+    component: () => import('../views/attendance/ShiftSchedule.vue'),
+    meta: { title: '排班管理' }
+  },
+  {
     path: '/admin/hxp-manage',
     name: 'HxpManage',
     component: () => import('../views/admin/HxpManage.vue'),

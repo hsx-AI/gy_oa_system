@@ -98,6 +98,15 @@
           </div>
         </div>
 
+        <!-- 考勤数据截止日期选择 -->
+        <div class="data-date-row">
+          <label class="data-date-label">考勤数据截止日期</label>
+          <input type="date" v-model="attendanceDataDate" class="data-date-input">
+          <span class="data-date-hint">
+            智能建议仅生成到此日期，避免未上传日期被误判为全员缺勤
+          </span>
+        </div>
+
         <div v-if="selectedFile && uploadStatus === 'ready'" class="upload-actions">
           <button class="btn btn-primary" @click="handleUpload" :disabled="uploading">
             <svg class="icon-sm mr-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,6 +255,7 @@ const uploading = ref(false)
 const uploadStatus = ref('ready') // ready, uploading, success, error
 const uploadProgress = ref(0)
 const uploadError = ref('') // 存储上传错误信息
+const attendanceDataDate = ref(new Date().toISOString().slice(0, 10))
 
 const uploadHistory = ref([])
 
@@ -308,7 +318,8 @@ const handleUpload = async () => {
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const uploader = (userInfo.name || userInfo.userName || '').trim()
     const response = await uploadAttendanceExcel(selectedFile.value, uploader, {
-      onProgress(pct) { uploadProgress.value = Math.min(pct, 99) }
+      onProgress(pct) { uploadProgress.value = Math.min(pct, 99) },
+      attendanceDataDate: attendanceDataDate.value || '',
     })
     
     uploadProgress.value = 100
@@ -363,6 +374,7 @@ onMounted(async () => {
   try {
     const res = await getUploadConfig()
     if (res.success && res.fetchReportUrl) fetchReportUrl.value = (res.fetchReportUrl || '').trim()
+    if (res.attendanceDataDate) attendanceDataDate.value = res.attendanceDataDate
   } catch {
     fetchReportUrl.value = ''
   }
@@ -373,7 +385,7 @@ const handleFetchAndUpload = async () => {
   const uploader = (userInfo.name || userInfo.userName || '').trim()
   fetching.value = true
   try {
-    const response = await fetchAndUploadAttendance(uploader)
+    const response = await fetchAndUploadAttendance(uploader, attendanceDataDate.value || '')
     uploadHistory.value.unshift({
       id: Date.now(),
       filename: '最新报表(拉取)',
@@ -580,6 +592,33 @@ const formatFileSize = (bytes) => {
   font-family: var(--font-family-code);
   min-width: 40px;
   text-align: right;
+}
+
+.data-date-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: var(--spacing-md);
+  padding: 10px 14px;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: var(--radius-sm);
+  flex-wrap: wrap;
+}
+.data-date-label {
+  font-weight: 600;
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.data-date-input {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.data-date-hint {
+  font-size: 12px;
+  color: #92400e;
 }
 
 .upload-actions {

@@ -38,6 +38,48 @@ def _get_dakaman() -> Optional[str]:
     return None
 
 
+def _ensure_attendance_data_date_column():
+    """确保 webconfig 表有 attendance_data_date 列（DATE 类型）"""
+    try:
+        db.execute_query(
+            "SELECT attendance_data_date FROM webconfig LIMIT 1"
+        )
+    except Exception:
+        try:
+            db.execute_update(
+                "ALTER TABLE webconfig ADD COLUMN attendance_data_date DATE NULL COMMENT '考勤数据截止日期'"
+            )
+        except Exception:
+            pass
+
+
+def _save_attendance_data_date(date_str: str):
+    """将考勤数据截止日期写入 webconfig"""
+    _ensure_attendance_data_date_column()
+    db.execute_update(
+        "UPDATE webconfig SET attendance_data_date = %s WHERE id = 1",
+        (date_str,),
+    )
+
+
+def get_attendance_data_date() -> Optional[str]:
+    """读取 webconfig 中保存的考勤数据截止日期，供建议系统使用"""
+    _ensure_attendance_data_date_column()
+    try:
+        rows = db.execute_query(
+            "SELECT attendance_data_date FROM webconfig WHERE id = 1 LIMIT 1"
+        )
+        if rows:
+            raw = rows[0].get("attendance_data_date")
+            if raw:
+                if hasattr(raw, "strftime"):
+                    return raw.strftime("%Y-%m-%d")
+                return str(raw)[:10]
+    except Exception:
+        pass
+    return None
+
+
 def _can_see_attendance_exceptions(current_user: str) -> tuple:
     """
     判断当前用户是否有权查看考勤异常。
@@ -175,10 +217,23 @@ async def get_upload_config():
     """
     dakaman = _get_dakaman()
     admin2 = ""
+    attendance_data_date = ""
     try:
         wc = db.execute_query("SELECT admin2 FROM webconfig WHERE id = 1 LIMIT 1")
         if wc and wc[0].get("admin2") is not None:
             admin2 = (wc[0]["admin2"] or "").strip() or ""
+    except Exception:
+        pass
+    try:
+        _ensure_attendance_data_date_column()
+        wc2 = db.execute_query("SELECT attendance_data_date FROM webconfig WHERE id = 1 LIMIT 1")
+        if wc2:
+            raw = wc2[0].get("attendance_data_date")
+            if raw:
+                if hasattr(raw, "strftime"):
+                    attendance_data_date = raw.strftime("%Y-%m-%d")
+                else:
+                    attendance_data_date = str(raw)[:10]
     except Exception:
         pass
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -191,6 +246,7 @@ async def get_upload_config():
         "admin1": admin1 or "",
         "fetchReportUrl": fetch_url,
         "personnelArchiveUrl": personnel_archive_url,
+        "attendanceDataDate": attendance_data_date,
     }
 
 
@@ -320,6 +376,7 @@ async def upload_excel(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     uploader: Optional[str] = Form(None),
+    attendance_data_date: Optional[str] = Form(None),
 ):
     """
     上传并处理考勤Excel文件。仅 webconfig 表中 dakaman 对应用户可上传。
@@ -341,6 +398,14 @@ async def upload_excel(
             status_code=403,
             detail="仅打卡管理员（webconfig.dakaman）或系统管理员（webconfig.admin1）可上传打卡数据"
         )
+
+    # 保存考勤数据截止日期到 webconfig
+    add = (attendance_data_date or "").strip()
+    if add:
+        try:
+            _save_attendance_data_date(add)
+        except Exception as e:
+            logger.warning("保存 attendance_data_date 失败: %s", e)
 
     # 验证文件类型
     if not file.filename.endswith(('.xls', '.xlsx')):
@@ -383,6 +448,7 @@ async def upload_excel(
 async def fetch_and_upload(
     background_tasks: BackgroundTasks,
     uploader: Optional[str] = Form(None),
+    attendance_data_date: Optional[str] = Form(None),
 ):
     """
     从打卡服务器 GET 拉取最新报表并导入。仅 dakaman 可操作。
@@ -393,6 +459,12 @@ async def fetch_and_upload(
     uploader_name = (uploader or "").strip()
     if not (admin1 and uploader_name == admin1) and not (dakaman and uploader_name == dakaman):
         raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可执行拉取上传")
+    add = (attendance_data_date or "").strip()
+    if add:
+        try:
+            _save_attendance_data_date(add)
+        except Exception as e:
+            logger.warning("保存 attendance_data_date 失败: %s", e)
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
     if not fetch_url:
         raise HTTPException(status_code=400, detail="未配置打卡报表拉取地址（ATTENDANCE_REPORT_FETCH_URL）")

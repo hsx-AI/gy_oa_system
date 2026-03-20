@@ -442,9 +442,10 @@ export function getUploadConfig() {
  * 从打卡服务器拉取最新报表并上传（GET 服务约 30 秒返回，仅 dakaman 可操作，需配置 ATTENDANCE_REPORT_FETCH_URL）
  * @param {string} uploader - 当前登录用户姓名
  */
-export function fetchAndUploadAttendance(uploader = '') {
+export function fetchAndUploadAttendance(uploader = '', attendanceDataDate = '') {
   const formData = new FormData()
   if (uploader) formData.append('uploader', uploader)
+  if (attendanceDataDate) formData.append('attendance_data_date', attendanceDataDate)
   return request({
     url: '/attendance/fetch-and-upload',
     method: 'post',
@@ -458,10 +459,11 @@ export function fetchAndUploadAttendance(uploader = '') {
  * @param {File} file - Excel 文件对象
  * @param {string} uploader - 当前登录用户姓名，后端校验与 webconfig.dakaman 一致
  */
-export function uploadAttendanceExcel(file, uploader = '', { onProgress } = {}) {
+export function uploadAttendanceExcel(file, uploader = '', { onProgress, attendanceDataDate } = {}) {
   const formData = new FormData()
   formData.append('file', file)
   if (uploader) formData.append('uploader', uploader)
+  if (attendanceDataDate) formData.append('attendance_data_date', attendanceDataDate)
 
   return request({
     url: '/attendance/upload',

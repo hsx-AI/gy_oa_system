@@ -524,7 +524,8 @@ async def get_overtime_list(
                 current_approver = dakaman
             else:
                 current_approver = ""
-            hours = row.get("jbf") or row.get("tian1") or 0
+            raw_t1 = row.get("tian1")
+            hours = raw_t1 if raw_t1 not in (None, "", 0, "0", 0.0) else (row.get("jbf") or 0)
             try:
                 hours = float(hours)
             except (TypeError, ValueError):
