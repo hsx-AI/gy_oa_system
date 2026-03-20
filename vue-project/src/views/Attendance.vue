@@ -291,6 +291,7 @@
                 <option value="智能制造工艺部">智能制造工艺部</option>
                 <option value="新产业开发部">新产业发展部</option>
                 <option value="新能源事业部">新能源事业部</option>
+                <option value="生产部">生产部</option>
                 <option value="其他">其他</option>
               </select>
             </div>
