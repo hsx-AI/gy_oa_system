@@ -71,7 +71,7 @@
               </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。满勤名单按领导人看板满勤统计逻辑（根据打卡数据识别，无异常建议即满勤）。</p>
+          <p v-if="canView" class="filter-hint">下载加班费报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -256,18 +256,28 @@ async function downloadFullAttendanceExcel() {
       return
     }
     const wb = XLSX.utils.book_new()
-    const summaryHeader = ['科室', '满勤人数', '总人数', '满勤率']
-    const summaryRows = (res.byDept || []).map((d) => [
-      d.lsys || '',
-      d.fullCount ?? 0,
-      d.totalPeople ?? 0,
-      (d.rate != null ? (d.rate * 100).toFixed(1) + '%' : '')
-    ])
-    const summarySheet = XLSX.utils.aoa_to_sheet([summaryHeader, ...summaryRows])
-    XLSX.utils.book_append_sheet(wb, summarySheet, '满勤汇总')
+    const allDetails = []
+    for (const d of res.byDept || []) {
+      for (const p of d.fullDetails || []) {
+        const n = (p.name || '').trim()
+        if (n) allDetails.push(p)
+      }
+    }
+    allDetails.sort((a, b) => (a.name || '').localeCompare(b.name || '', 'zh-Hans-CN'))
+    const seen = new Set()
+    const uniqueDetails = allDetails.filter((p) => {
+      if (seen.has(p.name)) return false
+      seen.add(p.name)
+      return true
+    })
+    const firstHeader = ['序号', '姓名', '出勤天数', '公出天数']
+    const firstRows = uniqueDetails.map((p, i) => [i + 1, p.name, p.attendDays ?? '', p.businessDays ?? ''])
+    const firstSheet = XLSX.utils.aoa_to_sheet([firstHeader, ...firstRows])
+    XLSX.utils.book_append_sheet(wb, firstSheet, '全员满勤名单')
     for (const dept of res.byDept || []) {
-      const nameHeader = ['序号', '姓名']
-      const nameRows = (dept.fullNames || []).map((name, i) => [i + 1, name])
+      const details = dept.fullDetails || []
+      const nameHeader = ['序号', '姓名', '出勤天数', '公出天数']
+      const nameRows = details.map((p, i) => [i + 1, p.name, p.attendDays ?? '', p.businessDays ?? ''])
       const sheet = XLSX.utils.aoa_to_sheet([nameHeader, ...nameRows])
       const sheetName = (dept.lsys || '科室').slice(0, 31)
       XLSX.utils.book_append_sheet(wb, sheet, sheetName)

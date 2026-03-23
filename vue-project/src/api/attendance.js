@@ -142,8 +142,8 @@ export function getLeaveMaterialDownloadUrl(filename) {
 }
 
 /**
- * 获取本人请假记录列表
- * @param {Object} params - { name, year?, month? }
+ * 获取请假记录列表
+ * @param {Object} params - { name, year?, status?, scope?: 'self'|'lsys' }（lsys 仅主任/副主任）
  */
 export function getLeaveList(params) {
   return request({
@@ -154,8 +154,8 @@ export function getLeaveList(params) {
 }
 
 /**
- * 获取本人加班记录列表
- * @param {Object} params - { name, year?, month? }
+ * 获取加班记录列表
+ * @param {Object} params - { name, year?, month?, status?, scope?: 'self'|'lsys' }（lsys 仅主任/副主任）
  */
 export function getOvertimeList(params) {
   return request({
@@ -218,6 +218,15 @@ export function getBusinessTripList(params) {
 export function getBusinessTripAllRecords(params) {
   return request({
     url: '/business-trip/all-records',
+    method: 'get',
+    params
+  })
+}
+
+/** 全部请假记录（按权限：部长/副部长看全员，其余看本科室） */
+export function getLeaveAllRecords(params) {
+  return request({
+    url: '/leave/all-records',
     method: 'get',
     params
   })

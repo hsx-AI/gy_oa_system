@@ -23,6 +23,10 @@
           </div>
           <div class="record-card__filters">
             <label class="filter-label">筛选：</label>
+            <select v-if="overtimeListMeta.canViewLsys" v-model="recordScope" class="filter-select filter-select--scope">
+              <option value="self">仅本人</option>
+              <option value="lsys">本专业全员（{{ overtimeListMeta.lsysLabel || '隶属室' }}）</option>
+            </select>
             <input type="month" v-model="recordMonth" class="filter-input">
             <select v-model="recordStatus" class="filter-select">
               <option value="processing">审批中/已驳回</option>
@@ -36,11 +40,14 @@
             <table class="record-table">
               <thead>
                 <tr>
+                  <th v-if="recordScope === 'lsys'">姓名</th>
                   <th>类别</th>
                   <th>加班日期</th>
                   <th>开始时间</th>
                   <th>结束时间</th>
                   <th>时长(小时)</th>
+                  <th>换休</th>
+                  <th>加班内容</th>
                   <th>登记时间</th>
                   <th>审批状态</th>
                   <th>当前审批人</th>
@@ -50,17 +57,20 @@
               </thead>
               <tbody>
                 <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
+                  <td v-if="recordScope === 'lsys'">{{ r.applicant || '—' }}</td>
                   <td>{{ r.level }}</td>
                   <td>{{ r.date }}</td>
                   <td>{{ r.startTime }}</td>
                   <td>{{ r.endTime }}</td>
                   <td>{{ r.hours }}</td>
+                  <td><span class="status-tag" :class="r.hx === '是' ? 'status-hx-yes' : 'status-hx-no'">{{ r.hx || '否' }}</span></td>
+                  <td class="content-cell">{{ r.content || '—' }}</td>
                   <td>{{ r.applyTime }}</td>
                   <td><span class="status-tag" :class="r.statusClass">{{ r.status }}</span></td>
                   <td>{{ r.currentApprover || '-' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button v-if="r.status === '已驳回'" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedOvertime(r)">删除</button>
+                    <button v-if="r.status === '已驳回' && isMyOvertimeRecord(r)" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedOvertime(r)">删除</button>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -227,16 +237,30 @@ watch(recordPageSize, () => { recordPage.value = 1 })
 const _d2 = new Date()
 const recordMonth = ref(`${_d2.getFullYear()}-${String(_d2.getMonth() + 1).padStart(2, '0')}`)
 const recordStatus = ref('processing')
+const recordScope = ref('self')
+const overtimeListMeta = ref({ canViewLsys: false, lsysLabel: '' })
+
 const recordFilterLabel = computed(() => {
   const r = (recordMonth.value || '').trim()
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
+  const who = recordScope.value === 'lsys'
+    ? `本专业（${overtimeListMeta.value.lsysLabel || '隶属室'}）全员`
+    : '本人'
   if (r) {
     const [y, m] = r.split('-')
-    return `展示 ${y}年${parseInt(m, 10)}月，${statusText} 本人的加班记录`
+    return `展示 ${y}年${parseInt(m, 10)}月，${statusText} ${who}的加班记录`
   }
-  return `展示 ${new Date().getFullYear()}年全年，${statusText} 本人的加班记录`
+  return `展示 ${new Date().getFullYear()}年全年，${statusText} ${who}的加班记录`
 })
-watch([recordMonth, recordStatus], () => { fetchOvertimeList() })
+
+function isMyOvertimeRecord(r) {
+  const n = (form.name || '').trim()
+  const a = (r?.applicant || '').trim()
+  return !a || a === n
+}
+
+watch([recordMonth, recordStatus, recordScope], () => { fetchOvertimeList() })
+watch(recordScope, () => { recordPage.value = 1 })
 
 // 审批人列表（从API按规则获取）
 const approvers = ref([])
@@ -444,7 +468,12 @@ const fetchOvertimeList = async () => {
   loadingList.value = true
   try {
     const r = (recordMonth.value || '').trim()
-    const params = { name: form.name, year: new Date().getFullYear(), status: recordStatus.value }
+    const params = {
+      name: form.name,
+      year: new Date().getFullYear(),
+      status: recordStatus.value,
+      scope: recordScope.value === 'lsys' ? 'lsys' : 'self'
+    }
     if (r) {
       const [y, m] = r.split('-')
       if (y) params.year = parseInt(y, 10)
@@ -453,9 +482,24 @@ const fetchOvertimeList = async () => {
     const res = await getOvertimeList(params)
     if (res.success && res.data) {
       myRecordList.value = res.data
+      if (res.meta) {
+        overtimeListMeta.value = {
+          canViewLsys: !!res.meta.canViewLsys,
+          lsysLabel: (res.meta.lsysLabel || '').trim()
+        }
+      }
+      if (recordScope.value === 'lsys' && !overtimeListMeta.value.canViewLsys) {
+        recordScope.value = 'self'
+      }
     }
   } catch (err) {
     console.error('获取加班记录失败:', err)
+    const st = err?.response?.status
+    if (st === 403 && recordScope.value === 'lsys') {
+      recordScope.value = 'self'
+      await fetchOvertimeList()
+      return
+    }
     myRecordList.value = []
   } finally {
     loadingList.value = false
@@ -612,6 +656,9 @@ const submitRegister = async () => {
 .record-card__body .status-tag.status-processing { color: #d97706; background: #fef3c7; }
 .record-card__body .status-tag.status-rejected { color: #dc2626; background: #fee2e2; }
 .reject-reason-cell { max-width: 200px; word-break: break-word; color: var(--color-text-secondary); font-size: var(--font-size-xs); }
+.content-cell { max-width: 180px; word-break: break-word; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.status-hx-yes { color: #059669; background: #d1fae5; }
+.status-hx-no { color: var(--color-text-tertiary); background: var(--color-bg-spotlight, #f5f5f5); }
 .record-pagination { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: var(--spacing-lg); padding: var(--spacing-md) var(--spacing-xl); border-top: 1px solid var(--color-border-lighter); background: white; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .record-pagination__total { margin-right: auto; }
 .record-pagination__size { display: flex; align-items: center; gap: var(--spacing-xs); }

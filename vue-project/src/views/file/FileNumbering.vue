@@ -95,15 +95,26 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>编号单位</th>
-                    <th>编制人</th>
-                    <th>工作号</th>
-                    <th>项目名称</th>
-                    <th>编号类别</th>
-                    <th>编号内容</th>
-                    <th>编号时间</th>
-                    <th>编号代码</th>
+                    <th class="sortable-th" @click="toggleSort('tech','bz')">编号单位 <span class="sort-icon">{{ sortIcon('tech','bz') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','xm')">编制人 <span class="sort-icon">{{ sortIcon('tech','xm') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','gzh')">工作号 <span class="sort-icon">{{ sortIcon('tech','gzh') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','cpname')">项目名称 <span class="sort-icon">{{ sortIcon('tech','cpname') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','fenlei')">编号类别 <span class="sort-icon">{{ sortIcon('tech','fenlei') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','neirong')">编号内容 <span class="sort-icon">{{ sortIcon('tech','neirong') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('tech','bhtime') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('tech','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('tech','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th><input v-model="colFilters.tech.bz" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.xm" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.gzh" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.cpname" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.fenlei" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.neirong" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.bhtime" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.tech.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -142,15 +153,26 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>编号单位</th>
-                    <th>编制人</th>
-                    <th>工作号</th>
-                    <th>项目名称</th>
-                    <th>编号类别</th>
-                    <th>编号内容</th>
-                    <th>编号时间</th>
-                    <th>编号代码</th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','bz')">编号单位 <span class="sort-icon">{{ sortIcon('jsgl','bz') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','xm')">编制人 <span class="sort-icon">{{ sortIcon('jsgl','xm') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','gzh')">工作号 <span class="sort-icon">{{ sortIcon('jsgl','gzh') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','cpname')">项目名称 <span class="sort-icon">{{ sortIcon('jsgl','cpname') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','fenleihao')">编号类别 <span class="sort-icon">{{ sortIcon('jsgl','fenleihao') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','neirong')">编号内容 <span class="sort-icon">{{ sortIcon('jsgl','neirong') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('jsgl','bhtime') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('jsgl','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('jsgl','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th><input v-model="colFilters.jsgl.bz" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.xm" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.gzh" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.cpname" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.fenleihao" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.neirong" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.bhtime" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.jsgl.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -189,13 +211,22 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>编号单位</th>
-                    <th>编制人</th>
-                    <th>编号类别</th>
-                    <th>编号内容</th>
-                    <th>编号时间</th>
-                    <th>编号代码</th>
+                    <th class="sortable-th" @click="toggleSort('manage','bz')">编号单位 <span class="sort-icon">{{ sortIcon('manage','bz') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('manage','xm')">编制人 <span class="sort-icon">{{ sortIcon('manage','xm') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('manage','fenlei')">编号类别 <span class="sort-icon">{{ sortIcon('manage','fenlei') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('manage','neirong')">编号内容 <span class="sort-icon">{{ sortIcon('manage','neirong') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('manage','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('manage','bhtime') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('manage','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('manage','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th><input v-model="colFilters.manage.bz" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.manage.xm" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.manage.fenlei" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.manage.neirong" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.manage.bhtime" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.manage.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -232,14 +263,24 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>编号单位</th>
-                    <th>编制人</th>
-                    <th>年代</th>
-                    <th>工艺部室</th>
-                    <th>编号内容</th>
-                    <th>编号时间</th>
-                    <th>编号代码</th>
+                    <th class="sortable-th" @click="toggleSort('gygch','bz')">编号单位 <span class="sort-icon">{{ sortIcon('gygch','bz') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','xm')">编制人 <span class="sort-icon">{{ sortIcon('gygch','xm') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','bhyear')">年代 <span class="sort-icon">{{ sortIcon('gygch','bhyear') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','room_code')">工艺部室 <span class="sort-icon">{{ sortIcon('gygch','room_code') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','neirong')">编号内容 <span class="sort-icon">{{ sortIcon('gygch','neirong') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('gygch','bhtime') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('gygch','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('gygch','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th><input v-model="colFilters.gygch.bz" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.xm" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.bhyear" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.room_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.neirong" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.bhtime" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.gygch.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -277,14 +318,24 @@
               <table class="data-table">
                 <thead>
                   <tr>
-                    <th>编号单位</th>
-                    <th>编制人</th>
-                    <th>项目</th>
-                    <th>编号内容</th>
-                    <th>备注</th>
-                    <th>编号时间</th>
-                    <th>编号代码</th>
+                    <th class="sortable-th" @click="toggleSort('scszh','bz')">编号单位 <span class="sort-icon">{{ sortIcon('scszh','bz') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','xm')">编制人 <span class="sort-icon">{{ sortIcon('scszh','xm') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','fenlei')">项目 <span class="sort-icon">{{ sortIcon('scszh','fenlei') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','neirong')">编号内容 <span class="sort-icon">{{ sortIcon('scszh','neirong') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','content')">备注 <span class="sort-icon">{{ sortIcon('scszh','content') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('scszh','bhtime') }}</span></th>
+                    <th class="sortable-th" @click="toggleSort('scszh','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('scszh','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
+                  </tr>
+                  <tr class="filter-row">
+                    <th><input v-model="colFilters.scszh.bz" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.xm" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.fenlei" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.neirong" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.content" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.bhtime" placeholder="筛选" class="col-filter-input"></th>
+                    <th><input v-model="colFilters.scszh.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
+                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -473,7 +524,7 @@
 </template>
 
 <script setup>
-import { ref, watch, computed, onMounted } from 'vue'
+import { ref, reactive, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, getScszhFenlei, addBianhaoScszh, getBianhaoScszhList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
 import { getStatisticsPermission } from '@/api/attendance'
@@ -520,6 +571,86 @@ const form = ref({
   content: '',
   bhyear: null
 })
+
+// 默认按编号时间从新到旧，与接口排序一致；用户可点表头改排序
+const tabSort = reactive({
+  tech: { key: 'bhtime', order: 'desc' },
+  jsgl: { key: 'bhtime', order: 'desc' },
+  manage: { key: 'bhtime', order: 'desc' },
+  gygch: { key: 'bhtime', order: 'desc' },
+  scszh: { key: 'bhtime', order: 'desc' },
+})
+const colFilters = reactive({
+  tech: {},
+  jsgl: {},
+  manage: {},
+  gygch: {},
+  scszh: {},
+})
+
+function toggleSort(tab, key) {
+  const s = tabSort[tab]
+  if (s.key === key) {
+    s.order = s.order === 'asc' ? 'desc' : 'asc'
+  } else {
+    s.key = key
+    s.order = 'asc'
+  }
+}
+
+function sortIcon(tab, key) {
+  const s = tabSort[tab]
+  if (s.key !== key) return ''
+  return s.order === 'asc' ? '▲' : '▼'
+}
+
+function parseLooseDate(v) {
+  if (!v) return null
+  const s = String(v).trim()
+  const m = s.match(/^(\d{4})[/\-.](\d{1,2})[/\-.](\d{1,2})/)
+  if (!m) return null
+  return new Date(+m[1], +m[2] - 1, +m[3])
+}
+
+function applyColFiltersAndSort(list, tab) {
+  const filters = colFilters[tab]
+  let result = list
+  for (const [field, val] of Object.entries(filters)) {
+    const kw = (val || '').trim().toLowerCase()
+    if (!kw) continue
+    result = result.filter(r => {
+      const cell = String(r[field] ?? '').toLowerCase()
+      return cell.includes(kw)
+    })
+  }
+  const s = tabSort[tab]
+  if (s.key) {
+    result = [...result].sort((a, b) => {
+      const va = a[s.key] ?? ''
+      const vb = b[s.key] ?? ''
+      const da = parseLooseDate(va)
+      const db = parseLooseDate(vb)
+      let cmp
+      if (da && db) {
+        cmp = da - db
+      } else if (da) {
+        cmp = -1
+      } else if (db) {
+        cmp = 1
+      } else {
+        const na = parseFloat(va)
+        const nb = parseFloat(vb)
+        if (!isNaN(na) && !isNaN(nb)) {
+          cmp = na - nb
+        } else {
+          cmp = String(va).localeCompare(String(vb), 'zh-Hans-CN')
+        }
+      }
+      return s.order === 'asc' ? cmp : -cmp
+    })
+  }
+  return result
+}
 
 /** 统计权限 level：3=部长/副部长可看全部专业，1/2=仅本专业 */
 const permissionLevel = ref(1)
@@ -649,70 +780,85 @@ function onFenleiChange() {
 
 const filteredTechList = computed(() => {
   const kw = (searchKeyword.value || '').trim().toLowerCase()
-  if (!kw) return techList.value
-  return techList.value.filter(
-    (r) =>
-      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-      (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
-      (r.bz && r.bz.toLowerCase().includes(kw)) ||
-      (r.xm && r.xm.toLowerCase().includes(kw))
-  )
+  let list = techList.value
+  if (kw) {
+    list = list.filter(
+      (r) =>
+        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+        (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
+        (r.bz && r.bz.toLowerCase().includes(kw)) ||
+        (r.xm && r.xm.toLowerCase().includes(kw))
+    )
+  }
+  return applyColFiltersAndSort(list, 'tech')
 })
 
 const filteredJsglList = computed(() => {
   const kw = (searchKeywordJsgl.value || '').trim().toLowerCase()
-  if (!kw) return jsglList.value
-  return jsglList.value.filter(
-    (r) =>
-      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-      (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
-      (r.bz && r.bz.toLowerCase().includes(kw)) ||
-      (r.xm && r.xm.toLowerCase().includes(kw)) ||
-      (r.fenleihao && r.fenleihao.toLowerCase().includes(kw))
-  )
+  let list = jsglList.value
+  if (kw) {
+    list = list.filter(
+      (r) =>
+        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+        (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
+        (r.bz && r.bz.toLowerCase().includes(kw)) ||
+        (r.xm && r.xm.toLowerCase().includes(kw)) ||
+        (r.fenleihao && r.fenleihao.toLowerCase().includes(kw))
+    )
+  }
+  return applyColFiltersAndSort(list, 'jsgl')
 })
 
 const filteredManageList = computed(() => {
   const kw = (searchKeywordManage.value || '').trim().toLowerCase()
-  if (!kw) return manageList.value
-  return manageList.value.filter(
-    (r) =>
-      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-      (r.bz && r.bz.toLowerCase().includes(kw)) ||
-      (r.xm && r.xm.toLowerCase().includes(kw)) ||
-      (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
-      (r.content && r.content.toLowerCase().includes(kw))
-  )
+  let list = manageList.value
+  if (kw) {
+    list = list.filter(
+      (r) =>
+        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+        (r.bz && r.bz.toLowerCase().includes(kw)) ||
+        (r.xm && r.xm.toLowerCase().includes(kw)) ||
+        (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
+        (r.content && r.content.toLowerCase().includes(kw))
+    )
+  }
+  return applyColFiltersAndSort(list, 'manage')
 })
 
 const filteredGygchList = computed(() => {
   const kw = (searchKeywordGygch.value || '').trim().toLowerCase()
-  if (!kw) return gygchList.value
-  return gygchList.value.filter(
-    (r) =>
-      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-      (r.bz && r.bz.toLowerCase().includes(kw)) ||
-      (r.xm && r.xm.toLowerCase().includes(kw)) ||
-      (r.room_code && r.room_code.toLowerCase().includes(kw))
-  )
+  let list = gygchList.value
+  if (kw) {
+    list = list.filter(
+      (r) =>
+        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+        (r.bz && r.bz.toLowerCase().includes(kw)) ||
+        (r.xm && r.xm.toLowerCase().includes(kw)) ||
+        (r.room_code && r.room_code.toLowerCase().includes(kw))
+    )
+  }
+  return applyColFiltersAndSort(list, 'gygch')
 })
 
 const filteredScszhList = computed(() => {
   const kw = (searchKeywordScszh.value || '').trim().toLowerCase()
-  if (!kw) return scszhList.value
-  return scszhList.value.filter(
-    (r) =>
-      (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-      (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-      (r.bz && r.bz.toLowerCase().includes(kw)) ||
-      (r.xm && r.xm.toLowerCase().includes(kw)) ||
-      (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
-      (r.content && r.content.toLowerCase().includes(kw))
-  )
+  let list = scszhList.value
+  if (kw) {
+    list = list.filter(
+      (r) =>
+        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
+        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
+        (r.bz && r.bz.toLowerCase().includes(kw)) ||
+        (r.xm && r.xm.toLowerCase().includes(kw)) ||
+        (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
+        (r.content && r.content.toLowerCase().includes(kw))
+    )
+  }
+  return applyColFiltersAndSort(list, 'scszh')
 })
 
 async function loadTechList() {
@@ -1189,6 +1335,39 @@ function goWorkNo() {
 .data-table th {
   background: var(--color-bg-lighter, #f5f5f5);
   font-weight: 600;
+}
+
+.sortable-th {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.sortable-th:hover {
+  background: var(--color-bg-hover, #eaeaea);
+}
+
+.sort-icon {
+  font-size: 0.7em;
+  color: var(--color-primary, #1677ff);
+  margin-left: 2px;
+}
+
+.filter-row th {
+  padding: 4px 6px;
+  background: var(--color-bg-container, #fff);
+}
+
+.col-filter-input {
+  width: 100%;
+  padding: 3px 6px;
+  font-size: 0.8rem;
+  border: 1px solid var(--color-border-lighter, #e8e8e8);
+  border-radius: 3px;
+  box-sizing: border-box;
+}
+.col-filter-input:focus {
+  border-color: var(--color-primary, #1677ff);
+  outline: none;
 }
 
 .data-table tbody tr:hover {

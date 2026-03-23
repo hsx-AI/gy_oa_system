@@ -211,34 +211,71 @@ async def apply_leave_json(req: LeaveApplyRequest):
         raise HTTPException(status_code=500, detail=f"申请失败: {str(e)}")
 
 
+def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
+    """
+    请假/加班列表：scope=self 仅本人；scope=lsys 为 yggl 同 lsys 全员（仅主任/副主任）。
+    返回 (xm_where_sql, xm_params, meta dict)。
+    """
+    from routers.approvers import _get_user_info, _jb_match
+
+    scope = (scope or "self").strip().lower()
+    if scope not in ("self", "lsys"):
+        raise HTTPException(status_code=400, detail="无效的 scope")
+    viewer = (viewer_name or "").strip()
+    if not viewer:
+        raise HTTPException(status_code=400, detail="姓名不能为空")
+    meta = {"canViewLsys": False, "lsysLabel": ""}
+    user = _get_user_info(viewer)
+    if user:
+        jb = (user.get("jb") or "").strip()
+        lsys = (user.get("lsys") or "").strip()
+        meta["lsysLabel"] = lsys
+        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
+    if scope == "self":
+        return "xm = %s", [viewer], meta
+    if not meta["canViewLsys"]:
+        raise HTTPException(
+            status_code=403,
+            detail="仅主任、副主任可查看本专业全员请假记录" if resource == "leave" else "仅主任、副主任可查看本专业全员加班记录",
+        )
+    lsys = (user.get("lsys") or "").strip()
+    clause = (
+        "xm IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
+        "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
+    )
+    return clause, [lsys], meta
+
+
 @router.get("/leave/list")
 async def get_leave_list(
     name: str,
     year: Optional[int] = None,
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员（仅主任/副主任）"),
 ):
     """
-    获取本人请假记录列表
-    用于 Leave.vue 的请假记录表格。全年筛选。all_years=true 时返回全部年份。
+    获取请假记录列表。默认仅本人；主任/副主任可选 lsys 查看本专业所有人。
     """
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
+        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "leave")
+
         if all_years:
-            query = """
+            query = f"""
                 SELECT id, bz, xm, qjfs, timefrom, timeto, qjtime, tian, xiaoshi, qjzt, content, spr, spr2, `2j`, bhyy
-                FROM qj WHERE xm = %s
+                FROM qj WHERE {xm_where}
             """
-            params = [name]
+            params = list(xm_params)
         else:
-            query = """
+            query = f"""
                 SELECT id, bz, xm, qjfs, timefrom, timeto, qjtime, tian, xiaoshi, qjzt, content, spr, spr2, `2j`, bhyy
-                FROM qj WHERE xm = %s
+                FROM qj WHERE {xm_where}
                 AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTR(timefrom, 1, 4) = %s)
             """
-            params = [name, f"{year}%", f"{year}%", str(year)]
+            params = list(xm_params) + [f"{year}%", f"{year}%", str(year)]
         if status == "approved":
             query += " AND qjzt = 4"
         elif status == "processing":
@@ -266,10 +303,13 @@ async def get_leave_list(
                 current_approver = ""
             records.append({
                 "id": row["id"],
+                "applicant": (row.get("xm") or "").strip(),
                 "type": row.get("qjfs") or "请假",
                 "startTime": format_datetime_plain(row.get("timefrom")) or "",
                 "endTime": format_datetime_plain(row.get("timeto")) or "",
                 "duration": float(row.get("tian") or 0),
+                "hours": float(row.get("xiaoshi") or 0),
+                "reason": (row.get("content") or "").strip(),
                 "applyTime": format_datetime_plain(row.get("qjtime")) or "",
                 "status": status_map.get(qjzt, "已驳回"),
                 "statusClass": status_class_map.get(qjzt, "status-rejected"),
@@ -277,9 +317,90 @@ async def get_leave_list(
                 "rejectReason": (row.get("bhyy") or "").strip()
             })
 
-        return {"success": True, "data": records, "total": len(records)}
+        return {
+            "success": True,
+            "data": records,
+            "total": len(records),
+            "scope": (scope or "self").strip().lower(),
+            "meta": meta,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"查询请假记录失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.get("/leave/all-records")
+async def get_leave_all_records(
+    name: str = Query(..., description="当前用户姓名"),
+    year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
+    month: Optional[int] = Query(None, description="按月份筛选，不传则全年"),
+):
+    """
+    全部请假记录（按权限）：
+    系统管理员/部长/副部长：全员；组长/主任/副主任：本科室。
+    仅返回已通过(qjzt=4)的记录，按请假开始时间倒序。
+    """
+    from routers.approvers import _get_user_info, _jb_match
+    from routers.db_manager import _get_admin1
+    try:
+        user = _get_user_info(name)
+        if not user:
+            return {"success": True, "data": [], "total": 0, "scope": "none"}
+        name_stripped = (name or "").strip()
+        admin1 = _get_admin1()
+        if admin1 and name_stripped == admin1:
+            is_leader = True
+            lsys = ""
+        else:
+            jb = (user.get("jb") or "").strip()
+            lsys = (user.get("lsys") or "").strip()
+            is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+
+        where_parts = ["qjzt = 4"]
+        params = []
+
+        if not is_leader:
+            if not lsys:
+                return {"success": True, "data": [], "total": 0, "scope": "dept"}
+            where_parts.append("lsys = %s")
+            params.append(lsys)
+
+        if year is not None:
+            if month is not None:
+                month_prefix = f"{year}-{month:02d}"
+                where_parts.append("(timefrom LIKE %s OR timefromdate LIKE %s)")
+                params.extend([f"{month_prefix}%", f"{month_prefix}%"])
+            else:
+                where_parts.append("(timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTR(timefrom, 1, 4) = %s)")
+                params.extend([f"{year}%", f"{year}%", str(year)])
+
+        sql = f"""
+            SELECT id, lsys, xm, qjfs, timefrom, timeto, tian, xiaoshi, qjtime, qjzt, content, spr, spr2
+            FROM qj WHERE {' AND '.join(where_parts)}
+            ORDER BY timefrom DESC
+        """
+        rows = db.execute_query(sql, tuple(params))
+
+        records = []
+        for row in rows:
+            records.append({
+                "id": row["id"],
+                "department": (row.get("lsys") or "").strip(),
+                "name": (row.get("xm") or "").strip(),
+                "type": row.get("qjfs") or "请假",
+                "startTime": format_datetime_plain(row.get("timefrom")) or "",
+                "endTime": format_datetime_plain(row.get("timeto")) or "",
+                "duration": float(row.get("tian") or 0),
+                "hours": float(row.get("xiaoshi") or 0),
+                "applyTime": format_datetime_plain(row.get("qjtime")) or "",
+                "reason": (row.get("content") or "").strip(),
+            })
+        scope = "all" if is_leader else "dept"
+        return {"success": True, "data": records, "total": len(records), "scope": scope}
+    except Exception as e:
+        logger.error(f"查询全部请假记录失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
@@ -495,36 +616,38 @@ async def get_overtime_list(
     month: Optional[int] = None,
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员（仅主任/副主任）"),
 ):
     """
-    获取本人加班记录列表
-    用于 Overtime.vue 的加班记录表格。按月筛选。all_years=true 时返回全部年份。
+    获取加班记录列表。默认仅本人；主任/副主任可选 lsys 查看本专业所有人。
     """
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
+        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "overtime")
+
         if all_years:
-            query = """
-                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy
-                FROM jiaban WHERE xm = %s
+            query = f"""
+                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy, hx
+                FROM jiaban WHERE {xm_where}
             """
-            params = [name]
+            params = list(xm_params)
         elif month:
             month_str = f"{year}-{month:02d}"
-            query = """
-                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy
-                FROM jiaban WHERE xm = %s
+            query = f"""
+                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy, hx
+                FROM jiaban WHERE {xm_where}
                 AND (timedate LIKE %s OR SUBSTR(timedate, 1, 7) = %s)
             """
-            params = [name, f"{month_str}%", month_str]
+            params = list(xm_params) + [f"{month_str}%", month_str]
         else:
-            query = """
-                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy
-                FROM jiaban WHERE xm = %s
+            query = f"""
+                SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, jiabanzt, content, spr, spr2, bhyy, hx
+                FROM jiaban WHERE {xm_where}
                 AND (timedate LIKE %s OR SUBSTR(timedate, 1, 4) = %s)
             """
-            params = [name, f"{year}%", str(year)]
+            params = list(xm_params) + [f"{year}%", str(year)]
         if status == "approved":
             query += " AND jiabanzt = 4"
         elif status == "processing":
@@ -535,8 +658,8 @@ async def get_overtime_list(
         try:
             rows = db.execute_query(query, tuple(params))
         except Exception:
-            query_no_bhyy = query.replace(", bhyy", "")
-            rows = db.execute_query(query_no_bhyy, tuple(params))
+            query_fallback = query.replace(", bhyy, hx", "").replace(", bhyy", "")
+            rows = db.execute_query(query_fallback, tuple(params))
 
         status_map = {0: "待审批", 1: "审批中", 3: "审批中", 5: "待打卡管理员审批", 4: "已通过", 22: "已驳回"}
         status_class_map = {0: "status-processing", 1: "status-processing", 3: "status-processing", 5: "status-processing", 4: "status-approved", 22: "status-rejected"}
@@ -581,6 +704,7 @@ async def get_overtime_list(
             date_ymd = (format_datetime_plain(_timedate) or "")[:10] if _timedate else ""
             records.append({
                 "id": row["id"],
+                "applicant": (row.get("xm") or "").strip(),
                 "level": row.get("jb") or "加班",
                 "date": date_ymd,
                 "startTime": tf,
@@ -590,10 +714,20 @@ async def get_overtime_list(
                 "status": status_map.get(jiabanzt, "已驳回"),
                 "statusClass": status_class_map.get(jiabanzt, "status-rejected"),
                 "currentApprover": current_approver,
-                "rejectReason": (row.get("bhyy") or "").strip()
+                "rejectReason": (row.get("bhyy") or "").strip(),
+                "content": (row.get("content") or "").strip(),
+                "hx": (row.get("hx") or "否").strip(),
             })
 
-        return {"success": True, "data": records, "total": len(records)}
+        return {
+            "success": True,
+            "data": records,
+            "total": len(records),
+            "scope": (scope or "self").strip().lower(),
+            "meta": meta,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"查询加班记录失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")

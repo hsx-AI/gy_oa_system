@@ -332,15 +332,96 @@ async def get_dept_leave_stats(
 
 # ==================== 加班科室统计 ====================
 
+
+def _query_hx_hours(
+    names: List[str],
+    year: int,
+    month: Optional[int] = None,
+    quarter: Optional[str] = None,
+    lsys: Optional[str] = None,
+    all_staff: bool = True,
+) -> Dict[str, float]:
+    """查询指定人员在时间段内的换休请假小时数（qjfs IN ('换休','员工换休票'), qjzt=4）。"""
+    if not names:
+        return {}
+
+    placeholders = ",".join(["%s"] * len(names))
+    base_where = f"qjzt = 4 AND qjfs IN ('换休','员工换休票') AND xm IN ({placeholders})"
+    params: list = list(names)
+
+    if month:
+        month_str = f"{year}-{month:02d}"
+        base_where += " AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)"
+        params += [f"{month_str}%", f"{month_str}%", month_str]
+    elif quarter:
+        q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
+        lo, hi = q_map.get(quarter, (1, 12))
+        base_where += f" AND YEAR(timefrom) = %s AND MONTH(timefrom) BETWEEN {lo} AND {hi}"
+        params.append(year)
+    else:
+        base_where += " AND (timefrom LIKE %s OR timefromdate LIKE %s OR YEAR(timefrom) = %s)"
+        params += [f"{year}%", f"{year}%", year]
+
+    query = f"""
+        SELECT xm AS name, SUM(CAST(COALESCE(xiaoshi, 0) AS DECIMAL(10,2))) AS hx_hours
+        FROM qj
+        WHERE {base_where}
+        GROUP BY xm
+    """
+    rows = db.execute_query(query, tuple(params))
+    return {(r.get("name") or "").strip(): float(r.get("hx_hours") or 0) for r in rows}
+
+
+def _query_hx_hours_all(
+    year: int,
+    month: Optional[int] = None,
+    quarter: Optional[str] = None,
+    lsys: Optional[str] = None,
+    all_staff: bool = True,
+) -> Dict[str, float]:
+    """按科室/全员查询换休请假小时数，不限定姓名列表。"""
+    if all_staff:
+        scope = "INNER JOIN yggl ON qj.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)"
+        params: list = [LEADER_EXCLUDE_LSYS]
+    else:
+        scope = "INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
+        params = [lsys]
+
+    base_where = "qj.qjzt = 4 AND qj.qjfs IN ('换休','员工换休票')"
+    if month:
+        month_str = f"{year}-{month:02d}"
+        base_where += " AND (qj.timefrom LIKE %s OR qj.timefromdate LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)"
+        params += [f"{month_str}%", f"{month_str}%", month_str]
+    elif quarter:
+        q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
+        lo, hi = q_map.get(quarter, (1, 12))
+        base_where += f" AND YEAR(qj.timefrom) = %s AND MONTH(qj.timefrom) BETWEEN {lo} AND {hi}"
+        params.append(year)
+    else:
+        base_where += " AND (qj.timefrom LIKE %s OR qj.timefromdate LIKE %s OR YEAR(qj.timefrom) = %s)"
+        params += [f"{year}%", f"{year}%", year]
+
+    query = f"""
+        SELECT qj.xm AS name, SUM(CAST(COALESCE(qj.xiaoshi, 0) AS DECIMAL(10,2))) AS hx_hours
+        FROM qj {scope}
+        WHERE {base_where}
+        GROUP BY qj.xm
+    """
+    rows = db.execute_query(query, tuple(params))
+    return {(r.get("name") or "").strip(): float(r.get("hx_hours") or 0) for r in rows}
+
+
 @router.get("/dept/overtime")
 async def get_dept_overtime_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = None,
-    quarter: Optional[str] = None
+    quarter: Optional[str] = None,
+    net: Optional[bool] = Query(False, description="true 时返回净加班（加班小时 - 换休请假小时）"),
 ):
     """
     科室加班统计（按人汇总小时）。不传 lsys 时为全员（排除部办）。
+    net=true 时，每人小时数减去该时间段内换休请假的 xiaoshi 合计。
     返回: { totalHours, personCount, list: [{ name, hours }] }
     仅统计 jiabanzt=4 已通过
     """
@@ -349,7 +430,6 @@ async def get_dept_overtime_stats(
             year = __import__("datetime").datetime.now().year
         all_staff = not (lsys and lsys.strip())
 
-        # 通过 yggl 关联；全员时仅排除部办
         if all_staff:
             join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)"
             join_param = (LEADER_EXCLUDE_LSYS,)
@@ -397,11 +477,29 @@ async def get_dept_overtime_stats(
                 """
                 rows = db.execute_query(query, join_param + (f"{year}%", year))
 
+        ot_map = {}
+        for r in rows:
+            n = (r.get("name") or "").strip()
+            if n:
+                ot_map[n] = float(r.get("hours") or 0)
+
+        hx_map: Dict[str, float] = {}
+        if net:
+            hx_map = _query_hx_hours_all(year, month, quarter, lsys, all_staff)
+            for n in hx_map:
+                if n not in ot_map:
+                    ot_map[n] = 0
+
+        if net:
+            all_names = sorted(ot_map, key=lambda k: -(ot_map[k] - hx_map.get(k, 0)))
+        else:
+            all_names = sorted(ot_map, key=lambda k: -ot_map[k])
+
         list_data = []
         total_hours = 0
-        for r in rows:
-            h = float(r.get("hours") or 0)
-            list_data.append({"name": r.get("name") or "", "hours": round(h, 2)})
+        for n in all_names:
+            h = round(ot_map[n] - hx_map.get(n, 0), 2) if net else round(ot_map[n], 2)
+            list_data.append({"name": n, "hours": h})
             total_hours += h
 
         return {
@@ -798,6 +896,153 @@ async def get_dept_business_trip_stats(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# ==================== 满勤判定辅助 ====================
+
+def _to_comparable_dt(val) -> Optional[str]:
+    """将 datetime / date / str 转为 19 位 'YYYY-MM-DD HH:MM:SS' 用于闭区间比较。"""
+    if val is None:
+        return None
+    if hasattr(val, "strftime"):
+        out = val.strftime("%Y-%m-%d %H:%M:%S") if hasattr(val, "hour") else val.strftime("%Y-%m-%d") + " 00:00:00"
+        return out[:19]
+    s = str(val).strip()
+    if "." in s:
+        s = s.split(".")[0]
+    if len(s) >= 19:
+        return s[:19]
+    if len(s) == 10:
+        return s + " 00:00:00"
+    if len(s) == 16 and s[10] == " " and ":" in s[11:]:
+        return s + ":00"
+    return s
+
+
+def _interval_covered_by(s_start: str, s_end: str, rows: list, get_start_end) -> bool:
+    """建议区间 [s_start, s_end] 是否被 rows 中某条记录的区间包含。"""
+    for r in rows:
+        r_start, r_end = get_start_end(r)
+        r_start = _to_comparable_dt(r_start)
+        r_end = _to_comparable_dt(r_end)
+        if r_start and r_end and r_start <= s_start and s_end <= r_end:
+            return True
+    return False
+
+
+def _compute_full_attendance_info(names: List[str], year: int, month: Optional[int] = None) -> Tuple[set, Dict[str, int]]:
+    """
+    计算不满勤的人员姓名集合，以及满勤人员各自的公出天数。
+
+    返回 (abnormal_set, gc_days_by_name):
+      - abnormal_set: 不满勤人员姓名集合
+      - gc_days_by_name: {姓名: 公出天数}，仅包含满勤且有公出的人员
+    """
+    empty = (set(), {})
+    if not names:
+        return empty
+
+    if month:
+        sugg_rows = db.execute_query(
+            """SELECT employee_name, start_time, end_time
+               FROM attendance_suggestions
+               WHERE status = 1 AND year = %s AND month = %s""",
+            (year, month)
+        )
+    else:
+        sugg_rows = db.execute_query(
+            """SELECT employee_name, start_time, end_time
+               FROM attendance_suggestions
+               WHERE status = 1 AND year = %s""",
+            (year,)
+        )
+
+    if not sugg_rows:
+        return empty
+
+    per_person: Dict[str, list] = defaultdict(list)
+    for r in sugg_rows:
+        n = (r.get("employee_name") or "").strip()
+        if n:
+            per_person[n].append(r)
+
+    name_set = set(names)
+    relevant = {n: items for n, items in per_person.items() if n in name_set}
+    if not relevant:
+        return empty
+
+    if month:
+        month_start = f"{year}-{month:02d}-01"
+        month_end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
+    else:
+        month_start = f"{year}-01-01"
+        month_end = f"{year + 1}-01-01"
+
+    rel_names = list(relevant.keys())
+    ph = ",".join(["%s"] * len(rel_names))
+
+    try:
+        qj_rows = db.execute_query(
+            f"SELECT xm, timefrom, timeto FROM qj "
+            f"WHERE xm IN ({ph}) AND qjzt = 4 AND timefrom < %s AND timeto >= %s",
+            tuple(rel_names) + (month_end, month_start),
+        )
+    except Exception:
+        qj_rows = []
+
+    try:
+        gc_rows = db.execute_query(
+            f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
+            f"WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
+            f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+            f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+            tuple(rel_names) + (month_end, month_start),
+        )
+    except Exception:
+        gc_rows = []
+
+    qj_by_name: Dict[str, list] = defaultdict(list)
+    for r in qj_rows:
+        n = (r.get("xm") or "").strip()
+        if n:
+            qj_by_name[n].append(r)
+
+    gc_by_name: Dict[str, list] = defaultdict(list)
+    for r in gc_rows:
+        n = (r.get("xm") or "").strip()
+        if n:
+            gc_by_name[n].append(r)
+
+    abnormal = set()
+    gc_dates_by_name: Dict[str, set] = defaultdict(set)
+    for n, items in relevant.items():
+        is_abnormal = False
+        for s in items:
+            s_start = _to_comparable_dt(s.get("start_time"))
+            s_end = _to_comparable_dt(s.get("end_time"))
+            if not s_start or not s_end:
+                is_abnormal = True
+                break
+            covered_by_gc = _interval_covered_by(
+                s_start, s_end, gc_by_name.get(n, []),
+                lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
+            )
+            if covered_by_gc:
+                gc_dates_by_name[n].add(s_start[:10])
+                continue
+            is_abnormal = True
+            break
+        if is_abnormal:
+            abnormal.add(n)
+
+    gc_days_by_name = {n: len(dates) for n, dates in gc_dates_by_name.items() if n not in abnormal}
+    return abnormal, gc_days_by_name
+
+
+def _compute_abnormal_set(names: List[str], year: int, month: Optional[int] = None) -> set:
+    """计算不满勤的人员姓名集合（简便包装）。"""
+    abnormal, _ = _compute_full_attendance_info(names, year, month)
+    return abnormal
+
+
 # ==================== 领导人看板扩展 API ====================
 
 @router.get("/leader/full-attendance")
@@ -808,7 +1053,7 @@ async def get_leader_full_attendance(
 ):
     """
     满勤率：指定月份全员或指定科室的满勤率。
-    满勤 = 当月没有请假（即无请假记录或请假天数为 0）。
+    满勤 = 当月 status=1 的考勤异常全部由已通过公出覆盖（或无异常）；有请假覆盖或未处理则不满勤。
     返回: workdays(当月应出勤工作日，仅作参考), totalPeople, fullCount, rate, byDept(仅当未传lsys时)
     """
     try:
@@ -838,16 +1083,7 @@ async def get_leader_full_attendance(
                 "byDept": []
             }
 
-        # 当月在 attendance_suggestions 中有 status=1（异常/需请假）记录的人员
-        abnormal_rows = db.execute_query(
-            """SELECT employee_name AS name
-               FROM attendance_suggestions
-               WHERE status = 1 AND year = %s AND month = %s
-               GROUP BY employee_name""",
-            (year, month)
-        )
-        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
-        abnormal_set.discard("")
+        abnormal_set = _compute_abnormal_set(names, year, month)
         full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
@@ -894,11 +1130,15 @@ async def get_leader_full_attendance_export(
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
 ):
     """
-    满勤名单导出：与领导人看板满勤统计同一逻辑（按打卡数据 attendance_suggestions 无 status=1 即满勤）。
+    满勤名单导出：与领导人看板满勤统计同一逻辑（异常全部由公出覆盖仍算满勤，有请假或未处理则不满勤）。
     返回 byDept 中每项含 fullNames（满勤人员姓名列表），用于 Excel 等导出。
     """
     try:
-        workdays = _count_workdays_in_month(year, month) if month else None
+        if month:
+            workdays = _count_workdays_in_month(year, month)
+        else:
+            workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
+
         if lsys:
             rows = db.execute_query(
                 "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
@@ -915,33 +1155,28 @@ async def get_leader_full_attendance_export(
         if not names:
             return {"success": True, "workdays": workdays, "totalPeople": 0, "fullCount": 0, "rate": 0, "byDept": []}
 
-        if month:
-            abnormal_rows = db.execute_query(
-                """SELECT employee_name AS name FROM attendance_suggestions
-                   WHERE status = 1 AND year = %s AND month = %s GROUP BY employee_name""",
-                (year, month)
-            )
-        else:
-            abnormal_rows = db.execute_query(
-                """SELECT employee_name AS name FROM attendance_suggestions
-                   WHERE status = 1 AND year = %s GROUP BY employee_name""",
-                (year,)
-            )
-        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
-        abnormal_set.discard("")
+        abnormal_set, gc_days_map = _compute_full_attendance_info(names, year, month)
         full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
 
+        def _build_details(name_list):
+            details = []
+            for n in sorted(name_list):
+                gc = gc_days_map.get(n, 0)
+                details.append({"name": n, "attendDays": workdays - gc, "businessDays": gc})
+            return details
+
         by_dept = []
         if lsys:
-            full_names = sorted([n for n in names if n not in abnormal_set])
+            full_list = [n for n in names if n not in abnormal_set]
             by_dept.append({
                 "lsys": lsys.strip(),
                 "totalPeople": total,
                 "fullCount": full_count,
                 "rate": rate,
-                "fullNames": full_names
+                "fullNames": sorted(full_list),
+                "fullDetails": _build_details(full_list),
             })
         elif rows and len(rows) > 0 and "lsys" in (rows[0] or {}):
             dept_names = {}
@@ -954,13 +1189,14 @@ async def get_leader_full_attendance_export(
             for d, nlist in sorted(dept_names.items()):
                 fc = sum(1 for n in nlist if n not in abnormal_set)
                 tot = len(nlist)
-                full_names = sorted([n for n in nlist if n not in abnormal_set])
+                full_list = [n for n in nlist if n not in abnormal_set]
                 by_dept.append({
                     "lsys": d,
                     "totalPeople": tot,
                     "fullCount": fc,
                     "rate": round(fc / tot, 4) if tot else 0,
-                    "fullNames": full_names
+                    "fullNames": sorted(full_list),
+                    "fullDetails": _build_details(full_list),
                 })
 
         return {
@@ -983,7 +1219,7 @@ async def get_leader_full_attendance_year(
 ):
     """
     满勤率（全年）：指定年份全员或指定科室的全年满勤率。
-    全年满勤 = 该年度内无请假（即该年请假总天数<=0，仅统计已通过请假记录）。
+    全年满勤 = 该年度内 status=1 异常全部由已通过公出覆盖（或无异常）。
     返回: totalPeople, fullCount, rate, byDept(仅当未传lsys时)，无 workdays。
     """
     try:
@@ -1010,16 +1246,7 @@ async def get_leader_full_attendance_year(
                 "byDept": []
             }
 
-        # 该年度内在 attendance_suggestions 中有 status=1（异常/需请假）记录的人员
-        abnormal_rows = db.execute_query(
-            """SELECT employee_name AS name
-               FROM attendance_suggestions
-               WHERE status = 1 AND year = %s
-               GROUP BY employee_name""",
-            (year,)
-        )
-        abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
-        abnormal_set.discard("")
+        abnormal_set = _compute_abnormal_set(names, year)
         full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
@@ -1065,7 +1292,7 @@ async def get_leader_full_attendance_by_month(
 ):
     """
     按月考勤满勤人数：横轴月份，纵轴满勤人数，可筛选科室。
-    满勤 = 当月没有请假。返回 12 个月每月的 fullCount、totalPeople。
+    满勤 = 当月异常全部由公出覆盖或无异常。返回 12 个月每月的 fullCount、totalPeople。
     返回: list[{ month, monthLabel, fullCount, totalPeople }]
     """
     try:
@@ -1094,15 +1321,7 @@ async def get_leader_full_attendance_by_month(
                 })
                 continue
 
-            abnormal_rows = db.execute_query(
-                """SELECT employee_name AS name
-                   FROM attendance_suggestions
-                   WHERE status = 1 AND year = %s AND month = %s
-                   GROUP BY employee_name""",
-                (year, month)
-            )
-            abnormal_set = {(r.get("name") or "").strip() for r in abnormal_rows}
-            abnormal_set.discard("")
+            abnormal_set = _compute_abnormal_set(names, year, month)
             full_count = sum(1 for n in names if n not in abnormal_set)
             total = len(names)
             list_data.append({
@@ -1204,6 +1423,21 @@ async def get_leader_dept_comparison(
                 trip_by_lsys[lsys] += round(days, 2)
         trip_by_lsys = dict(trip_by_lsys)
 
+        # 按科室汇总换休请假小时，用于计算净加班
+        hx_query = f"""
+            SELECT yggl.lsys, SUM(CAST(COALESCE(qj.xiaoshi, 0) AS DECIMAL(10,2))) AS total
+            FROM qj INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != '' AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+            WHERE qj.qjzt = 4 AND qj.qjfs IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1' {month_cond_leave}
+            GROUP BY yggl.lsys
+        """
+        hx_rows = db.execute_query(hx_query, params_leave)
+        hx_by_lsys = {r["lsys"].strip(): round(float(r.get("total") or 0), 2) for r in hx_rows if r.get("lsys")}
+
+        if month:
+            workdays = _count_workdays_in_month(year, month)
+        else:
+            workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
+
         all_lsys = sorted(person_by_lsys.keys())
         list_data = []
         for l in all_lsys:
@@ -1211,13 +1445,21 @@ async def get_leader_dept_comparison(
             ot = overtime_by_lsys.get(l, 0)
             lv = leave_by_lsys.get(l, 0)
             tr = trip_by_lsys.get(l, 0)
+            hx = hx_by_lsys.get(l, 0)
+            net_ot = round(ot - hx, 2)
+            effective_pd = workdays * pc - tr
             list_data.append({
                 "lsys": l,
                 "personCount": pc,
+                "workdays": workdays,
                 "overtimeTotal": ot,
+                "netOvertimeTotal": net_ot,
                 "leaveTotal": lv,
                 "tripTotal": tr,
                 "overtimePerCapita": round(ot / pc, 2) if pc else 0,
+                "netOvertimePerCapita": round(net_ot / pc, 2) if pc else 0,
+                "overtimePerWorkday": round(ot / effective_pd, 2) if effective_pd > 0 else 0,
+                "netOvertimePerWorkday": round(net_ot / effective_pd, 2) if effective_pd > 0 else 0,
                 "leavePerCapita": round(lv / pc, 2) if pc else 0,
                 "tripPerCapita": round(tr / pc, 2) if pc else 0
             })

@@ -196,8 +196,32 @@ async def get_upload_config():
     }
 
 
+def _yggl_employees_for_suggestions() -> List[tuple]:
+    """在职、有姓名与隶属科室的员工，与打卡入库时 department=lsys 一致。"""
+    try:
+        rows = db.execute_query(
+            """
+            SELECT TRIM(name) AS name, TRIM(lsys) AS lsys FROM yggl
+            WHERE name IS NOT NULL AND TRIM(name) != ''
+              AND lsys IS NOT NULL AND TRIM(lsys) != ''
+              AND (COALESCE(zaizhi, 0) = 0)
+            """
+        )
+    except Exception as e:
+        logger.warning(f"[后台] 查询 yggl 员工列表失败: {e}")
+        return []
+    out = []
+    for r in rows or []:
+        n = (r.get("name") or "").strip()
+        d = (r.get("lsys") or "").strip()
+        if n and d:
+            out.append((n, d))
+    return out
+
+
 def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
-    """后台任务：为上传涉及的每人每月生成智能建议，不阻塞上传响应。
+    """后台任务：上传打卡后，按涉及月份为全员（yggl 在职）重算智能建议，不阻塞上传响应。
+    当月库中无打卡记录的人也会生成建议（如工作日全天缺勤），避免仅处理「本次文件里出现过的员工」。
     cutoff_date_str: 'YYYY-MM-DD'，当月仅生成截止到此日期的建议。
     优化：按月份批量查询考勤记录（1条SQL/月），缓存假期数据，批量写入建议。"""
     import time as _time
@@ -236,11 +260,24 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
         if not seen:
             return
 
-        attendance_db.delete_suggestions_batch(list(seen))
-
         months = set()
         for (_, _, y, m) in seen:
             months.add((y, m))
+
+        employees = _yggl_employees_for_suggestions()
+        keys_to_process = set()
+        for y, m in months:
+            for name, dept in employees:
+                keys_to_process.add((name, dept, y, m))
+
+        if not keys_to_process:
+            return
+
+        # 避免单次 SQL 过长，分批删除旧建议
+        key_list = list(keys_to_process)
+        _chunk = 400
+        for i in range(0, len(key_list), _chunk):
+            attendance_db.delete_suggestions_batch(key_list[i : i + _chunk])
 
         holidays_cache: dict = {}
         month_records: dict = {}
@@ -263,7 +300,7 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
             if year_str not in holidays_cache:
                 holidays_cache[year_str] = load_holidays(year_str)
 
-        for (name, dept, y, m) in seen:
+        for (name, dept, y, m) in keys_to_process:
             try:
                 person_records = month_records.get((y, m), {}).get((name, dept), [])
                 holidays = holidays_cache[str(y)]
@@ -275,7 +312,7 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
                 logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
 
         elapsed = round(_time.time() - t0, 1)
-        logger.info(f"[后台] 智能建议生成完成，共处理 {len(seen)} 个人月组合，耗时 {elapsed}s")
+        logger.info(f"[后台] 智能建议生成完成，共处理 {len(keys_to_process)} 个人月组合，耗时 {elapsed}s")
     except Exception as e:
         logger.warning(f"[后台] 上传后生成智能建议失败: {e}")
 

@@ -21,6 +21,7 @@ class Settings(BaseSettings):
     MYSQL_PASSWORD: str = "123456"
     MYSQL_DB: str = "GY_OA_system"
     MYSQL_DB_DEMO: str = "demo"
+    
     # CORS配置
     CORS_ORIGINS: list = ["*"]
     CORS_CREDENTIALS: bool = True

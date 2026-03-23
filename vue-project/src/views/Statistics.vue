@@ -54,6 +54,13 @@
               <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
           </div>
+          <div class="form-item">
+            <label class="form-label">月份</label>
+            <select v-model="queryParams.month" class="form-select">
+              <option value="">全年</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+            </select>
+          </div>
           <div class="form-item form-actions">
             <button class="btn btn-primary" @click="fetchData" :disabled="loading">
               <svg v-if="loading" class="loading-icon" viewBox="0 0 24 24">
@@ -73,9 +80,9 @@
           <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M3 3v18h18M7 16l4-4 4 4 6-6"/>
           </svg>
-          {{ queryParams.year }}年度汇总{{ isAllStaffQuery ? '（全员）' : '' }}
+          {{ queryParams.year }}年{{ queryParams.month ? queryParams.month + '月' : '度' }}汇总{{ isAllStaffQuery ? '（全员）' : '' }}
         </h2>
-        <p class="section-hint">切换年份可对比历年数据；下方表格支持按月份筛选明细。</p>
+        <p class="section-hint">切换年份、月份可对比历年数据；下方表格支持按月份筛选明细。</p>
         <div class="summary-cards">
           <div class="summary-card overtime-card">
             <div class="summary-icon">
@@ -91,6 +98,9 @@
                 <span class="summary-unit">小时</span>
               </div>
               <div class="summary-sub">共 {{ yearTotal.overtime.count }} 次加班</div>
+              <div v-if="yearTotal.netOvertime != null" class="summary-sub summary-net">
+                净加班 {{ yearTotal.netOvertime }} 小时（扣除换休 {{ yearTotal.hx_hours }} 小时）
+              </div>
             </div>
           </div>
           
@@ -149,10 +159,12 @@
               :key="t.type"
               :class="['tab-btn', 'tab-btn-sm', { active: trendChartType === t.type }]"
               @click="trendChartType = t.type"
+              :title="t.type === 'netOvertime' ? '净加班 = 加班时长 − 换休请假时长' : ''"
             >
               {{ t.label }}{{ t.unit }}
             </button>
           </div>
+          <span v-if="trendChartType === 'netOvertime'" class="chart-hint">净加班 = 加班时长 − 换休请假时长</span>
         </div>
         <div class="chart-container">
           <div class="bar-chart bar-chart-single">
@@ -160,7 +172,7 @@
               <div class="bar-col">
                 <div
                   class="bar bar-has-value"
-                  :class="trendChartBarClass"
+                  :class="[trendChartBarClass, { 'bar-negative': trendChartValue(month) < 0 }]"
                   :style="{ height: getBarHeight(trendChartValue(month), trendChartMax) }"
                   :title="trendChartTitle(month)"
                 >
@@ -183,7 +195,7 @@
           </svg>
           科室成员横向对比
         </h2>
-        <p class="section-hint">{{ permLsys }} 各成员加班、请假、公出（{{ queryParams.year }}年全年）</p>
+        <p class="section-hint">{{ permLsys }} 各成员加班、请假、公出（{{ queryParams.year }}年{{ queryParams.month ? queryParams.month + '月' : '全年' }}）</p>
         <div class="chart-filter-row">
           <label class="chart-filter-label">展示</label>
           <div class="chart-type-tabs">
@@ -192,10 +204,12 @@
               :key="t.type"
               :class="['tab-btn', 'tab-btn-sm', { active: memberCompareChartType === t.type }]"
               @click="memberCompareChartType = t.type"
+              :title="t.type === 'netOvertime' ? '净加班 = 加班时长 − 换休请假时长' : ''"
             >
               {{ t.label }}{{ t.unit }}
             </button>
           </div>
+          <span v-if="memberCompareChartType === 'netOvertime'" class="chart-hint">净加班 = 加班时长 − 换休请假时长</span>
         </div>
         <div class="chart-container">
           <div class="bar-chart bar-chart-single">
@@ -203,7 +217,7 @@
               <div class="bar-col">
                 <div
                   class="bar bar-has-value"
-                  :class="memberCompareBarClass"
+                  :class="[memberCompareBarClass, { 'bar-negative': memberCompareValue(row) < 0 }]"
                   :style="{ height: getBarHeight(memberCompareValue(row), memberCompareMax) }"
                   :title="memberCompareTitle(row)"
                 >
@@ -242,6 +256,7 @@
                   <polyline points="12 6 12 12 16 14"/>
                 </svg>
                 加班明细
+                <router-link class="table-detail-link" :to="{ path: '/attendance/overtime' }">查看全部 &rarr;</router-link>
               </h3>
               <div class="table-filter">
                 <select v-model="selectedOvertimeMonth" class="filter-select">
@@ -258,7 +273,8 @@
                     <th>类型</th>
                     <th>时间段</th>
                     <th>时长</th>
-                    <th>说明</th>
+                    <th>换休</th>
+                    <th>加班内容</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -269,6 +285,9 @@
                     </td>
                     <td>{{ formatTimeRange(record.timefrom, record.timeto) }}</td>
                     <td class="hours-cell">{{ record.jbf || record.tian1 || '-' }} 小时</td>
+                    <td>
+                      <span :class="['type-tag', record.hx === '是' ? 'hx-yes' : 'hx-no']">{{ record.hx || '否' }}</span>
+                    </td>
                     <td class="content-cell">{{ record.content || '-' }}</td>
                   </tr>
                 </tbody>
@@ -278,6 +297,7 @@
                   <path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 <p>暂无加班记录</p>
+                <router-link class="empty-detail-link" :to="{ path: '/attendance/overtime' }">前往加班管理 &rarr;</router-link>
               </div>
             </div>
           </div>
@@ -293,6 +313,7 @@
                   <line x1="3" y1="10" x2="21" y2="10"/>
                 </svg>
                 请假明细
+                <router-link class="table-detail-link" :to="{ path: '/attendance/leave' }">查看全部 &rarr;</router-link>
               </h3>
               <div class="table-filter">
                 <select v-model="selectedLeaveMonth" class="filter-select">
@@ -306,7 +327,7 @@
                 <thead>
                   <tr>
                     <th>日期</th>
-                    <th>类型</th>
+                    <th>请假类型</th>
                     <th>时间段</th>
                     <th>时长</th>
                     <th>说明</th>
@@ -335,6 +356,7 @@
                   <path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 <p>暂无请假记录</p>
+                <router-link class="empty-detail-link" :to="{ path: '/attendance/leave' }">前往请假管理 &rarr;</router-link>
               </div>
             </div>
           </div>
@@ -348,6 +370,7 @@
                   <circle cx="12" cy="10" r="3"/>
                 </svg>
                 公出明细
+                <router-link class="table-detail-link" :to="{ path: '/attendance/business-trip' }">查看全部 &rarr;</router-link>
               </h3>
               <div class="table-filter">
                 <select v-model="selectedBusinessTripMonth" class="filter-select">
@@ -384,6 +407,7 @@
                   <path d="M9 12h6M12 9v6M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
                 </svg>
                 <p>暂无公出记录</p>
+                <router-link class="empty-detail-link" :to="{ path: '/attendance/business-trip' }">前往公出管理 &rarr;</router-link>
               </div>
             </div>
           </div>
@@ -416,7 +440,8 @@ const deptEmployeeList = ref([])
 // 查询参数
 const queryParams = ref({
   name: '',
-  year: new Date().getFullYear()
+  year: new Date().getFullYear(),
+  month: ''
 })
 
 // 状态
@@ -432,6 +457,7 @@ const selectedBusinessTripMonth = ref('')
 // 科室成员横向对比（班组长/主任/副主任可见）：按人合并加班/请假/公出
 const deptMemberLeave = ref([])
 const deptMemberOvertime = ref([])
+const deptMemberNetOvertime = ref([])
 const deptMemberTrip = ref([])
 
 // 年份选项
@@ -467,29 +493,40 @@ const maxBusinessTripDays = computed(() => {
 const trendChartType = ref('overtime')
 const trendChartTypes = [
   { type: 'overtime', label: '加班', unit: '(小时)' },
+  { type: 'netOvertime', label: '净加班', unit: '(小时)' },
   { type: 'leave', label: '请假', unit: '(天)' },
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
 const trendChartBarClass = computed(() => {
   if (trendChartType.value === 'overtime') return 'bar-ot'
+  if (trendChartType.value === 'netOvertime') return 'bar-not'
   if (trendChartType.value === 'leave') return 'bar-lv'
   return 'bar-tr'
 })
+const maxNetOvertimeHours = computed(() => {
+  if (monthlyData.value.length === 0) return 1
+  const max = Math.max(...monthlyData.value.map(m => Math.abs(m.overtime.hours - (m.hx_hours || 0))))
+  return max || 1
+})
 const trendChartMax = computed(() => {
   if (trendChartType.value === 'overtime') return maxOvertimeHours.value
+  if (trendChartType.value === 'netOvertime') return maxNetOvertimeHours.value
   if (trendChartType.value === 'leave') return maxLeaveDays.value
   return maxBusinessTripDays.value
 })
 function trendChartValue(month) {
   if (trendChartType.value === 'overtime') return month.overtime.hours
+  if (trendChartType.value === 'netOvertime') return round2(month.overtime.hours - (month.hx_hours || 0))
   if (trendChartType.value === 'leave') return month.leave.days
   return month.business_trip?.days ?? 0
 }
 function trendChartTitle(month) {
   const v = trendChartValue(month)
   if (trendChartType.value === 'overtime') return `加班 ${v} 小时`
+  if (trendChartType.value === 'netOvertime') return `净加班 ${v} 小时`
   return `${trendChartTypes.find(t => t.type === trendChartType.value)?.label || ''} ${v} 天`
 }
+function round2(v) { return Math.round(v * 100) / 100 }
 
 // 过滤后的加班记录
 const filteredOvertimeRecords = computed(() => {
@@ -524,30 +561,32 @@ const filteredBusinessTripRecords = computed(() => {
 // 获取柱状图高度
 const getBarHeight = (value, max) => {
   if (!value || !max) return '0%'
-  const percentage = (value / max) * 100
+  const percentage = (Math.abs(value) / max) * 100
   return `${Math.max(percentage, 5)}%`
 }
 
 // 科室成员横向对比：合并加班/请假/公出为 { name, overtimeHours, leaveDays, tripDays }
 const memberComparisonList = computed(() => {
+  const ensure = (map, n) => {
+    if (!map.has(n)) map.set(n, { name: n, overtimeHours: 0, netOvertimeHours: 0, leaveDays: 0, tripDays: 0 })
+    return map.get(n)
+  }
   const byName = new Map()
   for (const r of (deptMemberOvertime.value || [])) {
     const n = (r.name || '').trim()
-    if (n) byName.set(n, { name: n, overtimeHours: r.hours || 0, leaveDays: 0, tripDays: 0 })
+    if (n) ensure(byName, n).overtimeHours = r.hours || 0
+  }
+  for (const r of (deptMemberNetOvertime.value || [])) {
+    const n = (r.name || '').trim()
+    if (n) ensure(byName, n).netOvertimeHours = r.hours || 0
   }
   for (const r of (deptMemberLeave.value || [])) {
     const n = (r.name || '').trim()
-    if (n) {
-      if (!byName.has(n)) byName.set(n, { name: n, overtimeHours: 0, leaveDays: 0, tripDays: 0 })
-      byName.get(n).leaveDays = r.days || 0
-    }
+    if (n) ensure(byName, n).leaveDays = r.days || 0
   }
   for (const r of (deptMemberTrip.value || [])) {
     const n = (r.name || '').trim()
-    if (n) {
-      if (!byName.has(n)) byName.set(n, { name: n, overtimeHours: 0, leaveDays: 0, tripDays: 0 })
-      byName.get(n).tripDays = r.days || 0
-    }
+    if (n) ensure(byName, n).tripDays = r.days || 0
   }
   return Array.from(byName.values())
 })
@@ -555,16 +594,19 @@ const memberComparisonList = computed(() => {
 const memberCompareChartType = ref('overtime')
 const memberCompareChartTypes = [
   { type: 'overtime', label: '加班', unit: '(小时)' },
+  { type: 'netOvertime', label: '净加班', unit: '(小时)' },
   { type: 'leave', label: '请假', unit: '(天)' },
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
 const memberCompareBarClass = computed(() => {
   if (memberCompareChartType.value === 'overtime') return 'bar-ot'
+  if (memberCompareChartType.value === 'netOvertime') return 'bar-not'
   if (memberCompareChartType.value === 'leave') return 'bar-lv'
   return 'bar-tr'
 })
 function memberCompareValue(row) {
   if (memberCompareChartType.value === 'overtime') return row.overtimeHours
+  if (memberCompareChartType.value === 'netOvertime') return row.netOvertimeHours
   if (memberCompareChartType.value === 'leave') return row.leaveDays
   return row.tripDays
 }
@@ -576,13 +618,15 @@ const memberCompareSorted = computed(() => {
 const memberCompareMax = computed(() => {
   const list = memberCompareSorted.value
   if (!list.length) return 1
-  const max = Math.max(...list.map(memberCompareValue))
+  const max = Math.max(...list.map(r => Math.abs(memberCompareValue(r))))
   return max || 1
 })
 function memberCompareTitle(row) {
   const v = memberCompareValue(row)
-  if (memberCompareChartType.value === 'overtime') return `加班 ${v} 小时`
-  return `${memberCompareChartTypes.find(t => t.type === memberCompareChartType.value)?.label || ''} ${v} 天`
+  const t = memberCompareChartType.value
+  if (t === 'overtime') return `加班 ${v} 小时`
+  if (t === 'netOvertime') return `净加班 ${v} 小时`
+  return `${memberCompareChartTypes.find(c => c.type === t)?.label || ''} ${v} 天`
 }
 
 // 获取月份标签
@@ -685,7 +729,10 @@ const fetchData = async () => {
 
   loading.value = true
   try {
-    const params = { year: queryParams.value.year }
+    const year = queryParams.value.year
+    const month = queryParams.value.month
+    const params = { year }
+    if (month) params.month = month
     if (name) params.name = name
     else params.lsys = permLsys.value
 
@@ -696,10 +743,12 @@ const fetchData = async () => {
     }
 
     if (name) {
+      const recParams = { name, year }
+      if (month) recParams.month = month
       const [overtimeRes, leaveRes, businessTripRes] = await Promise.all([
-        getOvertimeRecords({ name, year: queryParams.value.year }),
-        getLeaveRecords({ name, year: queryParams.value.year }),
-        getBusinessTripRecords({ name, year: queryParams.value.year })
+        getOvertimeRecords(recParams),
+        getLeaveRecords(recParams),
+        getBusinessTripRecords(recParams)
       ])
       if (overtimeRes.success) overtimeRecords.value = overtimeRes.records || []
       if (leaveRes.success) leaveRecords.value = leaveRes.records || []
@@ -710,28 +759,35 @@ const fetchData = async () => {
       businessTripRecords.value = []
     }
 
-    // 班组长/主任/副主任：拉取科室成员横向对比数据（按人加班/请假/公出）
     if (permLevel.value === 2 && permLsys.value) {
       try {
-        const deptParams = { lsys: permLsys.value, year: queryParams.value.year }
-        const [leaveDept, overtimeDept, tripDept] = await Promise.all([
+        const deptParams = { lsys: permLsys.value, year }
+        if (month) deptParams.month = month
+        const [leaveDept, overtimeDept, netOvertimeDept, tripDept] = await Promise.all([
           getDeptLeaveStats(deptParams),
           getDeptOvertimeStats(deptParams),
+          getDeptOvertimeStats({ ...deptParams, net: true }),
           getDeptBusinessTripStats(deptParams)
         ])
         deptMemberLeave.value = (leaveDept.success && leaveDept.list) ? leaveDept.list : []
         deptMemberOvertime.value = (overtimeDept.success && overtimeDept.list) ? overtimeDept.list : []
+        deptMemberNetOvertime.value = (netOvertimeDept.success && netOvertimeDept.list) ? netOvertimeDept.list : []
         deptMemberTrip.value = (tripDept.success && tripDept.list) ? tripDept.list : []
       } catch (e) {
         deptMemberLeave.value = []
         deptMemberOvertime.value = []
+        deptMemberNetOvertime.value = []
         deptMemberTrip.value = []
       }
     } else {
       deptMemberLeave.value = []
       deptMemberOvertime.value = []
+      deptMemberNetOvertime.value = []
       deptMemberTrip.value = []
     }
+    selectedOvertimeMonth.value = month || ''
+    selectedLeaveMonth.value = month || ''
+    selectedBusinessTripMonth.value = month || ''
   } catch (error) {
     console.error('获取数据失败:', error)
     alert('获取数据失败，请检查网络或后端服务')
@@ -977,6 +1033,10 @@ const fetchData = async () => {
   opacity: 0.8;
   margin-top: var(--spacing-sm);
 }
+.summary-net {
+  font-size: 0.8rem;
+  opacity: 0.7;
+}
 
 /* 图表区域 */
 .chart-section {
@@ -1083,11 +1143,17 @@ const fetchData = async () => {
 .bar-group .bar-ot {
   background: linear-gradient(180deg, #667eea 0%, #764ba2 100%);
 }
+.bar-group .bar-not {
+  background: linear-gradient(180deg, #36d1dc 0%, #5b86e5 100%);
+}
 .bar-group .bar-lv {
   background: linear-gradient(180deg, #f093fb 0%, #f5576c 100%);
 }
 .bar-group .bar-tr {
   background: linear-gradient(180deg, #4facfe 0%, #00f2fe 100%);
+}
+.bar-group .bar-negative {
+  opacity: .55;
 }
 .bar-label {
   font-size: var(--font-size-xs);
@@ -1345,5 +1411,44 @@ const fetchData = async () => {
   .bar-group {
     min-width: 50px;
   }
+}
+
+.chart-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  margin-left: var(--spacing-md);
+  white-space: nowrap;
+}
+
+.table-detail-link {
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+  color: var(--color-primary);
+  margin-left: var(--spacing-md);
+  text-decoration: none;
+  white-space: nowrap;
+}
+.table-detail-link:hover {
+  text-decoration: underline;
+}
+
+.empty-detail-link {
+  display: inline-block;
+  margin-top: var(--spacing-sm);
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+.empty-detail-link:hover {
+  text-decoration: underline;
+}
+
+.type-tag.hx-yes {
+  color: #059669;
+  background: #d1fae5;
+}
+.type-tag.hx-no {
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-spotlight);
 }
 </style>

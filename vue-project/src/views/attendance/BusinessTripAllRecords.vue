@@ -19,9 +19,19 @@
           </div>
           <div class="record-card__filters">
             <label class="filter-label">年份：</label>
-            <select v-model.number="recordYear" class="filter-select" @change="fetchList">
+            <select v-model.number="recordYear" class="filter-select" @change="onYearChange">
               <option :value="null">全部</option>
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
+            </select>
+            <label class="filter-label">月份：</label>
+            <select
+              v-model.number="recordMonth"
+              class="filter-select"
+              :disabled="!recordYear"
+              @change="fetchList"
+            >
+              <option :value="null">全年</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
             </select>
           </div>
         </div>
@@ -102,14 +112,16 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { getBusinessTripAllRecords } from '@/api/attendance'
 
 const router = useRouter()
+const route = useRoute()
 const list = ref([])
 const loading = ref(false)
 const scope = ref('') // all | dept | none
 const recordYear = ref(null) // null = 全部年份
+const recordMonth = ref(null)
 const page = ref(1)
 const pageSize = ref(20)
 
@@ -125,8 +137,9 @@ const scopeHint = computed(() => {
 })
 
 const recordFilterLabel = computed(() => {
-  if (recordYear.value) return `展示 ${recordYear.value}年 公出记录`
-  return '展示全部年份公出记录'
+  if (!recordYear.value) return '展示全部年份公出记录'
+  if (recordMonth.value) return `展示 ${recordYear.value}年${recordMonth.value}月 公出记录`
+  return `展示 ${recordYear.value}年 公出记录`
 })
 
 const totalPages = computed(() => Math.max(1, Math.ceil(list.value.length / pageSize.value)))
@@ -149,10 +162,12 @@ async function fetchList() {
   }
   loading.value = true
   try {
-    const res = await getBusinessTripAllRecords({
-      name,
-      year: recordYear.value ?? undefined
-    })
+    const params = { name }
+    if (recordYear.value != null) {
+      params.year = recordYear.value
+      if (recordMonth.value != null) params.month = recordMonth.value
+    }
+    const res = await getBusinessTripAllRecords(params)
     if (res.success) {
       list.value = res.data || []
       scope.value = res.scope || 'none'
@@ -168,11 +183,26 @@ async function fetchList() {
   }
 }
 
-function goBack() {
-  router.push('/attendance/business-trip')
+function onYearChange() {
+  if (!recordYear.value) recordMonth.value = null
+  fetchList()
 }
 
-onMounted(() => fetchList())
+function goBack() {
+  if (route.query.from === 'leader') {
+    router.push('/leader-dashboard')
+  } else {
+    router.push('/attendance/business-trip')
+  }
+}
+
+onMounted(() => {
+  const qYear = parseInt(route.query.year, 10)
+  if (qYear > 2000) recordYear.value = qYear
+  const qMonth = parseInt(route.query.month, 10)
+  if (qMonth >= 1 && qMonth <= 12 && recordYear.value) recordMonth.value = qMonth
+  fetchList()
+})
 </script>
 
 <style scoped>
@@ -236,6 +266,7 @@ onMounted(() => fetchList())
 .record-card__filters {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
   gap: 8px;
 }
 .filter-label {

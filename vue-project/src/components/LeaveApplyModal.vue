@@ -348,7 +348,6 @@ async function handleSubmit() {
     if (form.materialFile) payload.materialFile = form.materialFile
     const res = await submitLeaveApplication(payload)
     if (res.success) {
-      alert('申请已提交')
       emit('close')
       emit('submitted')
     } else {

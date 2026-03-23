@@ -238,7 +238,7 @@ async def get_overtime_records(
             month_str = f"{year}-{month:02d}"
             query = """
                 SELECT id, bz, xm, jiabanfs, timedate, timefrom, timeto, 
-                       jiabantime, tian1, jbf, jiabanzt, content
+                       jiabantime, tian1, jbf, jiabanzt, content, hx
                 FROM jiaban 
                 WHERE xm = %s AND jiabanzt = 4
                 AND (
@@ -252,7 +252,7 @@ async def get_overtime_records(
             # 查询全年
             query = """
                 SELECT id, bz, xm, jiabanfs, timedate, timefrom, timeto, 
-                       jiabantime, tian1, jbf, jiabanzt, content
+                       jiabantime, tian1, jbf, jiabanzt, content, hx
                 FROM jiaban 
                 WHERE xm = %s AND jiabanzt = 4
                 AND (
@@ -279,7 +279,8 @@ async def get_overtime_records(
                 "tian1": row["tian1"],
                 "jbf": row["jbf"],
                 "jiabanzt": row["jiabanzt"],
-                "content": row["content"]
+                "content": row.get("content") or "",
+                "hx": (row.get("hx") or "否").strip(),
             }
             records.append(record)
             
@@ -521,7 +522,8 @@ async def get_monthly_summary(
                 "month": month_key,
                 "overtime": {"count": 0, "hours": 0.0, "by_type": {}},
                 "leave": {"count": 0, "days": 0.0, "hours": 0.0, "by_type": {}},
-                "business_trip": {"count": 0, "days": 0.0}
+                "business_trip": {"count": 0, "days": 0.0},
+                "hx_hours": 0.0,
             }
 
         for _name in names:
@@ -604,6 +606,8 @@ async def get_monthly_summary(
                                     monthly_data[month_key]["leave"]["days"] += days
                                     monthly_data[month_key]["leave"]["hours"] += hours
                                     qj_type = row["qjfs"] or "其他"
+                                    if qj_type in ("换休", "员工换休票"):
+                                        monthly_data[month_key]["hx_hours"] += hours
                                     if qj_type not in monthly_data[month_key]["leave"]["by_type"]:
                                         monthly_data[month_key]["leave"]["by_type"][qj_type] = {"count": 0, "days": 0, "hours": 0}
                                     monthly_data[month_key]["leave"]["by_type"][qj_type]["count"] += 1
@@ -648,7 +652,8 @@ async def get_monthly_summary(
             data["leave"]["days"] = round(data["leave"]["days"], 2)
             data["leave"]["hours"] = round(data["leave"]["hours"], 2)
             data["business_trip"]["days"] = round(data["business_trip"]["days"], 2)
-            
+            data["hx_hours"] = round(data.get("hx_hours", 0), 2)
+
             # 四舍五入类型统计
             for t in data["overtime"]["by_type"]:
                 data["overtime"]["by_type"][t]["hours"] = round(data["overtime"]["by_type"][t]["hours"], 2)
@@ -659,11 +664,15 @@ async def get_monthly_summary(
             monthly_list.append(data)
         
         # 计算年度总计
+        total_ot = round(sum(m["overtime"]["hours"] for m in monthly_list), 2)
+        total_hx = round(sum(m.get("hx_hours", 0) for m in monthly_list), 2)
         year_total = {
             "overtime": {
                 "count": sum(m["overtime"]["count"] for m in monthly_list),
-                "hours": round(sum(m["overtime"]["hours"] for m in monthly_list), 2)
+                "hours": total_ot
             },
+            "netOvertime": round(total_ot - total_hx, 2),
+            "hx_hours": total_hx,
             "leave": {
                 "count": sum(m["leave"]["count"] for m in monthly_list),
                 "days": round(sum(m["leave"]["days"] for m in monthly_list), 2),

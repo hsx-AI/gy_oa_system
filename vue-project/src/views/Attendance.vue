@@ -393,12 +393,9 @@
             </div>
           </div>
 
-          <div class="form-group checkbox-group">
-            <label class="checkbox-label text-danger">
-              <input type="checkbox" v-model="btForm.confirmed">
-              我确认已阅读并遵守《GYBG-047 智能制造工艺部公出人员管理办法》及公司相关规定。
-            </label>
-            <a :href="btManagementDocUrl" target="_blank" rel="noopener noreferrer" class="doc-link">点击阅读《GYBG-047 智能制造工艺部公出人员管理办法》</a>
+          <div class="form-group">
+            <a :href="btManagementDocUrl" target="_blank" rel="noopener noreferrer" class="doc-link">《GYBG-047 智能制造工艺部公出人员管理办法》</a>
+            <span class="doc-link-hint">（请自行查阅相关规定）</span>
           </div>
 
           <!-- 底部操作 -->
@@ -449,8 +446,7 @@ const btForm = reactive({
   phone: '',
   task: '',
   deptLeader: '',
-  responsiblePerson: '',
-  confirmed: false
+  responsiblePerson: ''
 })
 const btDeptLeaders = ref([])
 const btRoomDirectors = ref([])
@@ -571,7 +567,6 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   btForm.task = ''
   btForm.deptLeader = ''
   btForm.responsiblePerson = ''
-  btForm.confirmed = false
 
   // 获取当前用户对应的部领导与室主任列表
   btLoadingApprovers.value = true
@@ -604,7 +599,6 @@ const handleBusinessTripSubmit = async () => {
   if (!(btForm.endTime || '').trim()) tips.push('预计返回时间')
   if (!(btForm.deptLeader || '').trim()) tips.push('部领导')
   if (!isBuban.value && !(btForm.responsiblePerson || '').trim()) tips.push('室主任')
-  if (!btForm.confirmed) tips.push('勾选并确认已阅读管理办法')
   if (tips.length) {
     alert('请完善后再提交：\n\n' + tips.map(t => '· ' + t).join('\n'))
     return
@@ -635,7 +629,6 @@ const handleBusinessTripSubmit = async () => {
     }
     const res = await submitBusinessTripApply(payload)
     if (res.success) {
-      alert('公出申请已提交')
       businessTripModalVisible.value = false
       await loadSuggestions()
     } else {
@@ -703,7 +696,7 @@ const loadSuggestions = async () => {
       month: parseInt(month, 10)
     })
     if (response.success && response.suggestions) {
-      suggestions.value = response.suggestions.map(item => {
+      const list = response.suggestions.map(item => {
         let type = 'info'
         if ((item.suggestion || '').includes('缺勤') || (item.suggestion || '').includes('迟到')) type = 'warning'
         return {
@@ -716,6 +709,9 @@ const loadSuggestions = async () => {
           under_review: !!item.under_review
         }
       })
+      const priority = (s) => s.handled ? 2 : s.under_review ? 1 : 0
+      list.sort((a, b) => priority(a) - priority(b) || b.date.localeCompare(a.date))
+      suggestions.value = list
     } else {
       suggestions.value = []
     }
@@ -967,6 +963,19 @@ watch(selectedMonth, () => {
 
 .application-form {
   margin-top: var(--spacing-lg);
+}
+
+.doc-link {
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+}
+.doc-link:hover {
+  text-decoration: underline;
+}
+.doc-link-hint {
+  margin-left: var(--spacing-xs);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
 }
 
 .form-row {

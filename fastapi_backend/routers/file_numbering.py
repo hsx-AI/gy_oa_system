@@ -33,6 +33,25 @@ def _ensure_file_dirs():
         os.makedirs(d, exist_ok=True)
 
 
+def _format_bhtime(dt: Optional[datetime] = None) -> str:
+    """编号时间存库格式，与历史迁移数据一致：YYYY/M/D（如 2026/3/16），便于与旧数据混排、前端排序解析。"""
+    d = dt or datetime.now()
+    return f"{d.year}/{d.month}/{d.day}"
+
+
+def _sql_order_bhtime_desc_id_desc() -> str:
+    """
+    bhtime 为 VARCHAR，混用 2026/3/16、2026-03-23 等格式时，字符串 DESC 不是时间顺序。
+    统一把 - . 换成 / 后用 STR_TO_DATE(..., '%Y/%c/%e') 解析（月日可不补零），无效日期排后。
+    """
+    expr = (
+        "STR_TO_DATE(REPLACE(REPLACE(TRIM(IFNULL(bhtime,'')), '-', '/'), '.', '/'), '%Y/%c/%e')"
+    )
+    return (
+        f"ORDER BY ({expr} IS NULL) ASC, {expr} DESC, id DESC"
+    )
+
+
 def _row_id(r) -> Optional[str]:
     """从数据库行取 id，兼容 id / ID 两种列名"""
     if not r:
@@ -180,7 +199,7 @@ async def add_bianhao_tech(req: BianhaoTechRequest):
         next_num = 1 if not max_rows else (max_rows[0].get("bianhao2") or 0) + 1
         bianhao3 = str(next_num).zfill(4)
         bhyear = str(datetime.now().year)
-        bhtime = datetime.now().strftime("%Y-%m-%d")
+        bhtime = _format_bhtime()
         sql = """INSERT INTO bianhao (bz,xm,fenlei,gzh,cpname,neirong,bhtime,yj,bhyear,bianhao1,bianhao2,bianhao3)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,'0',%s,%s,%s,%s)"""
         db.execute_update(sql, (req.bz, req.xm, req.fenlei, gzh_val, req.xmname, req.neirong, bhtime, bhyear, bianhao1, next_num, bianhao3))
@@ -215,7 +234,7 @@ async def get_bianhao_tech_list(
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
         offset = (page - 1) * page_size
-        order = "ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s"
+        order = f"{_sql_order_bhtime_desc_id_desc()} LIMIT %s OFFSET %s"
         rows = db.execute_query(f"SELECT * FROM bianhao WHERE {where_sql} {order}", (*params, page_size, offset))
         def _with_has_pdf(r, ftype):
             d = dict(_fmt_bianhao(r))
@@ -302,7 +321,7 @@ async def add_bianhaogljs(req: BianhaoJsglRequest):
         fenleihao = next((f["label"] for f in FENLEI_JSGL if f["value"] == req.fenlei), "")
         sql = """INSERT INTO bianhaogljs (xm,bz,fenlei,gzh,cpname,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,fenleihao,yj)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'0')"""
-        bhtime = datetime.now().strftime("%Y-%m-%d")
+        bhtime = _format_bhtime()
         db.execute_update(sql, (req.xm, req.bz, req.fenlei, gzh_val, req.xmname, req.neirong, bhtime, bhyear, req.fenlei, next_num, bianhao3, fenleihao))
         code = f"{req.fenlei}{bhyear}{bianhao3}"
         return {"success": True, "message": "编号成功", "bianhao": code}
@@ -334,7 +353,10 @@ async def get_bianhaogljs_list(
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhaogljs WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
         offset = (page - 1) * page_size
-        rows = db.execute_query(f"SELECT * FROM bianhaogljs WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s", (*params, page_size, offset))
+        rows = db.execute_query(
+            f"SELECT * FROM bianhaogljs WHERE {where_sql} {_sql_order_bhtime_desc_id_desc()} LIMIT %s OFFSET %s",
+            (*params, page_size, offset),
+        )
         def _with_has_pdf(r, ftype):
             d = dict(_fmt_gl(r))
             d["id"] = _row_id(r)
@@ -397,7 +419,7 @@ async def add_bianhaogl(req: BianhaoglRequest):
         )
         next_num = 1 if not max_rows else (max_rows[0].get("bianhao2") or 0) + 1
         bianhao3 = str(next_num).zfill(3)
-        bhtime = datetime.now().strftime("%Y-%m-%d")
+        bhtime = _format_bhtime()
         sql = """INSERT INTO bianhaogl (xm,bz,fenlei,cpname,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,yj,content)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'0',%s)"""
         db.execute_update(sql, (req.xm, req.bz, req.fenlei, req.xmname or "", req.neirong, bhtime, bhyear, req.fenlei, next_num, bianhao3, (req.content or "").strip()))
@@ -443,7 +465,10 @@ async def get_bianhaogl_list(
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhaogl WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
         offset = (page - 1) * page_size
-        rows = db.execute_query(f"SELECT * FROM bianhaogl WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s", (*params, page_size, offset))
+        rows = db.execute_query(
+            f"SELECT * FROM bianhaogl WHERE {where_sql} {_sql_order_bhtime_desc_id_desc()} LIMIT %s OFFSET %s",
+            (*params, page_size, offset),
+        )
         def _with_has_pdf(r, ftype):
             d = dict(_fmt_gl_gl(r))
             d["id"] = _row_id(r)
@@ -505,7 +530,7 @@ async def add_bianhao_gygch(req: BianhaoGygchRequest):
         )
         next_seq = 1 if not max_rows else (max_rows[0].get("seq") or 0) + 1
         bianhao_code = f"{bhyear}{room_code}{str(next_seq).zfill(3)}"
-        bhtime = datetime.now().strftime("%Y-%m-%d")
+        bhtime = _format_bhtime()
         rid = uuid.uuid4().hex
         sql = """INSERT INTO bianhao_gygch (id, bz, xm, bhyear, room_code, seq, bianhao_code, neirong, bhtime)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
@@ -549,7 +574,7 @@ async def get_bianhao_gygch_list(
         total = (cnt[0]["n"] or 0) if cnt else 0
         offset = (page - 1) * page_size
         rows = db.execute_query(
-            f"SELECT * FROM bianhao_gygch WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s",
+            f"SELECT * FROM bianhao_gygch WHERE {where_sql} {_sql_order_bhtime_desc_id_desc()} LIMIT %s OFFSET %s",
             (*params, page_size, offset)
         )
         def _with_has_pdf(r):
@@ -666,7 +691,7 @@ async def add_bianhao_scszh(req: BianhaoScszhRequest):
             (req.fenlei, bhyear)
         )
         next_num = 1 if not max_rows else (max_rows[0].get("bianhao2") or 0) + 1
-        bhtime = datetime.now().strftime("%Y-%m-%d")
+        bhtime = _format_bhtime()
         sql = """INSERT INTO bianhao_scszh (xm,bz,fenlei,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,yj,content)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,'0',%s)"""
         db.execute_update(sql, (req.xm, req.bz, req.fenlei, req.neirong.strip(), bhtime, bhyear,
@@ -715,7 +740,7 @@ async def get_bianhao_scszh_list(
         total = (cnt[0]["n"] or 0) if cnt else 0
         offset = (page - 1) * page_size
         rows = db.execute_query(
-            f"SELECT * FROM bianhao_scszh WHERE {where_sql} ORDER BY bhtime DESC, id DESC LIMIT %s OFFSET %s",
+            f"SELECT * FROM bianhao_scszh WHERE {where_sql} {_sql_order_bhtime_desc_id_desc()} LIMIT %s OFFSET %s",
             (*params, page_size, offset)
         )
 

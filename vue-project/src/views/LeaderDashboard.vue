@@ -75,96 +75,173 @@
           </div>
         </div>
 
-        <!-- 汇总卡片 -->
-        <div class="dashboard-cards">
-          <div class="dashboard-card leave-card card">
-            <div class="dashboard-card-header">
-              <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
-                <line x1="16" y1="2" x2="16" y2="6"/>
-                <line x1="8" y1="2" x2="8" y2="6"/>
-                <line x1="3" y1="10" x2="21" y2="10"/>
-              </svg>
-              <h3>请假汇总</h3>
-            </div>
-            <div class="dashboard-card-body">
-              <div class="dashboard-total">
-                <span class="total-value">{{ leaveStats.totalDays ?? '-' }}</span>
-                <span class="total-unit">天</span>
+        <!-- ====== 考勤总览 ====== -->
+        <div class="section card overview-section">
+          <h2 class="section-title">考勤总览</h2>
+          <div class="dashboard-cards">
+            <div class="dashboard-card leave-card">
+              <div class="dashboard-card-header">
+                <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <rect x="3" y="4" width="18" height="18" rx="2" ry="2"/>
+                  <line x1="16" y1="2" x2="16" y2="6"/>
+                  <line x1="8" y1="2" x2="8" y2="6"/>
+                  <line x1="3" y1="10" x2="21" y2="10"/>
+                </svg>
+                <h3>请假汇总</h3>
               </div>
-              <div class="dashboard-meta">共 {{ leaveStats.personCount ?? 0 }} 人</div>
-              <div v-if="leaveStats.list?.length" class="dashboard-list">
-                <div class="list-title">按人明细</div>
-                <ul class="person-list">
-                  <li v-for="item in leaveStats.list" :key="item.name" class="person-item">
-                    <span class="person-name">{{ item.name }}</span>
-                    <span class="person-value">{{ item.days }} 天</span>
-                  </li>
-                </ul>
+              <div class="dashboard-card-body">
+                <div class="dashboard-total">
+                  <span class="total-value">{{ leaveStats.totalDays ?? '-' }}</span>
+                  <span class="total-unit">天</span>
+                </div>
+                <div class="dashboard-meta">共 {{ leaveStats.personCount ?? 0 }} 人</div>
+                <div v-if="leaveStats.list?.length" class="dashboard-list">
+                  <div class="list-title">按人明细</div>
+                  <ul class="person-list">
+                    <li v-for="item in leaveStats.list" :key="item.name" class="person-item">
+                      <span class="person-name">{{ item.name }}</span>
+                      <span class="person-value">{{ item.days }} 天</span>
+                    </li>
+                  </ul>
+                </div>
+                <router-link :to="leaveAllRecordsLink" class="card-detail-link">查看全部记录 →</router-link>
+              </div>
+            </div>
+
+            <div class="dashboard-card overtime-card">
+              <div class="dashboard-card-header">
+                <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="10"/>
+                  <polyline points="12 6 12 12 16 14"/>
+                </svg>
+                <h3>{{ showNetOvertime ? '净加班' : '加班汇总' }}</h3>
+                <button class="ot-toggle-btn" :class="{ active: showNetOvertime }" @click="toggleNetOvertime" title="净加班 = 加班时长 − 换休请假时长">
+                  {{ showNetOvertime ? '总加班' : '净加班' }}
+                </button>
+              </div>
+              <div class="dashboard-card-body">
+                <div class="dashboard-total">
+                  <span class="total-value">{{ overtimeStats.totalHours ?? '-' }}</span>
+                  <span class="total-unit">小时</span>
+                </div>
+                <div class="dashboard-meta">共 {{ overtimeStats.personCount ?? 0 }} 人</div>
+                <div v-if="showNetOvertime" class="ot-net-hint">加班时长 − 换休请假时长</div>
+                <div v-if="overtimeStats.list?.length" class="dashboard-list">
+                  <div class="list-title">按人明细</div>
+                  <ul class="person-list">
+                    <li v-for="item in overtimeStats.list" :key="item.name" class="person-item">
+                      <span class="person-name">{{ item.name }}</span>
+                      <span class="person-value">{{ item.hours }} 小时</span>
+                    </li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+
+            <div class="dashboard-card trip-card">
+              <div class="dashboard-card-header">
+                <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
+                  <circle cx="12" cy="10" r="3"/>
+                </svg>
+                <h3>公出汇总</h3>
+              </div>
+              <div class="dashboard-card-body">
+                <div class="dashboard-total">
+                  <span class="total-value">{{ tripStats.totalDays ?? '-' }}</span>
+                  <span class="total-unit">天</span>
+                </div>
+                <div class="dashboard-meta">共 {{ tripStats.personCount ?? 0 }} 人</div>
+                <div v-if="tripStats.list?.length" class="dashboard-list">
+                  <div class="list-title">按人明细</div>
+                  <ul class="person-list">
+                    <li v-for="item in tripStats.list" :key="item.name" class="person-item">
+                      <span class="person-name">{{ item.name }}</span>
+                      <span class="person-value">{{ item.days }} 天</span>
+                    </li>
+                  </ul>
+                </div>
+                <router-link :to="tripAllRecordsLink" class="card-detail-link">查看全部记录 →</router-link>
               </div>
             </div>
           </div>
 
-          <div class="dashboard-card overtime-card card">
-            <div class="dashboard-card-header">
-              <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <circle cx="12" cy="12" r="10"/>
-                <polyline points="12 6 12 12 16 14"/>
-              </svg>
-              <h3>加班汇总</h3>
-            </div>
-            <div class="dashboard-card-body">
-              <div class="dashboard-total">
-                <span class="total-value">{{ overtimeStats.totalHours ?? '-' }}</span>
-                <span class="total-unit">小时</span>
-              </div>
-              <div class="dashboard-meta">共 {{ overtimeStats.personCount ?? 0 }} 人</div>
-              <div v-if="overtimeStats.list?.length" class="dashboard-list">
-                <div class="list-title">按人明细</div>
-                <ul class="person-list">
-                  <li v-for="item in overtimeStats.list" :key="item.name" class="person-item">
-                    <span class="person-name">{{ item.name }}</span>
-                    <span class="person-value">{{ item.hours }} 小时</span>
-                  </li>
-                </ul>
+          <!-- 科室横向对比（内嵌在考勤总览中） -->
+          <div v-if="hasFetched && deptComparison.list?.length" class="overview-comparison">
+            <div class="fa-divider"></div>
+            <h3 class="fa-chart-title">科室横向对比</h3>
+            <p class="section-desc">各科室加班、请假、公出（可选月份为当月，未选为全年）</p>
+            <div class="chart-filter-row">
+              <label class="chart-filter-label">展示</label>
+              <div class="chart-type-tabs">
+                <button
+                  v-for="t in compareChartTypes"
+                  :key="t.type"
+                  :class="['tab-btn', 'tab-btn-sm', { active: compareChartType === t.type }]"
+                  @click="compareChartType = t.type"
+                >
+                  {{ t.label }}{{ t.unit }}
+                </button>
               </div>
             </div>
-          </div>
-
-          <div class="dashboard-card trip-card card">
-            <div class="dashboard-card-header">
-              <svg class="dashboard-card-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0118 0z"/>
-                <circle cx="12" cy="10" r="3"/>
-              </svg>
-              <h3>公出汇总</h3>
-            </div>
-            <div class="dashboard-card-body">
-              <div class="dashboard-total">
-                <span class="total-value">{{ tripStats.totalDays ?? '-' }}</span>
-                <span class="total-unit">天</span>
+            <div class="bar-chart-wrap">
+              <div class="bar-chart-total bar-chart-single">
+                <div v-for="row in deptComparisonSorted" :key="row.lsys" class="bar-group">
+                  <div class="bar-col">
+                    <div
+                      class="bar bar-has-value"
+                      :class="[compareChartBarClass, { 'bar-negative': compareChartTotalValue(row) < 0 }]"
+                      :style="{ height: getCompareBarHeight(compareChartTotalValue(row), compareChartMaxTotal) }"
+                      :title="compareChartTotalTitle(row)"
+                    >
+                      <span class="bar-value">{{ compareChartTotalValue(row) }}</span>
+                    </div>
+                  </div>
+                  <div class="bar-label">{{ row.lsys }}</div>
+                </div>
               </div>
-              <div class="dashboard-meta">共 {{ tripStats.personCount ?? 0 }} 人</div>
-              <div v-if="tripStats.list?.length" class="dashboard-list">
-                <div class="list-title">按人明细</div>
-                <ul class="person-list">
-                  <li v-for="item in tripStats.list" :key="item.name" class="person-item">
-                    <span class="person-name">{{ item.name }}</span>
-                    <span class="person-value">{{ item.days }} 天</span>
-                  </li>
-                </ul>
+            </div>
+            <div class="chart-subtitle-row">
+              <h3 class="chart-subtitle">{{ compareChartPcSubtitle }}</h3>
+              <button
+                v-if="compareChartType === 'overtime' || compareChartType === 'netOvertime'"
+                class="ot-toggle-btn pc-dim-btn"
+                :class="{ active: pcNetMode }"
+                @click="pcNetMode = !pcNetMode"
+                title="净人均 = 总加班 / (工作日×人数 − 公出天数)"
+              >{{ pcNetMode ? '切换人均' : '切换净人均' }}</button>
+            </div>
+            <div v-if="pcNetMode && (compareChartType === 'overtime' || compareChartType === 'netOvertime')" class="ot-net-hint" style="margin-bottom:8px">
+              公式：总加班 ÷（工作日 × 科室人数 − 科室公出天数），剔除公出人天后的实际在岗人均
+            </div>
+            <div class="bar-chart-wrap">
+              <div class="bar-chart-total bar-chart-single">
+                <div v-for="row in deptComparisonSortedPc" :key="'pc-' + row.lsys" class="bar-group">
+                  <div class="bar-col">
+                    <div
+                      class="bar bar-has-value"
+                      :class="[compareChartBarClass, { 'bar-negative': compareChartPerCapitaValue(row) < 0 }]"
+                      :style="{ height: getCompareBarHeight(compareChartPerCapitaValue(row), compareChartMaxPc) }"
+                      :title="compareChartPerCapitaTitle(row)"
+                    >
+                      <span class="bar-value">{{ compareChartPerCapitaValue(row) }}</span>
+                    </div>
+                  </div>
+                  <div class="bar-label">{{ row.lsys }}</div>
+                </div>
               </div>
             </div>
           </div>
         </div>
 
-        <!-- 满勤率：支持单月与全年，无请假即视为满勤 -->
-        <div v-if="hasFetched && (filterMonth || (fullAttendance.totalPeople != null && fullAttendance.totalPeople > 0))" class="section card full-attendance-section">
+        <!-- ====== 满勤统计 ====== -->
+        <div v-if="hasFetched" class="section card full-attendance-section">
           <h2 class="section-title">
-            <span>满勤率</span>
+            <span>满勤统计</span>
             <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
           </h2>
-          <p class="section-desc">{{ filterMonth ? '当月' : '全年' }}根据打卡数据识别，无异常建议即视为满勤。</p>
+          <p class="section-desc">根据打卡数据识别，考勤异常全部由公出覆盖或无异常即视为满勤。</p>
+
           <div v-if="fullAttendance.totalPeople != null" class="full-attendance-content">
             <div class="full-attendance-summary">
               <div v-if="fullAttendance.workdays != null" class="fa-item">
@@ -188,11 +265,10 @@
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 满勤人数柱状图：横轴月，纵轴满勤人数，可筛科室 -->
-        <div v-if="hasFetched" class="section card full-count-chart-section">
-          <h2 class="section-title">满勤人数柱状图</h2>
+          <div class="fa-divider"></div>
+
+          <h3 class="fa-chart-title">满勤人数柱状图</h3>
           <div class="chart-filter-row">
             <label class="chart-filter-label">科室</label>
             <select v-model="chartLsys" class="form-select chart-filter-select" @change="fetchFullAttendanceChart">
@@ -219,90 +295,6 @@
           </div>
         </div>
 
-        <!-- 科室横向对比柱状图：筛选展示加班/请假/公出其一 -->
-        <div v-if="hasFetched && deptComparison.list?.length" class="section card chart-section">
-          <h2 class="section-title">科室横向对比</h2>
-          <p class="section-desc">各科室加班、请假、公出（可选月份为当月，未选为全年）</p>
-          <div class="chart-filter-row">
-            <label class="chart-filter-label">展示</label>
-            <div class="chart-type-tabs">
-              <button
-                v-for="t in compareChartTypes"
-                :key="t.type"
-                :class="['tab-btn', 'tab-btn-sm', { active: compareChartType === t.type }]"
-                @click="compareChartType = t.type"
-              >
-                {{ t.label }}{{ t.unit }}
-              </button>
-            </div>
-          </div>
-          <div class="bar-chart-wrap">
-            <div class="bar-chart-total bar-chart-single">
-              <div v-for="row in deptComparisonSorted" :key="row.lsys" class="bar-group">
-                <div class="bar-col">
-                  <div
-                    class="bar bar-has-value"
-                    :class="compareChartBarClass"
-                    :style="{ height: getCompareBarHeight(compareChartTotalValue(row), compareChartMaxTotal) }"
-                    :title="compareChartTotalTitle(row)"
-                  >
-                    <span class="bar-value">{{ compareChartTotalValue(row) }}</span>
-                  </div>
-                </div>
-                <div class="bar-label">{{ row.lsys }}</div>
-              </div>
-            </div>
-          </div>
-          <h3 class="chart-subtitle">人均</h3>
-          <div class="bar-chart-wrap">
-            <div class="bar-chart-total bar-chart-single">
-              <div v-for="row in deptComparisonSortedPc" :key="'pc-' + row.lsys" class="bar-group">
-                <div class="bar-col">
-                  <div
-                    class="bar bar-has-value"
-                    :class="compareChartBarClass"
-                    :style="{ height: getCompareBarHeight(compareChartPerCapitaValue(row), compareChartMaxPc) }"
-                    :title="compareChartPerCapitaTitle(row)"
-                  >
-                    <span class="bar-value">{{ compareChartPerCapitaValue(row) }}</span>
-                  </div>
-                </div>
-                <div class="bar-label">{{ row.lsys }}</div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        <!-- 全体员工排序 -->
-        <div v-if="hasFetched" class="section card rankings-section">
-          <h2 class="section-title">全体员工排序</h2>
-          <div class="rankings-tabs">
-            <button v-for="t in rankingTypes" :key="t.type" :class="['tab-btn', { active: rankingType === t.type }]" @click="rankingType = t.type">
-              {{ t.label }}
-            </button>
-          </div>
-          <div class="rankings-table-wrap">
-            <table class="rankings-table">
-              <thead>
-                <tr>
-                  <th>排名</th>
-                  <th>姓名</th>
-                  <th>科室</th>
-                  <th>{{ currentRankingUnit }}</th>
-                </tr>
-              </thead>
-              <tbody>
-                <tr v-for="r in currentRankingList" :key="r.name + r.lsys">
-                  <td>{{ r.rank }}</td>
-                  <td>{{ r.name }}</td>
-                  <td>{{ r.lsys }}</td>
-                  <td class="rank-value">{{ r.value }} {{ r.unit }}</td>
-                </tr>
-              </tbody>
-            </table>
-            <div v-if="!currentRankingList.length && !loading" class="empty-rankings">暂无数据</div>
-          </div>
-        </div>
 
         <!-- 未查询时的提示 -->
         <div v-if="!hasFetched && !loading" class="init-hint card">
@@ -325,7 +317,6 @@ import {
   getLeaderFullAttendanceYear,
   getLeaderFullAttendanceByMonth,
   getLeaderDeptComparison,
-  getLeaderRankings
 } from '@/api/attendance'
 
 const lsys = ref('')
@@ -336,49 +327,38 @@ const lsysList = ref([])
 const canViewDept = computed(() => (permLevel.value === 2 && !!lsys.value) || permLevel.value === 3)
 
 const filterYear = ref(new Date().getFullYear())
-const filterMonth = ref('')
+/** 默认当前月，便于进入看板即看当月数据 */
+const filterMonth = ref(new Date().getMonth() + 1)
 const loading = ref(false)
 const hasFetched = ref(false)
 
 const leaveStats = ref({})
 const overtimeStats = ref({})
+const showNetOvertime = ref(false)
 const tripStats = ref({})
 
 const fullAttendance = ref({})
 const fullAttendanceByMonth = ref([])
 const chartLsys = ref('')
 const deptComparison = ref({ list: [] })
-/** 科室横向对比图筛选：overtime | leave | trip */
 const compareChartType = ref('overtime')
+const pcNetMode = ref(false)
 const compareChartTypes = [
   { type: 'overtime', label: '加班', unit: '(小时)' },
+  { type: 'netOvertime', label: '净加班', unit: '(小时)' },
   { type: 'leave', label: '请假', unit: '(天)' },
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
-const rankingsOvertime = ref([])
-const rankingsLeave = ref([])
-const rankingsTrip = ref([])
-const rankingType = ref('overtime')
-const rankingTypes = [
-  { type: 'overtime', label: '加班' },
-  { type: 'leave', label: '请假' },
-  { type: 'trip', label: '公出' }
-]
-
-const currentRankingList = computed(() => {
-  if (rankingType.value === 'overtime') return rankingsOvertime.value
-  if (rankingType.value === 'leave') return rankingsLeave.value
-  return rankingsTrip.value
-})
-const currentRankingUnit = computed(() => {
-  if (rankingType.value === 'overtime') return '小时'
-  return '天'
-})
 
 const maxCompareOvertime = computed(() => {
   const list = deptComparison.value?.list || []
   if (!list.length) return 1
   return Math.max(...list.map(r => r.overtimeTotal), 1)
+})
+const maxCompareNetOvertime = computed(() => {
+  const list = deptComparison.value?.list || []
+  if (!list.length) return 1
+  return Math.max(...list.map(r => Math.abs(r.netOvertimeTotal || 0)), 1)
 })
 const maxCompareLeave = computed(() => {
   const list = deptComparison.value?.list || []
@@ -395,6 +375,11 @@ const maxCompareOvertimePc = computed(() => {
   if (!list.length) return 1
   return Math.max(...list.map(r => r.overtimePerCapita), 0.01)
 })
+const maxCompareNetOvertimePc = computed(() => {
+  const list = deptComparison.value?.list || []
+  if (!list.length) return 1
+  return Math.max(...list.map(r => Math.abs(r.netOvertimePerCapita || 0)), 0.01)
+})
 const maxCompareLeavePc = computed(() => {
   const list = deptComparison.value?.list || []
   if (!list.length) return 1
@@ -408,12 +393,13 @@ const maxCompareTripPc = computed(() => {
 
 function getCompareBarHeight(value, max) {
   if (value == null || !max) return '0%'
-  const pct = (value / max) * 100
+  const pct = (Math.abs(value) / max) * 100
   return `${Math.max(pct, 4)}%`
 }
 
 const compareChartBarClass = computed(() => {
   if (compareChartType.value === 'overtime') return 'bar-ot'
+  if (compareChartType.value === 'netOvertime') return 'bar-not'
   if (compareChartType.value === 'leave') return 'bar-lv'
   return 'bar-tr'
 })
@@ -430,34 +416,64 @@ const deptComparisonSortedPc = computed(() => {
 })
 const compareChartMaxTotal = computed(() => {
   if (compareChartType.value === 'overtime') return maxCompareOvertime.value
+  if (compareChartType.value === 'netOvertime') return maxCompareNetOvertime.value
   if (compareChartType.value === 'leave') return maxCompareLeave.value
   return maxCompareTrip.value
 })
+const maxCompareOvertimeWd = computed(() => {
+  const list = deptComparison.value?.list || []
+  if (!list.length) return 0.01
+  return Math.max(...list.map(r => Math.abs(r.overtimePerWorkday || 0)), 0.01)
+})
+const maxCompareNetOvertimeWd = computed(() => {
+  const list = deptComparison.value?.list || []
+  if (!list.length) return 0.01
+  return Math.max(...list.map(r => Math.abs(r.netOvertimePerWorkday || 0)), 0.01)
+})
 const compareChartMaxPc = computed(() => {
-  if (compareChartType.value === 'overtime') return maxCompareOvertimePc.value
+  const useWd = pcNetMode.value && (compareChartType.value === 'overtime' || compareChartType.value === 'netOvertime')
+  if (compareChartType.value === 'overtime') return useWd ? maxCompareOvertimeWd.value : maxCompareOvertimePc.value
+  if (compareChartType.value === 'netOvertime') return useWd ? maxCompareNetOvertimeWd.value : maxCompareNetOvertimePc.value
   if (compareChartType.value === 'leave') return maxCompareLeavePc.value
   return maxCompareTripPc.value
 })
 function compareChartTotalValue(row) {
   if (compareChartType.value === 'overtime') return row.overtimeTotal
+  if (compareChartType.value === 'netOvertime') return row.netOvertimeTotal || 0
   if (compareChartType.value === 'leave') return row.leaveTotal
   return row.tripTotal
 }
 function compareChartPerCapitaValue(row) {
-  if (compareChartType.value === 'overtime') return row.overtimePerCapita
+  const useWorkday = pcNetMode.value && (compareChartType.value === 'overtime' || compareChartType.value === 'netOvertime')
+  if (compareChartType.value === 'overtime') return useWorkday ? (row.overtimePerWorkday || 0) : row.overtimePerCapita
+  if (compareChartType.value === 'netOvertime') return useWorkday ? (row.netOvertimePerWorkday || 0) : (row.netOvertimePerCapita || 0)
   if (compareChartType.value === 'leave') return row.leavePerCapita
   return row.tripPerCapita
 }
 function compareChartTotalTitle(row) {
   const v = compareChartTotalValue(row)
-  if (compareChartType.value === 'overtime') return `加班 ${v} 小时`
-  return `${compareChartTypes.find(t => t.type === compareChartType.value)?.label || ''} ${v} 天`
+  const t = compareChartType.value
+  if (t === 'overtime') return `加班 ${v} 小时`
+  if (t === 'netOvertime') return `净加班 ${v} 小时`
+  return `${compareChartTypes.find(c => c.type === t)?.label || ''} ${v} 天`
 }
 function compareChartPerCapitaTitle(row) {
   const v = compareChartPerCapitaValue(row)
-  if (compareChartType.value === 'overtime') return `人均加班 ${v} 小时`
-  return `人均${compareChartTypes.find(t => t.type === compareChartType.value)?.label || ''} ${v} 天`
+  const t = compareChartType.value
+  const wd = pcNetMode.value && (t === 'overtime' || t === 'netOvertime')
+  if (t === 'overtime') return wd ? `净人均加班 ${v} 小时/人天` : `人均加班 ${v} 小时`
+  if (t === 'netOvertime') return wd ? `净人均净加班 ${v} 小时/人天` : `人均净加班 ${v} 小时`
+  return `人均${compareChartTypes.find(c => c.type === t)?.label || ''} ${v} 天`
 }
+
+const compareChartPcSubtitle = computed(() => {
+  const t = compareChartType.value
+  const wd = pcNetMode.value && (t === 'overtime' || t === 'netOvertime')
+  if (t === 'overtime') return wd ? '净人均每天加班（去公出人天）' : '人均每天加班'
+  if (t === 'netOvertime') return wd ? '净人均每天净加班（去公出人天）' : '人均每天净加班'
+  if (t === 'leave') return '人均每天请假'
+  return '人均每天公出'
+})
 
 const yearOptions = computed(() => {
   const currentYear = new Date().getFullYear()
@@ -469,6 +485,19 @@ const yearOptions = computed(() => {
 const chartDeptOptions = computed(() => {
   if (permLevel.value === 3) return lsysList.value
   return lsys.value ? [lsys.value] : []
+})
+
+const leaveAllRecordsLink = computed(() => {
+  const q = { from: 'leader' }
+  if (filterYear.value) q.year = filterYear.value
+  if (filterMonth.value) q.month = filterMonth.value
+  return { path: '/attendance/leave/all-records', query: q }
+})
+const tripAllRecordsLink = computed(() => {
+  const q = { from: 'leader' }
+  if (filterYear.value) q.year = filterYear.value
+  if (filterMonth.value) q.month = filterMonth.value
+  return { path: '/attendance/business-trip/all-records', query: q }
 })
 
 /** 满勤柱状图只显示已过去的月份（当年只显示到当前月，未来年不显示） */
@@ -553,7 +582,6 @@ const fetchData = async () => {
   if (filterMonth.value) params.month = parseInt(filterMonth.value)
   const year = filterYear.value
   const month = filterMonth.value ? parseInt(filterMonth.value) : undefined
-  const baseParams = { year, month }
   try {
     const [
       leaveRes,
@@ -561,27 +589,18 @@ const fetchData = async () => {
       tripRes,
       fullAttRes,
       deptCompRes,
-      rankOtRes,
-      rankLvRes,
-      rankTrRes
     ] = await Promise.all([
       getDeptLeaveStats(params),
-      getDeptOvertimeStats(params),
+      getDeptOvertimeStats(showNetOvertime.value ? { ...params, net: true } : params),
       getDeptBusinessTripStats(params),
       filterMonth.value ? getLeaderFullAttendance({ year, month, lsys: lsysToUse || undefined }) : getLeaderFullAttendanceYear({ year, lsys: lsysToUse || undefined }),
       getLeaderDeptComparison(month ? { year, month } : { year }),
-      getLeaderRankings({ ...baseParams, type: 'overtime' }),
-      getLeaderRankings({ ...baseParams, type: 'leave' }),
-      getLeaderRankings({ ...baseParams, type: 'trip' })
     ])
     if (leaveRes.success) leaveStats.value = leaveRes
     if (overtimeRes.success) overtimeStats.value = overtimeRes
     if (tripRes.success) tripStats.value = tripRes
     if (fullAttRes?.success) fullAttendance.value = fullAttRes
     if (deptCompRes?.success) deptComparison.value = deptCompRes
-    if (rankOtRes?.success) rankingsOvertime.value = rankOtRes.list || []
-    if (rankLvRes?.success) rankingsLeave.value = rankLvRes.list || []
-    if (rankTrRes?.success) rankingsTrip.value = rankTrRes.list || []
     await fetchFullAttendanceChart()
   } catch (error) {
     console.error('领导人看板数据加载失败:', error)
@@ -590,10 +609,24 @@ const fetchData = async () => {
   }
 }
 
+async function toggleNetOvertime() {
+  showNetOvertime.value = !showNetOvertime.value
+  const lsysToUse = permLevel.value === 3 ? filterLsys.value : lsys.value
+  const params = { year: filterYear.value }
+  if (lsysToUse) params.lsys = lsysToUse
+  if (filterMonth.value) params.month = parseInt(filterMonth.value)
+  if (showNetOvertime.value) params.net = true
+  try {
+    const res = await getDeptOvertimeStats(params)
+    if (res.success) overtimeStats.value = res
+  } catch (e) {
+    console.error('切换净加班失败:', e)
+  }
+}
+
 onMounted(async () => {
   await loadPermission()
   await nextTick()
-  // 有科室权限时默认查询（部长默认全员全年，组长/主任为本科室）
   if (canViewDept.value && (permLevel.value === 3 ? true : !!lsys.value)) {
     fetchData()
   }
@@ -721,15 +754,20 @@ onMounted(async () => {
 
 .loading-icon { width: 18px; height: 18px; }
 
-/* 看板卡片 */
+/* 考勤总览 */
+.overview-section { padding: var(--spacing-xl); margin-bottom: var(--spacing-xl); }
+.overview-section .section-title { margin-bottom: var(--spacing-lg); }
+
 .dashboard-cards {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
-  gap: var(--spacing-xl);
+  grid-template-columns: repeat(3, 1fr);
+  gap: var(--spacing-lg);
 }
 
 .dashboard-card {
   overflow: hidden;
+  border-radius: var(--radius-base);
+  border: 1px solid var(--color-border-lighter);
 }
 
 .dashboard-card-header {
@@ -755,6 +793,28 @@ onMounted(async () => {
 .overtime-card .dashboard-card-header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: white; }
 .overtime-card .dashboard-card-header .dashboard-card-icon { color: white; }
 .overtime-card .dashboard-card-header h3 { color: white; }
+
+.ot-toggle-btn {
+  margin-left: auto;
+  padding: 2px 10px;
+  font-size: 12px;
+  line-height: 1.6;
+  border: 1px solid rgba(255,255,255,.6);
+  border-radius: 12px;
+  background: transparent;
+  color: rgba(255,255,255,.85);
+  cursor: pointer;
+  transition: all .2s;
+  white-space: nowrap;
+}
+.ot-toggle-btn:hover { background: rgba(255,255,255,.15); }
+.ot-toggle-btn.active { background: rgba(255,255,255,.25); border-color: #fff; color: #fff; }
+
+.ot-net-hint {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  margin-top: 4px;
+}
 
 .trip-card .dashboard-card-header { background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%); color: white; }
 .trip-card .dashboard-card-header .dashboard-card-icon { color: white; }
@@ -791,6 +851,18 @@ onMounted(async () => {
 
 .person-item:last-child { border-bottom: none; }
 
+.card-detail-link {
+  display: block;
+  margin-top: var(--spacing-md);
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border-lighter);
+  font-size: var(--font-size-sm);
+  color: var(--color-primary);
+  text-decoration: none;
+  text-align: center;
+}
+.card-detail-link:hover { text-decoration: underline; }
+
 .person-name { color: var(--color-text-primary); }
 
 .person-value { color: var(--color-primary); font-weight: var(--font-weight-medium); }
@@ -816,7 +888,10 @@ onMounted(async () => {
 .section-icon { width: 24px; height: 24px; color: var(--color-primary); flex-shrink: 0; }
 .section-desc, .section-desc + .chart-legend { margin-bottom: var(--spacing-md); font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 
-/* 满勤率 */
+/* 满勤统计 */
+.fa-divider { border-top: 1px solid var(--color-border-lighter); margin: var(--spacing-xl) 0; }
+.fa-chart-title { font-size: var(--font-size-md); font-weight: var(--font-weight-semibold); color: var(--color-text-primary); margin-bottom: var(--spacing-md); }
+
 .full-attendance-content { margin-top: var(--spacing-md); }
 .full-attendance-summary {
   display: flex;
@@ -850,6 +925,11 @@ onMounted(async () => {
 .bar-chart-wrap { margin-bottom: var(--spacing-xl); }
 .bar-chart-wrap:last-child { margin-bottom: 0; }
 .chart-subtitle { font-size: var(--font-size-md); color: var(--color-text-secondary); margin: var(--spacing-lg) 0 var(--spacing-sm); }
+.chart-subtitle-row { display: flex; align-items: center; gap: 12px; }
+.chart-subtitle-row .chart-subtitle { margin-bottom: 0; }
+.pc-dim-btn { font-size: 12px; padding: 2px 10px; border-radius: 12px; border: 1px solid var(--color-border); background: transparent; color: var(--color-text-secondary); cursor: pointer; transition: all .2s; white-space: nowrap; }
+.pc-dim-btn:hover { background: var(--color-bg-hover); }
+.pc-dim-btn.active { background: var(--color-primary); color: #fff; border-color: var(--color-primary); }
 .bar-chart-total {
   display: flex;
   gap: var(--spacing-sm);
@@ -872,12 +952,12 @@ onMounted(async () => {
 .bar-group .bar-has-value .bar-value { position: absolute; top: 0; left: 50%; transform: translate(-50%, calc(-100% - 4px)); font-size: var(--font-size-xs); color: var(--color-text-secondary); white-space: nowrap; pointer-events: none; }
 .bar-chart-single .bar-group .bar { width: 28px; }
 .bar-group .bar-ot { background: linear-gradient(180deg, #667eea 0%, #764ba2 100%); }
+.bar-group .bar-not { background: linear-gradient(180deg, #36d1dc 0%, #5b86e5 100%); }
+.bar-group .bar-negative { opacity: .55; }
 .bar-group .bar-lv { background: linear-gradient(180deg, #f093fb 0%, #f5576c 100%); }
 .bar-group .bar-tr { background: linear-gradient(180deg, #4facfe 0%, #00f2fe 100%); }
 .bar-group .bar-label { font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-top: var(--spacing-sm); text-align: center; }
 
-/* 全员排序 */
-.rankings-tabs { display: flex; gap: var(--spacing-sm); margin-bottom: var(--spacing-lg); }
 .tab-btn {
   padding: var(--spacing-sm) var(--spacing-lg);
   border: 1px solid var(--color-border-base);
@@ -890,12 +970,6 @@ onMounted(async () => {
 }
 .tab-btn:hover { border-color: var(--color-primary); color: var(--color-primary); }
 .tab-btn.active { background: var(--color-primary); color: white; border-color: var(--color-primary); }
-.rankings-table-wrap { max-height: 400px; overflow-y: auto; }
-.rankings-table { width: 100%; border-collapse: collapse; }
-.rankings-table th, .rankings-table td { padding: var(--spacing-md); text-align: left; border-bottom: 1px solid var(--color-border-lighter); }
-.rankings-table th { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); background: var(--color-bg-spotlight); }
-.rankings-table td { font-size: var(--font-size-sm); color: var(--color-text-primary); }
-.rankings-table .rank-value { font-weight: var(--font-weight-medium); color: var(--color-primary); }
 .empty-rankings { text-align: center; padding: var(--spacing-xxl); color: var(--color-text-tertiary); }
 
 /* 满勤人数柱状图 */
@@ -962,10 +1036,12 @@ onMounted(async () => {
   margin-top: var(--spacing-sm);
   flex-shrink: 0;
 }
+@media (max-width: 960px) {
+  .dashboard-cards { grid-template-columns: 1fr; }
+}
 @media (max-width: 768px) {
   .filter-form { flex-direction: column; align-items: stretch; }
   .form-actions { margin-left: 0; }
-  .dashboard-cards { grid-template-columns: 1fr; }
   .bar-chart-total { min-width: 400px; }
   .fa-dept-grid { grid-template-columns: repeat(2, 1fr); }
 }

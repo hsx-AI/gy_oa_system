@@ -82,6 +82,11 @@ const routes = [
     component: () => import('../views/attendance/BusinessTripAllRecords.vue')
   },
   {
+    path: '/attendance/leave/all-records',
+    name: 'LeaveAllRecords',
+    component: () => import('../views/attendance/LeaveAllRecords.vue')
+  },
+  {
     path: '/attendance/approvals',
     name: 'Approvals',
     component: () => import('../views/attendance/Approval.vue')

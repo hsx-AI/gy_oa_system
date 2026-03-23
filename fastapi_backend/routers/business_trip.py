@@ -244,6 +244,7 @@ async def get_business_trip_list(
 async def get_business_trip_all_records(
     name: str = Query(..., description="当前用户姓名"),
     year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="按月份筛选，须与 year 同时传入"),
 ):
     """
     全部公出记录（按权限）：
@@ -266,15 +267,25 @@ async def get_business_trip_all_records(
             is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
 
         order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
+        date_where = ""
+        date_params: tuple = ()
+        if year is not None:
+            if month is not None:
+                date_where = " AND YEAR(COALESCE(g.wpsj, g.gcsj)) = %s AND MONTH(COALESCE(g.wpsj, g.gcsj)) = %s"
+                date_params = (year, month)
+            else:
+                date_where = " AND YEAR(COALESCE(g.wpsj, g.gcsj)) = %s"
+                date_params = (year,)
+
         if is_leader:
             sql = f"""
                 SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt,
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
-                {f"WHERE (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
+                WHERE 1=1{date_where}
                 {order}
             """
-            params = (year, year) if year is not None else ()
+            params = date_params
         else:
             if not lsys:
                 return {"success": True, "data": [], "total": 0, "scope": "dept"}
@@ -283,10 +294,10 @@ async def get_business_trip_all_records(
                     g.szr, g.bld, g.bhyy, g.szrpztime, g.bldpztime, COALESCE(g.fhdj_status, 0) AS fhdj_status
                 FROM gcsqb g
                 INNER JOIN yggl y ON g.gcr = y.name AND y.lsys = %s
-                {"AND (YEAR(g.wpsj) = %s OR YEAR(g.gcsj) = %s)" if year is not None else ""}
+                WHERE 1=1{date_where}
                 {order}
             """
-            params = (lsys,) if year is None else (lsys, year, year)
+            params = (lsys,) + date_params
 
         rows = db.execute_query(sql, params)
         records = [_row_to_record(row) for row in rows]

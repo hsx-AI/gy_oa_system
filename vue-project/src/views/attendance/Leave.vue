@@ -23,6 +23,10 @@
           </div>
           <div class="record-card__filters">
             <label class="filter-label">筛选：</label>
+            <select v-if="leaveListMeta.canViewLsys" v-model="recordScope" class="filter-select filter-select--scope">
+              <option value="self">仅本人</option>
+              <option value="lsys">本专业全员（{{ leaveListMeta.lsysLabel || '隶属室' }}）</option>
+            </select>
             <select v-model.number="recordYear" class="filter-select">
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
@@ -39,10 +43,12 @@
             <table class="record-table">
               <thead>
                 <tr>
+                  <th v-if="recordScope === 'lsys'">姓名</th>
                   <th>请假类型</th>
                   <th>开始时间</th>
                   <th>结束时间</th>
-                  <th>时长(天)</th>
+                  <th>时长</th>
+                  <th>事由</th>
                   <th>登记时间</th>
                   <th>审批状态</th>
                   <th>当前审批人</th>
@@ -52,16 +58,22 @@
               </thead>
               <tbody>
                 <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
-                  <td>{{ r.type }}</td>
+                  <td v-if="recordScope === 'lsys'">{{ r.applicant || '—' }}</td>
+                  <td><span class="type-tag" :class="leaveTypeClass(r.type)">{{ r.type }}</span></td>
                   <td>{{ r.startTime }}</td>
                   <td>{{ r.endTime }}</td>
-                  <td>{{ r.duration }}</td>
+                  <td>
+                    <span v-if="r.duration && r.duration > 0">{{ r.duration }} 天</span>
+                    <span v-else-if="r.hours && r.hours > 0">{{ r.hours }} 小时</span>
+                    <span v-else>—</span>
+                  </td>
+                  <td class="reason-cell">{{ r.reason || '—' }}</td>
                   <td>{{ r.applyTime }}</td>
                   <td><span class="status-tag" :class="r.statusClass">{{ r.status }}</span></td>
                   <td>{{ r.currentApprover || '-' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button v-if="r.status === '已驳回'" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedLeave(r)">删除</button>
+                    <button v-if="r.status === '已驳回' && isMyLeaveRecord(r)" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedLeave(r)">删除</button>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -262,11 +274,36 @@ const recordYearOptions = computed(() => {
   return Array.from({ length: 6 }, (_, i) => y - i)  // 当前年及前5年
 })
 const recordStatus = ref('all')
+const recordScope = ref('self')
+const leaveListMeta = ref({ canViewLsys: false, lsysLabel: '' })
+
 const recordFilterLabel = computed(() => {
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
-  return `展示 ${recordYear.value}年全年，${statusText} 本人的请假记录`
+  const who = recordScope.value === 'lsys'
+    ? `本专业（${leaveListMeta.value.lsysLabel || '隶属室'}）全员`
+    : '本人'
+  return `展示 ${recordYear.value}年全年，${statusText} ${who}的请假记录`
 })
-watch([recordYear, recordStatus], () => { fetchLeaveList() })
+
+function isMyLeaveRecord(r) {
+  const n = (form.name || '').trim()
+  const a = (r?.applicant || '').trim()
+  return !a || a === n
+}
+
+watch([recordYear, recordStatus, recordScope], () => { fetchLeaveList() })
+watch(recordScope, () => { recordPage.value = 1 })
+
+function leaveTypeClass(type) {
+  if (!type) return ''
+  if (type.includes('换休')) return 'leave-type-hx'
+  if (type.includes('年休')) return 'leave-type-annual'
+  if (type.includes('病')) return 'leave-type-sick'
+  if (type.includes('事')) return 'leave-type-personal'
+  if (type.includes('婚')) return 'leave-type-marriage'
+  if (type.includes('产') || type.includes('哺乳') || type.includes('护理')) return 'leave-type-maternity'
+  return 'leave-type-other'
+}
 
 // 请假类型选项
 const leaveTypes = [
@@ -415,13 +452,33 @@ const resetForm = () => {
 const fetchLeaveList = async () => {
   loadingList.value = true
   try {
-    const params = { name: form.name, year: recordYear.value, status: recordStatus.value }
+    const params = {
+      name: form.name,
+      year: recordYear.value,
+      status: recordStatus.value,
+      scope: recordScope.value === 'lsys' ? 'lsys' : 'self'
+    }
     const res = await getLeaveList(params)
     if (res.success && res.data) {
       myRecordList.value = res.data
+      if (res.meta) {
+        leaveListMeta.value = {
+          canViewLsys: !!res.meta.canViewLsys,
+          lsysLabel: (res.meta.lsysLabel || '').trim()
+        }
+      }
+      if (recordScope.value === 'lsys' && !leaveListMeta.value.canViewLsys) {
+        recordScope.value = 'self'
+      }
     }
   } catch (err) {
     console.error('获取请假记录失败:', err)
+    const st = err?.response?.status
+    if (st === 403 && recordScope.value === 'lsys') {
+      recordScope.value = 'self'
+      await fetchLeaveList()
+      return
+    }
     myRecordList.value = []
   } finally {
     loadingList.value = false
@@ -823,4 +880,14 @@ button:hover {
   border-color: var(--color-primary-light);
   color: white;
 }
+
+.reason-cell { max-width: 180px; word-break: break-word; font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.type-tag { display: inline-block; padding: 2px 8px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); font-weight: 500; }
+.leave-type-hx { color: #0369a1; background: #e0f2fe; }
+.leave-type-annual { color: #059669; background: #d1fae5; }
+.leave-type-sick { color: #dc2626; background: #fee2e2; }
+.leave-type-personal { color: #d97706; background: #fef3c7; }
+.leave-type-marriage { color: #7c3aed; background: #ede9fe; }
+.leave-type-maternity { color: #db2777; background: #fce7f3; }
+.leave-type-other { color: var(--color-text-secondary); background: var(--color-bg-spotlight, #f5f5f5); }
 </style>
