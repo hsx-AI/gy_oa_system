@@ -41,15 +41,16 @@ def _format_bhtime(dt: Optional[datetime] = None) -> str:
 
 def _sql_order_bhtime_desc_id_desc() -> str:
     """
-    bhtime 为 VARCHAR，混用 2026/3/16、2026-03-23 等格式时，字符串 DESC 不是时间顺序。
-    统一把 - . 换成 / 后用 STR_TO_DATE(..., '%Y/%c/%e') 解析（月日可不补零），无效日期排后。
+    按编号时间真实日期倒序。bhtime 可能是 VARCHAR / DATE / DATETIME。
+    先 CAST 为 CHAR，取日期段，将 - . 统一为 /，再依次尝试两种格式。
+    注意：pymysql 用 %s 做参数替换，MySQL 的 %Y 等需要转义为 %%Y。
     """
-    expr = (
-        "STR_TO_DATE(REPLACE(REPLACE(TRIM(IFNULL(bhtime,'')), '-', '/'), '.', '/'), '%Y/%c/%e')"
+    bh = "SUBSTRING_INDEX(TRIM(CAST(bhtime AS CHAR(128))), ' ', 1)"
+    norm = f"REPLACE(REPLACE({bh}, '-', '/'), '.', '/')"
+    parsed = (
+        f"COALESCE(STR_TO_DATE({norm}, '%%Y/%%c/%%e'), STR_TO_DATE({norm}, '%%Y/%%m/%%d'))"
     )
-    return (
-        f"ORDER BY ({expr} IS NULL) ASC, {expr} DESC, id DESC"
-    )
+    return f"ORDER BY ({parsed} IS NULL) ASC, {parsed} DESC, id DESC"
 
 
 def _row_id(r) -> Optional[str]:
