@@ -70,7 +70,7 @@
               <tbody>
                 <tr v-for="(r, idx) in recordDisplayList" :key="r.id != null && r.id !== '' ? String(r.id) : `row-${idx}`" :data-record-id="r.id">
                   <td>{{ r.tripScope || '—' }}</td>
-                  <td>{{ r.targetUnit }}</td>
+                  <td>{{ r.tripScope === '市内公出' ? '—' : (r.targetUnit || '—') }}</td>
                   <td>{{ r.person }}</td>
                   <td>{{ r.assignTime }}</td>
                   <td>{{ r.projectName }}</td>
@@ -217,11 +217,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>出发时间</label>
-              <input type="datetime-local" v-model="form.startTime" name="btStartTime" autocomplete="on">
+              <DateTimePicker v-model="form.startTime" />
             </div>
             <div class="form-group half">
               <label>预计返回时间</label>
-              <input type="datetime-local" v-model="form.endTime" name="btEndTime" autocomplete="on">
+              <DateTimePicker v-model="form.endTime" />
             </div>
           </div>
 
@@ -309,23 +309,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>实际出发时间</label>
-              <input
-                type="datetime-local"
-                v-model="returnForm.actualStartTime"
-                name="btActualStartTime"
-                autocomplete="on"
-                step="1"
-              >
+              <DateTimePicker v-model="returnForm.actualStartTime" />
             </div>
             <div class="form-group half">
               <label>实际返回时间</label>
-              <input
-                type="datetime-local"
-                v-model="returnForm.actualReturnTime"
-                name="btActualReturnTime"
-                autocomplete="on"
-                step="1"
-              >
+              <DateTimePicker v-model="returnForm.actualReturnTime" />
             </div>
           </div>
 
@@ -346,6 +334,7 @@ import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getApprovers, submitBusinessTripApply, getBusinessTripList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
+import DateTimePicker from '@/components/DateTimePicker.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -685,18 +674,18 @@ const submitApplication = async () => {
   try {
     const payload = {
       tripScope: tripScope.value,
-      targetUnit: form.targetUnit,
-      assignTime: toDateTime(form.assignTime),
-      noticeNo: form.noticeNo,
+      targetUnit: isCityTrip.value ? '' : form.targetUnit,
+      assignTime: isCityTrip.value ? '' : toDateTime(form.assignTime),
+      noticeNo: isCityTrip.value ? '' : form.noticeNo,
       department: form.department,
       name: form.name,
       totalPeople: Number(form.totalPeople) || 1,
-      workNo: form.workNo,
-      projectName: form.projectName,
+      workNo: isCityTrip.value ? '' : form.workNo,
+      projectName: isCityTrip.value ? '' : form.projectName,
       location: form.location,
       startTime: toDateTime(form.startTime),
       endTime: toDateTime(form.endTime),
-      amount: Number(form.amount) || 0,
+      amount: isCityTrip.value ? 0 : (Number(form.amount) || 0),
       phone: form.phone,
       task: form.task,
       deptLeader: form.deptLeader,

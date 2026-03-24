@@ -48,9 +48,9 @@
               <option v-for="d in dateOptions" :key="d" :value="d">{{ d }}</option>
             </select>
             <div class="time-inputs">
-              <input type="time" v-model="form.startTime" name="overtimeStart" autocomplete="on" step="1" :disabled="timeLocked" :tabindex="timeLocked ? -1 : 0" @paste="!timeLocked && onPasteTime($event, 'startTime')">
+              <TimePicker v-model="form.startTime" :disabled="timeLocked" />
               <span>至</span>
-              <input type="time" v-model="form.endTime" name="overtimeEnd" autocomplete="on" step="1" :disabled="timeLocked" :tabindex="timeLocked ? -1 : 0" @paste="!timeLocked && onPasteTime($event, 'endTime')">
+              <TimePicker v-model="form.endTime" :disabled="timeLocked" />
             </div>
           </div>
           <p v-if="timeLocked" class="hint-text lock-hint">当前由智能建议自动填充，日期与时间不可修改</p>
@@ -100,6 +100,7 @@
 import { ref, reactive, computed, watch } from 'vue'
 import { getApprovers, getOvertimeWebconfig, submitOvertimeRegister, getHolidays } from '@/api/attendance'
 import RecentTextInput from '@/components/RecentTextInput.vue'
+import TimePicker from '@/components/TimePicker.vue'
 
 const props = defineProps({
   visible: Boolean,

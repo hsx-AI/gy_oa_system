@@ -153,9 +153,9 @@
                 <option v-for="date in dateOptions" :key="date" :value="date">{{ date }}</option>
               </select>
               <div class="time-inputs">
-                <input type="time" v-model="form.startTime" name="overtimeStart" autocomplete="on" step="1" @paste="onPasteTime($event, 'startTime')">
+                <TimePicker v-model="form.startTime" />
                 <span>至</span>
-                <input type="time" v-model="form.endTime" name="overtimeEnd" autocomplete="on" step="1" @paste="onPasteTime($event, 'endTime')">
+                <TimePicker v-model="form.endTime" />
               </div>
             </div>
             <p v-if="form.needExchangeTicket === '是'" class="hint-text ticket-hint">
@@ -211,6 +211,7 @@ import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getOvertimeList, submitOvertimeRegister, getApprovers, getOvertimeWebconfig, checkCanApprove, deleteOvertimeRecord, getHolidays } from '@/api/attendance'
 import RecentTextInput from '@/components/RecentTextInput.vue'
+import TimePicker from '@/components/TimePicker.vue'
 
 const router = useRouter()
 const route = useRoute()

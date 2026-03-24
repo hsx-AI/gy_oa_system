@@ -490,10 +490,14 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         if idx + 1 < len(intervals):
             next_in = intervals[idx + 1][0]
             if next_in > t_out:
-                suggestions.append(_sugg(
-                    format_time(t_out), format_time(next_in), 1,
-                    f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(next_in)} 的考勤"
-                ))
+                # 缺勤终止时间不能超过下班时间 17:00
+                work_end_dt = date_obj.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
+                gap_end = min(next_in, work_end_dt)
+                if gap_end > t_out:
+                    suggestions.append(_sugg(
+                        format_time(t_out), format_time(gap_end), 1,
+                        f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(gap_end)} 的考勤"
+                    ))
         else:
             # 情况 B：最后区间且刷离早于 17:00（17:00:00 不报）
             if out_val < WORK_PM_END:

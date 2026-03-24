@@ -39,12 +39,12 @@
         <div class="form-row">
           <div class="form-group half">
             <label>开始时间</label>
-            <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on" step="1" :disabled="timeLocked">
+            <DateTimePicker v-model="form.startTime" :disabled="timeLocked" />
             <p v-if="timeLocked" class="hint-text">由智能建议自动填充，不可修改</p>
           </div>
           <div class="form-group half">
             <label>结束时间</label>
-            <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on" step="1">
+            <DateTimePicker v-model="form.endTime" />
             <p v-if="timeLocked" class="hint-text">可修改结束时间以申请多天连续请假</p>
           </div>
         </div>
@@ -113,6 +113,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { getApprovers, submitLeaveApplication, getEmployeeProfile, getHolidays } from '@/api/attendance'
 import { calcDurationFromTimes, normalizeDateKey } from '@/utils/leaveDuration'
 import RecentTextInput from '@/components/RecentTextInput.vue'
+import DateTimePicker from '@/components/DateTimePicker.vue'
 
 const props = defineProps({
   visible: Boolean,

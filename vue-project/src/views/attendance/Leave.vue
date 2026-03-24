@@ -147,11 +147,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>开始时间</label>
-              <input type="datetime-local" v-model="form.startTime" name="leaveStartTime" autocomplete="on" step="1">
+              <DateTimePicker v-model="form.startTime" />
             </div>
             <div class="form-group half">
               <label>结束时间</label>
-              <input type="datetime-local" v-model="form.endTime" name="leaveEndTime" autocomplete="on" step="1">
+              <DateTimePicker v-model="form.endTime" />
             </div>
           </div>
 
@@ -235,6 +235,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { getLeaveList, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord } from '@/api/attendance'
 import { calcDurationFromTimes, normalizeDateKey } from '@/utils/leaveDuration'
 import RecentTextInput from '@/components/RecentTextInput.vue'
+import DateTimePicker from '@/components/DateTimePicker.vue'
 
 const router = useRouter()
 const route = useRoute()

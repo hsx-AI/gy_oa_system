@@ -347,11 +347,11 @@
           <div class="form-row">
             <div class="form-group half">
               <label>出发时间</label>
-              <input type="datetime-local" v-model="btForm.startTime" name="btStartTime" autocomplete="on">
+              <DateTimePicker v-model="btForm.startTime" />
             </div>
             <div class="form-group half">
               <label>预计返回时间</label>
-              <input type="datetime-local" v-model="btForm.endTime" name="btEndTime" autocomplete="on">
+              <DateTimePicker v-model="btForm.endTime" />
             </div>
           </div>
 
@@ -416,6 +416,7 @@ import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, s
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
+import DateTimePicker from '@/components/DateTimePicker.vue'
 
 const router = useRouter()
 
@@ -610,7 +611,7 @@ const handleBusinessTripSubmit = async () => {
   try {
     const payload = {
       tripScope: btTripScope.value,
-      targetUnit: btForm.targetUnit,
+      targetUnit: btIsCityTrip.value ? '' : btForm.targetUnit,
       assignTime: '',
       noticeNo: '',
       department: btForm.department,
