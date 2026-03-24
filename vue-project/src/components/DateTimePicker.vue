@@ -18,7 +18,7 @@
         </select>
       </div>
     </div>
-    <div class="dtp__presets" v-if="!disabled && innerDate">
+    <div class="dtp__presets" v-if="!disabled">
       <button
         v-for="p in presets"
         :key="p.h + '-' + p.m"
@@ -75,12 +75,13 @@ const presets = [
 ]
 
 const timeHint = computed(() => {
-  if (!innerDate.value) return ''
   if (innerHour.value === 0 && innerMinute.value === 0) {
-    return `即 ${innerDate.value} 零点，这一天的最开始`
+    const dateLabel = innerDate.value || '所选日期'
+    return `即 ${dateLabel} 零点，这一天的最开始`
   }
   if (innerHour.value === 24) {
-    return `即 ${innerDate.value} 的结束（次日零点），通常用于结束时间`
+    const dateLabel = innerDate.value || '所选日期'
+    return `即 ${dateLabel} 的结束（次日零点），通常用于结束时间`
   }
   return ''
 })
