@@ -986,12 +986,21 @@ async def get_pending_business_trip(approver: str = Query(...)):
     """
     try:
         # 一级：室主任待审批（szr=当前用户 即登记时选择的室主任）
+        # yjcfsj=预计出发（登记即有）；gcsj=实际出发（返回登记后才有）
         q1 = """
-            SELECT id, wpdw, gcdw, gcdd, gcsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 1 AND szr = %s
         """
         # 二级：部领导待审批（bld=当前用户 即登记时选择的部领导）
         q2 = """
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            FROM gcsqb WHERE bldzt = 1 AND szrzt = 2 AND bld = %s
+        """
+        q1_legacy = """
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            FROM gcsqb WHERE bldzt = 1 AND szrzt = 1 AND szr = %s
+        """
+        q2_legacy = """
             SELECT id, wpdw, gcdw, gcdd, gcsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 2 AND bld = %s
         """
@@ -999,9 +1008,14 @@ async def get_pending_business_trip(approver: str = Query(...)):
             rows1 = db.execute_query(q1, (approver,))
             rows2 = db.execute_query(q2, (approver,))
         except Exception as e:
-            if "unknown column" in str(e).lower() and ("bldzt" in str(e) or "szrzt" in str(e)):
+            err = str(e).lower()
+            if "unknown column" in err and "yjcfsj" in err:
+                rows1 = db.execute_query(q1_legacy, (approver,))
+                rows2 = db.execute_query(q2_legacy, (approver,))
+            elif "unknown column" in err and ("bldzt" in err or "szrzt" in err):
                 return {"success": True, "data": []}
-            raise
+            else:
+                raise
         items = []
         for r in rows1:
             items.append({
@@ -1010,7 +1024,7 @@ async def get_pending_business_trip(approver: str = Query(...)):
                 "targetUnit": r.get("wpdw") or "",
                 "department": r.get("gcdw") or "",
                 "location": r.get("gcdd") or "",
-                "startTime": _fmt_dt(r.get("gcsj")),
+                "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
                 "endTime": _fmt_dt(r.get("yjfhsj")),
                 "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else "",
                 "noticeNo": r.get("tzdbh") or "",
@@ -1026,7 +1040,7 @@ async def get_pending_business_trip(approver: str = Query(...)):
                 "targetUnit": r.get("wpdw") or "",
                 "department": r.get("gcdw") or "",
                 "location": r.get("gcdd") or "",
-                "startTime": _fmt_dt(r.get("gcsj")),
+                "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
                 "endTime": _fmt_dt(r.get("yjfhsj")),
                 "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else "",
                 "noticeNo": r.get("tzdbh") or "",
@@ -1060,7 +1074,7 @@ async def get_business_trip_detail(item_id: str):
             "location": r.get("gcdd"),
             "noticeNo": r.get("tzdbh"),
             "projectName": r.get("xmmc"),
-            "startTime": _fmt_dt(r.get("gcsj")),
+            "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
             "endTime": _fmt_dt(r.get("yjfhsj")),
             "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else _fmt_dt(r.get("gcsj")),
             "assignTime": _fmt_dt(r.get("wpsj")),
