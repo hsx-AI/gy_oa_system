@@ -171,6 +171,10 @@ def _row_to_record(row) -> dict:
             current_approver = (row.get("szr") or "").strip()
         elif bldzt == 1:
             current_approver = (row.get("bld") or "").strip()
+    # 列表「出发时间」：已做返回登记用 gcsj，否则用登记时的预计出发 yjcfsj
+    start_display = _fmt_dt(row.get("gcsj")) or _fmt_dt(row.get("yjcfsj"))
+    # 「实际返回」：仅 sjfhtime；未返回登记时前端可用 expectedReturnTime 显示预计
+    actual_ret = _fmt_dt(row.get("sjfhtime"))
     rec = {
         "id": row.get("id"),
         "tripScope": row.get("gclx") or "",
@@ -179,8 +183,8 @@ def _row_to_record(row) -> dict:
         "assignTime": _fmt_dt(row.get("wpsj")),
         "projectName": row.get("xmmc") or "",
         "location": row.get("gcdd") or "",
-        "startTime": _fmt_dt(row.get("gcsj")),
-        "actualReturnTime": _fmt_dt(row.get("sjfhtime")),
+        "startTime": start_display,
+        "actualReturnTime": actual_ret,
         "expectedStartTime": _fmt_dt(row.get("yjcfsj")),
         "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
         "fhdjStatus": int(row.get("fhdj_status") or 0),

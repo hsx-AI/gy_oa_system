@@ -475,6 +475,7 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     # 4. 缺勤检查逻辑：
     #    规则：如果刷离时间在工作时间区间内（开区间 8–12、13–17，整点 8/12/13/17 不报），
     #          则 "刷离时间 → 下次刷入时间" 为缺勤；若为最后区间则补到 17:00。
+    #    午休 [12:00, 13:00) 内最后一次刷离：视为上午已结束、下午未打卡，补 刷离→17:00（如 12:08→17:00）。
     # -------------------------------------------------
     for idx, (t_in, t_out) in enumerate(intervals):
         out_val = time_to_decimal(t_out)
@@ -482,17 +483,21 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         # 四个边界均开区间：整点 8:00:00 / 12:00:00 / 13:00:00 / 17:00:00 不触发缺勤/早退
         in_am = WORK_AM_START < out_val < WORK_AM_END
         in_pm = WORK_PM_START < out_val < WORK_PM_END
+        # 12:00–13:00（含 12:00 整点，不含 13:00）且为当天最后一对进出：下午缺勤
+        in_lunch_last = (WORK_AM_END <= out_val < WORK_PM_START) and (idx + 1 == len(intervals))
 
-        if not (in_am or in_pm):
-            continue  # 刷离不在工作时间内，不视为工作时段缺勤起点
+        if not (in_am or in_pm) and not in_lunch_last:
+            continue  # 刷离不在工作/午休末段场景内，不视为缺勤起点
 
         # 情况 A：有下一次刷入
         if idx + 1 < len(intervals):
             next_in = intervals[idx + 1][0]
             if next_in > t_out:
-                # 缺勤终止时间不能超过下班时间 17:00
-                work_end_dt = date_obj.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
-                gap_end = min(next_in, work_end_dt)
+                next_in_val = time_to_decimal(next_in)
+                if next_in_val > WORK_PM_END:
+                    gap_end = t_out.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
+                else:
+                    gap_end = next_in
                 if gap_end > t_out:
                     suggestions.append(_sugg(
                         format_time(t_out), format_time(gap_end), 1,
@@ -501,7 +506,8 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         else:
             # 情况 B：最后区间且刷离早于 17:00（17:00:00 不报）
             if out_val < WORK_PM_END:
-                end_dt = date_obj.replace(hour=17, minute=0, second=0, microsecond=0)
+                # 与 collect_valid_times 的 datetime 日期基准一致，避免与 date_obj 混用
+                end_dt = t_out.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
                 suggestions.append(_sugg(
                     format_time(t_out), format_time(end_dt), 1,
                     f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(end_dt)} 的考勤"

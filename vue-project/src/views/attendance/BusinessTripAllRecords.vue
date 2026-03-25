@@ -61,7 +61,7 @@
                   <td>{{ r.projectName }}</td>
                   <td>{{ r.location }}</td>
                   <td>{{ r.startTime || '—' }}</td>
-                  <td>{{ r.actualReturnTime ? r.actualReturnTime.replace('T', ' ').slice(0, 16) : '—' }}</td>
+                  <td>{{ formatTripReturnCell(r) }}</td>
                   <td><span class="status-tag" :class="r.statusClass || 'status-processing'">{{ r.status || '审批中' }}</span></td>
                   <td>{{ r.status === '审批中' && r.currentApprover ? r.currentApprover : '—' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
@@ -117,6 +117,15 @@ import { getBusinessTripAllRecords } from '@/api/attendance'
 
 const router = useRouter()
 const route = useRoute()
+
+function formatTripReturnCell(r) {
+  const a = (r.actualReturnTime || '').trim()
+  if (a) return a.replace('T', ' ').slice(0, 16)
+  const e = (r.expectedReturnTime || '').trim()
+  if (e) return e.replace('T', ' ').trim().slice(0, 16) + '（预计）'
+  return '—'
+}
+
 const list = ref([])
 const loading = ref(false)
 const scope = ref('') // all | dept | none
