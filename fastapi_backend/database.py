@@ -184,7 +184,12 @@ class MySQLDatabase:
                 conn.close()
 
     def execute_many(self, sql: str, params_list: list) -> int:
-        """批量执行 INSERT/UPDATE/DELETE，一次连接提交多行，返回受影响总行数"""
+        """批量执行 INSERT/UPDATE/DELETE，一次连接提交多行，返回受影响总行数。
+
+        使用逐条 execute 而非 PyMySQL executemany：executemany 对
+        INSERT ... VALUES (...) ON DUPLICATE KEY UPDATE ... 只会用 VALUES 段占位符数量
+        去格式化整条参数元组，导致占位符与参数个数不一致而报错。
+        """
         if not params_list:
             return 0
         conn = None
@@ -192,9 +197,13 @@ class MySQLDatabase:
             conn = self.get_connection()
             if not conn:
                 raise Exception("无法连接到数据库")
+            affected = 0
             with conn.cursor() as cursor:
-                cursor.executemany(sql, params_list)
-                affected = cursor.rowcount
+                for params in params_list:
+                    cursor.execute(sql, params)
+                    rc = cursor.rowcount
+                    if rc is not None and rc >= 0:
+                        affected += rc
             conn.commit()
             return affected
         except Exception as e:

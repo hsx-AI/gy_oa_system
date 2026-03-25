@@ -188,7 +188,7 @@ def main():
     parser = argparse.ArgumentParser(description="从 Access report1.mdb 导入 qj 数据到 MySQL")
     parser.add_argument("--commit", action="store_true", help="实际写入（默认 dry-run）")
     parser.add_argument("--mdb", default=MDB_PATH, help="mdb 文件路径")
-    parser.add_argument("--cutoff", default="2025-03-01", help="timeto < 此日期的记录才导入")
+    parser.add_argument("--cutoff", default="2026-03-01", help="timeto < 此日期的记录才导入")
     args = parser.parse_args()
 
     from database import db

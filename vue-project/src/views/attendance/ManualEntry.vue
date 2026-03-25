@@ -4,7 +4,7 @@
       <div class="header-left">
         <div>
           <h1 class="page-title">考勤手动填报</h1>
-          <p class="page-subtitle">请假申请与加班登记</p>
+          <p class="page-subtitle">请假申请、加班登记与节假日换休票</p>
         </div>
         <div class="header-tabs">
           <router-link
@@ -19,12 +19,19 @@
           >
             加班管理
           </router-link>
+          <router-link
+            :to="holidayExchangeTabTo"
+            :class="['tab-link', { active: currentTab === 'holiday-exchange' }]"
+          >
+            公出节假日换休票
+          </router-link>
         </div>
       </div>
     </div>
     <div class="tab-content">
       <Leave v-if="currentTab === 'leave'" />
-      <Overtime v-else />
+      <Overtime v-else-if="currentTab === 'overtime'" />
+      <HolidayExchange v-else-if="currentTab === 'holiday-exchange'" />
     </div>
   </div>
 </template>
@@ -34,11 +41,14 @@ import { computed } from 'vue'
 import { useRoute } from 'vue-router'
 import Leave from './Leave.vue'
 import Overtime from './Overtime.vue'
+import HolidayExchange from './HolidayExchange.vue'
 
 const route = useRoute()
 const currentTab = computed(() => {
   const t = route.query.tab
-  return t === 'overtime' ? 'overtime' : 'leave'
+  if (t === 'overtime') return 'overtime'
+  if (t === 'holiday-exchange') return 'holiday-exchange'
+  return 'leave'
 })
 
 /** 切换 tab 时保留 from、year、month 等查询参数（领导看板跳转等） */
@@ -49,6 +59,10 @@ const leaveTabTo = computed(() => ({
 const overtimeTabTo = computed(() => ({
   path: '/attendance/manual',
   query: { ...route.query, tab: 'overtime' }
+}))
+const holidayExchangeTabTo = computed(() => ({
+  path: '/attendance/manual',
+  query: { ...route.query, tab: 'holiday-exchange' }
 }))
 </script>
 

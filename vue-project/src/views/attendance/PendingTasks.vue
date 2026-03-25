@@ -66,6 +66,7 @@ import {
   getPendingLeave,
   getPendingOvertime,
   getPendingBusinessTrip,
+  getPendingHolidayExchange,
   getBusinessTripList
 } from '@/api/attendance'
 
@@ -120,10 +121,11 @@ async function fetchData() {
     const res = await checkCanApprove({ name: userName })
     canApprove.value = res.canApprove || false
     if (canApprove.value) {
-      const [leaveRes, overtimeRes, btRes] = await Promise.all([
+      const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
       getPendingLeave({ approver: userName }),
       getPendingOvertime({ approver: userName }),
-      getPendingBusinessTrip({ approver: userName })
+      getPendingBusinessTrip({ approver: userName }),
+      getPendingHolidayExchange({ approver: userName })
     ])
     const items = []
     const leaves = leaveRes.data || []
@@ -159,6 +161,18 @@ async function fetchData() {
         type: '公出审批',
         typeClass: 'type-trip',
         description: `${r.applicant}${loc}公出申请`,
+        applicant: r.applicant,
+        applyTime: r.applyTime || ''
+      })
+    })
+    const heList = heRes.data || []
+    heList.forEach(r => {
+      items.push({
+        uniqueId: `he-${r.id}`,
+        tabType: 'holiday-exchange',
+        type: '节假日换休票',
+        typeClass: 'type-he',
+        description: `${r.applicant}的公出节假日换休票申请（${r.dateFrom}至${r.dateTo}，${r.days}天）`,
         applicant: r.applicant,
         applyTime: r.applyTime || ''
       })
@@ -293,6 +307,11 @@ onMounted(fetchData)
 .type-trip {
   background: #e6fffb;
   color: #08979c;
+}
+
+.type-he {
+  background: #f0f5ff;
+  color: #2f54eb;
 }
 
 .btn-primary.btn-sm {

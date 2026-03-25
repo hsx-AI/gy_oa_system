@@ -63,7 +63,7 @@
               <path d="M11 14h2v2h-2z" />
               <path d="M15 14h2v2h-2z" />
             </svg>
-            <span>排班管理 <small style="color:#fbbf24;font-size:10px;">(正在开发)</small></span>
+            <span>排班管理</span>
           </router-link>
           <router-link v-if="canSeeLeaderDashboard" to="/leader-dashboard" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

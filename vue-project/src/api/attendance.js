@@ -554,6 +554,52 @@ export function exportLeaveHandlerTable(params) {
   })
 }
 
+// ==================== 公出节假日换休票 API ====================
+
+/** 提交公出节假日换休票申请（FormData，含文件上传） */
+export function submitHolidayExchange(formData) {
+  return request({
+    url: '/holiday-exchange/apply',
+    method: 'post',
+    data: formData,
+  })
+}
+
+/** 获取公出节假日换休票记录列表 */
+export function getHolidayExchangeList(params) {
+  return request({ url: '/holiday-exchange/list', method: 'get', params })
+}
+
+/** 删除本人已驳回的公出节假日换休票记录 */
+export function deleteHolidayExchangeRecord(id, params) {
+  return request({ url: `/holiday-exchange/${id}`, method: 'delete', params })
+}
+
+/** 获取佐证材料下载地址 */
+export function getHolidayExchangeDownloadUrl(filename) {
+  return `/api/holiday-exchange/download/${encodeURIComponent(filename)}`
+}
+
+/** 待审批公出节假日换休票列表 */
+export function getPendingHolidayExchange(params) {
+  return request({ url: '/approval/pending/holiday-exchange', method: 'get', params })
+}
+
+/** 公出节假日换休票详情 */
+export function getHolidayExchangeDetail(id) {
+  return request({ url: `/approval/holiday-exchange/${id}`, method: 'get' })
+}
+
+/** 公出节假日换休票审批 */
+export function holidayExchangeApproveAction(id, data) {
+  return request({ url: `/approval/holiday-exchange/${id}/action`, method: 'post', data })
+}
+
+/** 公出节假日换休票批量审批 */
+export function holidayExchangeBatchApprove(data) {
+  return request({ url: '/approval/holiday-exchange/batch', method: 'post', data })
+}
+
 // ==================== 加班/请假统计 API ====================
 
 /**

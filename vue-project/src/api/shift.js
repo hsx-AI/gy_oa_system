@@ -20,10 +20,22 @@ export function saveSchedule(data) {
   return request({ url: '/shift/schedule', method: 'post', data })
 }
 
+export function saveDayPlans(data) {
+  return request({ url: '/shift/day-plans', method: 'post', data })
+}
+
 export function autoSchedule(data) {
   return request({ url: '/shift/auto-schedule', method: 'post', data })
 }
 
 export function copyLastMonth(data) {
   return request({ url: '/shift/copy-last-month', method: 'post', data })
+}
+
+export function clearSchedule(data) {
+  return request({ url: '/shift/clear-schedule', method: 'post', data })
+}
+
+export function setDayLocks(data) {
+  return request({ url: '/shift/day-locks', method: 'post', data })
 }

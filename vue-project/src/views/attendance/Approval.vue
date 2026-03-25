@@ -188,6 +188,72 @@
         </div>
       </section>
 
+      <!-- 公出节假日换休票审批 -->
+      <section v-show="activeTab === 'holiday-exchange'" class="approval-section card">
+        <div class="card-body">
+          <div class="batch-actions" v-if="holidayExchangeList.length">
+            <label class="checkbox-label">
+              <input type="checkbox" :checked="holidayExchangeSelectedAll" @change="toggleHolidayExchangeSelectAll">
+              全选
+            </label>
+            <button type="button" class="btn btn-approve" @click="batchApprove('holiday-exchange')" :disabled="!selectedHolidayExchangeIds.length">
+              批量通过 ({{ selectedHolidayExchangeIds.length }})
+            </button>
+          </div>
+          <div class="table-wrap" v-if="holidayExchangeList.length">
+            <table class="approval-table">
+              <thead>
+                <tr>
+                  <th width="40"><input type="checkbox" :checked="holidayExchangeSelectedAll" @change="toggleHolidayExchangeSelectAll"></th>
+                  <th>申请人</th>
+                  <th>班组</th>
+                  <th>加班时间</th>
+                  <th>日期性质</th>
+                  <th>天数</th>
+                  <th>换休票(张)</th>
+                  <th>佐证材料</th>
+                  <th>审批级别</th>
+                  <th>申请时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in holidayExchangeList" :key="item.id">
+                  <td><input type="checkbox" :value="item.id" v-model="selectedHolidayExchangeIds"></td>
+                  <td>{{ item.applicant }}</td>
+                  <td>{{ item.department }}</td>
+                  <td>{{ item.dateFrom }} 至 {{ item.dateTo }}</td>
+                  <td class="cell-rest-summary" :title="item.restDaySummary">{{ item.restDaySummary || '—' }}</td>
+                  <td>{{ item.days }}</td>
+                  <td>{{ item.hxpCount }}</td>
+                  <td>
+                    <template v-if="item.materialFiles && item.materialFiles.length">
+                      <a
+                        v-for="(f, idx) in item.materialFiles"
+                        :key="idx"
+                        :href="getHolidayExchangeFileUrl(f.name)"
+                        target="_blank"
+                        rel="noopener"
+                        class="file-link-inline"
+                      >{{ f.original || f.name }}</a>
+                    </template>
+                    <span v-else>—</span>
+                  </td>
+                  <td>{{ item.approvalLevel }}</td>
+                  <td>{{ item.applyTime }}</td>
+                  <td class="approval-actions">
+                    <button type="button" class="btn btn-link" @click="showDetail('holiday-exchange', item)">查看</button>
+                    <button type="button" class="btn btn-approve" @click="handleApprove('holiday-exchange', item)">通过</button>
+                    <button type="button" class="btn btn-reject" @click="openRejectModal('holiday-exchange', item)">驳回</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="empty-text" v-else>暂无待审批的公出节假日换休票申请</p>
+        </div>
+      </section>
+
       <!-- 详情弹窗 -->
       <div v-if="detailVisible" class="modal-overlay" @click.self="detailVisible = false">
         <div class="modal-content detail-modal">
@@ -256,9 +322,34 @@
               <p><strong>部领导：</strong>{{ detailData.deptLeader }}</p>
               <p><strong>室主任：</strong>{{ detailData.roomDirector }}</p>
             </template>
+            <template v-else-if="detailType === 'holiday-exchange'">
+              <p><strong>申请人：</strong>{{ detailData.applicant }}</p>
+              <p><strong>班组：</strong>{{ detailData.department || '-' }}</p>
+              <p><strong>加班开始日期：</strong>{{ detailData.dateFrom }}</p>
+              <p><strong>加班截止日期：</strong>{{ detailData.dateTo }}</p>
+              <p><strong>日期性质：</strong>{{ detailData.restDaySummary || '—' }}</p>
+              <div v-if="detailData.restDayBreakdown && detailData.restDayBreakdown.length" class="detail-rest-breakdown">
+                <p><strong>逐日说明：</strong></p>
+                <ul class="detail-rest-day-list">
+                  <li v-for="(line, idx) in detailData.restDayBreakdown" :key="idx">{{ line }}</li>
+                </ul>
+              </div>
+              <p><strong>加班天数：</strong>{{ detailData.days }} 天</p>
+              <p><strong>换休票数量：</strong>{{ detailData.hxpCount }} 张</p>
+              <p><strong>佐证材料：</strong></p>
+              <ul v-if="detailData.materialFiles && detailData.materialFiles.length" class="detail-file-list">
+                <li v-for="(f, idx) in detailData.materialFiles" :key="idx">
+                  <a :href="getHolidayExchangeFileUrl(f.name)" target="_blank" rel="noopener">{{ f.original || f.name }}</a>
+                </li>
+              </ul>
+              <p v-else>无</p>
+              <p><strong>申请时间：</strong>{{ detailData.applyTime }}</p>
+              <p><strong>一级审批人：</strong>{{ detailData.spr }}</p>
+              <p><strong>二级审批人：</strong>{{ detailData.spr2 }}</p>
+            </template>
           </div>
           <div class="modal-footer">
-            <template v-if="(detailType === 'leave' || detailType === 'overtime') && detailData?.id">
+            <template v-if="(detailType === 'leave' || detailType === 'overtime' || detailType === 'holiday-exchange') && detailData?.id">
               <button type="button" class="btn btn-approve" @click="handleApprove(detailType, detailData)">通过</button>
               <button type="button" class="btn btn-reject" @click="detailVisible = false; openRejectModal(detailType, detailData)">驳回</button>
             </template>
@@ -307,7 +398,12 @@ import {
   overtimeBatchApprove,
   businessTripBatchApprove,
   queryAttendance,
-  validateOvertimeApproval
+  validateOvertimeApproval,
+  getPendingHolidayExchange,
+  getHolidayExchangeDetail,
+  holidayExchangeApproveAction,
+  holidayExchangeBatchApprove,
+  getHolidayExchangeDownloadUrl
 } from '@/api/attendance'
 
 const route = useRoute()
@@ -320,16 +416,19 @@ const canApprove = ref(true)
 const tabs = [
   { key: 'leave', label: '请假审批' },
   { key: 'overtime', label: '加班审批' },
-  { key: 'business-trip', label: '公出审批' }
+  { key: 'business-trip', label: '公出审批' },
+  { key: 'holiday-exchange', label: '节假日换休票' }
 ]
 
 const activeTab = ref('leave')
 const leaveList = ref([])
 const overtimeList = ref([])
 const businessTripList = ref([])
+const holidayExchangeList = ref([])
 const selectedLeaveIds = ref([])
 const selectedOvertimeIds = ref([])
 const selectedBusinessTripIds = ref([])
+const selectedHolidayExchangeIds = ref([])
 const detailVisible = ref(false)
 const detailType = ref('leave')
 const detailData = ref(null)
@@ -350,10 +449,14 @@ const overtimeSelectedAll = computed(() =>
 const businessTripSelectedAll = computed(() =>
   businessTripList.value.length > 0 && selectedBusinessTripIds.value.length === businessTripList.value.length
 )
+const holidayExchangeSelectedAll = computed(() =>
+  holidayExchangeList.value.length > 0 && selectedHolidayExchangeIds.value.length === holidayExchangeList.value.length
+)
 const detailTitle = computed(() => {
   if (detailType.value === 'leave') return '请假详情'
   if (detailType.value === 'overtime') return '加班详情'
   if (detailType.value === 'business-trip') return '公出详情'
+  if (detailType.value === 'holiday-exchange') return '公出节假日换休票详情'
   return '详情'
 })
 const materialFileDownloadUrl = computed(() => {
@@ -363,7 +466,7 @@ const materialFileDownloadUrl = computed(() => {
 
 onMounted(() => {
   const type = route.query.type
-  if (type === 'leave' || type === 'overtime' || type === 'business-trip') {
+  if (type === 'leave' || type === 'overtime' || type === 'business-trip' || type === 'holiday-exchange') {
     activeTab.value = type
   }
   init()
@@ -373,6 +476,7 @@ watch(activeTab, () => {
   selectedLeaveIds.value = []
   selectedOvertimeIds.value = []
   selectedBusinessTripIds.value = []
+  selectedHolidayExchangeIds.value = []
 })
 
 async function init() {
@@ -383,6 +487,7 @@ async function init() {
     fetchLeaveList()
     fetchOvertimeList()
     fetchBusinessTripList()
+    fetchHolidayExchangeList()
   }
 }
 
@@ -413,10 +518,24 @@ async function fetchBusinessTripList() {
   }
 }
 
+async function fetchHolidayExchangeList() {
+  try {
+    const res = await getPendingHolidayExchange({ approver: currentUser })
+    holidayExchangeList.value = res.data || []
+  } catch {
+    holidayExchangeList.value = []
+  }
+}
+
+function getHolidayExchangeFileUrl(filename) {
+  return getHolidayExchangeDownloadUrl(filename)
+}
+
 function pendingCount(key) {
   if (key === 'leave') return leaveList.value.length
   if (key === 'overtime') return overtimeList.value.length
   if (key === 'business-trip') return businessTripList.value.length
+  if (key === 'holiday-exchange') return holidayExchangeList.value.length
   return 0
 }
 
@@ -429,6 +548,9 @@ function toggleOvertimeSelectAll() {
 function toggleBusinessTripSelectAll() {
   selectedBusinessTripIds.value = businessTripSelectedAll.value ? [] : businessTripList.value.map(r => r.id)
 }
+function toggleHolidayExchangeSelectAll() {
+  selectedHolidayExchangeIds.value = holidayExchangeSelectedAll.value ? [] : holidayExchangeList.value.map(r => r.id)
+}
 
 async function showDetail(type, item) {
   detailType.value = type
@@ -437,6 +559,7 @@ async function showDetail(type, item) {
     let res
     if (type === 'leave') res = await getLeaveDetail(item.id)
     else if (type === 'overtime') res = await getOvertimeDetail(item.id)
+    else if (type === 'holiday-exchange') res = await getHolidayExchangeDetail(item.id)
     else res = await getBusinessTripApprovalDetail(item.id)
     detailData.value = res.data || item
   } catch {
@@ -515,8 +638,11 @@ function formatAttendanceTimes(rec) {
 
 async function handleApprove(type, item) {
   try {
-    const fn = type === 'leave' ? leaveApproveAction : type === 'overtime' ? overtimeApproveAction : businessTripApproveAction
-    const payload = type === 'overtime' ? { action: 'approve', approver: currentUser } : { action: 'approve' }
+    let fn, payload
+    if (type === 'leave') { fn = leaveApproveAction; payload = { action: 'approve' } }
+    else if (type === 'overtime') { fn = overtimeApproveAction; payload = { action: 'approve', approver: currentUser } }
+    else if (type === 'holiday-exchange') { fn = holidayExchangeApproveAction; payload = { action: 'approve', approver: currentUser } }
+    else { fn = businessTripApproveAction; payload = { action: 'approve' } }
     await fn(item.id, payload)
     detailVisible.value = false
     refreshList(type)
@@ -537,7 +663,7 @@ function openRejectModal(type, item) {
 }
 
 function openBatchRejectModal(type) {
-  const ids = type === 'leave' ? selectedLeaveIds.value : type === 'overtime' ? selectedOvertimeIds.value : selectedBusinessTripIds.value
+  const ids = type === 'leave' ? selectedLeaveIds.value : type === 'overtime' ? selectedOvertimeIds.value : type === 'holiday-exchange' ? selectedHolidayExchangeIds.value : selectedBusinessTripIds.value
   if (!ids.length) return
   rejectTarget.value = { type, ids, batch: true }
   rejectReasonInput.value = ''
@@ -557,15 +683,22 @@ async function confirmReject() {
   }
   try {
     if (batch) {
-      const fn = type === 'leave' ? leaveBatchApprove : type === 'overtime' ? overtimeBatchApprove : businessTripBatchApprove
-      const payload = type === 'overtime' ? { ids: target.ids, action: 'reject', reason, approver: currentUser } : { ids: target.ids, action: 'reject', reason }
+      let fn, payload
+      if (type === 'leave') { fn = leaveBatchApprove; payload = { ids: target.ids, action: 'reject', reason } }
+      else if (type === 'overtime') { fn = overtimeBatchApprove; payload = { ids: target.ids, action: 'reject', reason, approver: currentUser } }
+      else if (type === 'holiday-exchange') { fn = holidayExchangeBatchApprove; payload = { ids: target.ids, action: 'reject', reason, approver: currentUser } }
+      else { fn = businessTripBatchApprove; payload = { ids: target.ids, action: 'reject', reason } }
       await fn(payload)
       selectedLeaveIds.value = []
       selectedOvertimeIds.value = []
       selectedBusinessTripIds.value = []
+      selectedHolidayExchangeIds.value = []
     } else {
-      const fn = type === 'leave' ? leaveApproveAction : type === 'overtime' ? overtimeApproveAction : businessTripApproveAction
-      const payload = type === 'overtime' ? { action: 'reject', reason, approver: currentUser } : { action: 'reject', reason }
+      let fn, payload
+      if (type === 'leave') { fn = leaveApproveAction; payload = { action: 'reject', reason } }
+      else if (type === 'overtime') { fn = overtimeApproveAction; payload = { action: 'reject', reason, approver: currentUser } }
+      else if (type === 'holiday-exchange') { fn = holidayExchangeApproveAction; payload = { action: 'reject', reason, approver: currentUser } }
+      else { fn = businessTripApproveAction; payload = { action: 'reject', reason } }
       await fn(id, payload)
       detailVisible.value = false
     }
@@ -582,22 +715,27 @@ async function confirmReject() {
 async function refreshList(type) {
   if (type === 'leave') await fetchLeaveList()
   else if (type === 'overtime') await fetchOvertimeList()
+  else if (type === 'holiday-exchange') await fetchHolidayExchangeList()
   else await fetchBusinessTripList()
 }
 
 async function batchApprove(type) {
-  const ids = type === 'leave' ? selectedLeaveIds.value : type === 'overtime' ? selectedOvertimeIds.value : selectedBusinessTripIds.value
+  const ids = type === 'leave' ? selectedLeaveIds.value : type === 'overtime' ? selectedOvertimeIds.value : type === 'holiday-exchange' ? selectedHolidayExchangeIds.value : selectedBusinessTripIds.value
   if (!ids.length) return
-  const typeName = type === 'leave' ? '请假' : type === 'overtime' ? '加班' : '公出'
+  const typeName = type === 'leave' ? '请假' : type === 'overtime' ? '加班' : type === 'holiday-exchange' ? '节假日换休票' : '公出'
   if (!confirm(`确认批量通过选中的 ${ids.length} 条${typeName}申请？`)) return
   try {
-    const fn = type === 'leave' ? leaveBatchApprove : type === 'overtime' ? overtimeBatchApprove : businessTripBatchApprove
-    const payload = type === 'overtime' ? { ids, action: 'approve', approver: currentUser } : { ids, action: 'approve' }
+    let fn, payload
+    if (type === 'leave') { fn = leaveBatchApprove; payload = { ids, action: 'approve' } }
+    else if (type === 'overtime') { fn = overtimeBatchApprove; payload = { ids, action: 'approve', approver: currentUser } }
+    else if (type === 'holiday-exchange') { fn = holidayExchangeBatchApprove; payload = { ids, action: 'approve', approver: currentUser } }
+    else { fn = businessTripBatchApprove; payload = { ids, action: 'approve' } }
     const res = await fn(payload)
     alert(res.message || '操作完成')
     selectedLeaveIds.value = []
     selectedOvertimeIds.value = []
     selectedBusinessTripIds.value = []
+    selectedHolidayExchangeIds.value = []
     refreshList(type)
   } catch (e) {
     alert(e.response?.data?.detail || '操作失败')
@@ -1017,4 +1155,45 @@ async function batchApprove(type) {
   background: white;
   cursor: pointer;
 }
+
+.file-link-inline {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: var(--font-size-xs);
+}
+.file-link-inline:hover { text-decoration: underline; }
+
+.detail-file-list {
+  list-style: none;
+  padding: 0;
+  margin: var(--spacing-xs) 0;
+}
+.detail-file-list li { margin-bottom: 4px; }
+.detail-file-list a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+.detail-file-list a:hover { text-decoration: underline; }
+
+.cell-rest-summary {
+  max-width: 220px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+.detail-rest-breakdown {
+  margin: var(--spacing-sm) 0;
+}
+.detail-rest-day-list {
+  margin: var(--spacing-xs) 0 0;
+  padding-left: 1.25rem;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.detail-rest-day-list li { margin-bottom: 4px; }
 </style>

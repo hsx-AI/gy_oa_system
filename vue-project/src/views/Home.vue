@@ -121,6 +121,7 @@ import {
   getPendingLeave,
   getPendingOvertime,
   getPendingBusinessTrip,
+  getPendingHolidayExchange,
   getLeaveList,
   getOvertimeList,
   getBusinessTripList,
@@ -401,7 +402,7 @@ const personnelNeedAudit = ref(0)
 // 审批待办真实总数（不截断）
 const todoRealTotal = ref(0)
 
-// 展示的待办列表 = 审批待办(截断显示) + 公出返回登记提醒 + 思想汇报待审核 + 人事档案待办
+// 展示的待办列表 = 审批待办(含节假日换休票，截断显示) + 公出返回登记提醒 + 思想汇报待审核 + 人事档案待办
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
   if (tripReturnPendingCount.value > 0) {
@@ -499,10 +500,11 @@ async function fetchTodoList() {
       todoList.value = []
       return
     }
-    const [leaveRes, overtimeRes, btRes] = await Promise.all([
+    const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
       getPendingLeave({ approver: userName.value }),
       getPendingOvertime({ approver: userName.value }),
-      getPendingBusinessTrip({ approver: userName.value })
+      getPendingBusinessTrip({ approver: userName.value }),
+      getPendingHolidayExchange({ approver: userName.value })
     ])
     const items = []
     const leaves = leaveRes.data || []
@@ -537,6 +539,18 @@ async function fetchTodoList() {
         tabType: 'business-trip',
         type: '公出审批',
         description: `${r.applicant}${loc}公出申请`,
+        applicant: r.applicant,
+        time: formatRelativeTime(r.applyTime),
+        applyTime: r.applyTime || ''
+      })
+    })
+    const heList = heRes.data || []
+    heList.forEach(r => {
+      items.push({
+        uniqueId: `he-${r.id}`,
+        tabType: 'holiday-exchange',
+        type: '节假日换休票',
+        description: `${r.applicant}的公出节假日换休票（${r.dateFrom || ''}至${r.dateTo || ''}，${r.days ?? ''}天）`,
         applicant: r.applicant,
         time: formatRelativeTime(r.applyTime),
         applyTime: r.applyTime || ''
