@@ -37,6 +37,17 @@
               全部公出记录
             </button>
             <label class="filter-label">筛选：</label>
+            <select
+              v-if="tripListMeta.canViewLsys || tripListMeta.canViewAll"
+              v-model="recordScope"
+              class="filter-select filter-select--scope"
+            >
+              <option value="self">仅本人</option>
+              <option v-if="tripListMeta.canViewLsys" value="lsys">
+                本专业全员（{{ tripListMeta.lsysLabel || '隶属室' }}）
+              </option>
+              <option v-if="tripListMeta.canViewAll" value="all">全员</option>
+            </select>
             <select v-model.number="recordYear" class="filter-select">
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
@@ -45,6 +56,21 @@
               <option value="">全部</option>
               <option value="已通过">已通过</option>
               <option value="processing_rejected">审批中/已驳回</option>
+            </select>
+            <input
+              v-model.trim="recordKeyword"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="关键词"
+              aria-label="关键词筛选"
+            >
+            <select v-model="recordSort" class="filter-select" aria-label="排序">
+              <option value="assignTime_desc">委派时间 ↓</option>
+              <option value="assignTime_asc">委派时间 ↑</option>
+              <option value="startTime_desc">出发时间 ↓</option>
+              <option value="startTime_asc">出发时间 ↑</option>
+              <option value="person_asc">公出人 A→Z</option>
+              <option value="person_desc">公出人 Z→A</option>
             </select>
           </div>
         </div>
@@ -333,6 +359,7 @@
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getApprovers, submitBusinessTripApply, getBusinessTripList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
+import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
 
@@ -396,13 +423,45 @@ const recordYearOptions = computed(() => {
   return Array.from({ length: 6 }, (_, i) => y - i)  // 当前年及前5年
 })
 
+const recordScope = ref('self')
+const tripListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
+const recordKeyword = ref('')
+const recordSort = ref('assignTime_desc')
+const TRIP_LOCAL_SORT_FIELDS = [
+  { field: 'assignTime', type: 'date', get: (r) => r.assignTime },
+  { field: 'startTime', type: 'date', get: (r) => r.startTime },
+  { field: 'person', type: 'string', get: (r) => r.person }
+]
+
 const filteredRecordList = computed(() => {
-  const list = myRecordList.value
-  if (!recordStatusFilter.value) return list
-  if (recordStatusFilter.value === 'processing_rejected') {
-    return list.filter(r => (r.status || '') === '审批中' || (r.status || '') === '已驳回')
+  let list = myRecordList.value
+  if (recordStatusFilter.value) {
+    if (recordStatusFilter.value === 'processing_rejected') {
+      list = list.filter((r) => (r.status || '') === '审批中' || (r.status || '') === '已驳回')
+    } else {
+      list = list.filter((r) => (r.status || '') === recordStatusFilter.value)
+    }
   }
-  return list.filter(r => (r.status || '') === recordStatusFilter.value)
+  const kw = recordKeyword.value
+  if (kw && kw.trim()) {
+    list = list.filter((r) =>
+      keywordMatches(kw, [
+        r.tripScope,
+        r.targetUnit,
+        r.person,
+        r.assignTime,
+        r.projectName,
+        r.location,
+        r.startTime,
+        r.actualReturnTime,
+        r.expectedReturnTime,
+        r.status,
+        r.currentApprover,
+        r.rejectReason
+      ])
+    )
+  }
+  return sortRecordRows(list, recordSort.value, TRIP_LOCAL_SORT_FIELDS)
 })
 
 const recordTotal = computed(() => filteredRecordList.value.length)
@@ -416,13 +475,24 @@ const recordDisplayList = computed(() => {
 
 const recordFilterLabel = computed(() => {
   const statusText = recordStatusFilter.value === 'processing_rejected' ? '、审批中/已驳回' : recordStatusFilter.value ? `、${recordStatusFilter.value}` : ''
-  return `展示 ${recordYear.value}年全年本人的公出记录${statusText}`
+  const who =
+    recordScope.value === 'lsys'
+      ? `本专业（${tripListMeta.value.lsysLabel || '隶属室'}）全员`
+      : recordScope.value === 'all'
+        ? '全员（审批范围内）'
+        : '本人'
+  return `展示 ${recordYear.value}年全年${who}的公出记录${statusText}`
 })
 
 // 每页条数或状态筛选变化时回到第一页
 watch(recordPageSize, () => { recordPage.value = 1 })
 watch(recordStatusFilter, () => { recordPage.value = 1 })
+watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
 watch(recordYear, () => { fetchBusinessTripList() })
+watch(recordScope, () => {
+  recordPage.value = 1
+  fetchBusinessTripList()
+})
 
 // 返回登记候选记录：已通过且未做返回登记
 const returnCandidates = computed(() =>
@@ -511,16 +581,39 @@ watch(showApplyModal, (visible) => {
 const fetchBusinessTripList = async () => {
   loadingList.value = true
   try {
-    const params = { name: form.name, year: recordYear.value }
+    const params = {
+      name: form.name,
+      year: recordYear.value,
+      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
+    }
     const res = await getBusinessTripList(params)
     if (res.success && res.data) {
-      myRecordList.value = res.data.map(r => ({
+      myRecordList.value = res.data.map((r) => ({
         ...r,
         actualReturnTime: r.actualReturnTime ? r.actualReturnTime.replace(' ', 'T').slice(0, 16) : ''
       }))
+      if (res.meta) {
+        tripListMeta.value = {
+          canViewLsys: !!res.meta.canViewLsys,
+          canViewAll: !!res.meta.canViewAll,
+          lsysLabel: (res.meta.lsysLabel || '').trim()
+        }
+      }
+      if (recordScope.value === 'lsys' && !tripListMeta.value.canViewLsys) {
+        recordScope.value = 'self'
+      }
+      if (recordScope.value === 'all' && !tripListMeta.value.canViewAll) {
+        recordScope.value = 'self'
+      }
     }
   } catch (err) {
     console.error('获取公出记录失败:', err)
+    const st = err?.response?.status
+    if (st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
+      recordScope.value = 'self'
+      await fetchBusinessTripList()
+      return
+    }
     myRecordList.value = []
   } finally {
     loadingList.value = false
@@ -836,6 +929,19 @@ watch(showApplyModal, async (visible) => {
   border: 1px solid var(--color-border-base);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
+}
+
+.record-card__filters .filter-input {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.record-card__filters .filter-input--search {
+  min-width: 8rem;
+  flex: 1;
+  max-width: 14rem;
 }
 
 .record-card__desc {

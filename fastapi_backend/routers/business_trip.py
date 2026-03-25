@@ -14,7 +14,7 @@ from typing import Optional, List
 from pydantic import BaseModel
 from datetime import datetime
 from database import db
-from routers.approvers import _get_user_info, _jb_match
+from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
 from routers.db_manager import _get_admin1
 import logging
 import uuid
@@ -198,29 +198,78 @@ def _row_to_record(row) -> dict:
     return rec
 
 
+def _business_trip_list_gcr_clause(viewer_name: str, scope: str):
+    """
+    公出 /list：scope=self 仅本人；scope=lsys 同属室（主任/副主任）；scope=all 全员（仅综合技术室主任/副主任）。
+    返回 (sql_fragment, params list, meta)。
+    """
+    from routers.approvers import _jb_match
+
+    scope = (scope or "self").strip().lower()
+    if scope not in ("self", "lsys", "all"):
+        raise HTTPException(status_code=400, detail="无效的 scope")
+    viewer = (viewer_name or "").strip()
+    if not viewer:
+        raise HTTPException(status_code=400, detail="姓名不能为空")
+    meta = {"canViewLsys": False, "canViewAll": False, "lsysLabel": ""}
+    user = _get_user_info(viewer)
+    if user:
+        jb = (user.get("jb") or "").strip()
+        lsys = (user.get("lsys") or "").strip()
+        meta["lsysLabel"] = lsys
+        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
+        meta["canViewAll"] = is_zonghe_tech_director(user)
+    if scope == "self":
+        return "g.gcr = %s", [viewer], meta
+    if scope == "all":
+        if not meta["canViewAll"]:
+            raise HTTPException(status_code=403, detail="仅综合技术室主任、副主任可查看全员公出记录")
+        clause = (
+            "g.gcr IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
+            "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
+            "AND TRIM(y.lsys) <> '部办' "
+            "AND RIGHT(TRIM(y.name), 1) <> '1' "
+            "AND RIGHT(TRIM(y.lsys), 1) <> '1')"
+        )
+        return clause, [], meta
+    if not meta["canViewLsys"]:
+        raise HTTPException(status_code=403, detail="仅主任、副主任可查看本专业全员公出记录")
+    lsys = (user.get("lsys") or "").strip()
+    clause = (
+        "g.gcr IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
+        "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
+    )
+    return clause, [lsys], meta
+
+
 @router.get("/list")
 async def get_business_trip_list(
     name: str,
     year: Optional[int] = None,
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
 ):
-    """获取本人公出记录列表（按公出人 gcr）。含审批状态 bldzt/szrzt 及批示时间。all_years=true 时返回全部年份。"""
+    """获取公出记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all。all_years=true 时返回全部年份。"""
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
-        # 年份筛选用 COALESCE(wpsj, yjfhsj)，避免市内公出（wpsj 为空）被筛掉
+        gcr_where, gcr_params, meta = _business_trip_list_gcr_clause(name, scope)
+        year_expr = "COALESCE(g.wpsj, g.gcsj, g.yjcfsj, g.yjfhsj)"
+        order_by = f" ORDER BY {year_expr} DESC"
         if all_years:
-            base_where = " WHERE gcr = %s ORDER BY COALESCE(wpsj, yjfhsj) DESC"
-            params = (name,)
+            where_sql = f" WHERE ({gcr_where})"
+            params: tuple = tuple(gcr_params)
         else:
-            base_where = " WHERE gcr = %s AND (COALESCE(wpsj, yjfhsj) LIKE %s OR YEAR(COALESCE(wpsj, yjfhsj)) = %s) ORDER BY COALESCE(wpsj, yjfhsj) DESC"
-            params = (name, f"{year}%", year)
+            where_sql = (
+                f" WHERE ({gcr_where}) AND ({year_expr} LIKE %s OR YEAR({year_expr}) = %s)"
+            )
+            params = tuple(gcr_params) + (f"{year}%", year)
+
         try:
-            # bld=部领导, szr=室主任；审批中时展示当前审批人
             query = (
-                "SELECT id, gclx, wpdw, gcr, wpsj, yjcfsj, yjfhsj, xmmc, gcdd, gcsj, sjfhtime, fhdj_status, "
-                "bldzt, szrzt, szrpztime, bldpztime, bhyy, bld, szr FROM gcsqb" + base_where
+                "SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.fhdj_status, "
+                "g.bldzt, g.szrzt, g.szrpztime, g.bldpztime, g.bhyy, g.bld, g.szr FROM gcsqb g" + where_sql + order_by
             )
             rows = db.execute_query(query, params)
         except Exception as e:
@@ -228,17 +277,24 @@ async def get_business_trip_list(
             if "unknown column" in msg and (
                 "gclx" in msg or "szrpztime" in msg or "bldpztime" in msg or "fhdj_status" in msg or "bhyy" in msg or "bld" in msg or "szr" in msg
             ):
-                # 兼容老表结构：无 gclx / fhdj_status / szrpztime / bldpztime / bhyy / bld / szr 列
                 query = (
-                    "SELECT id, wpdw, gcr, wpsj, yjcfsj, yjfhsj, xmmc, gcdd, gcsj, sjfhtime, "
-                    "bldzt, szrzt FROM gcsqb" + base_where
+                    "SELECT g.id, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, "
+                    "g.bldzt, g.szrzt FROM gcsqb g" + where_sql + order_by
                 )
                 rows = db.execute_query(query, params)
             else:
                 raise
 
         records = [_row_to_record(row) for row in rows]
-        return {"success": True, "data": records, "total": len(records)}
+        return {
+            "success": True,
+            "data": records,
+            "total": len(records),
+            "scope": (scope or "self").strip().lower(),
+            "meta": meta,
+        }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"查询公出记录失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
@@ -252,7 +308,7 @@ async def get_business_trip_all_records(
 ):
     """
     全部公出记录（按权限）：
-    部长/副部长：按时间顺序查看全员公出记录；
+    部长/副部长、综合技术室主任/副主任：按时间顺序查看全员公出记录；
     其余人：仅查看本科室全员公出记录。
     按委派时间/公出时间倒序。
     """
@@ -268,7 +324,11 @@ async def get_business_trip_all_records(
         else:
             jb = (user.get("jb") or "").strip()
             lsys = (user.get("lsys") or "").strip()
-            is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+            is_leader = (
+                _jb_match(jb, "部长")
+                or _jb_match(jb, "副部长")
+                or is_zonghe_tech_director(user)
+            )
 
         order = "ORDER BY COALESCE(g.wpsj, g.gcsj) DESC, g.wpsj DESC"
         date_where = ""

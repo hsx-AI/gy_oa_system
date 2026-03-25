@@ -10,7 +10,7 @@
   6. 二级审批 -> jb(部长/副部长)
 """
 from fastapi import APIRouter, HTTPException, Query
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from database import db
 import logging
 
@@ -47,6 +47,18 @@ def _get_user_info(name: str) -> Optional[dict]:
     if not rows:
         return None
     return rows[0]
+
+
+def is_zonghe_tech_director(user: Optional[Dict[str, Any]]) -> bool:
+    """
+    综合技术室 且 主任/副主任：可查看全员请假、加班、公出记录（与部长同级数据范围，排除部办及离职等规则与统计一致）。
+    """
+    if not user:
+        return False
+    if (user.get("lsys") or "").strip() != "综合技术室":
+        return False
+    jb = (user.get("jb") or "").strip()
+    return _jb_match(jb, "主任") or _jb_match(jb, "副主任")
 
 
 def _get_approvers_first(name: str) -> List[dict]:

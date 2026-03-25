@@ -23,9 +23,16 @@
           </div>
           <div class="record-card__filters">
             <label class="filter-label">筛选：</label>
-            <select v-if="overtimeListMeta.canViewLsys" v-model="recordScope" class="filter-select filter-select--scope">
+            <select
+              v-if="overtimeListMeta.canViewLsys || overtimeListMeta.canViewAll"
+              v-model="recordScope"
+              class="filter-select filter-select--scope"
+            >
               <option value="self">仅本人</option>
-              <option value="lsys">本专业全员（{{ overtimeListMeta.lsysLabel || '隶属室' }}）</option>
+              <option v-if="overtimeListMeta.canViewLsys" value="lsys">
+                本专业全员（{{ overtimeListMeta.lsysLabel || '隶属室' }}）
+              </option>
+              <option v-if="overtimeListMeta.canViewAll" value="all">全员</option>
             </select>
             <input type="month" v-model="recordMonth" class="filter-input">
             <select v-model="recordStatus" class="filter-select">
@@ -33,14 +40,31 @@
               <option value="approved">已通过</option>
               <option value="all">全部</option>
             </select>
+            <input
+              v-model.trim="recordKeyword"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="关键词"
+              aria-label="关键词筛选"
+            >
+            <select v-model="recordSort" class="filter-select" aria-label="排序">
+              <option value="date_desc">加班日期 ↓</option>
+              <option value="date_asc">加班日期 ↑</option>
+              <option value="applyTime_desc">登记时间 ↓</option>
+              <option value="applyTime_asc">登记时间 ↑</option>
+              <option value="applicant_asc">姓名 A→Z</option>
+              <option value="applicant_desc">姓名 Z→A</option>
+              <option value="hours_desc">时长(小时) ↓</option>
+              <option value="hours_asc">时长(小时) ↑</option>
+            </select>
           </div>
         </div>
         <div class="card-body record-card__body">
-          <div class="table-wrap" v-if="myRecordList.length">
+          <div class="table-wrap" v-if="recordProcessedList.length">
             <table class="record-table">
               <thead>
                 <tr>
-                  <th v-if="recordScope === 'lsys'">姓名</th>
+                  <th v-if="showApplicantColumn">姓名</th>
                   <th>类别</th>
                   <th>加班日期</th>
                   <th>开始时间</th>
@@ -57,7 +81,7 @@
               </thead>
               <tbody>
                 <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
-                  <td v-if="recordScope === 'lsys'">{{ r.applicant || '—' }}</td>
+                  <td v-if="showApplicantColumn">{{ r.applicant || '—' }}</td>
                   <td>{{ r.level }}</td>
                   <td>{{ r.date }}</td>
                   <td>{{ r.startTime }}</td>
@@ -77,7 +101,7 @@
               </tbody>
             </table>
           </div>
-          <div class="record-pagination" v-if="myRecordList.length">
+          <div class="record-pagination" v-if="recordProcessedList.length">
             <span class="record-pagination__total">共 {{ recordTotal }} 条</span>
             <span class="record-pagination__size">
               每页
@@ -94,7 +118,8 @@
               <button type="button" class="record-pagination__btn" :disabled="recordPage >= recordTotalPages" @click="recordPage = Math.min(recordTotalPages, recordPage + 1)">下一页</button>
             </div>
           </div>
-          <p class="empty-text" v-else>暂无加班记录</p>
+          <p class="empty-text" v-else-if="!myRecordList.length">暂无加班记录</p>
+          <p class="empty-text" v-else>当前筛选条件下无匹配记录</p>
         </div>
       </div>
     </div>
@@ -210,6 +235,7 @@
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getOvertimeList, submitOvertimeRegister, getApprovers, getOvertimeWebconfig, checkCanApprove, deleteOvertimeRecord, getHolidays } from '@/api/attendance'
+import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
 
@@ -221,32 +247,67 @@ const loadingList = ref(false)
 // 本人的加班记录（从 API 获取）
 const myRecordList = ref([])
 
-// 加班记录分页
+// 加班记录分页（关键词 + 排序后分页）
 const recordPage = ref(1)
 const recordPageSize = ref(10)
-const recordTotal = computed(() => myRecordList.value.length)
+const recordKeyword = ref('')
+const recordSort = ref('date_desc')
+const OVERTIME_SORT_FIELDS = [
+  { field: 'date', type: 'date', get: (r) => r.date },
+  { field: 'applyTime', type: 'date', get: (r) => r.applyTime },
+  { field: 'applicant', type: 'string', get: (r) => r.applicant },
+  { field: 'hours', type: 'number', get: (r) => r.hours }
+]
+const recordProcessedList = computed(() => {
+  let list = myRecordList.value
+  const kw = recordKeyword.value
+  if (kw && kw.trim()) {
+    list = list.filter((r) =>
+      keywordMatches(kw, [
+        r.applicant,
+        r.level,
+        r.date,
+        r.startTime,
+        r.endTime,
+        r.content,
+        r.applyTime,
+        r.status,
+        r.hx,
+        r.currentApprover,
+        r.rejectReason
+      ])
+    )
+  }
+  return sortRecordRows(list, recordSort.value, OVERTIME_SORT_FIELDS)
+})
+const recordTotal = computed(() => recordProcessedList.value.length)
 const recordTotalPages = computed(() => Math.max(1, Math.ceil(recordTotal.value / recordPageSize.value)))
 const recordDisplayList = computed(() => {
-  const list = myRecordList.value
+  const list = recordProcessedList.value
   const size = recordPageSize.value
   const start = (recordPage.value - 1) * size
   return list.slice(start, start + size)
 })
 watch(recordPageSize, () => { recordPage.value = 1 })
+watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
 
 // 本人记录筛选：按月，审批状态默认已通过
 const _d2 = new Date()
 const recordMonth = ref(`${_d2.getFullYear()}-${String(_d2.getMonth() + 1).padStart(2, '0')}`)
 const recordStatus = ref('processing')
 const recordScope = ref('self')
-const overtimeListMeta = ref({ canViewLsys: false, lsysLabel: '' })
+const overtimeListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
+const showApplicantColumn = computed(() => recordScope.value === 'lsys' || recordScope.value === 'all')
 
 const recordFilterLabel = computed(() => {
   const r = (recordMonth.value || '').trim()
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
-  const who = recordScope.value === 'lsys'
-    ? `本专业（${overtimeListMeta.value.lsysLabel || '隶属室'}）全员`
-    : '本人'
+  const who =
+    recordScope.value === 'lsys'
+      ? `本专业（${overtimeListMeta.value.lsysLabel || '隶属室'}）全员`
+      : recordScope.value === 'all'
+        ? '全员（审批范围内）'
+        : '本人'
   if (r) {
     const [y, m] = r.split('-')
     return `展示 ${y}年${parseInt(m, 10)}月，${statusText} ${who}的加班记录`
@@ -473,7 +534,7 @@ const fetchOvertimeList = async () => {
       name: form.name,
       year: new Date().getFullYear(),
       status: recordStatus.value,
-      scope: recordScope.value === 'lsys' ? 'lsys' : 'self'
+      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
     }
     if (r) {
       const [y, m] = r.split('-')
@@ -486,17 +547,21 @@ const fetchOvertimeList = async () => {
       if (res.meta) {
         overtimeListMeta.value = {
           canViewLsys: !!res.meta.canViewLsys,
+          canViewAll: !!res.meta.canViewAll,
           lsysLabel: (res.meta.lsysLabel || '').trim()
         }
       }
       if (recordScope.value === 'lsys' && !overtimeListMeta.value.canViewLsys) {
         recordScope.value = 'self'
       }
+      if (recordScope.value === 'all' && !overtimeListMeta.value.canViewAll) {
+        recordScope.value = 'self'
+      }
     }
   } catch (err) {
     console.error('获取加班记录失败:', err)
     const st = err?.response?.status
-    if (st === 403 && recordScope.value === 'lsys') {
+    if (st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
       recordScope.value = 'self'
       await fetchOvertimeList()
       return
@@ -643,6 +708,7 @@ const submitRegister = async () => {
 .record-card__filters { display: flex; align-items: center; gap: var(--spacing-sm); flex-shrink: 0; }
 .record-card__filters .filter-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .record-card__filters .filter-input { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
+.record-card__filters .filter-input--search { min-width: 8rem; flex: 1; max-width: 14rem; }
 .record-card__filters .filter-select { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
 .record-card__desc { margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); font-weight: normal; }
 .card-body { padding: var(--spacing-lg); }

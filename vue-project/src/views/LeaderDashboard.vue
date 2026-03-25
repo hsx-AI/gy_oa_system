@@ -488,10 +488,10 @@ const chartDeptOptions = computed(() => {
 })
 
 const leaveAllRecordsLink = computed(() => {
-  const q = { from: 'leader' }
+  const q = { tab: 'leave', from: 'leader' }
   if (filterYear.value) q.year = filterYear.value
   if (filterMonth.value) q.month = filterMonth.value
-  return { path: '/attendance/leave/all-records', query: q }
+  return { path: '/attendance/manual', query: q }
 })
 const tripAllRecordsLink = computed(() => {
   const q = { from: 'leader' }

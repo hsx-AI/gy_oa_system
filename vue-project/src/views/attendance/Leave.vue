@@ -23,27 +23,55 @@
           </div>
           <div class="record-card__filters">
             <label class="filter-label">筛选：</label>
-            <select v-if="leaveListMeta.canViewLsys" v-model="recordScope" class="filter-select filter-select--scope">
+            <select
+              v-if="leaveListMeta.canViewLsys || leaveListMeta.canViewAll"
+              v-model="recordScope"
+              class="filter-select filter-select--scope"
+            >
               <option value="self">仅本人</option>
-              <option value="lsys">本专业全员（{{ leaveListMeta.lsysLabel || '隶属室' }}）</option>
+              <option v-if="leaveListMeta.canViewLsys" value="lsys">
+                本专业全员（{{ leaveListMeta.lsysLabel || '隶属室' }}）
+              </option>
+              <option v-if="leaveListMeta.canViewAll" value="all">全员</option>
             </select>
             <select v-model.number="recordYear" class="filter-select">
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
-            <span class="filter-text">全年</span>
+            <label class="filter-label">月份：</label>
+            <select v-model="recordMonth" class="filter-select">
+              <option :value="null">全年</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+            </select>
             <select v-model="recordStatus" class="filter-select">
               <option value="processing">审批中/已驳回</option>
               <option value="approved">已通过</option>
               <option value="all">全部</option>
             </select>
+            <input
+              v-model.trim="recordKeyword"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="关键词"
+              aria-label="关键词筛选"
+            >
+            <select v-model="recordSort" class="filter-select" aria-label="排序">
+              <option value="startTime_desc">开始时间 ↓</option>
+              <option value="startTime_asc">开始时间 ↑</option>
+              <option value="applyTime_desc">登记时间 ↓</option>
+              <option value="applyTime_asc">登记时间 ↑</option>
+              <option value="applicant_asc">姓名 A→Z</option>
+              <option value="applicant_desc">姓名 Z→A</option>
+              <option value="duration_desc">合计时长 ↓</option>
+              <option value="duration_asc">合计时长 ↑</option>
+            </select>
           </div>
         </div>
         <div class="card-body record-card__body">
-          <div class="table-wrap" v-if="myRecordList.length">
+          <div class="table-wrap" v-if="recordProcessedList.length">
             <table class="record-table">
               <thead>
                 <tr>
-                  <th v-if="recordScope === 'lsys'">姓名</th>
+                  <th v-if="showApplicantColumn">姓名</th>
                   <th>请假类型</th>
                   <th>开始时间</th>
                   <th>结束时间</th>
@@ -58,7 +86,7 @@
               </thead>
               <tbody>
                 <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
-                  <td v-if="recordScope === 'lsys'">{{ r.applicant || '—' }}</td>
+                  <td v-if="showApplicantColumn">{{ r.applicant || '—' }}</td>
                   <td><span class="type-tag" :class="leaveTypeClass(r.type)">{{ r.type }}</span></td>
                   <td>{{ r.startTime }}</td>
                   <td>{{ r.endTime }}</td>
@@ -80,7 +108,7 @@
               </tbody>
             </table>
           </div>
-          <div class="record-pagination" v-if="myRecordList.length">
+          <div class="record-pagination" v-if="recordProcessedList.length">
             <span class="record-pagination__total">共 {{ recordTotal }} 条</span>
             <span class="record-pagination__size">
               每页
@@ -97,7 +125,8 @@
               <button type="button" class="record-pagination__btn" :disabled="recordPage >= recordTotalPages" @click="recordPage = Math.min(recordTotalPages, recordPage + 1)">下一页</button>
             </div>
           </div>
-          <p class="empty-text" v-else>暂无请假记录</p>
+          <p class="empty-text" v-else-if="!myRecordList.length">暂无请假记录</p>
+          <p class="empty-text" v-else>当前筛选条件下无匹配记录</p>
         </div>
       </div>
     </div>
@@ -234,6 +263,7 @@ import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getLeaveList, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord } from '@/api/attendance'
 import { calcDurationFromTimes, normalizeDateKey } from '@/utils/leaveDuration'
+import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
 
@@ -255,18 +285,47 @@ const loadingList = ref(false)
 // 本人的请假记录（从 API 获取）
 const myRecordList = ref([])
 
-// 请假记录分页
+// 请假记录分页（在关键词筛选与排序后的列表上分页）
 const recordPage = ref(1)
 const recordPageSize = ref(10)
-const recordTotal = computed(() => myRecordList.value.length)
+const recordKeyword = ref('')
+const recordSort = ref('startTime_desc')
+const LEAVE_SORT_FIELDS = [
+  { field: 'startTime', type: 'date', get: (r) => r.startTime },
+  { field: 'applyTime', type: 'date', get: (r) => r.applyTime },
+  { field: 'applicant', type: 'string', get: (r) => r.applicant },
+  { field: 'duration', type: 'number', get: (r) => (Number(r.duration) || 0) * 24 + (Number(r.hours) || 0) }
+]
+const recordProcessedList = computed(() => {
+  let list = myRecordList.value
+  const kw = recordKeyword.value
+  if (kw && kw.trim()) {
+    list = list.filter((r) =>
+      keywordMatches(kw, [
+        r.applicant,
+        r.type,
+        r.startTime,
+        r.endTime,
+        r.reason,
+        r.applyTime,
+        r.status,
+        r.currentApprover,
+        r.rejectReason
+      ])
+    )
+  }
+  return sortRecordRows(list, recordSort.value, LEAVE_SORT_FIELDS)
+})
+const recordTotal = computed(() => recordProcessedList.value.length)
 const recordTotalPages = computed(() => Math.max(1, Math.ceil(recordTotal.value / recordPageSize.value)))
 const recordDisplayList = computed(() => {
-  const list = myRecordList.value
+  const list = recordProcessedList.value
   const size = recordPageSize.value
   const start = (recordPage.value - 1) * size
   return list.slice(start, start + size)
 })
 watch(recordPageSize, () => { recordPage.value = 1 })
+watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
 
 // 本人记录筛选：年份+全年，审批状态默认全部
 const recordYear = ref(new Date().getFullYear())
@@ -275,15 +334,24 @@ const recordYearOptions = computed(() => {
   return Array.from({ length: 6 }, (_, i) => y - i)  // 当前年及前5年
 })
 const recordStatus = ref('all')
+/** null = 全年，1–12 = 仅该月（按请假开始时间） */
+const recordMonth = ref(null)
 const recordScope = ref('self')
-const leaveListMeta = ref({ canViewLsys: false, lsysLabel: '' })
+const leaveListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
+const showApplicantColumn = computed(() => recordScope.value === 'lsys' || recordScope.value === 'all')
 
 const recordFilterLabel = computed(() => {
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
-  const who = recordScope.value === 'lsys'
-    ? `本专业（${leaveListMeta.value.lsysLabel || '隶属室'}）全员`
-    : '本人'
-  return `展示 ${recordYear.value}年全年，${statusText} ${who}的请假记录`
+  const who =
+    recordScope.value === 'lsys'
+      ? `本专业（${leaveListMeta.value.lsysLabel || '隶属室'}）全员`
+      : recordScope.value === 'all'
+        ? '全员（审批范围内）'
+        : '本人'
+  const rm = recordMonth.value
+  const hasMonth = rm != null && rm !== '' && Number.isFinite(Number(rm))
+  const ym = hasMonth ? `${recordYear.value}年${Number(rm)}月` : `${recordYear.value}年全年`
+  return `展示 ${ym}，${statusText} ${who}的请假记录`
 })
 
 function isMyLeaveRecord(r) {
@@ -292,8 +360,9 @@ function isMyLeaveRecord(r) {
   return !a || a === n
 }
 
-watch([recordYear, recordStatus, recordScope], () => { fetchLeaveList() })
+watch([recordYear, recordStatus, recordScope, recordMonth], () => { fetchLeaveList() })
 watch(recordScope, () => { recordPage.value = 1 })
+watch(recordMonth, () => { recordPage.value = 1 })
 
 function leaveTypeClass(type) {
   if (!type) return ''
@@ -457,7 +526,11 @@ const fetchLeaveList = async () => {
       name: form.name,
       year: recordYear.value,
       status: recordStatus.value,
-      scope: recordScope.value === 'lsys' ? 'lsys' : 'self'
+      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
+    }
+    const rm = recordMonth.value
+    if (rm != null && rm !== '' && Number.isFinite(Number(rm))) {
+      params.month = Number(rm)
     }
     const res = await getLeaveList(params)
     if (res.success && res.data) {
@@ -465,17 +538,21 @@ const fetchLeaveList = async () => {
       if (res.meta) {
         leaveListMeta.value = {
           canViewLsys: !!res.meta.canViewLsys,
+          canViewAll: !!res.meta.canViewAll,
           lsysLabel: (res.meta.lsysLabel || '').trim()
         }
       }
       if (recordScope.value === 'lsys' && !leaveListMeta.value.canViewLsys) {
         recordScope.value = 'self'
       }
+      if (recordScope.value === 'all' && !leaveListMeta.value.canViewAll) {
+        recordScope.value = 'self'
+      }
     }
   } catch (err) {
     console.error('获取请假记录失败:', err)
     const st = err?.response?.status
-    if (st === 403 && recordScope.value === 'lsys') {
+    if (st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
       recordScope.value = 'self'
       await fetchLeaveList()
       return
@@ -508,10 +585,27 @@ onMounted(async () => {
       canApprove.value = false
     }
   }
-  // 从首页点击流程：以业务时间(请假年+状态)筛选，再按 focusId 定位到该条并滚动
   const q = route.query
+  // 领导看板「查看全部记录」或旧链接 /leave/all-records：用工单填报页的完整筛选（全员+已通过+年月）
+  if (q.from === 'leader' || q.from === 'all-records') {
+    if (q.year) {
+      const y = Number(q.year)
+      if (y > 2000) recordYear.value = y
+    }
+    if (q.month) {
+      const mo = Number(q.month)
+      if (mo >= 1 && mo <= 12) recordMonth.value = mo
+    }
+    recordStatus.value = 'approved'
+    recordScope.value = 'all'
+  }
+  // 从首页点击流程：以业务时间(请假年+状态)筛选，再按 focusId 定位到该条并滚动
   if (q.focusId) {
     if (q.year) recordYear.value = Number(q.year)
+    if (q.month) {
+      const mo = Number(q.month)
+      if (mo >= 1 && mo <= 12) recordMonth.value = mo
+    }
     if (q.status === 'processing' || q.status === 'approved' || q.status === 'all') recordStatus.value = q.status
   }
   await fetchLeaveList()
@@ -702,6 +796,8 @@ const submitApplication = async () => {
 .record-card__filters .filter-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .record-card__filters .filter-text { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .record-card__filters .filter-select { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
+.record-card__filters .filter-input { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); min-width: 7rem; }
+.record-card__filters .filter-input--search { min-width: 8rem; flex: 1; max-width: 14rem; }
 .record-card__desc { margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); font-weight: normal; }
 .card-body { padding: var(--spacing-lg); }
 .record-card__body { padding: 0; background: white; }

@@ -33,11 +33,26 @@
               <option :value="null">全年</option>
               <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
             </select>
+            <input
+              v-model.trim="recordKeyword"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="关键词"
+              aria-label="关键词筛选"
+            >
+            <select v-model="recordSort" class="filter-select" aria-label="排序">
+              <option value="assignTime_desc">委派时间 ↓</option>
+              <option value="assignTime_asc">委派时间 ↑</option>
+              <option value="startTime_desc">出发时间 ↓</option>
+              <option value="startTime_asc">出发时间 ↑</option>
+              <option value="person_asc">公出人 A→Z</option>
+              <option value="person_desc">公出人 Z→A</option>
+            </select>
           </div>
         </div>
         <div class="card-body record-card__body">
           <div v-if="loading" class="loading-wrap">加载中…</div>
-          <div class="table-wrap" v-else-if="displayList.length">
+          <div class="table-wrap" v-else-if="filteredList.length">
             <table class="record-table">
               <thead>
                 <tr>
@@ -70,8 +85,8 @@
             </table>
           </div>
           <!-- 分页 -->
-          <div class="record-pagination" v-if="!loading && list.length">
-            <span class="record-pagination__total">共 {{ list.length }} 条</span>
+          <div class="record-pagination" v-if="!loading && filteredList.length">
+            <span class="record-pagination__total">共 {{ filteredList.length }} 条</span>
             <span class="record-pagination__size">
               每页
               <select v-model.number="pageSize" class="record-pagination__select">
@@ -103,7 +118,8 @@
               </button>
             </div>
           </div>
-          <p class="empty-text" v-else-if="!loading">暂无公出记录</p>
+          <p class="empty-text" v-else-if="!loading && !list.length">暂无公出记录</p>
+          <p class="empty-text" v-else-if="!loading">当前关键词/排序下无匹配记录</p>
         </div>
       </div>
     </div>
@@ -111,9 +127,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { getBusinessTripAllRecords } from '@/api/attendance'
+import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 
 const router = useRouter()
 const route = useRoute()
@@ -133,6 +150,13 @@ const recordYear = ref(null) // null = 全部年份
 const recordMonth = ref(null)
 const page = ref(1)
 const pageSize = ref(20)
+const recordKeyword = ref('')
+const recordSort = ref('assignTime_desc')
+const ALL_TRIP_SORT_FIELDS = [
+  { field: 'assignTime', type: 'date', get: (r) => r.assignTime },
+  { field: 'startTime', type: 'date', get: (r) => r.startTime },
+  { field: 'person', type: 'string', get: (r) => r.person }
+]
 
 const recordYearOptions = computed(() => {
   const y = new Date().getFullYear()
@@ -140,7 +164,7 @@ const recordYearOptions = computed(() => {
 })
 
 const scopeHint = computed(() => {
-  if (scope.value === 'all') return '部长/副部长：按时间顺序查看全员公出记录'
+  if (scope.value === 'all') return '部长/副部长或综合技术室主任/副主任：按时间查看全员公出记录'
   if (scope.value === 'dept') return '当前为本科室公出记录（按时间顺序）'
   return '暂无可见记录'
 })
@@ -151,10 +175,37 @@ const recordFilterLabel = computed(() => {
   return `展示 ${recordYear.value}年 公出记录`
 })
 
-const totalPages = computed(() => Math.max(1, Math.ceil(list.value.length / pageSize.value)))
+const filteredList = computed(() => {
+  let data = list.value
+  const kw = recordKeyword.value
+  if (kw && kw.trim()) {
+    data = data.filter((r) =>
+      keywordMatches(kw, [
+        r.targetUnit,
+        r.person,
+        r.assignTime,
+        r.projectName,
+        r.location,
+        r.startTime,
+        r.actualReturnTime,
+        r.expectedReturnTime,
+        r.status,
+        r.currentApprover,
+        r.rejectReason
+      ])
+    )
+  }
+  return sortRecordRows(data, recordSort.value, ALL_TRIP_SORT_FIELDS)
+})
+
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredList.value.length / pageSize.value)))
 const displayList = computed(() => {
   const start = (page.value - 1) * pageSize.value
-  return list.value.slice(start, start + pageSize.value)
+  return filteredList.value.slice(start, start + pageSize.value)
+})
+
+watch([recordKeyword, recordSort], () => {
+  page.value = 1
 })
 
 function getCurrentUserName() {
@@ -287,6 +338,17 @@ onMounted(() => {
   border: 1px solid #ddd;
   border-radius: 6px;
   font-size: 14px;
+}
+.filter-input {
+  padding: 6px 10px;
+  border: 1px solid #ddd;
+  border-radius: 6px;
+  font-size: 14px;
+}
+.filter-input--search {
+  min-width: 8rem;
+  flex: 1;
+  max-width: 14rem;
 }
 .record-card__body {
   padding: 16px 20px;

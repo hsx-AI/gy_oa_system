@@ -23,6 +23,16 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["请假与加班"])
 
+
+def _safe_float(val, default: float = 0.0) -> float:
+    """避免历史脏数据导致 float() 抛错进而 500"""
+    if val is None or val == "":
+        return default
+    try:
+        return float(val)
+    except (TypeError, ValueError):
+        return default
+
 # 说明材料文件存储目录（相对于 fastapi_backend 根目录）
 _BASE = Path(__file__).resolve().parent.parent
 UPLOAD_LEAVE_MATERIALS = _BASE / settings.UPLOAD_DIR / "leave_materials"
@@ -213,26 +223,53 @@ async def apply_leave_json(req: LeaveApplyRequest):
 
 def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
     """
-    请假/加班列表：scope=self 仅本人；scope=lsys 为 yggl 同 lsys 全员（仅主任/副主任）。
+    请假/加班列表：scope=self 仅本人；scope=lsys 同 lsys 全员（主任/副主任）；
+    scope=all：部长/副部长/系统管理员为不限制 xm（与原「全部请假记录」一致）；
+    综合技术室主任/副主任为 yggl 子查询（排除部办等，与统计规则一致）。
     返回 (xm_where_sql, xm_params, meta dict)。
     """
-    from routers.approvers import _get_user_info, _jb_match
+    from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
+    from routers.db_manager import _get_admin1
 
     scope = (scope or "self").strip().lower()
-    if scope not in ("self", "lsys"):
+    if scope not in ("self", "lsys", "all"):
         raise HTTPException(status_code=400, detail="无效的 scope")
     viewer = (viewer_name or "").strip()
     if not viewer:
         raise HTTPException(status_code=400, detail="姓名不能为空")
-    meta = {"canViewLsys": False, "lsysLabel": ""}
+    meta = {"canViewLsys": False, "canViewAll": False, "lsysLabel": ""}
     user = _get_user_info(viewer)
+    admin1 = (_get_admin1() or "").strip()
+    is_admin_user = bool(admin1 and viewer == admin1)
+    jb = ""
     if user:
         jb = (user.get("jb") or "").strip()
         lsys = (user.get("lsys") or "").strip()
         meta["lsysLabel"] = lsys
         meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
+    is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+    zonghe_dir = bool(user and is_zonghe_tech_director(user))
+    meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir
     if scope == "self":
         return "xm = %s", [viewer], meta
+    if scope == "all":
+        if not meta["canViewAll"]:
+            raise HTTPException(
+                status_code=403,
+                detail="仅部长、副部长、综合技术室主任/副主任或系统管理员可查看全员请假记录"
+                if resource == "leave"
+                else "仅部长、副部长、综合技术室主任/副主任或系统管理员可查看全员加班记录",
+            )
+        if is_admin_user or is_minister:
+            return "1=1", [], meta
+        clause = (
+            "xm IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
+            "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
+            "AND TRIM(y.lsys) <> '部办' "
+            "AND RIGHT(TRIM(y.name), 1) <> '1' "
+            "AND RIGHT(TRIM(y.lsys), 1) <> '1')"
+        )
+        return clause, [], meta
     if not meta["canViewLsys"]:
         raise HTTPException(
             status_code=403,
@@ -250,12 +287,13 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
 async def get_leave_list(
     name: str,
     year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按请假开始时间所在年月筛选"),
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
-    scope: str = Query("self", description="self=仅本人，lsys=同属室全员（仅主任/副主任）"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
 ):
     """
-    获取请假记录列表。默认仅本人；主任/副主任可选 lsys 查看本专业所有人。
+    获取请假记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all 查看全员。
     """
     try:
         if year is None and not all_years:
@@ -269,6 +307,16 @@ async def get_leave_list(
                 FROM qj WHERE {xm_where}
             """
             params = list(xm_params)
+        elif month is not None:
+            month_str = f"{year}-{month:02d}"
+            query = f"""
+                SELECT id, bz, xm, qjfs, timefrom, timeto, qjtime, tian, xiaoshi, qjzt, content, spr, spr2, `2j`, bhyy
+                FROM qj WHERE {xm_where}
+                AND (
+                    timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTR(timefrom, 1, 7) = %s
+                )
+            """
+            params = list(xm_params) + [f"{month_str}%", f"{month_str}%", month_str]
         else:
             query = f"""
                 SELECT id, bz, xm, qjfs, timefrom, timeto, qjtime, tian, xiaoshi, qjzt, content, spr, spr2, `2j`, bhyy
@@ -294,6 +342,9 @@ async def get_leave_list(
 
         records = []
         for row in rows:
+            rid = row.get("id")
+            if rid is None:
+                continue
             qjzt = row.get("qjzt")
             if qjzt == 1:
                 current_approver = (row.get("spr") or "").strip()
@@ -302,13 +353,13 @@ async def get_leave_list(
             else:
                 current_approver = ""
             records.append({
-                "id": row["id"],
+                "id": rid,
                 "applicant": (row.get("xm") or "").strip(),
                 "type": row.get("qjfs") or "请假",
                 "startTime": format_datetime_plain(row.get("timefrom")) or "",
                 "endTime": format_datetime_plain(row.get("timeto")) or "",
-                "duration": float(row.get("tian") or 0),
-                "hours": float(row.get("xiaoshi") or 0),
+                "duration": _safe_float(row.get("tian"), 0.0),
+                "hours": _safe_float(row.get("xiaoshi"), 0.0),
                 "reason": (row.get("content") or "").strip(),
                 "applyTime": format_datetime_plain(row.get("qjtime")) or "",
                 "status": status_map.get(qjzt, "已驳回"),
@@ -339,10 +390,10 @@ async def get_leave_all_records(
 ):
     """
     全部请假记录（按权限）：
-    系统管理员/部长/副部长：全员；组长/主任/副主任：本科室。
+    系统管理员/部长/副部长/综合技术室主任与副主任：全员；组长/主任/副主任：本科室。
     仅返回已通过(qjzt=4)的记录，按请假开始时间倒序。
     """
-    from routers.approvers import _get_user_info, _jb_match
+    from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
     from routers.db_manager import _get_admin1
     try:
         user = _get_user_info(name)
@@ -356,7 +407,11 @@ async def get_leave_all_records(
         else:
             jb = (user.get("jb") or "").strip()
             lsys = (user.get("lsys") or "").strip()
-            is_leader = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+            is_leader = (
+                _jb_match(jb, "部长")
+                or _jb_match(jb, "副部长")
+                or is_zonghe_tech_director(user)
+            )
 
         where_parts = ["qjzt = 4"]
         params = []
@@ -385,15 +440,18 @@ async def get_leave_all_records(
 
         records = []
         for row in rows:
+            rid = row.get("id")
+            if rid is None:
+                continue
             records.append({
-                "id": row["id"],
+                "id": rid,
                 "department": (row.get("lsys") or "").strip(),
                 "name": (row.get("xm") or "").strip(),
                 "type": row.get("qjfs") or "请假",
                 "startTime": format_datetime_plain(row.get("timefrom")) or "",
                 "endTime": format_datetime_plain(row.get("timeto")) or "",
-                "duration": float(row.get("tian") or 0),
-                "hours": float(row.get("xiaoshi") or 0),
+                "duration": _safe_float(row.get("tian"), 0.0),
+                "hours": _safe_float(row.get("xiaoshi"), 0.0),
                 "applyTime": format_datetime_plain(row.get("qjtime")) or "",
                 "reason": (row.get("content") or "").strip(),
             })
@@ -616,10 +674,10 @@ async def get_overtime_list(
     month: Optional[int] = None,
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
-    scope: str = Query("self", description="self=仅本人，lsys=同属室全员（仅主任/副主任）"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
 ):
     """
-    获取加班记录列表。默认仅本人；主任/副主任可选 lsys 查看本专业所有人。
+    获取加班记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all 查看全员。
     """
     try:
         if year is None and not all_years:

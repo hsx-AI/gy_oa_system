@@ -8,13 +8,13 @@
         </div>
         <div class="header-tabs">
           <router-link
-            :to="{ path: '/attendance/manual', query: { tab: 'leave' } }"
+            :to="leaveTabTo"
             :class="['tab-link', { active: currentTab === 'leave' }]"
           >
             请假管理
           </router-link>
           <router-link
-            :to="{ path: '/attendance/manual', query: { tab: 'overtime' } }"
+            :to="overtimeTabTo"
             :class="['tab-link', { active: currentTab === 'overtime' }]"
           >
             加班管理
@@ -40,6 +40,16 @@ const currentTab = computed(() => {
   const t = route.query.tab
   return t === 'overtime' ? 'overtime' : 'leave'
 })
+
+/** 切换 tab 时保留 from、year、month 等查询参数（领导看板跳转等） */
+const leaveTabTo = computed(() => ({
+  path: '/attendance/manual',
+  query: { ...route.query, tab: 'leave' }
+}))
+const overtimeTabTo = computed(() => ({
+  path: '/attendance/manual',
+  query: { ...route.query, tab: 'overtime' }
+}))
 </script>
 
 <style scoped>

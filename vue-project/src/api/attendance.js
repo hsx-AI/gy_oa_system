@@ -143,7 +143,7 @@ export function getLeaveMaterialDownloadUrl(filename) {
 
 /**
  * 获取请假记录列表
- * @param {Object} params - { name, year?, status?, scope?: 'self'|'lsys' }（lsys 仅主任/副主任）
+ * @param {Object} params - { name, year?, month?(1-12), status?, scope?: 'self'|'lsys'|'all' }
  */
 export function getLeaveList(params) {
   return request({

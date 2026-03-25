@@ -84,7 +84,10 @@ const routes = [
   {
     path: '/attendance/leave/all-records',
     name: 'LeaveAllRecords',
-    component: () => import('../views/attendance/LeaveAllRecords.vue')
+    redirect: (to) => ({
+      path: '/attendance/manual',
+      query: { ...to.query, tab: 'leave', from: to.query.from || 'all-records' }
+    })
   },
   {
     path: '/attendance/approvals',

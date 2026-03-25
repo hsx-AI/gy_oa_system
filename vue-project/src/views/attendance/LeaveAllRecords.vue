@@ -110,7 +110,7 @@ const recordYearOptions = computed(() => {
 })
 
 const scopeHint = computed(() => {
-  if (scope.value === 'all') return '部长/副部长：查看全员已通过请假记录'
+  if (scope.value === 'all') return '部长/副部长或综合技术室主任/副主任：查看全员已通过请假记录'
   if (scope.value === 'dept') return '当前为本科室已通过请假记录'
   return '暂无可见记录'
 })
