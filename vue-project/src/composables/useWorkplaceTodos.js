@@ -41,7 +41,7 @@ const todoLoading = ref(false)
 const tripReturnPendingCount = ref(0)
 const tripReturnLoading = ref(false)
 const sixianghuibaoTodoTotal = ref(0)
-const personnelMyPending = ref(0)
+/** 人事档案系统 GET pending-count 返回的 data.needAuditCount（仅展示此项，不展示 myPendingCount） */
 const personnelNeedAudit = ref(0)
 const todoRealTotal = ref(0)
 
@@ -60,28 +60,18 @@ const displayTodoList = computed(() => {
   if (sixianghuibaoTodoTotal.value > 0) {
     list.push({
       uniqueId: 'sixianghuibao-todos',
-      type: '思想汇报待审核',
-      description: `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待审核`,
+      type: '思想汇报待处理',
+      description: `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待处理`,
       applicant: '思想汇报系统',
       time: '',
       isSixianghuibao: true,
     })
   }
-  if (personnelMyPending.value > 0) {
-    list.push({
-      uniqueId: 'personnel-my-pending',
-      type: '人事档案待审批',
-      description: `您有 ${personnelMyPending.value} 条人事档案待处理`,
-      applicant: '人事档案系统',
-      time: '',
-      isPersonnel: true,
-    })
-  }
   if (personnelNeedAudit.value > 0) {
     list.push({
       uniqueId: 'personnel-need-audit',
-      type: '人事档案需审核',
-      description: `您有 ${personnelNeedAudit.value} 条人事档案需您审核`,
+      type: '人事档案待审核',
+      description: `您有 ${personnelNeedAudit.value} 条人事档案待您审核`,
       applicant: '人事档案系统',
       time: '',
       isPersonnel: true,
@@ -94,8 +84,7 @@ const totalBadgeCount = computed(() => {
   let count = todoRealTotal.value
   if (tripReturnPendingCount.value > 0) count += 1
   if (sixianghuibaoTodoTotal.value > 0) count += 1
-  if (personnelMyPending.value > 0) count += 1
-  if (personnelNeedAudit.value > 0) count += 1
+  count += Math.max(0, Number(personnelNeedAudit.value) || 0)
   return count
 })
 
@@ -199,10 +188,8 @@ async function fetchPersonnelPending() {
   if (!name) return
   try {
     const res = await getPersonnelPendingCount({ name })
-    personnelMyPending.value = Math.max(0, Number(res?.myPendingCount) || 0)
     personnelNeedAudit.value = Math.max(0, Number(res?.needAuditCount) || 0)
   } catch {
-    personnelMyPending.value = 0
     personnelNeedAudit.value = 0
   }
 }
@@ -292,7 +279,6 @@ export function useWorkplaceTodos() {
     tripReturnLoading,
     tripReturnPendingCount,
     sixianghuibaoTodoTotal,
-    personnelMyPending,
     personnelNeedAudit,
     todoRealTotal,
     displayTodoList,

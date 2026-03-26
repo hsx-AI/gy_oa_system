@@ -28,9 +28,10 @@ export function getSixianghuibaoTodos(params) {
 }
 
 /**
- * 获取人事档案系统待办数量（供 OA 首页待办提醒）
+ * 获取人事档案系统待办数量（后端代理 GET pending-count，解析对方 { code, data: { myPendingCount, needAuditCount } }）
+ * OA 首页与顶栏待办仅展示 needAuditCount
  * @param {Object} params - { name: 当前用户姓名 }
- * @returns {Promise<{ success, myPendingCount, needAuditCount }>}
+ * @returns {Promise<{ success, myPendingCount?, needAuditCount }>}
  */
 export function getPersonnelPendingCount(params) {
   return request({
