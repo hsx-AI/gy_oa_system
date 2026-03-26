@@ -92,14 +92,16 @@
                   <span class="full-day-absence-badge">全天缺勤</span>
                 </td>
                 <template v-else>
-                  <td><span class="time-badge">{{ record.time_1 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_2 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_3 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_4 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_5 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_6 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_7 || '-' }}</span></td>
-                  <td><span class="time-badge">{{ record.time_8 || '-' }}</span></td>
+                  <td v-for="n in timeSlots" :key="'t' + n" class="time-slot-cell">
+                    <div class="time-slot-inner">
+                      <span
+                        v-if="hasAttendanceTimeMark(record, n)"
+                        class="inout-chip"
+                        :class="isOutAttendanceMark(record, n) ? 'inout-chip-out' : 'inout-chip-in'"
+                      >{{ isOutAttendanceMark(record, n) ? '出' : '进' }}</span>
+                      <span class="time-badge">{{ record['time_' + n] || '-' }}</span>
+                    </div>
+                  </td>
                 </template>
                 <td v-if="isDakaman">
                   <button class="btn-process" @click="openProcessModal(record)" :disabled="processingId === recordKey(record)">
@@ -155,6 +157,9 @@
 <script setup>
 import { ref, reactive, computed, onMounted } from 'vue'
 import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable, dakamanProcessException } from '@/api/attendance'
+import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
+
+const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8]
 
 const loading = ref(false)
 const loadError = ref('')
@@ -557,6 +562,44 @@ onMounted(() => {
 
 .employee-name {
   font-weight: var(--font-weight-medium);
+}
+
+.time-slot-cell {
+  white-space: nowrap;
+  vertical-align: middle;
+}
+
+.time-slot-inner {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: nowrap;
+}
+
+.inout-chip {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  padding: 2px 5px;
+  font-size: 10px;
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.2;
+  border-radius: 3px;
+  letter-spacing: 0.02em;
+}
+
+.inout-chip-in {
+  background: rgba(82, 196, 26, 0.15);
+  color: #389e0d;
+  border: 1px solid rgba(82, 196, 26, 0.35);
+}
+
+.inout-chip-out {
+  background: rgba(24, 144, 255, 0.12);
+  color: #096dd9;
+  border: 1px solid rgba(24, 144, 255, 0.35);
 }
 
 .time-badge {

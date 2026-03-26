@@ -45,28 +45,44 @@ class AttendanceDatabase:
         """插入或更新考勤记录（表有 id 列且无默认值时需显式传入）"""
         try:
             record_id = record.get("id") or uuid.uuid4().hex
-            # 使用 ON DUPLICATE KEY UPDATE 语法；id 列无默认值，需显式传入
             sql = """
                 INSERT INTO attendance_records 
                 (id, employee_id, employee_name, department, attendance_date,
-                 time_1, time_2, time_3, time_4, time_5,
-                 time_6, time_7, time_8, time_9, time_10)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 time_1, time_1_mark, time_2, time_2_mark, time_3, time_3_mark,
+                 time_4, time_4_mark, time_5, time_5_mark,
+                 time_6, time_6_mark, time_7, time_7_mark, time_8, time_8_mark,
+                 time_9, time_9_mark, time_10, time_10_mark)
+                VALUES (%s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                        %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 ON DUPLICATE KEY UPDATE
                 employee_name=VALUES(employee_name), department=VALUES(department),
-                time_1=VALUES(time_1), time_2=VALUES(time_2), time_3=VALUES(time_3),
-                time_4=VALUES(time_4), time_5=VALUES(time_5), time_6=VALUES(time_6),
-                time_7=VALUES(time_7), time_8=VALUES(time_8), time_9=VALUES(time_9),
-                time_10=VALUES(time_10), updated_at=CURRENT_TIMESTAMP
+                time_1=VALUES(time_1), time_1_mark=VALUES(time_1_mark),
+                time_2=VALUES(time_2), time_2_mark=VALUES(time_2_mark),
+                time_3=VALUES(time_3), time_3_mark=VALUES(time_3_mark),
+                time_4=VALUES(time_4), time_4_mark=VALUES(time_4_mark),
+                time_5=VALUES(time_5), time_5_mark=VALUES(time_5_mark),
+                time_6=VALUES(time_6), time_6_mark=VALUES(time_6_mark),
+                time_7=VALUES(time_7), time_7_mark=VALUES(time_7_mark),
+                time_8=VALUES(time_8), time_8_mark=VALUES(time_8_mark),
+                time_9=VALUES(time_9), time_9_mark=VALUES(time_9_mark),
+                time_10=VALUES(time_10), time_10_mark=VALUES(time_10_mark),
+                updated_at=CURRENT_TIMESTAMP
             """
             params = (
                 record_id,
                 record['employee_id'], record['employee_name'], record['department'],
                 record['attendance_date'],
-                record.get('time_1'), record.get('time_2'), record.get('time_3'),
-                record.get('time_4'), record.get('time_5'), record.get('time_6'),
-                record.get('time_7'), record.get('time_8'), record.get('time_9'),
-                record.get('time_10')
+                record.get('time_1'), record.get('time_1_mark'),
+                record.get('time_2'), record.get('time_2_mark'),
+                record.get('time_3'), record.get('time_3_mark'),
+                record.get('time_4'), record.get('time_4_mark'),
+                record.get('time_5'), record.get('time_5_mark'),
+                record.get('time_6'), record.get('time_6_mark'),
+                record.get('time_7'), record.get('time_7_mark'),
+                record.get('time_8'), record.get('time_8_mark'),
+                record.get('time_9'), record.get('time_9_mark'),
+                record.get('time_10'), record.get('time_10_mark'),
             )
             
             result = db.execute_update(sql, params)
@@ -111,33 +127,42 @@ class AttendanceDatabase:
             else:
                 logger.warning(f"确保 attendance_records 唯一约束时出错（重复上传可能仍会重复录入）: {e}")
 
+    _UPSERT_COLUMNS = (
+        "id, employee_id, employee_name, department, attendance_date, "
+        "time_1, time_1_mark, time_2, time_2_mark, time_3, time_3_mark, "
+        "time_4, time_4_mark, time_5, time_5_mark, "
+        "time_6, time_6_mark, time_7, time_7_mark, time_8, time_8_mark, "
+        "time_9, time_9_mark, time_10, time_10_mark"
+    )
+    _UPSERT_PH = ", ".join(["%s"] * 25)
+    _UPSERT_ON_DUP = (
+        "employee_name=VALUES(employee_name), department=VALUES(department), "
+        + ", ".join(
+            f"time_{i}=VALUES(time_{i}), time_{i}_mark=VALUES(time_{i}_mark)"
+            for i in range(1, 11)
+        )
+        + ", updated_at=CURRENT_TIMESTAMP"
+    )
+
     def _build_single_upsert_sql(self):
-        return """
-            INSERT INTO attendance_records
-            (id, employee_id, employee_name, department, attendance_date,
-             time_1, time_2, time_3, time_4, time_5,
-             time_6, time_7, time_8, time_9, time_10)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-            ON DUPLICATE KEY UPDATE
-            employee_name=VALUES(employee_name), department=VALUES(department),
-            time_1=VALUES(time_1), time_2=VALUES(time_2), time_3=VALUES(time_3),
-            time_4=VALUES(time_4), time_5=VALUES(time_5), time_6=VALUES(time_6),
-            time_7=VALUES(time_7), time_8=VALUES(time_8), time_9=VALUES(time_9),
-            time_10=VALUES(time_10), updated_at=CURRENT_TIMESTAMP
-        """
+        return (
+            f"INSERT INTO attendance_records ({self._UPSERT_COLUMNS}) "
+            f"VALUES ({self._UPSERT_PH}) "
+            f"ON DUPLICATE KEY UPDATE {self._UPSERT_ON_DUP}"
+        )
 
     @staticmethod
     def _record_to_params(record: Dict) -> tuple:
         record_id = record.get("id") or uuid.uuid4().hex
-        return (
+        parts = [
             record_id,
             record['employee_id'], record['employee_name'], record['department'],
             record['attendance_date'],
-            record.get('time_1'), record.get('time_2'), record.get('time_3'),
-            record.get('time_4'), record.get('time_5'), record.get('time_6'),
-            record.get('time_7'), record.get('time_8'), record.get('time_9'),
-            record.get('time_10')
-        )
+        ]
+        for i in range(1, 11):
+            parts.append(record.get(f'time_{i}'))
+            parts.append(record.get(f'time_{i}_mark'))
+        return tuple(parts)
 
     def batch_insert_records(self, records: List[Dict]) -> tuple:
         """批量插入记录。分块批量 INSERT，失败的块降级逐条重试，避免一条坏数据丢掉整块。"""
@@ -157,21 +182,13 @@ class AttendanceDatabase:
                 for i in range(0, len(records), chunk_size):
                     chunk = records[i : i + chunk_size]
                     placeholders = ", ".join(
-                        ["(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"] * len(chunk)
+                        [f"({self._UPSERT_PH})"] * len(chunk)
                     )
-                    bulk_sql = f"""
-                        INSERT INTO attendance_records
-                        (id, employee_id, employee_name, department, attendance_date,
-                         time_1, time_2, time_3, time_4, time_5,
-                         time_6, time_7, time_8, time_9, time_10)
-                        VALUES {placeholders}
-                        ON DUPLICATE KEY UPDATE
-                        employee_name=VALUES(employee_name), department=VALUES(department),
-                        time_1=VALUES(time_1), time_2=VALUES(time_2), time_3=VALUES(time_3),
-                        time_4=VALUES(time_4), time_5=VALUES(time_5), time_6=VALUES(time_6),
-                        time_7=VALUES(time_7), time_8=VALUES(time_8), time_9=VALUES(time_9),
-                        time_10=VALUES(time_10), updated_at=CURRENT_TIMESTAMP
-                    """
+                    bulk_sql = (
+                        f"INSERT INTO attendance_records ({self._UPSERT_COLUMNS}) "
+                        f"VALUES {placeholders} "
+                        f"ON DUPLICATE KEY UPDATE {self._UPSERT_ON_DUP}"
+                    )
                     params = []
                     for record in chunk:
                         params.extend(self._record_to_params(record))

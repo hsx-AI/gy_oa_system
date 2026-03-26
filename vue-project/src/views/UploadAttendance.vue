@@ -157,6 +157,7 @@
               <ul class="instruction-list">
                 <li>必填：日期、工号、姓名</li>
                 <li>可选：部门、上班时间、下班时间</li>
+                <li>H 列可填进出标记（进/入/出）；无标记时系统按当日打卡顺序与前一条交替推断</li>
                 <li>日期格式：YYYY-MM-DD</li>
                 <li>时间格式：HH:MM:SS</li>
               </ul>

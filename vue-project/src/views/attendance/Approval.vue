@@ -301,7 +301,16 @@
                   <li v-for="(rec, idx) in overtimeDetailAttendance" :key="idx">
                     <span v-if="rec.attendance_date">{{ rec.attendance_date }}</span>
                     <span class="detail-attendance-times">
-                      {{ formatAttendanceTimes(rec) }}
+                      <template v-for="slot in 10" :key="slot">
+                        <span v-if="rec[`time_${slot}`] && String(rec[`time_${slot}`]).trim()" class="detail-time-item">
+                          <span
+                            v-if="hasAttendanceTimeMark(rec, slot)"
+                            class="inout-chip"
+                            :class="isOutAttendanceMark(rec, slot) ? 'inout-chip-out' : 'inout-chip-in'"
+                          >{{ isOutAttendanceMark(rec, slot) ? '出' : '进' }}</span>
+                          <span>{{ String(rec[`time_${slot}`]).trim() }}</span>
+                        </span>
+                      </template>
                     </span>
                   </li>
                 </ul>
@@ -405,6 +414,7 @@ import {
   holidayExchangeBatchApprove,
   getHolidayExchangeDownloadUrl
 } from '@/api/attendance'
+import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
 const route = useRoute()
 const currentUser = (() => {
@@ -1128,6 +1138,32 @@ async function batchApprove(type) {
   margin-left: 0.25em;
   font-weight: 500;
   color: var(--color-text-primary);
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 0.15em 0.5em;
+  align-items: center;
+}
+.detail-time-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+}
+.detail-attendance-times .inout-chip {
+  display: inline-block;
+  font-size: 10px;
+  line-height: 1;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 600;
+  vertical-align: middle;
+}
+.detail-attendance-times .inout-chip-in {
+  background: #e6f9ee;
+  color: #18a058;
+}
+.detail-attendance-times .inout-chip-out {
+  background: #e8f0fe;
+  color: #3b82f6;
 }
 
 .download-link {

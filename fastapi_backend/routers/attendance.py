@@ -144,15 +144,25 @@ class AttendanceRecord(BaseModel):
     department: str
     attendance_date: str
     time_1: Optional[str] = None
+    time_1_mark: Optional[int] = None
     time_2: Optional[str] = None
+    time_2_mark: Optional[int] = None
     time_3: Optional[str] = None
+    time_3_mark: Optional[int] = None
     time_4: Optional[str] = None
+    time_4_mark: Optional[int] = None
     time_5: Optional[str] = None
+    time_5_mark: Optional[int] = None
     time_6: Optional[str] = None
+    time_6_mark: Optional[int] = None
     time_7: Optional[str] = None
+    time_7_mark: Optional[int] = None
     time_8: Optional[str] = None
+    time_8_mark: Optional[int] = None
     time_9: Optional[str] = None
+    time_9_mark: Optional[int] = None
     time_10: Optional[str] = None
+    time_10_mark: Optional[int] = None
     # 考勤异常接口专用：无打卡记录时为 True，前端显示「全天缺勤」
     full_day_absence: Optional[bool] = None
 
@@ -376,12 +386,13 @@ async def upload_excel(
     
     文件格式要求：
     - Excel格式（.xls 或 .xlsx）
-    - 从第6行（A6:F6）开始读取数据
-    - 列结构：员工编号、姓名、部门1、部门2、考勤日期、考勤时间
+    - 从第6行开始读取数据
+    - 列结构：A~F 员工编号、姓名、部门1、部门2、考勤日期、考勤时间；H 列为进出标记（可选）
     
     处理逻辑：
     - 自动按员工编号和日期合并打卡记录
     - 同一人同一天的多次打卡会合并为一行
+    - H 列含「进/入」记为进、含「出」记为出；无关键字则按当日时间顺序与前一条交替（首条视为进）
     """
     dakaman = _get_dakaman()
     admin1 = _get_admin1()

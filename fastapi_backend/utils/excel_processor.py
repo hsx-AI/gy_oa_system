@@ -5,7 +5,7 @@ Excel 考勤数据处理模块
 import openpyxl
 from openpyxl import load_workbook
 import xlrd
-from typing import List, Dict
+from typing import List, Dict, Optional
 from datetime import datetime, time, timedelta
 import logging
 from collections import defaultdict
@@ -55,6 +55,44 @@ class ExcelProcessor:
             logger.error(f"加载文件失败: {str(e)}")
             return False
     
+    @staticmethod
+    def _parse_inout_mark(raw) -> Optional[int]:
+        """解析 H 列进出字面量：含「入」「进」→0(进)，含「出」→1(出)；识别不到返回 None（合并时再按时间线与前一条交替推断）。"""
+        if raw is None:
+            return None
+        s = str(raw).strip()
+        if not s:
+            return None
+        if "入" in s or "进" in s:
+            return 0
+        if "出" in s:
+            return 1
+        return None
+
+    @staticmethod
+    def _resolve_inout_mark_sequence(group: List[Dict]) -> List[int]:
+        """
+        按已排序的同日打卡序列，为每条生成 0/1。
+        有字面量则用字面量；否则：前一条是进则本条为出，前一条是出则本条为进；
+        当日第一条仍无法识别时，视为进(0)。
+        """
+        out: List[int] = []
+        prev: Optional[int] = None
+        for record in group:
+            raw = record.get("inout_mark")
+            if raw is not None:
+                resolved = int(raw)
+                if resolved not in (0, 1):
+                    resolved = 0 if prev is None else (1 if prev == 0 else 0)
+            else:
+                if prev is None:
+                    resolved = 0
+                else:
+                    resolved = 1 if prev == 0 else 0
+            out.append(resolved)
+            prev = resolved
+        return out
+
     def parse_time_value(self, value) -> str:
         """解析时间值"""
         if value is None or value == "":
@@ -146,10 +184,8 @@ class ExcelProcessor:
         records = []
         
         try:
-            # xlrd 使用0为基准的索引，所以 start_row=6 需要转为索引 5
             for row_idx in range(start_row - 1, self.xlrd_sheet.nrows):
                 try:
-                    # 读取 A-F 列（0-5）
                     row = self.xlrd_sheet.row(row_idx)
                     
                     if len(row) < 6:
@@ -164,18 +200,15 @@ class ExcelProcessor:
                     
                     employee_id = self._clean_employee_id(employee_id)
 
-                    # 跳过空行
                     if not employee_id or not employee_name:
                         continue
                     
-                    # xlrd 日期处理
                     if row[4].ctype == 3:  # XL_CELL_DATE
                         date_tuple = xlrd.xldate_as_tuple(attendance_date, self.xlrd_book.datemode)
                         parsed_date = datetime(*date_tuple[:3]).strftime("%Y-%m-%d")
                     else:
                         parsed_date = self.parse_date_value(attendance_date)
                     
-                    # xlrd 时间处理
                     if row[5].ctype == 3:  # XL_CELL_DATE
                         time_tuple = xlrd.xldate_as_tuple(attendance_time, self.xlrd_book.datemode)
                         parsed_time = f"{time_tuple[3]:02d}:{time_tuple[4]:02d}:{time_tuple[5]:02d}"
@@ -185,13 +218,17 @@ class ExcelProcessor:
                     if not parsed_date or not parsed_time:
                         logger.warning(f"第{row_idx+1}行数据不完整（employee_id={employee_id}, date={attendance_date}, time={attendance_time}），跳过")
                         continue
+
+                    inout_raw = row[7].value if len(row) > 7 else None
+                    inout_mark = self._parse_inout_mark(inout_raw)
                     
                     record = {
                         'employee_id': employee_id,
                         'employee_name': str(employee_name).strip() if employee_name else "",
                         'department': str(department1).strip() if department1 else "",
                         'attendance_date': parsed_date,
-                        'attendance_time': parsed_time
+                        'attendance_time': parsed_time,
+                        'inout_mark': inout_mark,
                     }
                     
                     records.append(record)
@@ -215,38 +252,37 @@ class ExcelProcessor:
         records = []
         
         try:
-            # 从第6行开始读取（A6:F6开始）
             for row_idx, row in enumerate(self.worksheet.iter_rows(min_row=start_row), start=start_row):
-                # 读取 A-F 列（员工编号、姓名、部门1、部门2、考勤日期、考勤时间）
                 if len(row) < 6:
                     continue
                 
-                employee_id = self._clean_employee_id(row[0].value)  # A列：员工编号
-                employee_name = row[1].value  # B列：姓名
-                department1 = row[2].value  # C列：部门1
-                department2 = row[3].value  # D列：部门2（暂时不用）
-                attendance_date = row[4].value  # E列：考勤日期
-                attendance_time = row[5].value  # F列：考勤时间
+                employee_id = self._clean_employee_id(row[0].value)  # A列
+                employee_name = row[1].value  # B列
+                department1 = row[2].value  # C列
+                department2 = row[3].value  # D列
+                attendance_date = row[4].value  # E列
+                attendance_time = row[5].value  # F列
                 
-                # 跳过空行
                 if not employee_id or not employee_name:
                     continue
                 
-                # 解析日期和时间
                 parsed_date = self.parse_date_value(attendance_date)
                 parsed_time = self.parse_time_value(attendance_time)
                 
                 if not parsed_date or not parsed_time:
                     logger.warning(f"第{row_idx}行数据不完整（employee_id={employee_id}, date={attendance_date}, time={attendance_time}），跳过")
                     continue
+
+                inout_raw = row[7].value if len(row) > 7 else None  # H列(index 7)
+                inout_mark = self._parse_inout_mark(inout_raw)
                 
-                # 添加记录
                 record = {
                     'employee_id': employee_id,
                     'employee_name': str(employee_name).strip() if employee_name else "",
                     'department': str(department1).strip() if department1 else "",
                     'attendance_date': parsed_date,
-                    'attendance_time': parsed_time
+                    'attendance_time': parsed_time,
+                    'inout_mark': inout_mark,
                 }
                 
                 records.append(record)
@@ -259,10 +295,9 @@ class ExcelProcessor:
     
     def merge_records_by_employee_and_date(self, records: List[Dict]) -> List[Dict]:
         """
-        按员工和日期合并记录
-        将同一个人同一天的多条打卡记录合并为一行
+        按员工和日期合并记录（同人同日按时间排序，最多保留 10 次打卡）。
+        进出标记：H 列有「进/入」「出」则用其值；否则按时间线与前一条交替（首条无法识别时视为进）。
         """
-        # 使用字典来分组记录
         grouped = defaultdict(list)
         
         for record in records:
@@ -272,10 +307,10 @@ class ExcelProcessor:
         merged_records = []
         
         for (employee_id, attendance_date), group in grouped.items():
-            # 按时间排序
             group.sort(key=lambda x: x['attendance_time'])
+            sub = group[:10]
+            marks = self._resolve_inout_mark_sequence(sub)
             
-            # 构建合并后的记录
             merged = {
                 'employee_id': employee_id,
                 'employee_name': group[0]['employee_name'],
@@ -283,13 +318,13 @@ class ExcelProcessor:
                 'attendance_date': attendance_date
             }
             
-            # 添加时间字段（最多10个）
-            for i, record in enumerate(group[:10], start=1):
+            for i, record in enumerate(sub, start=1):
                 merged[f'time_{i}'] = record['attendance_time']
+                merged[f'time_{i}_mark'] = marks[i - 1]
             
-            # 补充剩余的时间字段为None
             for i in range(len(group) + 1, 11):
                 merged[f'time_{i}'] = None
+                merged[f'time_{i}_mark'] = None
             
             merged_records.append(merged)
         
