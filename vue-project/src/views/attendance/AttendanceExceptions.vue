@@ -51,14 +51,7 @@
                 <th>日期</th>
                 <th>姓名</th>
                 <th>所在单位</th>
-                <th>考勤时间1</th>
-                <th>考勤时间2</th>
-                <th>考勤时间3</th>
-                <th>考勤时间4</th>
-                <th>考勤时间5</th>
-                <th>考勤时间6</th>
-                <th>考勤时间7</th>
-                <th>考勤时间8</th>
+                <th v-for="n in timeSlots" :key="'th' + n">考勤时间{{ n }}</th>
                 <th v-if="isDakaman">操作</th>
               </tr>
             </thead>
@@ -159,7 +152,7 @@ import { ref, reactive, computed, onMounted } from 'vue'
 import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable, dakamanProcessException } from '@/api/attendance'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
-const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8]
+const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 const loading = ref(false)
 const loadError = ref('')
@@ -210,7 +203,7 @@ function getCurrentUserName() {
 
 function isFullDayAbsence(record) {
   if (record.full_day_absence === true) return true
-  const t = [record.time_1, record.time_2, record.time_3, record.time_4, record.time_5, record.time_6, record.time_7, record.time_8]
+  const t = [record.time_1, record.time_2, record.time_3, record.time_4, record.time_5, record.time_6, record.time_7, record.time_8, record.time_9, record.time_10]
   return t.every(v => !v || String(v).trim() === '')
 }
 

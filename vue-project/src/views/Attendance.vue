@@ -178,14 +178,7 @@
                 <th>日期</th>
                 <th>姓名</th>
                 <th>所在单位</th>
-                <th>考勤时间1</th>
-                <th>考勤时间2</th>
-                <th>考勤时间3</th>
-                <th>考勤时间4</th>
-                <th>考勤时间5</th>
-                <th>考勤时间6</th>
-                <th>考勤时间7</th>
-                <th>考勤时间8</th>
+                <th v-for="n in timeSlots" :key="'th' + n">考勤时间{{ n }}</th>
               </tr>
             </thead>
             <tbody>
@@ -406,7 +399,7 @@ import DateTimePicker from '@/components/DateTimePicker.vue'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
 const router = useRouter()
-const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8]
+const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
 const canApprove = ref(false)
 

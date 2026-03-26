@@ -1,0 +1,133 @@
+"filename", "language", "HTML", "Markdown", "Python", "JavaScript", "Ignore", "vue", "pip requirements", "JSON", "CSS", "MS SQL", "comment", "blank", "total"
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\MIGRATION_GUIDE.md", "Markdown", 0, 49, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 70
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\README.md", "Markdown", 0, 59, 0, 0, 0, 0, 0, 0, 0, 0, 0, 19, 78
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\attendance_db.py", "Python", 0, 0, 415, 0, 0, 0, 0, 0, 0, 0, 10, 34, 459
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\config.py", "Python", 0, 0, 42, 0, 0, 0, 0, 0, 0, 0, 29, 18, 89
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\data\holidays\2025.json", "JSON", 0, 0, 0, 0, 0, 0, 0, 42, 0, 0, 0, 1, 43
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\data\holidays\README.md", "Markdown", 0, 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 19
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\database.py", "Python", 0, 0, 211, 0, 0, 0, 0, 0, 0, 0, 5, 29, 245
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\docs\AI_DEEP_SEARCH_SETUP.md", "Markdown", 0, 49, 0, 0, 0, 0, 0, 0, 0, 0, 0, 21, 70
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\docs\SSO_B系统对接说明.md", "Markdown", 0, 73, 0, 0, 0, 0, 0, 0, 0, 0, 0, 26, 99
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\main.py", "Python", 0, 0, 118, 0, 0, 0, 0, 0, 0, 0, 6, 18, 142
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\models.py", "Python", 0, 0, 47, 0, 0, 0, 0, 0, 0, 0, 2, 14, 63
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\requirements.txt", "pip requirements", 0, 0, 0, 0, 0, 0, 19, 0, 0, 0, 1, 0, 20
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\__init__.py", "Python", 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 6
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\admin.py", "Python", 0, 0, 433, 0, 0, 0, 0, 0, 0, 0, 12, 41, 486
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\approval.py", "Python", 0, 0, 1063, 0, 0, 0, 0, 0, 0, 0, 41, 119, 1223
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\approvers.py", "Python", 0, 0, 176, 0, 0, 0, 0, 0, 0, 0, 8, 28, 212
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\attendance.py", "Python", 0, 0, 960, 0, 0, 0, 0, 0, 0, 0, 21, 128, 1109
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\auth.py", "Python", 0, 0, 340, 0, 0, 0, 0, 0, 0, 0, 13, 39, 392
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\business_trip.py", "Python", 0, 0, 384, 0, 0, 0, 0, 0, 0, 0, 5, 43, 432
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\db_manager.py", "Python", 0, 0, 420, 0, 0, 0, 0, 0, 0, 0, 8, 50, 478
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\department_policy.py", "Python", 0, 0, 359, 0, 0, 0, 0, 0, 0, 0, 5, 39, 403
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\email_sender.py", "Python", 0, 0, 143, 0, 0, 0, 0, 0, 0, 0, 1, 26, 170
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\file_numbering.py", "Python", 0, 0, 788, 0, 0, 0, 0, 0, 0, 0, 22, 119, 929
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\health_monitor.py", "Python", 0, 0, 163, 0, 0, 0, 0, 0, 0, 0, 3, 26, 192
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\holiday.py", "Python", 0, 0, 530, 0, 0, 0, 0, 0, 0, 0, 26, 62, 618
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\holiday_exchange.py", "Python", 0, 0, 655, 0, 0, 0, 0, 0, 0, 0, 3, 88, 746
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\leave_overtime.py", "Python", 0, 0, 744, 0, 0, 0, 0, 0, 0, 0, 21, 69, 834
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\report.py", "Python", 0, 0, 636, 0, 0, 0, 0, 0, 0, 0, 24, 77, 737
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\shift_schedule.py", "Python", 0, 0, 762, 0, 0, 0, 0, 0, 0, 0, 9, 98, 869
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\sso.py", "Python", 0, 0, 169, 0, 0, 0, 0, 0, 0, 0, 4, 19, 192
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\statistics.py", "Python", 0, 0, 1394, 0, 0, 0, 0, 0, 0, 0, 28, 156, 1578
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\suggestions.py", "Python", 0, 0, 866, 0, 0, 0, 0, 0, 0, 0, 47, 94, 1007
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_attendance_time_inout_mark.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 11, 4, 2, 17
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_gcsqb_gclx.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 2, 2, 6
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_gcsqb_yjcfsj.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 4, 3, 9
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_hxp_from_xlsx.py", "Python", 0, 0, 84, 0, 0, 0, 0, 0, 0, 0, 1, 19, 104
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_notification_fields.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 7, 3, 3, 13
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_webconfig_llm.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 5, 2, 9
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_yggl_enterprise_email.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 3, 3, 2, 8
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\approve_backfill_overtime.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 17, 3, 3, 23
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\backfill_overtime.py", "Python", 0, 0, 238, 0, 0, 0, 0, 0, 0, 0, 8, 50, 296
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_bianhao_scszh.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 15, 4, 2, 21
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_shift_tables.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 23, 2, 2, 27
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_employee_gh_from_excel.py", "Python", 0, 0, 111, 0, 0, 0, 0, 0, 0, 0, 6, 19, 136
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_employee_rcnf_from_excel.py", "Python", 0, 0, 171, 0, 0, 0, 0, 0, 0, 0, 10, 21, 202
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_employee_sfzh_from_excel.py", "Python", 0, 0, 111, 0, 0, 0, 0, 0, 0, 0, 4, 19, 134
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_qj_from_access.py", "Python", 0, 0, 264, 0, 0, 0, 0, 0, 0, 0, 7, 57, 328
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_yggl_enterprise_email_from_excel.py", "Python", 0, 0, 129, 0, 0, 0, 0, 0, 0, 0, 2, 30, 161
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\migrate_attendance_suggestions_drop_suggestion_date.py", "Python", 0, 0, 37, 0, 0, 0, 0, 0, 0, 0, 1, 7, 45
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\subtract_hxp.py", "Python", 0, 0, 97, 0, 0, 0, 0, 0, 0, 0, 1, 21, 119
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_bianhao_from_access.py", "Python", 0, 0, 123, 0, 0, 0, 0, 0, 0, 0, 4, 31, 158
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_bianhaogl_from_access.py", "Python", 0, 0, 122, 0, 0, 0, 0, 0, 0, 0, 6, 31, 159
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_bianhaogljs_from_access.py", "Python", 0, 0, 123, 0, 0, 0, 0, 0, 0, 0, 4, 31, 158
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_gcsqb_from_access.py", "Python", 0, 0, 220, 0, 0, 0, 0, 0, 0, 0, 13, 42, 275
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_gzh_from_access.py", "Python", 0, 0, 123, 0, 0, 0, 0, 0, 0, 0, 4, 31, 158
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\sync_hxp_from_access.py", "Python", 0, 0, 145, 0, 0, 0, 0, 0, 0, 0, 7, 33, 185
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\删除打卡和建议.sql", "MS SQL", 0, 0, 0, 0, 0, 0, 0, 0, 0, 2, 1, 0, 3
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\services\__init__.py", "Python", 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 2
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\services\policy_vector.py", "Python", 0, 0, 196, 0, 0, 0, 0, 0, 0, 0, 4, 23, 223
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\__init__.py", "Python", 0, 0, 3, 0, 0, 0, 0, 0, 0, 0, 1, 2, 6
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\excel_processor.py", "Python", 0, 0, 237, 0, 0, 0, 0, 0, 0, 0, 32, 62, 331
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\helpers.py", "Python", 0, 0, 118, 0, 0, 0, 0, 0, 0, 0, 4, 31, 153
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\holiday_loader.py", "Python", 0, 0, 48, 0, 0, 0, 0, 0, 0, 0, 1, 7, 56
+"e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\hxp_helper.py", "Python", 0, 0, 28, 0, 0, 0, 0, 0, 0, 0, 1, 5, 34
+"e:\Desktop\tuixiu_protect\OA_system\oa_system.gitignore", "Ignore", 0, 0, 0, 0, 16, 0, 0, 0, 0, 0, 4, 3, 23
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\README.md", "Markdown", 0, 54, 0, 0, 0, 0, 0, 0, 0, 0, 0, 24, 78
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\index.html", "HTML", 12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 8, 20
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\package-lock.json", "JSON", 0, 0, 0, 0, 0, 0, 0, 1640, 0, 0, 0, 1, 1641
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\package.json", "JSON", 0, 0, 0, 0, 0, 0, 0, 22, 0, 0, 0, 1, 23
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\App.vue", "vue", 0, 0, 0, 0, 0, 1111, 0, 0, 0, 0, 5, 94, 1210
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\admin.js", "JavaScript", 0, 0, 0, 35, 0, 0, 0, 0, 0, 0, 0, 6, 41
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\attendance.js", "JavaScript", 0, 0, 0, 419, 0, 0, 0, 0, 0, 0, 174, 93, 686
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\dbManager.js", "JavaScript", 0, 0, 0, 54, 0, 0, 0, 0, 0, 0, 9, 10, 73
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\departmentPolicy.js", "JavaScript", 0, 0, 0, 32, 0, 0, 0, 0, 0, 0, 6, 8, 46
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\email.js", "JavaScript", 0, 0, 0, 10, 0, 0, 0, 0, 0, 0, 0, 4, 14
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\fileNumbering.js", "JavaScript", 0, 0, 0, 85, 0, 0, 0, 0, 0, 0, 22, 24, 131
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\healthMonitor.js", "JavaScript", 0, 0, 0, 7, 0, 0, 0, 0, 0, 0, 2, 3, 12
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\shift.js", "JavaScript", 0, 0, 0, 31, 0, 0, 0, 0, 0, 0, 0, 11, 42
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\sso.js", "JavaScript", 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 16, 4, 42
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\assets\design-tokens.css", "CSS", 0, 0, 0, 0, 0, 0, 0, 0, 103, 0, 22, 31, 156
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\assets\global.css", "CSS", 0, 0, 0, 0, 0, 0, 0, 0, 432, 0, 26, 85, 543
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\AttendanceTable.vue", "vue", 0, 0, 0, 0, 0, 296, 0, 0, 0, 0, 0, 37, 333
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\DateTimePicker.vue", "vue", 0, 0, 0, 0, 0, 238, 0, 0, 0, 0, 0, 33, 271
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\LeaveApplyModal.vue", "vue", 0, 0, 0, 0, 0, 372, 0, 0, 0, 0, 0, 19, 391
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\OvertimeRegisterModal.vue", "vue", 0, 0, 0, 0, 0, 368, 0, 0, 0, 0, 0, 25, 393
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\RecentTextInput.vue", "vue", 0, 0, 0, 0, 0, 180, 0, 0, 0, 0, 0, 14, 194
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\StatCard.vue", "vue", 0, 0, 0, 0, 0, 122, 0, 0, 0, 0, 0, 18, 140
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\SuggestionPanel.vue", "vue", 0, 0, 0, 0, 0, 155, 0, 0, 0, 0, 0, 26, 181
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\TimePicker.vue", "vue", 0, 0, 0, 0, 0, 185, 0, 0, 0, 0, 0, 29, 214
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\charts\AppBarChart.vue", "vue", 0, 0, 0, 0, 0, 46, 0, 0, 0, 0, 0, 6, 52
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\main.js", "JavaScript", 0, 0, 0, 28, 0, 0, 0, 0, 0, 0, 3, 6, 37
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\router\index.js", "JavaScript", 0, 0, 0, 364, 0, 0, 0, 0, 0, 0, 23, 10, 397
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\chartConfig.js", "JavaScript", 0, 0, 0, 73, 0, 0, 0, 0, 0, 0, 6, 3, 82
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\employeeMobile.js", "JavaScript", 0, 0, 0, 15, 0, 0, 0, 0, 0, 0, 3, 2, 20
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\leaveDuration.js", "JavaScript", 0, 0, 0, 77, 0, 0, 0, 0, 0, 0, 25, 11, 113
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\recordTableHelpers.js", "JavaScript", 0, 0, 0, 46, 0, 0, 0, 0, 0, 0, 8, 6, 60
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\request.js", "JavaScript", 0, 0, 0, 56, 0, 0, 0, 0, 0, 0, 7, 13, 76
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\AdminEmployeeStatus.vue", "vue", 0, 0, 0, 0, 0, 794, 0, 0, 0, 0, 4, 75, 873
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Attendance.vue", "vue", 0, 0, 0, 0, 0, 1332, 0, 0, 0, 0, 16, 153, 1501
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\EmployeeProfile.vue", "vue", 0, 0, 0, 0, 0, 314, 0, 0, 0, 0, 1, 12, 327
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Home.vue", "vue", 0, 0, 0, 0, 0, 1116, 0, 0, 0, 0, 4, 98, 1218
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\LeaderDashboard.vue", "vue", 0, 0, 0, 0, 0, 1045, 0, 0, 0, 0, 8, 90, 1143
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Login.vue", "vue", 0, 0, 0, 0, 0, 877, 0, 0, 0, 0, 6, 113, 996
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\OvertimePay.vue", "vue", 0, 0, 0, 0, 0, 465, 0, 0, 0, 0, 0, 14, 479
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Statistics.vue", "vue", 0, 0, 0, 0, 0, 1315, 0, 0, 0, 0, 15, 125, 1455
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\UploadAttendance.vue", "vue", 0, 0, 0, 0, 0, 703, 0, 0, 0, 0, 5, 92, 800
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\DbManager.vue", "vue", 0, 0, 0, 0, 0, 376, 0, 0, 0, 0, 1, 23, 400
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\EmailSender.vue", "vue", 0, 0, 0, 0, 0, 426, 0, 0, 0, 0, 6, 34, 466
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\HealthMonitor.vue", "vue", 0, 0, 0, 0, 0, 194, 0, 0, 0, 0, 0, 10, 204
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\HxpManage.vue", "vue", 0, 0, 0, 0, 0, 284, 0, 0, 0, 0, 0, 12, 296
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\NotificationManage.vue", "vue", 0, 0, 0, 0, 0, 236, 0, 0, 0, 0, 2, 18, 256
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\YgglFill.vue", "vue", 0, 0, 0, 0, 0, 147, 0, 0, 0, 0, 0, 12, 159
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Approval.vue", "vue", 0, 0, 0, 0, 0, 1108, 0, 0, 0, 0, 6, 86, 1200
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\AttendanceExceptions.vue", "vue", 0, 0, 0, 0, 0, 639, 0, 0, 0, 0, 1, 57, 697
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTrip.vue", "vue", 0, 0, 0, 0, 0, 1190, 0, 0, 0, 0, 10, 124, 1324
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTripAllRecords.vue", "vue", 0, 0, 0, 0, 0, 426, 0, 0, 0, 0, 1, 18, 445
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTripDeptDetail.vue", "vue", 0, 0, 0, 0, 0, 262, 0, 0, 0, 0, 0, 28, 290
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\HolidayExchange.vue", "vue", 0, 0, 0, 0, 0, 593, 0, 0, 0, 0, 2, 47, 642
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\HolidaySettings.vue", "vue", 0, 0, 0, 0, 0, 414, 0, 0, 0, 0, 0, 43, 457
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Leave.vue", "vue", 0, 0, 0, 0, 0, 913, 0, 0, 0, 0, 7, 71, 991
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\LeaveAllRecords.vue", "vue", 0, 0, 0, 0, 0, 203, 0, 0, 0, 0, 0, 14, 217
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\ManualEntry.vue", "vue", 0, 0, 0, 0, 0, 127, 0, 0, 0, 0, 0, 5, 132
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\MyApplications.vue", "vue", 0, 0, 0, 0, 0, 182, 0, 0, 0, 0, 0, 11, 193
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Overtime.vue", "vue", 0, 0, 0, 0, 0, 798, 0, 0, 0, 0, 7, 67, 872
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\PendingTasks.vue", "vue", 0, 0, 0, 0, 0, 296, 0, 0, 0, 0, 0, 32, 328
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\ShiftSchedule.vue", "vue", 0, 0, 0, 0, 0, 1441, 0, 0, 0, 0, 6, 75, 1522
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\FileNumbering.vue", "vue", 0, 0, 0, 0, 0, 1573, 0, 0, 0, 0, 4, 102, 1679
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\PolicyQuery.vue", "vue", 0, 0, 0, 0, 0, 739, 0, 0, 0, 0, 3, 54, 796
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\TechCategoryManage.vue", "vue", 0, 0, 0, 0, 0, 231, 0, 0, 0, 0, 0, 28, 259
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\WorkNoManage.vue", "vue", 0, 0, 0, 0, 0, 236, 0, 0, 0, 0, 0, 29, 265
+"e:\Desktop\tuixiu_protect\OA_system\vue-project\vite.config.js", "JavaScript", 0, 0, 0, 22, 0, 0, 0, 0, 0, 0, 0, 2, 24
+"Total", "-", 12, 296, 14549, 1376, 16, 24068, 19, 1704, 535, 84, 984, 4567, 48210

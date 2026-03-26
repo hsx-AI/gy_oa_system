@@ -11,3 +11,11 @@ export function updateEmailConfig(data) {
 export function sendEmail(data) {
   return request({ url: '/email/send', method: 'post', data })
 }
+
+export function previewAttendanceReminder(data) {
+  return request({ url: '/email/preview-attendance-reminder', method: 'post', data })
+}
+
+export function sendAttendanceReminder(data) {
+  return request({ url: '/email/send-attendance-reminder', method: 'post', data })
+}

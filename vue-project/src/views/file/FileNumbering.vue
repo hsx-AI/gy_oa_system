@@ -53,54 +53,39 @@
     </div>
 
     <div class="content mt-xl">
-      <!-- 搜索栏（技术文件 / 技术管理 / 管理文件） -->
-      <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage' || currentTab === 'gygch' || currentTab === 'scszh'">
-        <template v-if="currentTab === 'tech'">
-          <input v-model="searchKeyword" type="text" placeholder="搜索编号/文件名/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="techPage = 1; loadTechList()">查询</button>
-          <button type="button" class="btn" @click="searchKeyword = ''; techPage = 1; loadTechList()">重置</button>
-        </template>
-        <template v-else-if="currentTab === 'jsgl'">
-          <input v-model="searchKeywordJsgl" type="text" placeholder="搜索编号/内容/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="jsglPage = 1; loadJsglList()">查询</button>
-          <button type="button" class="btn" @click="searchKeywordJsgl = ''; jsglPage = 1; loadJsglList()">重置</button>
-        </template>
-        <template v-else-if="currentTab === 'manage'">
-          <input v-model="searchKeywordManage" type="text" placeholder="搜索编号/内容..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="managePage = 1; loadManageList()">查询</button>
-          <button type="button" class="btn" @click="searchKeywordManage = ''; managePage = 1; loadManageList()">重置</button>
-        </template>
-        <template v-else-if="currentTab === 'gygch'">
-          <input v-model="searchKeywordGygch" type="text" placeholder="搜索编号/内容/工艺部室..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="gygchPage = 1; loadGygchList()">查询</button>
-          <button type="button" class="btn" @click="searchKeywordGygch = ''; gygchPage = 1; loadGygchList()">重置</button>
-        </template>
-        <template v-else-if="currentTab === 'scszh'">
-          <input v-model="searchKeywordScszh" type="text" placeholder="搜索编号/内容/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="scszhPage = 1; loadScszhList()">查询</button>
-          <button type="button" class="btn" @click="searchKeywordScszh = ''; scszhPage = 1; loadScszhList()">重置</button>
-        </template>
-      </div>
-
       <!-- 列表 -->
       <div class="card">
-        <div class="card-header card-header-with-actions">
-          <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : currentTab === 'manage' ? '管理文件列表' : currentTab === 'gygch' ? '工艺过程策划表列表' : '生产数字化编号列表' }}</h3>
-          <button
-            v-if="canExportBianhao"
-            type="button"
-            class="btn btn-primary"
-            :disabled="exportLoading"
-            @click="exportCurrentTable"
-          >
-            {{ exportLoading ? '导出中…' : '导出 Excel' }}
-          </button>
+        <div class="card-header record-card__header">
+          <div>
+            <h3>{{ tabTitleMap[currentTab] || '文件列表' }}</h3>
+          </div>
+          <div class="record-card__filters">
+            <label class="filter-label">搜索：</label>
+            <input
+              v-model="activeSearchKeyword"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="关键词"
+              @keyup.enter="doCurrentSearch"
+            >
+            <button type="button" class="btn btn-primary btn-sm" @click="doCurrentSearch">查询</button>
+            <button type="button" class="btn btn-sm" @click="doCurrentReset">重置</button>
+            <button
+              v-if="canExportBianhao"
+              type="button"
+              class="btn btn-primary btn-sm"
+              :disabled="exportLoading"
+              @click="exportCurrentTable"
+            >
+              {{ exportLoading ? '导出中…' : '导出 Excel' }}
+            </button>
+          </div>
         </div>
         <div class="card-body">
           <template v-if="currentTab === 'tech'">
             <div v-if="techListLoading" class="empty-text">加载中...</div>
             <div v-else-if="techTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
-            <div v-else-if="filteredTechList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
+            <div v-else-if="filteredTechList.length === 0" class="empty-text">当前页无匹配记录，请调整搜索关键词或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -114,17 +99,6 @@
                     <th class="sortable-th" @click="toggleSort('tech','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('tech','bhtime') }}</span></th>
                     <th class="sortable-th" @click="toggleSort('tech','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('tech','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
-                  </tr>
-                  <tr class="filter-row">
-                    <th><input v-model="colFilters.tech.bz" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.xm" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.gzh" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.cpname" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.fenlei" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.neirong" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.bhtime" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.tech.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -163,7 +137,7 @@
           <template v-else-if="currentTab === 'jsgl'">
             <div v-if="jsglListLoading" class="empty-text">加载中...</div>
             <div v-else-if="jsglTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
-            <div v-else-if="filteredJsglList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
+            <div v-else-if="filteredJsglList.length === 0" class="empty-text">当前页无匹配记录，请调整搜索关键词或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -177,17 +151,6 @@
                     <th class="sortable-th" @click="toggleSort('jsgl','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('jsgl','bhtime') }}</span></th>
                     <th class="sortable-th" @click="toggleSort('jsgl','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('jsgl','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
-                  </tr>
-                  <tr class="filter-row">
-                    <th><input v-model="colFilters.jsgl.bz" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.xm" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.gzh" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.cpname" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.fenleihao" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.neirong" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.bhtime" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.jsgl.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -226,7 +189,7 @@
           <template v-else-if="currentTab === 'manage'">
             <div v-if="manageListLoading" class="empty-text">加载中...</div>
             <div v-else-if="manageTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
-            <div v-else-if="filteredManageList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
+            <div v-else-if="filteredManageList.length === 0" class="empty-text">当前页无匹配记录，请调整搜索关键词或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -238,15 +201,6 @@
                     <th class="sortable-th" @click="toggleSort('manage','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('manage','bhtime') }}</span></th>
                     <th class="sortable-th" @click="toggleSort('manage','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('manage','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
-                  </tr>
-                  <tr class="filter-row">
-                    <th><input v-model="colFilters.manage.bz" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.manage.xm" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.manage.fenlei" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.manage.neirong" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.manage.bhtime" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.manage.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -283,7 +237,7 @@
           <template v-else-if="currentTab === 'gygch'">
             <div v-if="gygchListLoading" class="empty-text">加载中...</div>
             <div v-else-if="gygchTotal === 0" class="empty-text">暂无工艺过程策划表编号记录</div>
-            <div v-else-if="filteredGygchList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
+            <div v-else-if="filteredGygchList.length === 0" class="empty-text">当前页无匹配记录，请调整搜索关键词或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -296,16 +250,6 @@
                     <th class="sortable-th" @click="toggleSort('gygch','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('gygch','bhtime') }}</span></th>
                     <th class="sortable-th" @click="toggleSort('gygch','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('gygch','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
-                  </tr>
-                  <tr class="filter-row">
-                    <th><input v-model="colFilters.gygch.bz" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.xm" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.bhyear" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.room_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.neirong" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.bhtime" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.gygch.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -343,7 +287,7 @@
           <template v-else-if="currentTab === 'scszh'">
             <div v-if="scszhListLoading" class="empty-text">加载中...</div>
             <div v-else-if="scszhTotal === 0" class="empty-text">暂无生产数字化编号记录</div>
-            <div v-else-if="filteredScszhList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
+            <div v-else-if="filteredScszhList.length === 0" class="empty-text">当前页无匹配记录，请调整搜索关键词或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -356,16 +300,6 @@
                     <th class="sortable-th" @click="toggleSort('scszh','bhtime')">编号时间 <span class="sort-icon">{{ sortIcon('scszh','bhtime') }}</span></th>
                     <th class="sortable-th" @click="toggleSort('scszh','bianhao_code')">编号代码 <span class="sort-icon">{{ sortIcon('scszh','bianhao_code') }}</span></th>
                     <th>PDF 文件</th>
-                  </tr>
-                  <tr class="filter-row">
-                    <th><input v-model="colFilters.scszh.bz" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.xm" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.fenlei" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.neirong" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.content" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.bhtime" placeholder="筛选" class="col-filter-input"></th>
-                    <th><input v-model="colFilters.scszh.bianhao_code" placeholder="筛选" class="col-filter-input"></th>
-                    <th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -619,6 +553,40 @@ const EXPORT_TABLE_BY_TAB = {
   scszh: 'scszh'
 }
 
+const tabTitleMap = {
+  tech: '技术文件列表',
+  jsgl: '技术管理文件列表',
+  manage: '管理文件列表',
+  gygch: '工艺过程策划表列表',
+  scszh: '生产数字化编号列表',
+}
+
+const _kwRefs = { tech: searchKeyword, jsgl: searchKeywordJsgl, manage: searchKeywordManage, gygch: searchKeywordGygch, scszh: searchKeywordScszh }
+const activeSearchKeyword = computed({
+  get: () => (_kwRefs[currentTab.value] || searchKeyword).value,
+  set: v => { (_kwRefs[currentTab.value] || searchKeyword).value = v }
+})
+
+const _pageRefs = { tech: techPage, jsgl: jsglPage, manage: managePage, gygch: gygchPage, scszh: scszhPage }
+const _loaders = {
+  tech: () => loadTechList(),
+  jsgl: () => loadJsglList(),
+  manage: () => loadManageList(),
+  gygch: () => loadGygchList(),
+  scszh: () => loadScszhList(),
+}
+
+function doCurrentSearch() {
+  const pg = _pageRefs[currentTab.value]
+  if (pg) pg.value = 1
+  _loaders[currentTab.value]?.()
+}
+
+function doCurrentReset() {
+  activeSearchKeyword.value = ''
+  doCurrentSearch()
+}
+
 const form = ref({
   xm: '',
   bz: '',
@@ -638,14 +606,6 @@ const tabSort = reactive({
   gygch: { key: 'bhtime', order: 'desc' },
   scszh: { key: 'bhtime', order: 'desc' },
 })
-const colFilters = reactive({
-  tech: {},
-  jsgl: {},
-  manage: {},
-  gygch: {},
-  scszh: {},
-})
-
 function toggleSort(tab, key) {
   const s = tabSort[tab]
   if (s.key === key) {
@@ -670,44 +630,32 @@ function parseLooseDate(v) {
   return new Date(+m[1], +m[2] - 1, +m[3])
 }
 
-function applyColFiltersAndSort(list, tab) {
-  const filters = colFilters[tab]
-  let result = list
-  for (const [field, val] of Object.entries(filters)) {
-    const kw = (val || '').trim().toLowerCase()
-    if (!kw) continue
-    result = result.filter(r => {
-      const cell = String(r[field] ?? '').toLowerCase()
-      return cell.includes(kw)
-    })
-  }
+function applySortOnly(list, tab) {
   const s = tabSort[tab]
-  if (s.key) {
-    result = [...result].sort((a, b) => {
-      const va = a[s.key] ?? ''
-      const vb = b[s.key] ?? ''
-      const da = parseLooseDate(va)
-      const db = parseLooseDate(vb)
-      let cmp
-      if (da && db) {
-        cmp = da - db
-      } else if (da) {
-        cmp = -1
-      } else if (db) {
-        cmp = 1
+  if (!s.key) return list
+  return [...list].sort((a, b) => {
+    const va = a[s.key] ?? ''
+    const vb = b[s.key] ?? ''
+    const da = parseLooseDate(va)
+    const db = parseLooseDate(vb)
+    let cmp
+    if (da && db) {
+      cmp = da - db
+    } else if (da) {
+      cmp = -1
+    } else if (db) {
+      cmp = 1
+    } else {
+      const na = parseFloat(va)
+      const nb = parseFloat(vb)
+      if (!isNaN(na) && !isNaN(nb)) {
+        cmp = na - nb
       } else {
-        const na = parseFloat(va)
-        const nb = parseFloat(vb)
-        if (!isNaN(na) && !isNaN(nb)) {
-          cmp = na - nb
-        } else {
-          cmp = String(va).localeCompare(String(vb), 'zh-Hans-CN')
-        }
+        cmp = String(va).localeCompare(String(vb), 'zh-Hans-CN')
       }
-      return s.order === 'asc' ? cmp : -cmp
-    })
-  }
-  return result
+    }
+    return s.order === 'asc' ? cmp : -cmp
+  })
 }
 
 /** 统计权限 level：3=部长/副部长可看全部专业，1/2=仅本专业 */
@@ -928,15 +876,15 @@ function onFenleiChange() {
   form.value.flbianma = item ? (item.flbianma || '').trim() : ''
 }
 
-const filteredTechList = computed(() => applyColFiltersAndSort(techList.value, 'tech'))
+const filteredTechList = computed(() => applySortOnly(techList.value, 'tech'))
 
-const filteredJsglList = computed(() => applyColFiltersAndSort(jsglList.value, 'jsgl'))
+const filteredJsglList = computed(() => applySortOnly(jsglList.value, 'jsgl'))
 
-const filteredManageList = computed(() => applyColFiltersAndSort(manageList.value, 'manage'))
+const filteredManageList = computed(() => applySortOnly(manageList.value, 'manage'))
 
-const filteredGygchList = computed(() => applyColFiltersAndSort(gygchList.value, 'gygch'))
+const filteredGygchList = computed(() => applySortOnly(gygchList.value, 'gygch'))
 
-const filteredScszhList = computed(() => applyColFiltersAndSort(scszhList.value, 'scszh'))
+const filteredScszhList = computed(() => applySortOnly(scszhList.value, 'scszh'))
 
 async function loadTechList() {
   techListLoading.value = true
@@ -1354,9 +1302,6 @@ function goWorkNo() {
   margin-top: 0;
 }
 
-.search-bar.mb-lg {
-  margin-bottom: 0;
-}
 
 .tab-item {
   padding: var(--spacing-md) var(--spacing-xl);
@@ -1372,19 +1317,6 @@ function goWorkNo() {
   border-bottom-color: var(--color-primary);
 }
 
-.search-bar {
-  display: flex;
-  gap: var(--spacing-md);
-  padding: var(--spacing-lg);
-  border-radius: var(--radius-md);
-}
-
-.search-input {
-  flex: 1;
-  padding: 8px 12px;
-  border: 1px solid var(--color-border-base);
-  border-radius: var(--radius-sm);
-}
 
 .card {
   background: white;
@@ -1398,16 +1330,39 @@ function goWorkNo() {
   border-bottom: 1px solid var(--color-border-lighter);
 }
 
-.card-header-with-actions {
+.record-card__header {
+  padding: var(--spacing-lg) var(--spacing-xl);
+  background: white;
+  border-bottom: 1px solid var(--color-border-lighter);
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: var(--spacing-md);
+}
+.record-card__header h3 {
+  margin: 0;
+}
+.record-card__filters {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: var(--spacing-md);
+  gap: var(--spacing-sm);
   flex-wrap: wrap;
 }
-
-.card-header-with-actions h3 {
-  margin: 0;
+.record-card__filters .filter-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+.record-card__filters .filter-input {
+  padding: 6px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.record-card__filters .filter-input--search {
+  min-width: 10rem;
+  max-width: 16rem;
 }
 
 .card-body {
@@ -1457,23 +1412,6 @@ function goWorkNo() {
   margin-left: 2px;
 }
 
-.filter-row th {
-  padding: 4px 6px;
-  background: var(--color-bg-container, #fff);
-}
-
-.col-filter-input {
-  width: 100%;
-  padding: 3px 6px;
-  font-size: 0.8rem;
-  border: 1px solid var(--color-border-lighter, #e8e8e8);
-  border-radius: 3px;
-  box-sizing: border-box;
-}
-.col-filter-input:focus {
-  border-color: var(--color-primary, #1677ff);
-  outline: none;
-}
 
 .data-table tbody tr:hover {
   background: var(--color-bg-lighter, #fafafa);

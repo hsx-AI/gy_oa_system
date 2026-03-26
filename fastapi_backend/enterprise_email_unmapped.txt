@@ -1,0 +1,13 @@
+姓名	邮箱
+马凤	mf@hec-china.com
+王国强	wgq@hec-china.com
+葛慧哲	ghz@hec-china.com
+富喜明	fuxm@hec-china.com
+制造工艺部公用	zzgybgy@hec-china.com
+林磊	ll@hec-china.com
+李方	lif@hec-china.com
+李冰（工艺）	lbinggy@hec-china.com
+李冰（非标）	lbign@hec-china.com
+李佳贺	ljh@hec-china.com
+汽发工艺	qfgy@hec-china.com
+张艳辉	zyh@hec-china.com
