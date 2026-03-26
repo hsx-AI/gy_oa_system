@@ -51,7 +51,7 @@
               <line x1="12" y1="1" x2="12" y2="23" />
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
-            <span>加班费统计</span>
+            <span>其他绩效激励统计</span>
           </router-link>
           <router-link to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -196,13 +196,52 @@
               <span class="app-title">智能制造工艺部集成办公平台</span>
             </div>
             <div class="header-right">
-              <button class="header-action-btn">
-                <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
-                  <path d="M13.73 21a2 2 0 0 1-3.46 0" />
-                </svg>
-                <span class="badge-dot"></span>
-              </button>
+              <div ref="todoBellWrapRef" class="todo-bell-wrap">
+                <button
+                  type="button"
+                  class="header-action-btn"
+                  aria-label="待办事项"
+                  :aria-expanded="todoPopoverOpen ? 'true' : 'false'"
+                  @click.stop="toggleTodoPopover"
+                >
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9" />
+                    <path d="M13.73 21a2 2 0 0 1-3.46 0" />
+                  </svg>
+                  <span v-if="totalBadgeCount > 0" class="badge-dot" aria-hidden="true"></span>
+                </button>
+                <div
+                  v-show="todoPopoverOpen"
+                  class="todo-popover"
+                  role="dialog"
+                  aria-label="待办事项"
+                  @click.stop
+                >
+                  <div class="todo-popover__header">
+                    <span class="todo-popover__title">待办事项</span>
+                    <span class="todo-popover__count">{{ totalBadgeCount }}</span>
+                    <button type="button" class="todo-popover__link" @click="openAllTodos">查看全部</button>
+                  </div>
+                  <div class="todo-popover__body">
+                    <ul v-if="displayTodoList.length" class="todo-popover-list">
+                      <li v-for="task in displayTodoList" :key="task.uniqueId" class="todo-popover-item">
+                        <div class="todo-popover-item__top">
+                          <span class="todo-popover-item__type">{{ task.type }}</span>
+                          <p class="todo-popover-item__desc" :title="task.description">{{ task.description }}</p>
+                        </div>
+                        <div class="todo-popover-item__bottom">
+                          <span class="todo-popover-item__meta">{{ task.applicant }}{{ task.time ? ' · ' + task.time : '' }}</span>
+                          <button type="button" class="todo-popover-item__btn" @click="onHeaderTodoAction(task)">
+                            {{ task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')) }}
+                          </button>
+                        </div>
+                      </li>
+                    </ul>
+                    <div v-else-if="!todoPanelLoading" class="todo-popover-empty">暂无待办事项</div>
+                    <div v-else class="todo-popover-empty">加载中…</div>
+                  </div>
+                </div>
+              </div>
               <button class="header-action-btn">
                 <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                   <circle cx="12" cy="12" r="3" />
@@ -316,9 +355,37 @@ import { getUploadConfig, setLoginStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification } from '@/api/admin'
+import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 
 const route = useRoute()
 const router = useRouter()
+
+const {
+  totalBadgeCount,
+  displayTodoList,
+  todoPanelLoading,
+  handleTodoAction,
+} = useWorkplaceTodos()
+
+const todoBellWrapRef = ref(null)
+const todoPopoverOpen = ref(false)
+
+function toggleTodoPopover() {
+  todoPopoverOpen.value = !todoPopoverOpen.value
+  if (todoPopoverOpen.value) {
+    refreshWorkplaceTodos()
+  }
+}
+
+function openAllTodos() {
+  todoPopoverOpen.value = false
+  router.push('/attendance/pending-tasks')
+}
+
+function onHeaderTodoAction(task) {
+  handleTodoAction(task)
+  todoPopoverOpen.value = false
+}
 
 // 当前用户信息
 const currentUser = ref({
@@ -373,7 +440,7 @@ const canSeeLeaderDashboard = computed(() => {
   return isMinister || isZhjsDirector
 })
 
-// 加班费统计：全员可访问，页面内按权限显示本人/本室/全部门
+// 其他绩效激励统计：全员可访问，页面内按权限显示本人/本室/全部门
 
 // 是否显示数据库表管理入口（仅 webconfig.admin1 系统管理员）
 const canAccessDbManager = ref(false)
@@ -408,6 +475,9 @@ const toggleUserMenu = () => {
 const onDocumentClick = (e) => {
   if (userInfoRef.value && !userInfoRef.value.contains(e.target)) {
     showUserMenu.value = false
+  }
+  if (todoBellWrapRef.value && !todoBellWrapRef.value.contains(e.target)) {
+    todoPopoverOpen.value = false
   }
 }
 
@@ -448,6 +518,9 @@ const loadUserInfo = () => {
 // 路由变化时重新加载用户信息（登录后跳转时 currentUser 能正确更新）
 watch(() => route.path, () => {
   loadUserInfo()
+  if (route.path !== '/login') {
+    refreshWorkplaceTodos()
+  }
 }, { immediate: true })
 
 // 首次登录介绍弹窗：当用户 showIntro 为 true 且当前在主布局时显示
@@ -771,9 +844,160 @@ const displayUserName = computed(() => {
   right: 8px;
   width: 8px;
   height: 8px;
-  background: var(--color-error);
+  background: var(--color-error, #ef4444);
   border-radius: 50%;
   border: 2px solid #1f2937;
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
+}
+
+.todo-bell-wrap {
+  position: relative;
+}
+
+.todo-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: min(400px, calc(100vw - 48px));
+  max-height: min(440px, 72vh);
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border: 1px solid var(--color-border-lighter, #e5e7eb);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.todo-popover__header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--color-border-lighter, #e5e7eb);
+  background: #f9fafb;
+  flex-shrink: 0;
+}
+
+.todo-popover__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+}
+
+.todo-popover__count {
+  font-size: 12px;
+  font-weight: 600;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  background: #fee2e2;
+  color: #b91c1c;
+  border-radius: 999px;
+}
+
+.todo-popover__link {
+  margin-left: auto;
+  border: none;
+  background: none;
+  font-size: 13px;
+  font-weight: 500;
+  color: #6366f1;
+  cursor: pointer;
+  padding: 4px 0;
+}
+
+.todo-popover__link:hover {
+  text-decoration: underline;
+}
+
+.todo-popover__body {
+  overflow-y: auto;
+  flex: 1;
+  min-height: 0;
+}
+
+.todo-popover-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.todo-popover-item {
+  padding: 10px 14px;
+  border-bottom: 1px solid #f3f4f6;
+}
+
+.todo-popover-item:last-child {
+  border-bottom: none;
+}
+
+.todo-popover-item__top {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.todo-popover-item__type {
+  font-size: 11px;
+  font-weight: 600;
+  color: #6366f1;
+  text-transform: none;
+}
+
+.todo-popover-item__desc {
+  margin: 0;
+  font-size: 13px;
+  color: #374151;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.todo-popover-item__bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.todo-popover-item__meta {
+  font-size: 12px;
+  color: #9ca3af;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.todo-popover-item__btn {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #fff;
+  background: #6366f1;
+  border: none;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.todo-popover-item__btn:hover {
+  background: #4f46e5;
+}
+
+.todo-popover-empty {
+  padding: 28px 16px;
+  text-align: center;
+  font-size: 14px;
+  color: #9ca3af;
 }
 
 .user-info {

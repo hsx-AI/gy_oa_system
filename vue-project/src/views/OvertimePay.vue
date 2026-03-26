@@ -2,7 +2,7 @@
   <div class="overtime-pay-page">
     <div class="page-header">
       <div class="header-content">
-        <h1 class="header-title">加班费统计</h1>
+        <h1 class="header-title">其他绩效激励统计</h1>
         <p class="header-subtitle">按科室、年份、月份查询</p>
       </div>
     </div>
@@ -10,7 +10,7 @@
     <div class="container">
       <div v-if="!canView" class="no-permission card">
         <div class="no-permission-content">
-          <p>您暂无权限查看加班费统计。</p>
+          <p>您暂无权限查看其他绩效激励统计。</p>
           <router-link to="/" class="btn btn-primary">返回首页</router-link>
         </div>
       </div>
@@ -71,7 +71,7 @@
               </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载加班费报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。</p>
+          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -93,7 +93,7 @@
                 <tr>
                   <th>月份</th>
                   <th>加班小时</th>
-                  <th>加班费（元）</th>
+                  <th>其他绩效激励（元）</th>
                 </tr>
               </thead>
               <tbody>
@@ -113,13 +113,13 @@
             </table>
           </div>
           <div v-if="overtimePayByEmployee.length > 0" class="table-wrap">
-            <h3 class="subsection-title">科室员工加班费明细</h3>
+            <h3 class="subsection-title">科室员工其他绩效激励明细</h3>
             <table class="data-table">
               <thead>
                 <tr>
                   <th>姓名</th>
                   <th>加班小时</th>
-                  <th>加班费（元）</th>
+                  <th>其他绩效激励（元）</th>
                 </tr>
               </thead>
               <tbody>
@@ -138,11 +138,11 @@
               </tfoot>
             </table>
           </div>
-          <div v-if="hasFetched && !overtimePayByMonth.length && !overtimePayByEmployee.length" class="empty-state">暂无加班费数据</div>
+          <div v-if="hasFetched && !overtimePayByMonth.length && !overtimePayByEmployee.length" class="empty-state">暂无其他绩效激励数据</div>
         </div>
 
         <div v-if="!hasFetched && !loading" class="init-hint card">
-          <p>选择科室、年份与月份后点击「查询」查看加班费统计。</p>
+          <p>选择科室、年份与月份后点击「查询」查看其他绩效激励统计。</p>
         </div>
       </template>
     </div>
@@ -202,7 +202,7 @@ const fetchData = async () => {
 }
 
 function sheetFromList(list) {
-  const header = ['姓名', '本月加班费（元）']
+  const header = ['姓名', '本月其他绩效激励（元）']
   const rows = list.map((item) => [item.name || '', item.pay ?? 0])
   return XLSX.utils.aoa_to_sheet([header, ...rows])
 }
@@ -234,7 +234,7 @@ async function downloadExcel() {
       const sheet = sheetFromList(dept.list || [])
       XLSX.utils.book_append_sheet(wb, sheet, sheetName)
     }
-    const fileName = `加班费工资报表_${filterYear.value}年${filterMonth.value}月.xlsx`
+    const fileName = `其他绩效激励工资报表_${filterYear.value}年${filterMonth.value}月.xlsx`
     XLSX.writeFile(wb, fileName)
   } catch (e) {
     console.error(e)

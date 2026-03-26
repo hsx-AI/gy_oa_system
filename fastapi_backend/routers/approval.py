@@ -618,7 +618,7 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
                     (tickets, item_id),
                 )
         else:
-            # hx=否：只记加班费，回写 jbf（以 tian1 为准），hxp 置 0
+            # hx=否：只记其他绩效激励，回写 jbf（以 tian1 为准），hxp 置 0
             db.execute_update(
                 "UPDATE jiaban SET jbf = %s, hxp = 0 WHERE id = %s",
                 (hours, item_id),

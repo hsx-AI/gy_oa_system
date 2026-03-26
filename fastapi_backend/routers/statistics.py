@@ -51,9 +51,9 @@ def _aggregate_overtime_with_incentive(
 ):
     """
     对原始加班记录按「人+日期」聚合，并按节日激励规则计算：
-    - 春节/国庆节/高温防暑休假 这三类节日当天：若当日加班时长(已扣午休) >= 8 小时，则这天加班费固定 200 元；
+    - 春节/国庆节/高温防暑休假 这三类节日当天：若当日加班时长(已扣午休) >= 8 小时，则这天其他绩效激励固定 200 元；
       超过 8 小时不再额外计算；这些小时不再计入普通 15 元/小时部分。
-    - 其他日期或不足 8 小时的节日，加班费按 15 元/小时计算。
+    - 其他日期或不足 8 小时的节日，其他绩效激励按 15 元/小时计算。
     返回:
     - per_month: { "YYYY-MM": {"hours": 总小时数, "pay": 总金额} }
     - per_employee: { name: {"hours": 总小时数, "pay": 总金额} }
@@ -520,7 +520,7 @@ def _apply_overtime_pay_scope(
     lsys: Optional[str],
     name: Optional[str],
 ) -> Tuple[Optional[str], Optional[str]]:
-    """按加班费统计页权限 scope 强制修正 lsys/name。返回 (lsys, name)。"""
+    """按其他绩效激励统计页权限 scope 强制修正 lsys/name。返回 (lsys, name)。"""
     if not current_user or not scope:
         return lsys, name
     if scope == "self":
@@ -541,9 +541,9 @@ async def get_dept_overtime_pay_by_month(
     scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
-    加班费按月份统计。仅统计 jiaban 审核完成(jiabanzt=4)、换休票为否(hx 非「是」)，
+    其他绩效激励按月份统计。仅统计 jiaban 审核完成(jiabanzt=4)、换休票为否(hx 非「是」)，
     激励规则：
-    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天加班时长(已扣午休) >= 8 小时，则该天加班费固定 200 元；
+    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天加班时长(已扣午休) >= 8 小时，则该天其他绩效激励固定 200 元；
       超出 8 小时部分不再额外计算；
     - 其他日期或不足 8 小时部分，按 webconfig.zhibanfei（默认 15 元/小时）计算；
     支持 name=某人 仅查本人；month=1~12 仅查该月。
@@ -611,7 +611,7 @@ async def get_dept_overtime_pay_by_month(
 
         return {"success": True, "zhibanfei": zhibanfei, "list": list_data}
     except Exception as e:
-        logger.error(f"加班费按月考勤失败: {str(e)}")
+        logger.error(f"其他绩效激励按月考勤失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -626,7 +626,7 @@ async def get_dept_overtime_pay_by_employee(
     scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
-    科室员工加班费明细：指定科室、年份，按人汇总（审核通过且换休票为否）。
+    科室员工其他绩效激励明细：指定科室、年份，按人汇总（审核通过且换休票为否）。
     激励规则与 /dept/overtime-pay-by-month 相同。
     支持 name=某人 仅查本人；month=1~12 仅查该月。
     当传入 current_user+scope 时按权限强制过滤。
@@ -685,7 +685,7 @@ async def get_dept_overtime_pay_by_employee(
 
         return {"success": True, "zhibanfei": zhibanfei, "list": list_data}
     except Exception as e:
-        logger.error(f"加班费按员工统计失败: {str(e)}")
+        logger.error(f"其他绩效激励按员工统计失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 
@@ -698,8 +698,8 @@ async def get_overtime_pay_export(
     scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
-    按月导出加班费工资报表数据：全员 + 各科室。
-    以 yggl 名单为准，当月无加班记录者本月加班费为 0，保证科室人全。
+    按月导出其他绩效激励工资报表数据：全员 + 各科室。
+    以 yggl 名单为准，当月无加班记录者本月其他绩效激励为 0，保证科室人全。
     当传入 current_user+scope 时按权限过滤：self 仅导出本人，lsys 仅本室，all 不限制。
     返回: { success, zhibanfei, all: [{ name, pay }], byDept: [{ lsys, list: [{ name, pay }] }] }
     """
@@ -712,7 +712,7 @@ async def get_overtime_pay_export(
         except Exception:
             pass
 
-        # 本月所有加班记录（不区分科室），用于计算激励与普通加班费
+        # 本月所有加班记录（不区分科室），用于计算激励与普通其他绩效激励
         q_rows = """
             SELECT jiaban.xm AS emp_name,
                    jiaban.timedate,
@@ -777,7 +777,7 @@ async def get_overtime_pay_export(
 
         return {"success": True, "zhibanfei": zhibanfei, "all": list_all, "byDept": by_dept}
     except Exception as e:
-        logger.error(f"加班费按月导出失败: {str(e)}")
+        logger.error(f"其他绩效激励按月导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

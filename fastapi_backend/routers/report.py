@@ -85,7 +85,7 @@ async def get_statistics_permission(name: str = Query(..., description="当前�
 @router.get("/overtime-pay-permission")
 async def get_overtime_pay_permission(name: str = Query(..., description="当前用户姓名")):
     """
-    加班费统计页权限：全员可访问，按 yggl.jb 与 webconfig.admin2 返回可见范围。
+    其他绩效激励统计页权限：全员可访问，按 yggl.jb 与 webconfig.admin2 返回可见范围。
     返回 { success, canView: true, scope, lsys? }
     - scope=all: 部长/副部长、人事管理员(admin2)，可见全部门；
     - scope=lsys: 主任/副主任，可见本室(lsys)全部员工；
@@ -167,7 +167,7 @@ class OvertimeRecord(BaseModel):
     timeto: Optional[str] = None  # 结束时间
     jiabantime: Optional[str] = None  # 申请时间
     tian1: Optional[str] = None  # 加班时长（小时）
-    jbf: Optional[float] = None  # 加班费小时数
+    jbf: Optional[float] = None  # 其他绩效激励小时数
     jiabanzt: Optional[int] = None  # 状态 (4=已通过)
     content: Optional[str] = None  # 内容描述
 

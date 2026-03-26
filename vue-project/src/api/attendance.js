@@ -100,7 +100,7 @@ export function uploadHolidayFile({ year, current_user, file }) {
 }
 
 /**
- * 获取加班配置（zhibanfei：每小时加班费，用于“否”换休票时计算加班费）
+ * 获取加班配置（zhibanfei：每小时其他绩效激励，用于“否”换休票时计算其他绩效激励）
  */
 export function getOvertimeWebconfig() {
   return request({ url: '/overtime/webconfig', method: 'get' })
@@ -335,17 +335,17 @@ export function getDeptBusinessTripStats(params) {
   return request({ url: '/dept/business-trip', method: 'get', params })
 }
 
-/** 本科室加班费按月份统计（审核通过且换休票为否，jbf*zhibanfei） */
+/** 本科室其他绩效激励按月份统计（审核通过且换休票为否，jbf*zhibanfei） */
 export function getDeptOvertimePayByMonth(params) {
   return request({ url: '/dept/overtime-pay-by-month', method: 'get', params })
 }
 
-/** 本科室加班费按员工统计（审核通过且换休票为否，jbf*zhibanfei） */
+/** 本科室其他绩效激励按员工统计（审核通过且换休票为否，jbf*zhibanfei） */
 export function getDeptOvertimePayByEmployee(params) {
   return request({ url: '/dept/overtime-pay-by-employee', method: 'get', params })
 }
 
-/** 加班费按月导出（全员+各科室，用于 Excel 工资报表） */
+/** 其他绩效激励按月导出（全员+各科室，用于 Excel 工资报表） */
 export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })
 }
@@ -390,7 +390,7 @@ export function getStatisticsPermission(params) {
   return request({ url: '/report/statistics-permission', method: 'get', params })
 }
 
-/** 加班费统计页权限：仅部长/副部长或人事管理员(webconfig.admin2)可访问 */
+/** 其他绩效激励统计页权限：仅部长/副部长或人事管理员(webconfig.admin2)可访问 */
 export function getOvertimePayPermission(params) {
   return request({ url: '/report/overtime-pay-permission', method: 'get', params })
 }

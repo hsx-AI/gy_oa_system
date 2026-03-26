@@ -623,7 +623,7 @@ async def register_overtime(req: OvertimeRegisterRequest):
                 pass
         if not bz:
             bz = "未知"
-        # 要换休票(hx=是)与要加班费(jbf)二选一：hx=是 只写 tian1/hxp，jbf 不写(0)；hx=否 写 jbf，hxp=0
+        # 要换休票(hx=是)与要其他绩效激励(jbf)二选一：hx=是 只写 tian1/hxp，jbf 不写(0)；hx=否 写 jbf，hxp=0
         hx_raw = (req.needExchangeTicket or "是").strip()
         need_exchange = str(hx_raw).lower() in ("是", "1", "true", "yes")
         jbf_val = 0.0 if need_exchange else float(hours)
@@ -817,8 +817,8 @@ async def delete_overtime_rejected(item_id: str, name: str):
 @router.get("/overtime/webconfig")
 async def get_overtime_webconfig():
     """
-    获取加班相关配置（用于“否”换休票时计算加班费）。
-    返回 webconfig 表中的 zhibanfei（每小时加班费，元），若表不存在或无记录则返回默认 15。
+    获取加班相关配置（用于“否”换休票时计算其他绩效激励）。
+    返回 webconfig 表中的 zhibanfei（每小时其他绩效激励，元），若表不存在或无记录则返回默认 15。
     """
     try:
         rows = db.execute_query("SELECT zhibanfei FROM webconfig WHERE id = 1 LIMIT 1")

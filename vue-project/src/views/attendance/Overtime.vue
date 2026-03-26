@@ -188,13 +188,13 @@
             </p>
             <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
               <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8">
-                本次加班费：{{ specialHolidayName }}严格按照上下班打卡满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
+                本次其他绩效激励：{{ specialHolidayName }}严格按照上下班打卡满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
               </template>
               <template v-else-if="isSpecialHoliday">
-                本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}严格按照上下班打卡满8小时可获固定200元奖励）
+                本次其他绩效激励：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}严格按照上下班打卡满8小时可获固定200元奖励）
               </template>
               <template v-else>
-                本次加班费：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元
+                本次其他绩效激励：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元
               </template>
             </p>
           </div>
@@ -477,7 +477,7 @@ watch(() => form.date, (newDate) => {
   }
 })
 
-// 加班费用工作时长：早八晚五，午休 12:00-13:00 不计入，再按 0.5 时为单位
+// 其他绩效激励计算用工作时长：早八晚五，午休 12:00-13:00 不计入，再按 0.5 时为单位
 function calcOvertimeWorkHours(st, et) {
   if (!st || !et) return 0
   const toMins = (t) => {

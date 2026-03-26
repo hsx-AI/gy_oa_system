@@ -26,7 +26,7 @@
                 </div>
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
-                  <button type="button" class="todo-item__btn" @click="task.isPersonnel ? goPersonnelArchive() : (task.isSixianghuibao ? goSixianghuibao() : (task.isReturnReminder ? router.push('/attendance/business-trip') : goApprove(task)))">
+                  <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
                     {{ task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')) }}
                   </button>
                 </div>
@@ -117,19 +117,23 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import {
-  checkCanApprove,
-  getPendingLeave,
-  getPendingOvertime,
-  getPendingBusinessTrip,
-  getPendingHolidayExchange,
   getLeaveList,
   getOvertimeList,
   getBusinessTripList,
   getUploadConfig,
 } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
+import { getSSOLink } from '@/api/sso'
+import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 const router = useRouter()
+
+const {
+  displayTodoList,
+  totalBadgeCount,
+  todoLoading,
+  tripReturnLoading,
+  handleTodoAction,
+} = useWorkplaceTodos()
 
 const dakaman = ref('')
 const admin2 = ref('')
@@ -248,8 +252,8 @@ const rawFeatureGroups = [
       },
       {
         id: 'overtime-pay',
-        title: '加班费统计',
-        description: '按权限查看本人/本室/全部门加班费汇总与导出',
+        title: '其他绩效激励统计',
+        description: '按权限查看本人/本室/全部门其他绩效激励汇总与导出',
         path: '/overtime-pay',
         permission: 'overtimePay',
         color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
@@ -354,14 +358,6 @@ const featureGroups = computed(() => {
     .filter(group => group.items.length > 0)
 })
 
-// 待办事项（真实数据）
-const todoList = ref([])
-const todoLoading = ref(false)
-
-// 公出已通过但未做返回登记的数量（首页待办提醒）
-const tripReturnPendingCount = ref(0)
-const tripReturnLoading = ref(false)
-
 // 我的申请（真实数据）
 const requestList = ref([])
 const requestLoading = ref(false)
@@ -378,101 +374,6 @@ function getStoredUserInfo() {
 const userInfo = getStoredUserInfo()
 // 首页挂载时再读一次，避免登录后 userName 未更新
 const userName = ref(userInfo.name || userInfo.userName || '')
-
-/** 相对时间 */
-function formatRelativeTime(dtStr) {
-  if (!dtStr) return ''
-  const d = new Date(dtStr.replace(/-/g, '/'))
-  const now = Date.now()
-  const diff = now - d.getTime()
-  if (diff < 60000) return '刚刚'
-  if (diff < 3600000) return Math.floor(diff / 60000) + '分钟前'
-  if (diff < 86400000) return Math.floor(diff / 3600000) + '小时前'
-  if (diff < 604800000) return Math.floor(diff / 86400000) + '天前'
-  return dtStr.slice(0, 10)
-}
-
-// 思想汇报待办数量（由 OA 代理请求思想汇报 /api/integration/oa/todos）
-const sixianghuibaoTodoTotal = ref(0)
-
-// 人事档案系统待办数量
-const personnelMyPending = ref(0)
-const personnelNeedAudit = ref(0)
-
-// 审批待办真实总数（不截断）
-const todoRealTotal = ref(0)
-
-// 展示的待办列表 = 审批待办(含节假日换休票，截断显示) + 公出返回登记提醒 + 思想汇报待审核 + 人事档案待办
-const displayTodoList = computed(() => {
-  const list = [...(todoList.value || [])]
-  if (tripReturnPendingCount.value > 0) {
-    list.push({
-      uniqueId: 'trip-return-reminder',
-      type: '公出返回登记',
-      description: `您有 ${tripReturnPendingCount.value} 条公出已通过尚未做返回登记，请及时登记`,
-      applicant: '本人',
-      time: '',
-      isReturnReminder: true
-    })
-  }
-  if (sixianghuibaoTodoTotal.value > 0) {
-    list.push({
-      uniqueId: 'sixianghuibao-todos',
-      type: '思想汇报待审核',
-      description: `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待审核`,
-      applicant: '思想汇报系统',
-      time: '',
-      isSixianghuibao: true
-    })
-  }
-  if (personnelMyPending.value > 0) {
-    list.push({
-      uniqueId: 'personnel-my-pending',
-      type: '人事档案待审批',
-      description: `您有 ${personnelMyPending.value} 条人事档案待处理`,
-      applicant: '人事档案系统',
-      time: '',
-      isPersonnel: true
-    })
-  }
-  if (personnelNeedAudit.value > 0) {
-    list.push({
-      uniqueId: 'personnel-need-audit',
-      type: '人事档案需审核',
-      description: `您有 ${personnelNeedAudit.value} 条人事档案需您审核`,
-      applicant: '人事档案系统',
-      time: '',
-      isPersonnel: true
-    })
-  }
-  return list
-})
-
-// badge 显示真实总数（审批项不截断）
-const totalBadgeCount = computed(() => {
-  let count = todoRealTotal.value
-  if (tripReturnPendingCount.value > 0) count += 1
-  if (sixianghuibaoTodoTotal.value > 0) count += 1
-  if (personnelMyPending.value > 0) count += 1
-  if (personnelNeedAudit.value > 0) count += 1
-  return count
-})
-
-function goApprove(task) {
-  router.push({ path: '/attendance/approvals', query: { type: task.tabType } })
-}
-
-async function goSixianghuibao() {
-  const name = (userName.value || '').trim()
-  if (!name) return
-  try {
-    const res = await getSSOLink('sixianghuibao', name)
-    if (res?.url) window.open(res.url, '_blank', 'noopener,noreferrer')
-    else alert(res?.detail || '获取思想汇报系统链接失败')
-  } catch (e) {
-    alert(e?.message || e?.response?.data?.detail || '获取思想汇报系统链接失败，请稍后重试')
-  }
-}
 
 function goMyApplications() {
   router.push('/attendance/my-applications')
@@ -491,131 +392,12 @@ function goMyApplication(req) {
   router.push({ path, query })
 }
 
-async function fetchTodoList() {
-  if (!userName.value) return
-  todoLoading.value = true
-  try {
-    const res = await checkCanApprove({ name: userName.value })
-    if (!res.canApprove) {
-      todoList.value = []
-      return
-    }
-    const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
-      getPendingLeave({ approver: userName.value }),
-      getPendingOvertime({ approver: userName.value }),
-      getPendingBusinessTrip({ approver: userName.value }),
-      getPendingHolidayExchange({ approver: userName.value })
-    ])
-    const items = []
-    const leaves = leaveRes.data || []
-    leaves.forEach(r => {
-      items.push({
-        uniqueId: `leave-${r.id}`,
-        tabType: 'leave',
-        type: '请假审批',
-        description: `${r.applicant}的${r.type || '请假'}申请`,
-        applicant: r.applicant,
-        time: formatRelativeTime(r.applyTime),
-        applyTime: r.applyTime || ''
-      })
-    })
-    const overtimes = overtimeRes.data || []
-    overtimes.forEach(r => {
-      items.push({
-        uniqueId: `overtime-${r.id}`,
-        tabType: 'overtime',
-        type: '加班审批',
-        description: `${r.applicant}的${r.date || ''}加班申请`,
-        applicant: r.applicant,
-        time: formatRelativeTime(r.applyTime),
-        applyTime: r.applyTime || ''
-      })
-    })
-    const trips = btRes.data || []
-    trips.forEach(r => {
-      const loc = r.location ? `去${r.location}的` : ''
-      items.push({
-        uniqueId: `bt-${r.id}`,
-        tabType: 'business-trip',
-        type: '公出审批',
-        description: `${r.applicant}${loc}公出申请`,
-        applicant: r.applicant,
-        time: formatRelativeTime(r.applyTime),
-        applyTime: r.applyTime || ''
-      })
-    })
-    const heList = heRes.data || []
-    heList.forEach(r => {
-      items.push({
-        uniqueId: `he-${r.id}`,
-        tabType: 'holiday-exchange',
-        type: '节假日换休票',
-        description: `${r.applicant}的公出节假日换休票（${r.dateFrom || ''}至${r.dateTo || ''}，${r.days ?? ''}天）`,
-        applicant: r.applicant,
-        time: formatRelativeTime(r.applyTime),
-        applyTime: r.applyTime || ''
-      })
-    })
-    items.sort((a, b) => (b.applyTime || '').localeCompare(a.applyTime || ''))
-    todoRealTotal.value = items.length
-    todoList.value = items.slice(0, 10)
-  } catch (e) {
-    todoList.value = []
-    todoRealTotal.value = 0
-  } finally {
-    todoLoading.value = false
-  }
-}
-
-/** 获取思想汇报系统待办数量（代理请求思想汇报 /api/integration/oa/todos），用于首页待办提醒 */
-async function fetchSixianghuibaoTodos() {
-  const name = (userName.value || '').trim()
-  if (!name) return
-  try {
-    const res = await getSixianghuibaoTodos({ name })
-    sixianghuibaoTodoTotal.value = Math.max(0, Number(res?.total) || 0)
-  } catch (e) {
-    sixianghuibaoTodoTotal.value = 0
-  }
-}
-
-/** 获取人事档案系统待办/需审核数量 */
-async function fetchPersonnelPending() {
-  const name = (userName.value || '').trim()
-  if (!name) return
-  try {
-    const res = await getPersonnelPendingCount({ name })
-    personnelMyPending.value = Math.max(0, Number(res?.myPendingCount) || 0)
-    personnelNeedAudit.value = Math.max(0, Number(res?.needAuditCount) || 0)
-  } catch (e) {
-    personnelMyPending.value = 0
-    personnelNeedAudit.value = 0
-  }
-}
-
 function goPersonnelArchive() {
   const url = (personnelArchiveUrl.value || '').trim()
   if (url) {
     window.open(url, '_blank', 'noopener,noreferrer')
   } else {
     alert('人事档案系统链接未配置，请联系管理员')
-  }
-}
-
-/** 获取公出已通过但未做返回登记的数量，用于首页待办提醒 */
-async function fetchTripReturnPending() {
-  if (!userName.value) return
-  tripReturnLoading.value = true
-  try {
-    const res = await getBusinessTripList({ name: userName.value, year: new Date().getFullYear() })
-    const data = res?.data || []
-    tripReturnPendingCount.value = data.filter(
-      r => (r.status === '已通过') && (Number(r.fhdjStatus) !== 1)
-    ).length
-  } catch (e) {
-    tripReturnPendingCount.value = 0
-  } finally {
-    tripReturnLoading.value = false
   }
 }
 
@@ -709,10 +491,7 @@ onMounted(() => {
   userName.value = info.name || info.userName || ''
   userJb.value = info.jb || ''
   userLsys.value = (info.dept || info.lsys || '').trim()
-  fetchTodoList()
-  fetchTripReturnPending()
-  fetchSixianghuibaoTodos()
-  fetchPersonnelPending()
+  refreshWorkplaceTodos()
   fetchRequestList()
   getUploadConfig().then(res => {
     if (res && res.success) {
