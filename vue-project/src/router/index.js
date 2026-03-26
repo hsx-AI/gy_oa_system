@@ -167,6 +167,11 @@ const routes = [
     name: 'HxpManage',
     component: () => import('../views/admin/HxpManage.vue'),
     meta: { title: '换休票管理' }
+  },
+  {
+    path: '/attendance/business-trip/map',
+    name: 'BusinessTripMap',
+    component: () => import('@/views/attendance/BusinessTripMap.vue')
   }
   // 未来可以添加更多路由：
   // {
