@@ -395,23 +395,90 @@ def is_workday(date_obj: datetime, holidays: Dict[str, str]) -> tuple:
     return is_work, is_weekend, is_holiday, holiday_type
 
 
+def _parse_time_val(time_val) -> Optional[datetime]:
+    """将数据库中的时间值解析为 datetime，失败返回 None"""
+    if not time_val or time_val == "":
+        return None
+    if isinstance(time_val, datetime):
+        return time_val
+    if isinstance(time_val, str):
+        try:
+            return datetime.strptime(time_val, "%H:%M:%S")
+        except Exception:
+            pass
+    return None
+
+
 def collect_valid_times(record: dict) -> List[datetime]:
-    """收集所有有效的打卡时间"""
+    """收集所有有效的打卡时间（向后兼容接口）"""
     times = []
-    # 新数据库使用 time_1 到 time_10 的字段名
     for i in range(1, 11):
-        time_val = record.get(f"time_{i}")
-        if time_val and time_val != "":
-            if isinstance(time_val, datetime):
-                times.append(time_val)
-            elif isinstance(time_val, str):
-                try:
-                    # 尝试解析时间字符串
-                    parsed_time = datetime.strptime(time_val, "%H:%M:%S")
-                    times.append(parsed_time)
-                except:
-                    pass
+        t = _parse_time_val(record.get(f"time_{i}"))
+        if t is not None:
+            times.append(t)
     return times
+
+
+def collect_valid_times_with_marks(record: dict) -> List[tuple]:
+    """
+    收集所有有效的 (time, mark) 对。
+    mark: 0=进, 1=出, None=未知。返回按时间排序的列表。
+    """
+    pairs = []
+    for i in range(1, 11):
+        t = _parse_time_val(record.get(f"time_{i}"))
+        if t is None:
+            continue
+        raw_mark = record.get(f"time_{i}_mark")
+        mark = int(raw_mark) if raw_mark is not None and str(raw_mark).strip() != "" else None
+        pairs.append((t, mark))
+    pairs.sort(key=lambda x: x[0])
+    return pairs
+
+
+def build_intervals_from_marks(time_mark_pairs: List[tuple]) -> List[tuple]:
+    """
+    根据进(0)/出(1)标记构建进出区间。
+    - 遇到「进」时记录为区间起点（连续多次「进」取第一次）
+    - 遇到「出」时与最近的「进」配对形成区间（无配对的「出」忽略）
+    - 若所有 mark 都为 None，回退到按下标两两配对的旧逻辑
+    """
+    if not time_mark_pairs:
+        return []
+
+    has_any_mark = any(m is not None for _, m in time_mark_pairs)
+
+    if not has_any_mark:
+        intervals = []
+        for i in range(0, len(time_mark_pairs) - 1, 2):
+            t_in = time_mark_pairs[i][0]
+            t_out = time_mark_pairs[i + 1][0]
+            if t_out > t_in:
+                intervals.append((t_in, t_out))
+        return intervals
+
+    intervals = []
+    current_in = None
+
+    for t, mark in time_mark_pairs:
+        if mark == 0:  # 进
+            if current_in is None:
+                current_in = t
+        elif mark == 1:  # 出
+            if current_in is not None:
+                if t > current_in:
+                    intervals.append((current_in, t))
+                current_in = None
+        else:
+            # mark 为 None：根据上下文推断——如果没有待配对的入，视为进；否则视为出
+            if current_in is None:
+                current_in = t
+            else:
+                if t > current_in:
+                    intervals.append((current_in, t))
+                current_in = None
+
+    return intervals
 
 
 def _sugg(start_time: str, end_time: str, status: int, message: str) -> dict:
@@ -430,15 +497,13 @@ def _time_to_datetime(date_str: str, time_str: str) -> str:
 
 
 def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
-    """分析工作日打卡记录，生成建议（按刷入/刷离区间逻辑）。返回 List[dict] 含 start_time, end_time, status, message。"""
+    """分析工作日打卡记录，生成建议（按进/出标记配对区间）。返回 List[dict] 含 start_time, end_time, status, message。"""
     suggestions: List[dict] = []
 
-    # 1. 收集并排序所有有效打卡时间
-    times = collect_valid_times(record)
-    if not times:
+    # 1. 收集带进出标记的打卡时间，并构建区间
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
         return suggestions
-
-    times.sort()
 
     # 工作时间与加班时间常量
     WORK_AM_START = 8      # 上午上班开始
@@ -464,71 +529,97 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
     # -------------------------------------------------
-    # 2. 迟到检测（仅检测迟到，早退由缺勤逻辑处理）
+    # 2. 迟到检测（基于当天第一次「进」的时间）
     # -------------------------------------------------
-    first_time = times[0]
-    first_val = time_to_decimal(first_time)
+    first_in_time = None
+    for t, m in time_mark_pairs:
+        if m == 0 or m is None:
+            first_in_time = t
+            break
+    if first_in_time is None:
+        first_in_time = time_mark_pairs[0][0]
 
-    # 迟到：第一次打卡在 (8:00, 12:00) 内，整点 8:00:00/12:00:00 不报
+    first_val = time_to_decimal(first_in_time)
+
     if WORK_AM_START < first_val < WORK_AM_END:
         suggestions.append(_sugg(
-            "08:00:00", format_time(first_time), 1,
-            f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(first_time)} 的考勤"
+            "08:00:00", format_time(first_in_time), 1,
+            f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(first_in_time)} 的考勤"
         ))
 
     # -------------------------------------------------
-    # 3. 构造（刷入，刷离）区间：第1次视为刷入，第2次为刷离……
+    # 3. 根据进/出标记构建（刷入，刷离）区间
     # -------------------------------------------------
-    intervals: List[tuple[datetime, datetime]] = []
-    for i in range(0, len(times), 2):
-        if i + 1 < len(times):
-            t_in = times[i]
-            t_out = times[i + 1]
-            if t_out > t_in:
-                intervals.append((t_in, t_out))
-
-    # 如果是奇数个打卡（最后一个没有配对），目前忽略最后一个
+    intervals = build_intervals_from_marks(time_mark_pairs)
 
     # -------------------------------------------------
     # 4. 缺勤检查逻辑：
     #    规则：如果刷离时间在工作时间区间内（开区间 8–12、13–17，整点 8/12/13/17 不报），
     #          则 "刷离时间 → 下次刷入时间" 为缺勤；若为最后区间则补到 17:00。
-    #    午休 [12:00, 13:00) 内最后一次刷离：视为上午已结束、下午未打卡，补 刷离→17:00（如 12:08→17:00）。
+    #    午休 [12:00, 13:00) 内出门：缺勤从 13:00 开始算（午休不算缺勤）。
     # -------------------------------------------------
     for idx, (t_in, t_out) in enumerate(intervals):
         out_val = time_to_decimal(t_out)
 
-        # 四个边界均开区间：整点 8:00:00 / 12:00:00 / 13:00:00 / 17:00:00 不触发缺勤/早退
         in_am = WORK_AM_START < out_val < WORK_AM_END
         in_pm = WORK_PM_START < out_val < WORK_PM_END
-        # 12:00–13:00（含 12:00 整点，不含 13:00）且为当天最后一对进出：下午缺勤
-        in_lunch_last = (WORK_AM_END <= out_val < WORK_PM_START) and (idx + 1 == len(intervals))
+        in_lunch = WORK_AM_END <= out_val < WORK_PM_START
 
-        if not (in_am or in_pm) and not in_lunch_last:
-            continue  # 刷离不在工作/午休末段场景内，不视为缺勤起点
+        if not (in_am or in_pm) and not in_lunch:
+            continue
 
-        # 情况 A：有下一次刷入
+        # 午休期间出门，缺勤起点跳到 13:00
+        if in_lunch:
+            gap_start = t_out.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
+        else:
+            gap_start = t_out
+
+        gap_start_val = time_to_decimal(gap_start)
+
         if idx + 1 < len(intervals):
             next_in = intervals[idx + 1][0]
-            if next_in > t_out:
-                next_in_val = time_to_decimal(next_in)
-                if next_in_val > WORK_PM_END:
-                    gap_end = t_out.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
-                else:
-                    gap_end = next_in
-                if gap_end > t_out:
-                    suggestions.append(_sugg(
-                        format_time(t_out), format_time(gap_end), 1,
-                        f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(gap_end)} 的考勤"
-                    ))
-        else:
-            # 情况 B：最后区间且刷离早于 17:00（17:00:00 不报）
-            if out_val < WORK_PM_END:
-                # 与 collect_valid_times 的 datetime 日期基准一致，避免与 date_obj 混用
-                end_dt = t_out.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
+            next_in_val = time_to_decimal(next_in)
+            # 下次入门在午休前 → 缺勤到下次入门；入门在午休后 → 也要跳过午休
+            if next_in_val <= WORK_AM_END:
+                gap_end = next_in
+            elif WORK_AM_END <= next_in_val < WORK_PM_START:
+                # 下次入门也在午休内，不产生缺勤
+                continue
+            elif next_in_val > WORK_PM_END:
+                gap_end = gap_start.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
+            else:
+                gap_end = next_in
+
+            # 如果缺勤起点也在午休前，需要拆成上午段和下午段
+            if not in_lunch and out_val < WORK_AM_END and gap_start_val < WORK_AM_END:
+                gap_end_val = time_to_decimal(gap_end)
+                if gap_end_val > WORK_PM_START:
+                    # 跨午休：拆为上午缺勤 + 下午缺勤
+                    am_end = t_out.replace(hour=WORK_AM_END, minute=0, second=0, microsecond=0)
+                    if am_end > t_out:
+                        suggestions.append(_sugg(
+                            format_time(t_out), format_time(am_end), 1,
+                            f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(am_end)} 的考勤"
+                        ))
+                    pm_start = t_out.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
+                    if gap_end > pm_start:
+                        suggestions.append(_sugg(
+                            format_time(pm_start), format_time(gap_end), 1,
+                            f"【考勤建议】检测到缺勤，建议补录 {format_time(pm_start)} 到 {format_time(gap_end)} 的考勤"
+                        ))
+                    continue
+
+            if gap_end > gap_start:
                 suggestions.append(_sugg(
-                    format_time(t_out), format_time(end_dt), 1,
-                    f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(end_dt)} 的考勤"
+                    format_time(gap_start), format_time(gap_end), 1,
+                    f"【考勤建议】检测到缺勤，建议补录 {format_time(gap_start)} 到 {format_time(gap_end)} 的考勤"
+                ))
+        else:
+            if gap_start_val < WORK_PM_END:
+                end_dt = gap_start.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
+                suggestions.append(_sugg(
+                    format_time(gap_start), format_time(end_dt), 1,
+                    f"【考勤建议】检测到缺勤，建议补录 {format_time(gap_start)} 到 {format_time(end_dt)} 的考勤"
                 ))
 
     # -------------------------------------------------
@@ -647,27 +738,25 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     """
     分析休息日/假期打卡记录，生成建议。返回 List[dict] 含 start_time, end_time, status=0, message。
     逻辑：
-    - 打卡按 (time_1,time_2)、(time_3,time_4)... 成对为进出段。
-    - 相邻进出对间隔超过 GAP_THRESHOLD 小时的拆为独立段，各段独立生成建议。
+    - 根据进/出标记配对构建进出区间。
+    - 各区间独立生成建议。
     - 段内若存在「午休前离岗、午休后返岗」则按子段分别建议；否则合并为一段，跨午休扣除实际重叠。
     """
     suggestions: List[dict] = []
 
-    times = collect_valid_times(record)
-    if not times:
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
         return suggestions
 
-    times.sort()
     NOON_START = 12
     NOON_END = 13
     OT_START_HOUR = 8
     RESTDAY_OVERTIME_MIN_HOURS = 1.0
-    GAP_THRESHOLD_HOURS = 1.0
+
+    intervals = build_intervals_from_marks(time_mark_pairs)
 
     pairs: List[tuple] = []
-    for i in range(0, len(times) - 1, 2):
-        t_in = times[i]
-        t_out = times[i + 1]
+    for t_in, t_out in intervals:
         dur = time_to_decimal(t_out) - time_to_decimal(t_in)
         if dur >= RESTDAY_OVERTIME_MIN_HOURS:
             pairs.append((t_in, t_out))

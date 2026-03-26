@@ -17,6 +17,7 @@ import uuid
 from routers.approvers import _get_user_info, _jb_match
 from routers.db_manager import _get_admin1
 from routers.leave_overtime import _calc_hours, round_overtime_hours_down
+from routers.suggestions import collect_valid_times_with_marks, build_intervals_from_marks
 from utils.helpers import format_datetime_plain
 import logging
 
@@ -909,25 +910,23 @@ async def overtime_validate(req: OvertimeValidateRequest):
             results.append({"id": it.id, "pass": False, "reason": "开始时间不能早于8:00"})
             continue
 
-        # 2b) 打卡校验（从预取数据中查找）
+        # 2b) 打卡校验（基于进/出标记配对，从预取数据中查找）
         punch_contained = False
         for row in att_map.get((applicant, date_ymd), []):
+            time_mark_pairs = collect_valid_times_with_marks(row)
+            intervals = build_intervals_from_marks(time_mark_pairs)
             punch_starts = []
             punch_ends = []
-            for i in range(1, 10, 2):
-                t1 = row.get(f"time_{i}")
-                t2 = row.get(f"time_{i+1}")
-                if t1 is None or t2 is None:
-                    continue
-                t1 = format_datetime_plain(t1) if t1 else ""
-                t2 = format_datetime_plain(t2) if t2 else ""
-                if isinstance(t1, str) and " " not in t1 and len(t1) <= 8:
-                    t1 = f"{date_ymd} {t1}" if len(t1) > 5 else f"{date_ymd} {t1}:00"
-                if isinstance(t2, str) and " " not in t2 and len(t2) <= 8:
-                    t2 = f"{date_ymd} {t2}" if len(t2) > 5 else f"{date_ymd} {t2}:00"
-                if t1 and t2 and t1 < t2:
-                    punch_starts.append(t1[:19])
-                    punch_ends.append(t2[:19])
+            for t_in, t_out in intervals:
+                s = format_datetime_plain(t_in) if t_in else ""
+                e = format_datetime_plain(t_out) if t_out else ""
+                if isinstance(s, str) and " " not in s and len(s) <= 8:
+                    s = f"{date_ymd} {s}" if len(s) > 5 else f"{date_ymd} {s}:00"
+                if isinstance(e, str) and " " not in e and len(e) <= 8:
+                    e = f"{date_ymd} {e}" if len(e) > 5 else f"{date_ymd} {e}:00"
+                if s and e and s[:19] < e[:19]:
+                    punch_starts.append(s[:19])
+                    punch_ends.append(e[:19])
             segments = _overtime_segments_for_noon(date_ymd, start_dt, end_dt)
             all_contained = all(
                 _interval_contained_in(seg_start, seg_end, punch_starts, punch_ends)
