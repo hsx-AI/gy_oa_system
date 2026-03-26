@@ -109,12 +109,36 @@
             </div>
             <div v-show="reminderTestMode" class="reminder-row">
               <label>测试收件人</label>
-              <input
-                v-model="reminderTestRecipientsInput"
-                type="text"
-                class="text-input-full"
-                placeholder="多个邮箱用英文逗号或中文逗号分隔，留空则默认 hsx@hec-china.com"
-              />
+              <div class="cc-area">
+                <div class="recipient-tags" v-if="reminderTestTo.length">
+                  <span v-for="(addr, i) in reminderTestTo" :key="'test-'+i+addr" class="tag tag-cc">
+                    {{ addr }}
+                    <button type="button" class="tag-remove" @click="reminderTestTo.splice(i, 1)">&times;</button>
+                  </span>
+                </div>
+                <div class="recipient-input-wrap">
+                  <input
+                    v-model="reminderTestInput"
+                    type="text"
+                    placeholder="输入测试邮箱或搜索员工，回车添加（留空发送时默认 hsx@hec-china.com）"
+                    @keydown.enter.prevent="addReminderTestTo"
+                    @input="reminderTestShowSuggestions = true"
+                    @focus="reminderTestShowSuggestions = true"
+                  />
+                  <div v-if="reminderTestShowSuggestions && reminderTestFiltered.length" class="suggestion-dropdown">
+                    <div
+                      v-for="emp in reminderTestFiltered"
+                      :key="'testsug-'+emp.name"
+                      class="suggestion-item"
+                      @mousedown.prevent="selectReminderTestTo(emp)"
+                    >
+                      <span class="emp-name">{{ emp.name }}</span>
+                      <span class="emp-email">{{ emp.email || '无邮箱' }}</span>
+                      <span class="emp-dept">{{ emp.dept }}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           </div>
 
@@ -334,7 +358,9 @@ const reminderCc = ref([])
 const reminderCcInput = ref('')
 const reminderCcShowSuggestions = ref(false)
 const reminderTestMode = ref(true)
-const reminderTestRecipientsInput = ref('hsx@hec-china.com')
+const reminderTestTo = ref(['hsx@hec-china.com'])
+const reminderTestInput = ref('')
+const reminderTestShowSuggestions = ref(false)
 const previewing = ref(false)
 const previewData = ref(null)
 const reminderSending = ref(false)
@@ -369,6 +395,14 @@ const ccFilteredEmployees = computed(() => {
 
 const reminderCcFiltered = computed(() => {
   const q = reminderCcInput.value.trim().toLowerCase()
+  if (!q) return []
+  return employees.value
+    .filter(e => e.name.toLowerCase().includes(q) || (e.dept || '').toLowerCase().includes(q) || (e.email || '').toLowerCase().includes(q))
+    .slice(0, 15)
+})
+
+const reminderTestFiltered = computed(() => {
+  const q = reminderTestInput.value.trim().toLowerCase()
   if (!q) return []
   return employees.value
     .filter(e => e.name.toLowerCase().includes(q) || (e.dept || '').toLowerCase().includes(q) || (e.email || '').toLowerCase().includes(q))
@@ -435,6 +469,24 @@ function addReminderCc() {
   }
   reminderCcInput.value = ''
   reminderCcShowSuggestions.value = false
+}
+
+function selectReminderTestTo(emp) {
+  const addr = emp.email || emp.name
+  if (!reminderTestTo.value.includes(addr)) {
+    reminderTestTo.value.push(addr)
+  }
+  reminderTestInput.value = ''
+  reminderTestShowSuggestions.value = false
+}
+
+function addReminderTestTo() {
+  const val = reminderTestInput.value.trim()
+  if (val && !reminderTestTo.value.includes(val)) {
+    reminderTestTo.value.push(val)
+  }
+  reminderTestInput.value = ''
+  reminderTestShowSuggestions.value = false
 }
 
 function formatSize(bytes) {
@@ -578,7 +630,7 @@ async function handlePreview() {
 
 async function handleSendReminder() {
   if (!previewData.value) return
-  const testList = parseReminderTestEmails(reminderTestRecipientsInput.value)
+  const testList = [...reminderTestTo.value]
   const testDisplay = testList.length ? testList.join('、') : 'hsx@hec-china.com（默认）'
   if (!confirm(`确认发送${reminderMonth.value}月考勤异常提醒邮件？${reminderTestMode.value ? `（测试模式，将发送到：${testDisplay}）` : `将发送给 ${previewData.value.has_email_count} 位收件人`}`)) return
 
@@ -609,14 +661,6 @@ async function handleSendReminder() {
   } finally {
     reminderSending.value = false
   }
-}
-
-function parseReminderTestEmails(s) {
-  if (!s || !String(s).trim()) return []
-  return String(s)
-    .split(/[,，;；\n]+/)
-    .map((x) => x.trim())
-    .filter(Boolean)
 }
 
 onMounted(loadConfig)
@@ -843,16 +887,6 @@ onMounted(loadConfig)
 }
 .reminder-row input[type="checkbox"] { accent-color: #6366f1; }
 .reminder-row .checkbox-label { font-weight: 500; cursor: pointer; }
-.reminder-row .text-input-full {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 10px 14px;
-  border: 1px solid #d1d5db;
-  border-radius: 8px;
-  font-size: 14px;
-  outline: none;
-}
-.reminder-row .text-input-full:focus { border-color: #6366f1; box-shadow: 0 0 0 3px rgba(99,102,241,0.1); }
 .month-picker { display: flex; gap: 8px; }
 .select-input {
   padding: 8px 12px;
