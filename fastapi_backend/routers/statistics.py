@@ -1109,11 +1109,13 @@ async def get_leader_full_attendance(
             for d, nlist in dept_names.items():
                 fc = sum(1 for n in nlist if n not in abnormal_set)
                 tot = len(nlist)
+                full_list = sorted(n for n in nlist if n not in abnormal_set)
                 by_dept.append({
                     "lsys": d,
                     "totalPeople": tot,
                     "fullCount": fc,
-                    "rate": round(fc / tot, 4) if tot else 0
+                    "rate": round(fc / tot, 4) if tot else 0,
+                    "fullNames": full_list,
                 })
             result["byDept"] = by_dept
 
@@ -1271,11 +1273,13 @@ async def get_leader_full_attendance_year(
             for d, nlist in dept_names.items():
                 fc = sum(1 for n in nlist if n not in abnormal_set)
                 tot = len(nlist)
+                full_list = sorted(n for n in nlist if n not in abnormal_set)
                 by_dept.append({
                     "lsys": d,
                     "totalPeople": tot,
                     "fullCount": fc,
-                    "rate": round(fc / tot, 4) if tot else 0
+                    "rate": round(fc / tot, 4) if tot else 0,
+                    "fullNames": full_list,
                 })
             result["byDept"] = by_dept
 

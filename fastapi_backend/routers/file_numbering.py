@@ -253,7 +253,7 @@ async def get_bianhao_tech_list(
             if px:
                 where.append("fenlei=%s")
                 params = (bz, px)
-        kc, kp = _keyword_sql_clause(keyword, _TECH_KW_COLS)
+        kc, kp = _keyword_sql_clause(keyword, _TECH_KW_LHS)
         if kc:
             where.append(kc)
             params = params + kp

@@ -255,12 +255,27 @@
               </div>
             </div>
             <div v-if="fullAttendance.byDept?.length" class="full-attendance-depts">
-              <div class="fa-dept-title">各科室满勤率</div>
+              <div class="fa-dept-title">各科室满勤率（悬停或聚焦卡片查看满勤名单）</div>
               <div class="fa-dept-grid">
-                <div v-for="d in fullAttendance.byDept" :key="d.lsys" class="fa-dept-card">
-                  <span class="fa-dept-name">{{ d.lsys }}</span>
-                  <span class="fa-dept-rate">{{ (d.rate * 100).toFixed(1) }}%</span>
-                  <span class="fa-dept-meta">{{ d.fullCount }}/{{ d.totalPeople }} 人</span>
+                <div
+                  v-for="d in fullAttendance.byDept"
+                  :key="d.lsys"
+                  class="fa-dept-card-wrap"
+                  tabindex="0"
+                >
+                  <div class="fa-dept-card">
+                    <span class="fa-dept-name">{{ d.lsys }}</span>
+                    <span class="fa-dept-rate">{{ (d.rate * 100).toFixed(1) }}%</span>
+                    <span class="fa-dept-meta">{{ d.fullCount }}/{{ d.totalPeople }} 人</span>
+                  </div>
+                  <div class="fa-dept-tooltip" role="tooltip">
+                    <div class="fa-tooltip-title">{{ d.lsys }} · 满勤 {{ d.fullCount }} 人</div>
+                    <ul v-if="deptFullNames(d).length" class="fa-tooltip-names">
+                      <li v-for="nm in deptFullNames(d)" :key="nm">{{ nm }}</li>
+                    </ul>
+                    <p v-else-if="d.fullCount > 0" class="fa-tooltip-empty">满勤名单未加载，请点击「查询」刷新</p>
+                    <p v-else class="fa-tooltip-empty">本科室暂无满勤人员</p>
+                  </div>
                 </div>
               </div>
             </div>
@@ -527,6 +542,11 @@ function getFullCountBarHeightPx(value, max) {
   const pct = value / max
   const px = Math.max(8, Math.round(pct * FULL_COUNT_BAR_AREA_PX))
   return `${px}px`
+}
+
+/** 科室满勤卡片：后端 byDept 项含 fullNames（与导出逻辑一致） */
+function deptFullNames(d) {
+  return Array.isArray(d?.fullNames) ? d.fullNames : []
 }
 
 const fetchFullAttendanceChart = async () => {
@@ -903,8 +923,28 @@ onMounted(async () => {
 .fa-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .fa-value { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); color: var(--color-primary); }
 .fa-meta { font-size: var(--font-size-sm); color: var(--color-text-tertiary); }
+.full-attendance-section {
+  overflow: visible;
+}
+.full-attendance-depts {
+  overflow: visible;
+}
 .fa-dept-title { font-size: var(--font-size-sm); font-weight: var(--font-weight-medium); color: var(--color-text-secondary); margin-bottom: var(--spacing-sm); }
-.fa-dept-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: var(--spacing-md); }
+.fa-dept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--spacing-md);
+  overflow: visible;
+}
+.fa-dept-card-wrap {
+  position: relative;
+  z-index: 1;
+  outline: none;
+}
+.fa-dept-card-wrap:hover,
+.fa-dept-card-wrap:focus-within {
+  z-index: 30;
+}
 .fa-dept-card {
   padding: var(--spacing-md);
   border: 1px solid var(--color-border-lighter);
@@ -912,10 +952,64 @@ onMounted(async () => {
   display: flex;
   flex-direction: column;
   gap: var(--spacing-xs);
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.fa-dept-card-wrap:hover .fa-dept-card,
+.fa-dept-card-wrap:focus-within .fa-dept-card {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
 }
 .fa-dept-name { font-weight: var(--font-weight-medium); color: var(--color-text-primary); }
 .fa-dept-rate { font-size: var(--font-size-lg); color: var(--color-primary); }
 .fa-dept-meta { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
+
+.fa-dept-tooltip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 10px);
+  min-width: min(280px, 90vw);
+  max-width: min(320px, 92vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--spacing-md);
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-card);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+.fa-dept-card-wrap:hover .fa-dept-tooltip,
+.fa-dept-card-wrap:focus-within .fa-dept-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+.fa-tooltip-title {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--spacing-sm);
+  padding-bottom: var(--spacing-xs);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+.fa-tooltip-names {
+  margin: 0;
+  padding-left: 1.1em;
+  list-style: disc;
+}
+.fa-tooltip-names li {
+  margin-bottom: 2px;
+}
+.fa-tooltip-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
 
 /* 科室对比柱状图 */
 .chart-filter-row { display: flex; align-items: center; gap: var(--spacing-md); margin-bottom: var(--spacing-lg); flex-wrap: wrap; }
