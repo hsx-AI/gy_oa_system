@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     # 上传文件存储路径（相对于项目根目录）
     UPLOAD_DIR: str = "uploads"
 
-    # 打卡服务器报表拉取：GET 请求 URL，请求后约 30 秒返回当天最新报表文件。用于「上传最新数据」与每日 0 点自动上传
+    # 打卡服务器报表拉取：GET 请求 URL，返回当天报表；远端可能很慢（数分钟或更久），超时见 attendance 路由 httpx 配置
     ATTENDANCE_REPORT_FETCH_URL: str = "http://10.42.60.250:6648/run?token=18400021209"
     # 定时任务时区（拉取打卡报表按此时区执行），如 Asia/Shanghai、UTC
     SCHEDULER_TIMEZONE: str = "Asia/Shanghai"

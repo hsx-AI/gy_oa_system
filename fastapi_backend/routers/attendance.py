@@ -27,6 +27,14 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/attendance", tags=["考勤管理"])
 
 
+def _attendance_report_httpx_timeout():
+    """打卡服务器 GET 拉取报表：远端生成慢、本机卡顿时可能长时间无字节返回，单独放宽超时（手动「上传最新数据」与定时任务共用）。"""
+    import httpx
+
+    # 读超时 20 分钟：允许长时间挂起后仍返回；连接 3 分钟应对极慢网络/系统卡顿
+    return httpx.Timeout(connect=180.0, read=1200.0, write=180.0, pool=180.0)
+
+
 def _get_dakaman() -> Optional[str]:
     """从 webconfig 表读取 dakaman 字段（打卡数据上传权限用户名）。"""
     try:
@@ -431,7 +439,7 @@ async def fetch_and_upload(
 ):
     """
     从打卡服务器 GET 拉取最新报表并导入。仅 dakaman 可操作。
-    需在 config 或 .env 中配置 ATTENDANCE_REPORT_FETCH_URL，拉取约需 30 秒。
+    需在 config 或 .env 中配置 ATTENDANCE_REPORT_FETCH_URL；远端响应可能很慢，服务端 HTTP 读超时约 20 分钟。
     """
     dakaman = _get_dakaman()
     admin1 = _get_admin1()
@@ -447,7 +455,7 @@ async def fetch_and_upload(
     temp_file_path = None
     try:
         logger.info("开始从打卡服务器拉取最新报表: %s", fetch_url[:80] + "..." if len(fetch_url) > 80 else fetch_url)
-        async with httpx.AsyncClient(timeout=60.0) as client:
+        async with httpx.AsyncClient(timeout=_attendance_report_httpx_timeout()) as client:
             resp = await client.get(fetch_url)
             resp.raise_for_status()
             content = resp.content
@@ -491,7 +499,8 @@ async def fetch_and_upload(
 
 
 async def run_fetch_and_upload_report():
-    """供每日 0 点定时任务调用：从配置 URL 拉取报表并导入。失败时最多重试 3 次。"""
+    """供定时任务调用（执行时刻见 SCHEDULER_HOUR/MINUTE）：拉取报表并导入，智能建议截止日为「运行当日」。
+    建议在当日 24 点前运行，以处理当天打卡数据。失败时最多重试 3 次。"""
     import asyncio
     import httpx
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -510,7 +519,7 @@ async def run_fetch_and_upload_report():
         temp_file_path = None
         try:
             logger.info("[定时] 拉取打卡报表 第 %d/%d 次: %s", attempt, max_attempts, fetch_url[:80] + "..." if len(fetch_url) > 80 else fetch_url)
-            async with httpx.AsyncClient(timeout=60.0) as client:
+            async with httpx.AsyncClient(timeout=_attendance_report_httpx_timeout()) as client:
                 resp = await client.get(fetch_url)
                 resp.raise_for_status()
                 content = resp.content
@@ -544,9 +553,9 @@ async def run_fetch_and_upload_report():
                     await asyncio.sleep(retry_delay_seconds)
                 continue
             attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-            yesterday = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            today_str = datetime.now().strftime("%Y-%m-%d")
             loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), yesterday))
+            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), today_str))
             logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
             return
         except Exception as e:

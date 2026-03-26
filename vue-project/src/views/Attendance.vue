@@ -13,7 +13,7 @@
               <router-link to="/attendance/approvals" class="btn btn-header-link">考勤审批</router-link>
             </div>
             <div class="header-btn-wrap">
-              <router-link to="/attendance/manual" class="btn btn-header-link">手动填报</router-link>
+              <router-link to="/attendance/manual" class="btn btn-header-link">手动填报/记录查询</router-link>
               <p class="header-btn-hint">智能填报无法满足时可手动填报</p>
             </div>
             <!-- 月份选择器 -->

@@ -23,13 +23,13 @@
               class="btn btn-primary btn-sm"
               :disabled="fetching"
               @click="handleFetchAndUpload"
-              title="从打卡服务器拉取当天最新报表并导入（需在系统配置 ATTENDANCE_REPORT_FETCH_URL）"
+              title="从打卡服务器拉取当天最新报表并导入；远端可能很慢（可达十余分钟），请勿关闭页面"
             >
               <svg v-if="fetching" class="icon-sm mr-xs spin" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
               <svg v-else class="icon-sm mr-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3" />
               </svg>
-              {{ fetching ? '获取中…（约30秒）' : '上传最新数据' }}
+              {{ fetching ? '获取中…（可能较久，请稍候）' : '上传最新数据' }}
             </button>
             <button class="btn-text" @click="downloadTemplate">
               <svg class="icon-sm mr-xs" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -103,7 +103,7 @@
           <label class="data-date-label">考勤数据截止日期</label>
           <input type="date" v-model="attendanceDataDate" class="data-date-input">
           <span class="data-date-hint">
-            智能建议仅生成到此日期，避免未上传日期被误判为全员缺勤
+            手动上传时：智能建议仅生成到此日期，避免未上传日期被误判为全员缺勤。定时自动拉取以<strong>任务运行当日</strong>为截止日（与表单无关）。
           </span>
         </div>
 
@@ -178,6 +178,7 @@
                 <li>避免空白行和无效数据</li>
                 <li>重复数据将被自动过滤</li>
                 <li>上传后可在记录页面查看</li>
+                <li>服务端可按配置时刻自动拉取打卡报表，导入<strong>当天</strong>数据并重算智能建议（建议在当日 24 点前执行）</li>
               </ul>
             </div>
           </div>

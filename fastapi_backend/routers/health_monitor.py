@@ -173,7 +173,7 @@ async def get_health_overview(
         ("personnel_archive", "人事档案系统", _check_personnel_archive),
         ("sixianghuibao", "思想汇报管理系统", _check_sixianghuibao),
         ("attendance_fetch", "打卡数据自动获取服务", _check_attendance_fetch_service),
-        ("scheduler", "每日 0 点拉取任务配置", _check_scheduler),
+        ("scheduler", "定时拉取打卡报表任务配置", _check_scheduler),
     ]
     for id_, name, coro in checks:
         try:

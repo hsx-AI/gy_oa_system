@@ -57,40 +57,50 @@
       <div class="search-bar card mb-lg" v-if="currentTab === 'tech' || currentTab === 'jsgl' || currentTab === 'manage' || currentTab === 'gygch' || currentTab === 'scszh'">
         <template v-if="currentTab === 'tech'">
           <input v-model="searchKeyword" type="text" placeholder="搜索编号/文件名/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="loadTechList">查询</button>
-          <button type="button" class="btn" @click="searchKeyword = ''; loadTechList()">重置</button>
+          <button type="button" class="btn btn-primary" @click="techPage = 1; loadTechList()">查询</button>
+          <button type="button" class="btn" @click="searchKeyword = ''; techPage = 1; loadTechList()">重置</button>
         </template>
         <template v-else-if="currentTab === 'jsgl'">
           <input v-model="searchKeywordJsgl" type="text" placeholder="搜索编号/内容/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="loadJsglList">查询</button>
-          <button type="button" class="btn" @click="searchKeywordJsgl = ''; loadJsglList()">重置</button>
+          <button type="button" class="btn btn-primary" @click="jsglPage = 1; loadJsglList()">查询</button>
+          <button type="button" class="btn" @click="searchKeywordJsgl = ''; jsglPage = 1; loadJsglList()">重置</button>
         </template>
         <template v-else-if="currentTab === 'manage'">
           <input v-model="searchKeywordManage" type="text" placeholder="搜索编号/内容..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="loadManageList">查询</button>
-          <button type="button" class="btn" @click="searchKeywordManage = ''; loadManageList()">重置</button>
+          <button type="button" class="btn btn-primary" @click="managePage = 1; loadManageList()">查询</button>
+          <button type="button" class="btn" @click="searchKeywordManage = ''; managePage = 1; loadManageList()">重置</button>
         </template>
         <template v-else-if="currentTab === 'gygch'">
           <input v-model="searchKeywordGygch" type="text" placeholder="搜索编号/内容/工艺部室..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="loadGygchList">查询</button>
-          <button type="button" class="btn" @click="searchKeywordGygch = ''; loadGygchList()">重置</button>
+          <button type="button" class="btn btn-primary" @click="gygchPage = 1; loadGygchList()">查询</button>
+          <button type="button" class="btn" @click="searchKeywordGygch = ''; gygchPage = 1; loadGygchList()">重置</button>
         </template>
         <template v-else-if="currentTab === 'scszh'">
           <input v-model="searchKeywordScszh" type="text" placeholder="搜索编号/内容/项目..." class="search-input">
-          <button type="button" class="btn btn-primary" @click="loadScszhList">查询</button>
-          <button type="button" class="btn" @click="searchKeywordScszh = ''; loadScszhList()">重置</button>
+          <button type="button" class="btn btn-primary" @click="scszhPage = 1; loadScszhList()">查询</button>
+          <button type="button" class="btn" @click="searchKeywordScszh = ''; scszhPage = 1; loadScszhList()">重置</button>
         </template>
       </div>
 
       <!-- 列表 -->
       <div class="card">
-        <div class="card-header">
+        <div class="card-header card-header-with-actions">
           <h3>{{ currentTab === 'tech' ? '技术文件列表' : currentTab === 'jsgl' ? '技术管理文件列表' : currentTab === 'manage' ? '管理文件列表' : currentTab === 'gygch' ? '工艺过程策划表列表' : '生产数字化编号列表' }}</h3>
+          <button
+            v-if="canExportBianhao"
+            type="button"
+            class="btn btn-primary"
+            :disabled="exportLoading"
+            @click="exportCurrentTable"
+          >
+            {{ exportLoading ? '导出中…' : '导出 Excel' }}
+          </button>
         </div>
         <div class="card-body">
           <template v-if="currentTab === 'tech'">
             <div v-if="techListLoading" class="empty-text">加载中...</div>
-            <div v-else-if="filteredTechList.length === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="techTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="filteredTechList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -142,13 +152,18 @@
                 </tbody>
               </table>
             </div>
-            <div v-if="techTotal > 0" class="table-footer">
-              共 {{ techTotal }} 条，当前页 {{ filteredTechList.length }} 条
+            <div v-if="techTotal > 0" class="table-footer table-footer-pager">
+              <span>共 {{ techTotal }} 条，第 {{ techPage }} / {{ techTotalPages }} 页，每页 {{ LIST_PAGE_SIZE }} 条</span>
+              <div class="pager-btns">
+                <button type="button" class="btn pager-btn" :disabled="techPage <= 1" @click="goTechPage(-1)">上一页</button>
+                <button type="button" class="btn pager-btn" :disabled="techPage >= techTotalPages" @click="goTechPage(1)">下一页</button>
+              </div>
             </div>
           </template>
           <template v-else-if="currentTab === 'jsgl'">
             <div v-if="jsglListLoading" class="empty-text">加载中...</div>
-            <div v-else-if="filteredJsglList.length === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="jsglTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="filteredJsglList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -200,13 +215,18 @@
                 </tbody>
               </table>
             </div>
-            <div v-if="jsglTotal > 0" class="table-footer">
-              共 {{ jsglTotal }} 条，当前页 {{ filteredJsglList.length }} 条
+            <div v-if="jsglTotal > 0" class="table-footer table-footer-pager">
+              <span>共 {{ jsglTotal }} 条，第 {{ jsglPage }} / {{ jsglTotalPages }} 页，每页 {{ LIST_PAGE_SIZE }} 条</span>
+              <div class="pager-btns">
+                <button type="button" class="btn pager-btn" :disabled="jsglPage <= 1" @click="goJsglPage(-1)">上一页</button>
+                <button type="button" class="btn pager-btn" :disabled="jsglPage >= jsglTotalPages" @click="goJsglPage(1)">下一页</button>
+              </div>
             </div>
           </template>
           <template v-else-if="currentTab === 'manage'">
             <div v-if="manageListLoading" class="empty-text">加载中...</div>
-            <div v-else-if="filteredManageList.length === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="manageTotal === 0" class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</div>
+            <div v-else-if="filteredManageList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -252,13 +272,18 @@
                 </tbody>
               </table>
             </div>
-            <div v-if="manageTotal > 0" class="table-footer">
-              共 {{ manageTotal }} 条，当前页 {{ filteredManageList.length }} 条
+            <div v-if="manageTotal > 0" class="table-footer table-footer-pager">
+              <span>共 {{ manageTotal }} 条，第 {{ managePage }} / {{ manageTotalPages }} 页，每页 {{ LIST_PAGE_SIZE }} 条</span>
+              <div class="pager-btns">
+                <button type="button" class="btn pager-btn" :disabled="managePage <= 1" @click="goManagePage(-1)">上一页</button>
+                <button type="button" class="btn pager-btn" :disabled="managePage >= manageTotalPages" @click="goManagePage(1)">下一页</button>
+              </div>
             </div>
           </template>
           <template v-else-if="currentTab === 'gygch'">
             <div v-if="gygchListLoading" class="empty-text">加载中...</div>
-            <div v-else-if="filteredGygchList.length === 0" class="empty-text">暂无工艺过程策划表编号记录</div>
+            <div v-else-if="gygchTotal === 0" class="empty-text">暂无工艺过程策划表编号记录</div>
+            <div v-else-if="filteredGygchList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -307,13 +332,18 @@
                 </tbody>
               </table>
             </div>
-            <div v-if="gygchTotal > 0" class="table-footer">
-              共 {{ gygchTotal }} 条，当前页 {{ filteredGygchList.length }} 条
+            <div v-if="gygchTotal > 0" class="table-footer table-footer-pager">
+              <span>共 {{ gygchTotal }} 条，第 {{ gygchPage }} / {{ gygchTotalPages }} 页，每页 {{ LIST_PAGE_SIZE }} 条</span>
+              <div class="pager-btns">
+                <button type="button" class="btn pager-btn" :disabled="gygchPage <= 1" @click="goGygchPage(-1)">上一页</button>
+                <button type="button" class="btn pager-btn" :disabled="gygchPage >= gygchTotalPages" @click="goGygchPage(1)">下一页</button>
+              </div>
             </div>
           </template>
           <template v-else-if="currentTab === 'scszh'">
             <div v-if="scszhListLoading" class="empty-text">加载中...</div>
-            <div v-else-if="filteredScszhList.length === 0" class="empty-text">暂无生产数字化编号记录</div>
+            <div v-else-if="scszhTotal === 0" class="empty-text">暂无生产数字化编号记录</div>
+            <div v-else-if="filteredScszhList.length === 0" class="empty-text">当前页无匹配筛选，请调整列筛选或翻页</div>
             <div v-else class="table-wrap">
               <table class="data-table">
                 <thead>
@@ -362,8 +392,12 @@
                 </tbody>
               </table>
             </div>
-            <div v-if="scszhTotal > 0" class="table-footer">
-              共 {{ scszhTotal }} 条，当前页 {{ filteredScszhList.length }} 条
+            <div v-if="scszhTotal > 0" class="table-footer table-footer-pager">
+              <span>共 {{ scszhTotal }} 条，第 {{ scszhPage }} / {{ scszhTotalPages }} 页，每页 {{ LIST_PAGE_SIZE }} 条</span>
+              <div class="pager-btns">
+                <button type="button" class="btn pager-btn" :disabled="scszhPage <= 1" @click="goScszhPage(-1)">上一页</button>
+                <button type="button" class="btn pager-btn" :disabled="scszhPage >= scszhTotalPages" @click="goScszhPage(1)">下一页</button>
+              </div>
             </div>
           </template>
           <p v-else class="empty-text">{{ canSeeAllFiles ? '暂无文件记录' : '您只能看到本专业的文件哦' }}</p>
@@ -526,8 +560,11 @@
 <script setup>
 import { ref, reactive, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, getScszhFenlei, addBianhaoScszh, getBianhaoScszhList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl } from '@/api/fileNumbering'
+import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, getScszhFenlei, addBianhaoScszh, getBianhaoScszhList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl, exportBianhaoExcel } from '@/api/fileNumbering'
+import { getPolicyUploadPermission } from '@/api/departmentPolicy'
 import { getStatisticsPermission } from '@/api/attendance'
+
+const LIST_PAGE_SIZE = 20
 
 const router = useRouter()
 
@@ -538,28 +575,49 @@ const generatedBianhao = ref('')
 const techList = ref([])
 const techListLoading = ref(false)
 const techTotal = ref(0)
+const techPage = ref(1)
 const searchKeyword = ref('')
 const jsglList = ref([])
 const jsglListLoading = ref(false)
 const jsglTotal = ref(0)
+const jsglPage = ref(1)
 const searchKeywordJsgl = ref('')
 const jsglFenleiList = ref([])
 const manageList = ref([])
 const manageListLoading = ref(false)
 const manageTotal = ref(0)
+const managePage = ref(1)
 const searchKeywordManage = ref('')
 const glFenleiList = ref([])
 const gygchList = ref([])
 const gygchListLoading = ref(false)
 const gygchTotal = ref(0)
+const gygchPage = ref(1)
 const searchKeywordGygch = ref('')
 const scszhList = ref([])
 const scszhListLoading = ref(false)
 const scszhTotal = ref(0)
+const scszhPage = ref(1)
 const searchKeywordScszh = ref('')
 const scszhFenleiList = ref([])
 const pdfInputRef = ref(null)
 const uploadTarget = ref({ type: '', code: '' })
+const canExportBianhao = ref(false)
+const exportLoading = ref(false)
+
+const techTotalPages = computed(() => Math.max(1, Math.ceil((techTotal.value || 0) / LIST_PAGE_SIZE)))
+const jsglTotalPages = computed(() => Math.max(1, Math.ceil((jsglTotal.value || 0) / LIST_PAGE_SIZE)))
+const manageTotalPages = computed(() => Math.max(1, Math.ceil((manageTotal.value || 0) / LIST_PAGE_SIZE)))
+const gygchTotalPages = computed(() => Math.max(1, Math.ceil((gygchTotal.value || 0) / LIST_PAGE_SIZE)))
+const scszhTotalPages = computed(() => Math.max(1, Math.ceil((scszhTotal.value || 0) / LIST_PAGE_SIZE)))
+
+const EXPORT_TABLE_BY_TAB = {
+  tech: 'tech',
+  jsgl: 'jsgl',
+  manage: 'manage',
+  gygch: 'gygch',
+  scszh: 'scszh'
+}
 
 const form = ref({
   xm: '',
@@ -670,9 +728,96 @@ function getCurrentUser() {
   }
 }
 
+async function loadExportPermission() {
+  const u = getCurrentUser()
+  if (!u?.name) {
+    canExportBianhao.value = false
+    return
+  }
+  try {
+    const res = await getPolicyUploadPermission({ name: u.name })
+    canExportBianhao.value = !!(res && res.canUpload)
+  } catch {
+    canExportBianhao.value = false
+  }
+}
+
+async function exportCurrentTable() {
+  const u = getCurrentUser()
+  if (!u?.name) {
+    alert('请先登录')
+    return
+  }
+  const table = EXPORT_TABLE_BY_TAB[currentTab.value]
+  if (!table) return
+  exportLoading.value = true
+  try {
+    const blob = await exportBianhaoExcel({ table, name: u.name })
+    const isExcel =
+      blob.type &&
+      (blob.type.includes('spreadsheet') ||
+        blob.type.includes('ms-excel') ||
+        blob.type.includes('octet-stream'))
+    if (isExcel) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `文件编号_${table}.xlsx`
+      a.click()
+      URL.revokeObjectURL(url)
+      return
+    }
+    const text = await blob.text()
+    try {
+      const j = JSON.parse(text)
+      alert(j.detail || '导出失败')
+    } catch {
+      alert(text || '导出失败')
+    }
+  } catch (e) {
+    alert(e.response?.data?.detail || e.message || '导出失败')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
+function goTechPage(delta) {
+  const next = techPage.value + delta
+  if (next < 1 || next > techTotalPages.value) return
+  techPage.value = next
+  loadTechList()
+}
+function goJsglPage(delta) {
+  const next = jsglPage.value + delta
+  if (next < 1 || next > jsglTotalPages.value) return
+  jsglPage.value = next
+  loadJsglList()
+}
+function goManagePage(delta) {
+  const next = managePage.value + delta
+  if (next < 1 || next > manageTotalPages.value) return
+  managePage.value = next
+  loadManageList()
+}
+function goGygchPage(delta) {
+  const next = gygchPage.value + delta
+  if (next < 1 || next > gygchTotalPages.value) return
+  gygchPage.value = next
+  loadGygchList()
+}
+function goScszhPage(delta) {
+  const next = scszhPage.value + delta
+  if (next < 1 || next > scszhTotalPages.value) return
+  scszhPage.value = next
+  loadScszhList()
+}
+
 async function loadUserDept() {
   const user = getCurrentUser()
-  if (!user?.name) return
+  if (!user?.name) {
+    await loadExportPermission()
+    return
+  }
   form.value.xm = user.name
   try {
     const res = await getStatisticsPermission({ name: user.name })
@@ -683,6 +828,7 @@ async function loadUserDept() {
   } catch {
     // 已设置 xm，lsys 可能为空
   }
+  await loadExportPermission()
 }
 
 async function loadOptions() {
@@ -743,8 +889,10 @@ async function loadScszhFenlei() {
 async function loadScszhList() {
   scszhListLoading.value = true
   try {
-    const params = { page: 1, page_size: 100 }
+    const params = { page: scszhPage.value, page_size: LIST_PAGE_SIZE }
     if ((form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const kw = (searchKeywordScszh.value || '').trim()
+    if (kw) params.keyword = kw
     const res = await getBianhaoScszhList(params)
     scszhList.value = (res.list || []).filter(Boolean)
     scszhTotal.value = res.total ?? scszhList.value.length
@@ -759,8 +907,10 @@ async function loadScszhList() {
 async function loadGygchList() {
   gygchListLoading.value = true
   try {
-    const params = { page: 1, page_size: 100 }
+    const params = { page: gygchPage.value, page_size: LIST_PAGE_SIZE }
     if ((form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const kw = (searchKeywordGygch.value || '').trim()
+    if (kw) params.keyword = kw
     const res = await getBianhaoGygchList(params)
     gygchList.value = (res.list || []).filter(Boolean)
     gygchTotal.value = res.total ?? gygchList.value.length
@@ -778,94 +928,23 @@ function onFenleiChange() {
   form.value.flbianma = item ? (item.flbianma || '').trim() : ''
 }
 
-const filteredTechList = computed(() => {
-  const kw = (searchKeyword.value || '').trim().toLowerCase()
-  let list = techList.value
-  if (kw) {
-    list = list.filter(
-      (r) =>
-        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-        (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
-        (r.bz && r.bz.toLowerCase().includes(kw)) ||
-        (r.xm && r.xm.toLowerCase().includes(kw))
-    )
-  }
-  return applyColFiltersAndSort(list, 'tech')
-})
+const filteredTechList = computed(() => applyColFiltersAndSort(techList.value, 'tech'))
 
-const filteredJsglList = computed(() => {
-  const kw = (searchKeywordJsgl.value || '').trim().toLowerCase()
-  let list = jsglList.value
-  if (kw) {
-    list = list.filter(
-      (r) =>
-        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-        (r.cpname && r.cpname.toLowerCase().includes(kw)) ||
-        (r.bz && r.bz.toLowerCase().includes(kw)) ||
-        (r.xm && r.xm.toLowerCase().includes(kw)) ||
-        (r.fenleihao && r.fenleihao.toLowerCase().includes(kw))
-    )
-  }
-  return applyColFiltersAndSort(list, 'jsgl')
-})
+const filteredJsglList = computed(() => applyColFiltersAndSort(jsglList.value, 'jsgl'))
 
-const filteredManageList = computed(() => {
-  const kw = (searchKeywordManage.value || '').trim().toLowerCase()
-  let list = manageList.value
-  if (kw) {
-    list = list.filter(
-      (r) =>
-        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-        (r.bz && r.bz.toLowerCase().includes(kw)) ||
-        (r.xm && r.xm.toLowerCase().includes(kw)) ||
-        (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
-        (r.content && r.content.toLowerCase().includes(kw))
-    )
-  }
-  return applyColFiltersAndSort(list, 'manage')
-})
+const filteredManageList = computed(() => applyColFiltersAndSort(manageList.value, 'manage'))
 
-const filteredGygchList = computed(() => {
-  const kw = (searchKeywordGygch.value || '').trim().toLowerCase()
-  let list = gygchList.value
-  if (kw) {
-    list = list.filter(
-      (r) =>
-        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-        (r.bz && r.bz.toLowerCase().includes(kw)) ||
-        (r.xm && r.xm.toLowerCase().includes(kw)) ||
-        (r.room_code && r.room_code.toLowerCase().includes(kw))
-    )
-  }
-  return applyColFiltersAndSort(list, 'gygch')
-})
+const filteredGygchList = computed(() => applyColFiltersAndSort(gygchList.value, 'gygch'))
 
-const filteredScszhList = computed(() => {
-  const kw = (searchKeywordScszh.value || '').trim().toLowerCase()
-  let list = scszhList.value
-  if (kw) {
-    list = list.filter(
-      (r) =>
-        (r.bianhao_code && r.bianhao_code.toLowerCase().includes(kw)) ||
-        (r.neirong && r.neirong.toLowerCase().includes(kw)) ||
-        (r.bz && r.bz.toLowerCase().includes(kw)) ||
-        (r.xm && r.xm.toLowerCase().includes(kw)) ||
-        (r.fenlei && r.fenlei.toLowerCase().includes(kw)) ||
-        (r.content && r.content.toLowerCase().includes(kw))
-    )
-  }
-  return applyColFiltersAndSort(list, 'scszh')
-})
+const filteredScszhList = computed(() => applyColFiltersAndSort(scszhList.value, 'scszh'))
 
 async function loadTechList() {
   techListLoading.value = true
   try {
-    const params = { page: 1, page_size: 100 }
+    const params = { page: techPage.value, page_size: LIST_PAGE_SIZE }
     if (!canSeeAllFiles.value && (form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const kw = (searchKeyword.value || '').trim()
+    if (kw) params.keyword = kw
     const res = await getBianhaoTechList(params)
     techList.value = (res.list || []).filter(Boolean)
     techTotal.value = res.total ?? techList.value.length
@@ -880,8 +959,10 @@ async function loadTechList() {
 async function loadJsglList() {
   jsglListLoading.value = true
   try {
-    const params = { page: 1, page_size: 100 }
+    const params = { page: jsglPage.value, page_size: LIST_PAGE_SIZE }
     if (!canSeeAllFiles.value && (form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const kw = (searchKeywordJsgl.value || '').trim()
+    if (kw) params.keyword = kw
     const res = await getBianhaogljsList(params)
     jsglList.value = (res.list || []).filter(Boolean)
     jsglTotal.value = res.total ?? jsglList.value.length
@@ -896,8 +977,10 @@ async function loadJsglList() {
 async function loadManageList() {
   manageListLoading.value = true
   try {
-    const params = { page: 1, page_size: 100 }
+    const params = { page: managePage.value, page_size: LIST_PAGE_SIZE }
     if (!canSeeAllFiles.value && (form.value.bz || '').trim()) params.bz = form.value.bz.trim()
+    const kw = (searchKeywordManage.value || '').trim()
+    if (kw) params.keyword = kw
     const res = await getBianhaoglList(params)
     manageList.value = (res.list || []).filter(Boolean)
     manageTotal.value = res.total ?? manageList.value.length
@@ -998,18 +1081,23 @@ async function copyBianhao() {
 
 watch(currentTab, async (tab) => {
   if (tab === 'tech') {
+    techPage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadTechList()
   } else if (tab === 'jsgl') {
+    jsglPage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadJsglList()
   } else if (tab === 'manage') {
+    managePage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadManageList()
   } else if (tab === 'gygch') {
+    gygchPage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadGygchList()
   } else if (tab === 'scszh') {
+    scszhPage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
     await loadScszhList()
   }
@@ -1091,6 +1179,7 @@ async function submitNumbering() {
       })
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
+        techPage.value = 1
         await loadTechList()
       } else {
         alert(res.message || '生成失败')
@@ -1123,6 +1212,7 @@ async function submitNumbering() {
       })
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
+        jsglPage.value = 1
         await loadJsglList()
       } else {
         alert(res.message || '生成失败')
@@ -1154,6 +1244,7 @@ async function submitNumbering() {
       })
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
+        managePage.value = 1
         await loadManageList()
       } else {
         alert(res.message || '生成失败')
@@ -1180,6 +1271,7 @@ async function submitNumbering() {
       })
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
+        gygchPage.value = 1
         await loadGygchList()
       } else {
         alert(res.message || '生成失败')
@@ -1211,6 +1303,7 @@ async function submitNumbering() {
       })
       if (res.success) {
         generatedBianhao.value = res.bianhao || ''
+        scszhPage.value = 1
         await loadScszhList()
       } else {
         alert(res.message || '生成失败')
@@ -1303,6 +1396,18 @@ function goWorkNo() {
 .card-header {
   padding: var(--spacing-lg);
   border-bottom: 1px solid var(--color-border-lighter);
+}
+
+.card-header-with-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.card-header-with-actions h3 {
+  margin: 0;
 }
 
 .card-body {
@@ -1452,6 +1557,24 @@ function goWorkNo() {
   margin-top: var(--spacing-md);
   font-size: 0.85rem;
   color: var(--color-text-secondary);
+}
+
+.table-footer-pager {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+}
+
+.pager-btns {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
+.pager-btn {
+  font-size: 0.85rem;
+  padding: 4px 12px;
 }
 
 .mb-lg {

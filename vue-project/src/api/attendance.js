@@ -448,7 +448,7 @@ export function getUploadConfig() {
 }
 
 /**
- * 从打卡服务器拉取最新报表并上传（GET 服务约 30 秒返回，仅 dakaman 可操作，需配置 ATTENDANCE_REPORT_FETCH_URL）
+ * 从打卡服务器拉取最新报表并上传（GET 可能极慢，仅 dakaman 可操作，需配置 ATTENDANCE_REPORT_FETCH_URL）
  * @param {string} uploader - 当前登录用户姓名
  */
 export function fetchAndUploadAttendance(uploader = '', attendanceDataDate = '') {
@@ -459,7 +459,8 @@ export function fetchAndUploadAttendance(uploader = '', attendanceDataDate = '')
     url: '/attendance/fetch-and-upload',
     method: 'post',
     data: formData,
-    timeout: 70000
+    // 须大于后端拉取报表读超时 + 本地解析入库时间（后端约 20min + 余量）
+    timeout: 1_800_000
   })
 }
 

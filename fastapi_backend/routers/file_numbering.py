@@ -4,15 +4,36 @@
 """
 import os
 from fastapi import APIRouter, HTTPException, Query, File, UploadFile
-from fastapi.responses import FileResponse
-from typing import Optional, List
+from fastapi.responses import FileResponse, Response
+from typing import Optional, List, Tuple
+from urllib.parse import quote
 from pydantic import BaseModel
 from datetime import datetime
 from database import db
 import logging
 import uuid
+from io import BytesIO
+
+from routers.department_policy import _can_upload_policy
 
 logger = logging.getLogger(__name__)
+
+
+def _keyword_sql_clause(keyword: Optional[str], like_lhs_exprs: List[str]) -> Tuple[Optional[str], tuple]:
+    """多列 OR LIKE；like_lhs_exprs 为 LIKE 左侧 SQL 表达式（列名或 CAST(...)）。"""
+    kw = (keyword or "").strip()
+    if not kw:
+        return None, ()
+    kwp = f"%{kw}%"
+    clause = "(" + " OR ".join(f"{e} LIKE %s" for e in like_lhs_exprs) + ")"
+    return clause, tuple([kwp] * len(like_lhs_exprs))
+
+
+_TECH_KW_LHS = ["bz", "xm", "gzh", "cpname", "fenlei", "neirong", "bianhao1", "bianhao3", "CAST(bhyear AS CHAR)"]
+_JSGL_KW_LHS = ["bz", "xm", "gzh", "cpname", "neirong", "fenlei", "fenleihao", "bianhao1", "bianhao3", "CAST(bhyear AS CHAR)"]
+_GL_KW_LHS = ["bz", "xm", "fenlei", "neirong", "content", "bianhao1", "bianhao3", "CAST(bhyear AS CHAR)"]
+_GYGCH_KW_LHS = ["bz", "xm", "neirong", "room_code", "bianhao_code", "CAST(bhyear AS CHAR)"]
+_SCSZH_KW_LHS = ["bz", "xm", "fenlei", "neirong", "content", "bianhao1", "CAST(bhyear AS CHAR)"]
 
 router = APIRouter(prefix="/file-numbering", tags=["文件编号"])
 
@@ -219,6 +240,7 @@ async def add_bianhao_tech(req: BianhaoTechRequest):
 async def get_bianhao_tech_list(
     bz: Optional[str] = Query(None),
     px: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None, description="编号/内容/项目等关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100)
 ):
@@ -231,6 +253,10 @@ async def get_bianhao_tech_list(
             if px:
                 where.append("fenlei=%s")
                 params = (bz, px)
+        kc, kp = _keyword_sql_clause(keyword, _TECH_KW_COLS)
+        if kc:
+            where.append(kc)
+            params = params + kp
         where_sql = (" AND ".join(where)) if where else "1=1"
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
@@ -337,6 +363,7 @@ async def add_bianhaogljs(req: BianhaoJsglRequest):
 async def get_bianhaogljs_list(
     bz: Optional[str] = Query(None, description="所属科室，不传则不过滤"),
     px: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None, description="关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100)
 ):
@@ -350,6 +377,10 @@ async def get_bianhaogljs_list(
         if px and px in fenlei_map:
             where.append("fenlei=%s")
             params = params + (fenlei_map[px],) if isinstance(params, tuple) else (fenlei_map[px],)
+        kc, kp = _keyword_sql_clause(keyword, _JSGL_KW_LHS)
+        if kc:
+            where.append(kc)
+            params = params + kp
         where_sql = " AND ".join(where) if where else "1=1"
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhaogljs WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
@@ -449,6 +480,7 @@ def _fmt_gl_gl(r):
 async def get_bianhaogl_list(
     bz: Optional[str] = Query(None, description="所属科室"),
     px: Optional[str] = Query(None),
+    keyword: Optional[str] = Query(None, description="关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100)
 ):
@@ -462,6 +494,10 @@ async def get_bianhaogl_list(
         if px and px in fenlei_map:
             where.append("fenlei=%s")
             params = params + (fenlei_map[px],) if isinstance(params, tuple) else (fenlei_map[px],)
+        kc, kp = _keyword_sql_clause(keyword, _GL_KW_LHS)
+        if kc:
+            where.append(kc)
+            params = params + kp
         where_sql = " AND ".join(where) if where else "1=1"
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhaogl WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
@@ -561,6 +597,7 @@ def _fmt_gygch(r):
 @router.get("/gygch/list")
 async def get_bianhao_gygch_list(
     bz: Optional[str] = Query(None, description="所属科室"),
+    keyword: Optional[str] = Query(None, description="关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100)
 ):
@@ -570,6 +607,10 @@ async def get_bianhao_gygch_list(
         if (bz or "").strip():
             where.append("bz=%s")
             params = (bz.strip(),)
+        kc, kp = _keyword_sql_clause(keyword, _GYGCH_KW_LHS)
+        if kc:
+            where.append(kc)
+            params = params + kp
         where_sql = " AND ".join(where) if where else "1=1"
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao_gygch WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
@@ -724,6 +765,7 @@ def _fmt_scszh(r):
 async def get_bianhao_scszh_list(
     bz: Optional[str] = Query(None, description="所属科室"),
     px: Optional[str] = Query(None, description="按项目缩写筛选"),
+    keyword: Optional[str] = Query(None, description="关键词"),
     page: int = Query(1, ge=1),
     page_size: int = Query(30, ge=1, le=100)
 ):
@@ -736,6 +778,10 @@ async def get_bianhao_scszh_list(
         if (px or "").strip():
             where.append("fenlei=%s")
             params = params + (px.strip(),)
+        kc, kp = _keyword_sql_clause(keyword, _SCSZH_KW_LHS)
+        if kc:
+            where.append(kc)
+            params = params + kp
         where_sql = " AND ".join(where) if where else "1=1"
         cnt = db.execute_query(f"SELECT COUNT(*) as n FROM bianhao_scszh WHERE {where_sql}", params)
         total = (cnt[0]["n"] or 0) if cnt else 0
@@ -755,6 +801,97 @@ async def get_bianhao_scszh_list(
     except Exception as e:
         logger.error(f"查询失败: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+_EXPORT_TABLE_LABELS = {
+    "tech": "技术文件编号",
+    "jsgl": "技术管理文件编号",
+    "manage": "管理文件编号",
+    "gygch": "工艺过程策划表",
+    "scszh": "生产数字化编号",
+}
+
+
+@router.get("/export/excel")
+async def export_bianhao_excel(
+    table: str = Query(..., description="tech|jsgl|manage|gygch|scszh"),
+    name: str = Query(..., description="当前用户姓名"),
+):
+    """导出各类型编号台账（全量）。仅 yggl 综合技术室且主任/副主任可用，与制度上传权限一致。"""
+    if table not in _EXPORT_TABLE_LABELS:
+        raise HTTPException(status_code=400, detail="无效表格类型")
+    if not _can_upload_policy((name or "").strip()):
+        raise HTTPException(status_code=403, detail="仅综合技术室主任/副主任可导出")
+    try:
+        from openpyxl import Workbook
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
+
+    order_sql = _sql_order_bhtime_desc_id_desc()
+    wb = Workbook()
+    ws = wb.active
+    label = _EXPORT_TABLE_LABELS[table]
+    ws.title = label[:31]
+
+    try:
+        if table == "tech":
+            rows = db.execute_query(f"SELECT * FROM bianhao WHERE 1=1 {order_sql}", ())
+            ws.append(["编号单位", "编制人", "工作号", "项目名称", "编号类别", "编号内容", "编号时间", "编号代码", "已上传PDF"])
+            for r in rows or []:
+                d = _fmt_bianhao(r)
+                code = d.get("bianhao_code") or ""
+                hasp = "是" if (code and os.path.isfile(_file_path_by_code("tech", code))) else "否"
+                ws.append(
+                    [d.get("bz"), d.get("xm"), d.get("gzh"), d.get("cpname"), d.get("fenlei"), d.get("neirong"), d.get("bhtime"), code, hasp]
+                )
+        elif table == "jsgl":
+            rows = db.execute_query(f"SELECT * FROM bianhaogljs WHERE 1=1 {order_sql}", ())
+            ws.append(["编号单位", "编制人", "工作号", "项目名称", "编号类别", "编号内容", "编号时间", "编号代码", "已上传PDF"])
+            for r in rows or []:
+                d = _fmt_gl(r)
+                code = d.get("bianhao_code") or ""
+                hasp = "是" if (code and os.path.isfile(_file_path_by_code("jsgl", code))) else "否"
+                flh = d.get("fenleihao") or d.get("fenlei")
+                ws.append([d.get("bz"), d.get("xm"), d.get("gzh"), d.get("cpname"), flh, d.get("neirong"), d.get("bhtime"), code, hasp])
+        elif table == "manage":
+            rows = db.execute_query(f"SELECT * FROM bianhaogl WHERE 1=1 {order_sql}", ())
+            ws.append(["编号单位", "编制人", "编号类别", "编号内容", "编号时间", "编号代码", "备注", "已上传PDF"])
+            for r in rows or []:
+                d = _fmt_gl_gl(r)
+                code = d.get("bianhao_code") or ""
+                hasp = "是" if (code and os.path.isfile(_file_path_by_code("manage", code))) else "否"
+                ws.append([d.get("bz"), d.get("xm"), d.get("fenlei"), d.get("neirong"), d.get("bhtime"), code, d.get("content"), hasp])
+        elif table == "gygch":
+            rows = db.execute_query(f"SELECT * FROM bianhao_gygch WHERE 1=1 {order_sql}", ())
+            ws.append(["编号单位", "编制人", "年代", "工艺部室", "编号内容", "编号时间", "编号代码", "已上传PDF"])
+            for r in rows or []:
+                d = _fmt_gygch(r)
+                code = d.get("bianhao_code") or ""
+                hasp = "是" if (code and os.path.isfile(_file_path_by_code("gygch", code))) else "否"
+                ws.append([d.get("bz"), d.get("xm"), d.get("bhyear"), d.get("room_code"), d.get("neirong"), d.get("bhtime"), code, hasp])
+        else:  # scszh
+            rows = db.execute_query(f"SELECT * FROM bianhao_scszh WHERE 1=1 {order_sql}", ())
+            ws.append(["编号单位", "编制人", "项目", "编号内容", "备注", "编号时间", "编号代码", "已上传PDF"])
+            for r in rows or []:
+                d = _fmt_scszh(r)
+                code = d.get("bianhao_code") or ""
+                hasp = "是" if (code and code != "-" and os.path.isfile(_file_path_by_code("scszh", code))) else "否"
+                ws.append([d.get("bz"), d.get("xm"), d.get("fenlei"), d.get("neirong"), d.get("content"), d.get("bhtime"), code, hasp])
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"导出文件编号 Excel 失败: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    bio = BytesIO()
+    wb.save(bio)
+    data = bio.getvalue()
+    fname = f"文件编号_{label}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
 
 
 @router.delete("/file")

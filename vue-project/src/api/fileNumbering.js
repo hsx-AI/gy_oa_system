@@ -118,3 +118,13 @@ export function deleteNumberingPdf(type, code) {
 export function getNumberingFileUrl(type, code, download = 0) {
   return `/api${P}/file?type=${encodeURIComponent(type)}&code=${encodeURIComponent(code)}&download=${download}`
 }
+
+/** 导出编号台账 Excel（仅综合技术室主任/副主任，后端校验） */
+export function exportBianhaoExcel(params) {
+  return request({
+    url: `${P}/export/excel`,
+    method: 'get',
+    params: { table: params.table, name: params.name },
+    responseType: 'blob'
+  })
+}
