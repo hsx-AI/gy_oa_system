@@ -918,15 +918,11 @@ async def overtime_validate(req: OvertimeValidateRequest):
             punch_starts = []
             punch_ends = []
             for t_in, t_out in intervals:
-                s = format_datetime_plain(t_in) if t_in else ""
-                e = format_datetime_plain(t_out) if t_out else ""
-                if isinstance(s, str) and " " not in s and len(s) <= 8:
-                    s = f"{date_ymd} {s}" if len(s) > 5 else f"{date_ymd} {s}:00"
-                if isinstance(e, str) and " " not in e and len(e) <= 8:
-                    e = f"{date_ymd} {e}" if len(e) > 5 else f"{date_ymd} {e}:00"
-                if s and e and s[:19] < e[:19]:
-                    punch_starts.append(s[:19])
-                    punch_ends.append(e[:19])
+                s = f"{date_ymd} {t_in.strftime('%H:%M:%S')}" if t_in else ""
+                e = f"{date_ymd} {t_out.strftime('%H:%M:%S')}" if t_out else ""
+                if s and e and s < e:
+                    punch_starts.append(s)
+                    punch_ends.append(e)
             segments = _overtime_segments_for_noon(date_ymd, start_dt, end_dt)
             all_contained = all(
                 _interval_contained_in(seg_start, seg_end, punch_starts, punch_ends)
