@@ -87,7 +87,7 @@ async def startup_event():
     print(f"[System] API文档地址: http://localhost:8000/docs")
     logger.info(f"API文档地址: http://localhost:8000/docs")
     logger.debug("调试日志已开启，将显示详细调试信息")
-    # 定时从打卡服务器拉取报表并上传（时刻由 SCHEDULER_HOUR、SCHEDULER_MINUTE、SCHEDULER_TIMEZONE 配置；建议配置在当日 24 点前，处理当天数据）
+    # 定时从打卡服务器拉取报表并上传
     fetch_url = getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or ""
     if (fetch_url or "").strip():
         try:
@@ -110,6 +110,10 @@ async def startup_event():
         except Exception as e:
             logger.warning("启用每日拉取打卡报表任务失败: %s", e)
             print(f"[System] 警告: 定时拉取打卡报表任务未启用: {e}")
+    # 考勤异常提醒自动发送后台任务
+    import asyncio as _asyncio
+    from routers.email_sender import auto_reminder_background_loop
+    _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
 
 
 @app.get("/")

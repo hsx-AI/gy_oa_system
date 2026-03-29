@@ -146,6 +146,48 @@ def _merge_intervals_days(intervals: List[Tuple[date, date]]) -> float:
     merged.append((cur_s, cur_e))
     return sum((e - s).days + 1 for s, e in merged)
 
+
+def _qj_leave_date_bounds(row: Dict) -> Tuple[Optional[date], Optional[date]]:
+    """请假记录的起止日期（闭区间）。优先 timefrom/timeto，缺省回退 timefromdate。"""
+    start = _parse_date(row.get("timefrom")) or _parse_date(row.get("timefromdate"))
+    end = _parse_date(row.get("timeto")) or start
+    if start and end and end < start:
+        start, end = end, start
+    return start, end
+
+
+def _allocate_leave_tian_to_period(
+    tian: float, leave_start: date, leave_end: date, period_start: date, period_end: date
+) -> float:
+    """
+    将整条请假的 tian 按「与统计区间相交的日历天数 / 请假整段日历天数」比例分摊。
+    解决跨月/跨年请假只在「开始月」计满全部天数的问题。
+    """
+    try:
+        tian_f = float(tian or 0)
+    except (TypeError, ValueError):
+        tian_f = 0.0
+    if tian_f <= 0 or not leave_start or not leave_end:
+        return 0.0
+    total_span = (leave_end - leave_start).days + 1
+    if total_span <= 0:
+        return 0.0
+    ov_s = max(leave_start, period_start)
+    ov_e = min(leave_end, period_end)
+    if ov_e < ov_s:
+        return 0.0
+    ov_days = (ov_e - ov_s).days + 1
+    return tian_f * float(ov_days) / float(total_span)
+
+
+def _leave_overlap_sql_bounds() -> str:
+    """WHERE 片段：请假区间与 [ps, pe] 闭区间有交集（ps/pe 为 'YYYY-MM-DD' 字符串）。"""
+    return """
+            AND COALESCE(DATE(timefrom), DATE(timefromdate)) <= %s
+            AND COALESCE(DATE(timeto), DATE(timefrom), DATE(timefromdate)) >= %s
+        """
+
+
 router = APIRouter(tags=["统计"])
 
 
@@ -229,95 +271,68 @@ async def get_dept_leave_stats(
     """
     科室请假统计（按人汇总天数）。不传 lsys 时为全员（排除部办）。
     返回: { totalDays, personCount, list: [{ name, days }] }
-    仅统计 qjzt=4 已通过
+    仅统计 qjzt=4 已通过。
+    跨月/跨季请假按日历重叠比例将 tian 分摊到各统计区间（与领导人看板月份/季度/全年一致）。
     """
     try:
+        import calendar
+
         if year is None:
-            year = __import__("datetime").datetime.now().year
+            year = datetime.now().year
         all_staff = not (lsys and lsys.strip())
 
-        # 月度
         if month:
-            month_str = f"{year}-{month:02d}"
-            if all_staff:
-                query = """
-                    SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                    FROM qj
-                    WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
-                    AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)
-                    GROUP BY xm
-                    ORDER BY days DESC
-                """
-                rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, f"{month_str}%", f"{month_str}%", month_str))
-            else:
-                query = """
-                    SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                    FROM qj
-                    WHERE lsys = %s AND qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1'
-                    AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)
-                    GROUP BY xm
-                    ORDER BY days DESC
-                """
-                rows = db.execute_query(query, (lsys, f"{month_str}%", f"{month_str}%", month_str))
-        # 年度或季度
+            period_start = date(year, int(month), 1)
+            period_end = date(year, int(month), calendar.monthrange(year, int(month))[1])
+        elif quarter:
+            q = str(quarter).strip()
+            q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
+            lo, hi = q_map.get(q, (1, 12))
+            period_start = date(year, lo, 1)
+            period_end = date(year, hi, calendar.monthrange(year, hi)[1])
         else:
-            if quarter:
-                if quarter == "1":
-                    mon_cond = "MONTH(timefrom) BETWEEN 1 AND 3"
-                elif quarter == "2":
-                    mon_cond = "MONTH(timefrom) BETWEEN 4 AND 6"
-                elif quarter == "3":
-                    mon_cond = "MONTH(timefrom) BETWEEN 7 AND 9"
-                else:
-                    mon_cond = "MONTH(timefrom) BETWEEN 10 AND 12"
-                if all_staff:
-                    query = f"""
-                        SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                        FROM qj
-                        WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
-                        AND YEAR(timefrom) = %s AND {mon_cond}
-                        GROUP BY xm
-                        ORDER BY days DESC
-                    """
-                    rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, year))
-                else:
-                    query = f"""
-                        SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                        FROM qj
-                        WHERE lsys = %s AND qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1'
-                        AND YEAR(timefrom) = %s AND {mon_cond}
-                        GROUP BY xm
-                        ORDER BY days DESC
-                    """
-                    rows = db.execute_query(query, (lsys, year))
-            else:
-                if all_staff:
-                    query = """
-                        SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                        FROM qj
-                        WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
-                        AND (timefrom LIKE %s OR timefromdate LIKE %s OR YEAR(timefrom) = %s)
-                        GROUP BY xm
-                        ORDER BY days DESC
-                    """
-                    rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, f"{year}%", f"{year}%", year))
-                else:
-                    query = """
-                        SELECT xm AS name, SUM(CAST(tian AS DECIMAL(10,2))) AS days
-                        FROM qj
-                        WHERE lsys = %s AND qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1'
-                        AND (timefrom LIKE %s OR timefromdate LIKE %s OR YEAR(timefrom) = %s)
-                        GROUP BY xm
-                        ORDER BY days DESC
-                    """
-                    rows = db.execute_query(query, (lsys, f"{year}%", f"{year}%", year))
+            period_start = date(year, 1, 1)
+            period_end = date(year, 12, 31)
 
-        list_data = []
-        total_days = 0
-        for r in rows:
-            d = float(r.get("days") or 0)
-            list_data.append({"name": r.get("name") or "", "days": round(d, 2)})
-            total_days += d
+        pe_str = period_end.strftime("%Y-%m-%d")
+        ps_str = period_start.strftime("%Y-%m-%d")
+        ov = _leave_overlap_sql_bounds()
+
+        if all_staff:
+            query = f"""
+                SELECT xm AS name, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
+                FROM qj
+                WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
+                {ov}
+            """
+            rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, pe_str, ps_str))
+        else:
+            query = f"""
+                SELECT xm AS name, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
+                FROM qj
+                WHERE lsys = %s AND qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1'
+                {ov}
+            """
+            rows = db.execute_query(query, (lsys, pe_str, ps_str))
+
+        by_name: Dict[str, float] = defaultdict(float)
+        for r in rows or []:
+            name = (r.get("name") or "").strip()
+            if not name:
+                continue
+            ls_d, le_d = _qj_leave_date_bounds(r)
+            if not ls_d or not le_d:
+                continue
+            try:
+                tian_f = float(r.get("tian") or 0)
+            except (TypeError, ValueError):
+                tian_f = 0.0
+            alloc = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, period_start, period_end)
+            if alloc > 0:
+                by_name[name] += alloc
+
+        list_data = [{"name": n, "days": round(v, 2)} for n, v in sorted(by_name.items(), key=lambda x: -x[1])]
+        total_days = sum(by_name.values())
 
         return {
             "success": True,
@@ -1350,11 +1365,23 @@ async def get_leader_dept_comparison(
     返回: list[{ lsys, personCount, overtimeTotal, leaveTotal, tripTotal, overtimePerCapita, leavePerCapita, tripPerCapita }]
     """
     try:
+        import calendar
+
         month_str = f"{year}-{month:02d}%" if month else f"{year}%"
         month_cond_leave = "AND (timefrom LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)" if month else "AND (timefrom LIKE %s OR YEAR(timefrom) = %s)"
         month_cond_overtime = "AND (timedate LIKE %s OR SUBSTRING(timedate, 1, 7) = %s)" if month else "AND (timedate LIKE %s OR YEAR(timedate) = %s)"
         params_leave = (month_str, month_str) if month else (month_str, year)
         params_overtime = (month_str, month_str) if month else (month_str, year)
+
+        if month:
+            leave_period_start = date(year, month, 1)
+            leave_period_end = date(year, month, calendar.monthrange(year, month)[1])
+        else:
+            leave_period_start = date(year, 1, 1)
+            leave_period_end = date(year, 12, 31)
+        leave_pe_str = leave_period_end.strftime("%Y-%m-%d")
+        leave_ps_str = leave_period_start.strftime("%Y-%m-%d")
+        leave_ov = _leave_overlap_sql_bounds()
 
         person_rows = db.execute_query(
             "SELECT lsys, COUNT(*) AS cnt FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0) GROUP BY lsys ORDER BY lsys",
@@ -1362,13 +1389,28 @@ async def get_leader_dept_comparison(
         )
         person_by_lsys = {r["lsys"].strip(): int(r.get("cnt") or 0) for r in person_rows if r.get("lsys")}
 
-        leave_query = f"""
-            SELECT lsys, SUM(CAST(tian AS DECIMAL(10,2))) AS total
-            FROM qj WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s {month_cond_leave}
-            GROUP BY lsys
+        leave_raw = f"""
+            SELECT lsys, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
+            FROM qj WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
+            {leave_ov}
         """
-        leave_rows = db.execute_query(leave_query, (LEADER_EXCLUDE_LSYS,) + tuple(params_leave))
-        leave_by_lsys = {r["lsys"].strip(): round(float(r.get("total") or 0), 2) for r in leave_rows if r.get("lsys")}
+        leave_rows = db.execute_query(leave_raw, (LEADER_EXCLUDE_LSYS, leave_pe_str, leave_ps_str))
+        leave_by_lsys_acc: Dict[str, float] = defaultdict(float)
+        for row in leave_rows or []:
+            l = (row.get("lsys") or "").strip()
+            if not l:
+                continue
+            ls_d, le_d = _qj_leave_date_bounds(row)
+            if not ls_d or not le_d:
+                continue
+            try:
+                tian_f = float(row.get("tian") or 0)
+            except (TypeError, ValueError):
+                tian_f = 0.0
+            alloc = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, leave_period_start, leave_period_end)
+            if alloc > 0:
+                leave_by_lsys_acc[l] += alloc
+        leave_by_lsys = {k: round(v, 2) for k, v in leave_by_lsys_acc.items()}
 
         overtime_query = f"""
             SELECT yggl.lsys, SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS total
@@ -1380,7 +1422,6 @@ async def get_leader_dept_comparison(
         overtime_by_lsys = {r["lsys"].strip(): round(float(r.get("total") or 0), 2) for r in ot_rows if r.get("lsys")}
 
         # 公出与「全体员工排序」一致：仅已批准(bldzt=2, szrzt=2)，按区间并集计天数后按科室汇总
-        import calendar
         month_start = date(year, month, 1) if month else None
         month_end = date(year, month, calendar.monthrange(year, month)[1]) if month else None
         year_start = date(year, 1, 1)
@@ -1484,8 +1525,13 @@ async def get_leader_rankings(
     返回: list[{ rank, name, lsys, value, unit }]
     """
     try:
+        import calendar
+
         month_str = f"{year}-{month:02d}%" if month else f"{year}%"
         month_param = (month_str, month_str) if month else (month_str, year)
+
+        rows = []
+        unit = ""
 
         if type_ == "overtime":
             query = """
@@ -1496,17 +1542,47 @@ async def get_leader_rankings(
                 GROUP BY jiaban.xm, yggl.lsys ORDER BY value DESC
             """
             unit = "小时"
+            rows = db.execute_query(query, month_param)
         elif type_ == "leave":
-            query = """
-                SELECT qj.xm AS name, qj.lsys,
-                    SUM(CAST(qj.tian AS DECIMAL(10,2))) AS value
-                FROM qj WHERE qj.qjzt = 4 AND RIGHT(TRIM(qj.xm), 1) != '1' AND RIGHT(TRIM(qj.lsys), 1) != '1' AND (qj.timefrom LIKE %s OR YEAR(qj.timefrom) = %s)
-                GROUP BY qj.xm, qj.lsys ORDER BY value DESC
+            if month:
+                lp_start = date(year, month, 1)
+                lp_end = date(year, month, calendar.monthrange(year, month)[1])
+            else:
+                lp_start = date(year, 1, 1)
+                lp_end = date(year, 12, 31)
+            pe_str = lp_end.strftime("%Y-%m-%d")
+            ps_str = lp_start.strftime("%Y-%m-%d")
+            lov = _leave_overlap_sql_bounds()
+            leave_raw = f"""
+                SELECT qj.xm AS name, qj.lsys, timefrom, timeto, timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian
+                FROM qj WHERE qj.qjzt = 4 AND RIGHT(TRIM(qj.xm), 1) != '1' AND RIGHT(TRIM(qj.lsys), 1) != '1'
+                {lov}
             """
+            lrows = db.execute_query(leave_raw, (pe_str, ps_str))
+            acc_lv: Dict[Tuple[str, str], float] = defaultdict(float)
+            for row in lrows or []:
+                nm = (row.get("name") or "").strip()
+                ls = (row.get("lsys") or "").strip()
+                if not nm:
+                    continue
+                ls_d, le_d = _qj_leave_date_bounds(row)
+                if not ls_d or not le_d:
+                    continue
+                try:
+                    tian_f = float(row.get("tian") or 0)
+                except (TypeError, ValueError):
+                    tian_f = 0.0
+                alloc = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, lp_start, lp_end)
+                if alloc > 0:
+                    acc_lv[(nm, ls)] += alloc
+            rows = [
+                {"name": k[0], "lsys": k[1], "value": round(v, 2)}
+                for k, v in sorted(acc_lv.items(), key=lambda x: -x[1])
+                if v > 0
+            ]
             unit = "天"
         elif type_ == "trip":
             # 公出天数按区间并集计算，避免重复申报导致超过 365 天
-            import calendar
             month_start = date(year, month, 1) if month else None
             month_end = date(year, month, calendar.monthrange(year, month)[1]) if month else None
             if month:
@@ -1558,8 +1634,6 @@ async def get_leader_rankings(
         else:
             raise HTTPException(status_code=400, detail="type 须为 overtime|leave|trip")
 
-        if type_ != "trip":
-            rows = db.execute_query(query, month_param)
         list_data = []
         for i, r in enumerate(rows, 1):
             list_data.append({

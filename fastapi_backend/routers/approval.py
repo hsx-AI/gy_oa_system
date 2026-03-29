@@ -190,8 +190,8 @@ class ApproveRequest(BaseModel):
     approver: Optional[str] = None  # 当前审批人姓名，用于加班最终环(jiabanzt=5)仅 dakaman 可操作时校验
 
 
-def _add_exchange_tickets(name: str, tickets: float):
-    """加班审批通过且「要换休票」时，向 hxp 表增加换休票。tickets 为张数（已按 0.25 取整）。"""
+def _add_exchange_tickets(name: str, tickets: float, ly: str = ""):
+    """向 hxp 表增加换休票。tickets 为张数，ly 为来源说明。"""
     if not name or tickets <= 0:
         return
     try:
@@ -199,22 +199,22 @@ def _add_exchange_tickets(name: str, tickets: float):
         if tickets <= 0:
             return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # hxp 表若 id 为 VARCHAR(36) NOT NULL 则需显式传入；否则按无 id 列插入
+        ly_val = (ly or "").strip()
         try:
             hxp_id = uuid.uuid4().hex
             n = db.execute_update(
-                "INSERT INTO hxp (id, name, sl, sj) VALUES (%s, %s, %s, %s)",
-                (hxp_id, name.strip(), tickets, now),
+                "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
+                (hxp_id, name.strip(), tickets, now, ly_val),
             )
         except Exception:
             n = db.execute_update(
-                "INSERT INTO hxp (name, sl, sj) VALUES (%s, %s, %s)",
-                (name.strip(), tickets, now),
+                "INSERT INTO hxp (name, sl, sj, ly) VALUES (%s, %s, %s, %s)",
+                (name.strip(), tickets, now, ly_val),
             )
         if n <= 0:
-            logger.warning("加班换休票入账未生效（INSERT 影响行数为0）")
+            logger.warning("换休票入账未生效（INSERT 影响行数为0）")
     except Exception as e:
-        logger.warning(f"加班换休票入账失败: {e}")
+        logger.warning(f"换休票入账失败: {e}")
 
 
 def _deduct_exchange_tickets(name: str, consume: float):
@@ -613,7 +613,7 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
             # 1天=8小时=2张，即 1小时=0.25张；向下取整到 0.25 张
             tickets = math.floor(hours) / 4  # 1小时=0.25张，向下取整到整小时后折算
             if tickets > 0:
-                _add_exchange_tickets(xm, tickets)
+                _add_exchange_tickets(xm, tickets, ly="加班换休")
                 db.execute_update(
                     "UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s",
                     (tickets, item_id),
@@ -719,7 +719,7 @@ async def overtime_batch_approve(req: BatchApproveRequest):
             tickets = math.floor(hours) / 4
             if tickets > 0:
                 try:
-                    _add_exchange_tickets(xm, tickets)
+                    _add_exchange_tickets(xm, tickets, ly="加班换休")
                 except Exception as e:
                     logger.warning(f"加班批量审批添加换休票失败 xm={xm}: {e}")
                 db.execute_update("UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s", (tickets, rid))
@@ -1215,3 +1215,57 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
         )
 
     return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
+
+
+# ==================== 换休票未读通知 ====================
+
+def _ensure_hxp_read_column():
+    """确保 hxp 表有 is_read 列（0=未读 1=已读），不存在时自动添加。"""
+    try:
+        cols = db.execute_query("SHOW COLUMNS FROM hxp LIKE 'is_read'")
+        if not cols:
+            db.execute_update(
+                "ALTER TABLE hxp ADD COLUMN is_read TINYINT NOT NULL DEFAULT 0"
+            )
+    except Exception as e:
+        logger.warning(f"检查/添加 hxp.is_read 列失败: {e}")
+
+_ensure_hxp_read_column()
+
+
+@router.get("/hxp/unread")
+async def get_unread_hxp(name: str = Query(..., description="员工姓名")):
+    """获取指定员工的未读换休票记录（新增的换休票通知）"""
+    rows = db.execute_query(
+        "SELECT id, name, sl, sj, ly FROM hxp "
+        "WHERE name = %s AND (is_read IS NULL OR is_read = 0) AND sl > 0 "
+        "ORDER BY sj DESC",
+        (name.strip(),),
+    )
+    items = []
+    for r in (rows or []):
+        items.append({
+            "id": r.get("id") or "",
+            "name": r.get("name") or "",
+            "sl": float(r.get("sl") or 0),
+            "sj": str(r.get("sj") or ""),
+            "ly": (r.get("ly") or "").strip() or "系统自动",
+        })
+    return {"success": True, "data": items, "total": len(items)}
+
+
+class HxpMarkReadRequest(BaseModel):
+    ids: List[str]
+
+
+@router.post("/hxp/mark-read")
+async def mark_hxp_read(req: HxpMarkReadRequest):
+    """将指定换休票记录标记为已读"""
+    if not req.ids:
+        return {"success": True, "updated": 0}
+    ph = ",".join(["%s"] * len(req.ids))
+    n = db.execute_update(
+        f"UPDATE hxp SET is_read = 1 WHERE id IN ({ph})",
+        tuple(req.ids),
+    )
+    return {"success": True, "updated": n}

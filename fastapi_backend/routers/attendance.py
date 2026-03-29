@@ -18,6 +18,7 @@ from config import settings
 from attendance_db import attendance_db
 from database import db
 from utils.excel_processor import ExcelProcessor
+from utils.helpers import normalize_qj_tian_days
 from routers.suggestions import get_attendance_exception_keys
 from routers.approvers import _get_user_info, _jb_match
 from routers.db_manager import _get_admin1
@@ -1069,9 +1070,10 @@ async def dakaman_process_exception(req: DakamanProcessRequest):
                 st_dt = datetime.strptime(st_norm[:19], "%Y-%m-%d %H:%M:%S")
                 et_dt = datetime.strptime(et_norm[:19], "%Y-%m-%d %H:%M:%S")
                 diff_hours = (et_dt - st_dt).total_seconds() / 3600
-                dur_days = round(diff_hours / 8, 2) if diff_hours > 0 else 0.5
+                raw_days = (diff_hours / 8) if diff_hours > 0 else 0.5
+                dur_days = normalize_qj_tian_days(raw_days)
             except Exception:
-                dur_days = 0.5
+                dur_days = normalize_qj_tian_days(0.5)
             xiaoshi = str(round(dur_days * 8, 2))
 
             sql = """

@@ -79,14 +79,17 @@ const routes = [
   {
     path: '/attendance/business-trip/all-records',
     name: 'BusinessTripAllRecords',
-    component: () => import('../views/attendance/BusinessTripAllRecords.vue')
+    redirect: (to) => ({
+      path: '/attendance/business-trip',
+      query: { ...to.query, view: 'ledger' }
+    })
   },
   {
     path: '/attendance/leave/all-records',
     name: 'LeaveAllRecords',
     redirect: (to) => ({
       path: '/attendance/manual',
-      query: { ...to.query, tab: 'leave', from: to.query.from || 'all-records' }
+      query: { ...to.query, tab: 'leave', from: to.query.from || 'all-records', view: 'ledger' }
     })
   },
   {
@@ -181,6 +184,12 @@ const routes = [
     name: 'HxpManage',
     component: () => import('../views/admin/HxpManage.vue'),
     meta: { title: '换休票管理' }
+  },
+  {
+    path: '/admin/hxp-records',
+    name: 'HxpRecords',
+    component: () => import('../views/admin/HxpRecords.vue'),
+    meta: { title: '换休票明细查询' }
   }
   // 未来可以添加更多路由：
   // {
@@ -344,6 +353,25 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
+  if (to.path === '/admin/hxp-records') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) { next('/login'); return }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      if (!name) { next('/'); return }
+      const jb = (user.jb || '').trim()
+      const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      const res = await getUploadConfig()
+      const a2 = (res?.admin2 || '').trim()
+      if (isMinister || (a2 && name === a2)) {
+        next()
+      } else {
+        next('/')
+      }
+    } catch { next('/') }
+    return
+  }
   if (to.path === '/admin/hxp-manage') {
     try {
       const raw = localStorage.getItem('userInfo')
@@ -351,10 +379,12 @@ router.beforeEach(async (to, _from, next) => {
       const user = JSON.parse(raw)
       const name = (user.name || user.userName || '').trim()
       if (!name) { next('/'); return }
+      const jb = (user.jb || '').trim()
+      const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
       const res = await getUploadConfig()
       const a1 = (res?.admin1 || '').trim()
       const a2 = (res?.admin2 || '').trim()
-      if ((a1 && name === a1) || (a2 && name === a2)) {
+      if ((a1 && name === a1) || (a2 && name === a2) || isMinister) {
         next()
       } else {
         next('/')

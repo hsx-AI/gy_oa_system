@@ -64,6 +64,18 @@ function parseLocalDateTime(str) {
  * @param {string} endStr - 结束时间
  * @param {Object} holidayMap - 可选，日期 -> 类型（来自 holiday 表）；不传则仅排除周六日
  */
+/**
+ * 将已存储的天数规范为 0.25 的整数倍（与后端 normalize_qj_tian_days 一致），用于列表展示或排序。
+ * 非正数返回 0。
+ */
+export function normalizeLeaveDaysForDisplay(d) {
+  const x = Number(d)
+  if (!Number.isFinite(x) || x <= 0) return 0
+  const quartersScaled = Number((x * 4).toFixed(6))
+  const q = Math.max(1, Math.ceil(quartersScaled))
+  return q / 4
+}
+
 export function calcDurationFromTimes(startStr, endStr, holidayMap = null) {
   if (!startStr || !endStr) return 0
   try {
@@ -104,8 +116,10 @@ export function calcDurationFromTimes(startStr, endStr, holidayMap = null) {
     if (workMs <= 0) return 0
     const workHours = workMs / (1000 * 60 * 60)
     const days = workHours / 8
-    const rounded = Math.ceil(days * 4) / 4
-    return Math.max(0.25, Math.round(rounded * 100) / 100)
+    // 与后端 normalize_qj_tian_days 一致：按 0.25 天为最小粒度向上取整，禁止再按两位小数四舍五入（否则会出 1.12 天）
+    const quartersScaled = Number((days * 4).toFixed(6))
+    const q = Math.max(1, Math.ceil(quartersScaled))
+    return q / 4
   } catch {
     return 0
   }

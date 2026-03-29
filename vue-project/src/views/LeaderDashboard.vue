@@ -90,7 +90,7 @@
                 <h3>请假汇总</h3>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total">
+                <div class="dashboard-total clickable" @click="goLeave()" title="点击查看全部请假记录">
                   <span class="total-value">{{ leaveStats.totalDays ?? '-' }}</span>
                   <span class="total-unit">天</span>
                 </div>
@@ -98,7 +98,7 @@
                 <div v-if="leaveStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in leaveStats.list" :key="item.name" class="person-item">
+                    <li v-for="item in leaveStats.list" :key="item.name" class="person-item clickable" @click="goLeave(item.name)" :title="`点击查看 ${item.name} 的请假记录`">
                       <span class="person-name">{{ item.name }}</span>
                       <span class="person-value">{{ item.days }} 天</span>
                     </li>
@@ -120,7 +120,7 @@
                 </button>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total">
+                <div class="dashboard-total clickable" @click="goOvertime()" title="点击查看全部加班记录">
                   <span class="total-value">{{ overtimeStats.totalHours ?? '-' }}</span>
                   <span class="total-unit">小时</span>
                 </div>
@@ -129,7 +129,7 @@
                 <div v-if="overtimeStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in overtimeStats.list" :key="item.name" class="person-item">
+                    <li v-for="item in overtimeStats.list" :key="item.name" class="person-item clickable" @click="goOvertime(item.name)" :title="`点击查看 ${item.name} 的加班记录`">
                       <span class="person-name">{{ item.name }}</span>
                       <span class="person-value">{{ item.hours }} 小时</span>
                     </li>
@@ -147,7 +147,7 @@
                 <h3>公出汇总</h3>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total">
+                <div class="dashboard-total clickable" @click="goTrip()" title="点击查看全部公出记录">
                   <span class="total-value">{{ tripStats.totalDays ?? '-' }}</span>
                   <span class="total-unit">天</span>
                 </div>
@@ -155,7 +155,7 @@
                 <div v-if="tripStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in tripStats.list" :key="item.name" class="person-item">
+                    <li v-for="item in tripStats.list" :key="item.name" class="person-item clickable" @click="goTrip(item.name)" :title="`点击查看 ${item.name} 的公出记录`">
                       <span class="person-name">{{ item.name }}</span>
                       <span class="person-value">{{ item.days }} 天</span>
                     </li>
@@ -254,11 +254,11 @@
                 <span class="fa-meta">满勤 {{ fullAttendance.fullCount ?? 0 }} / {{ fullAttendance.totalPeople ?? 0 }} 人</span>
               </div>
             </div>
-            <div v-if="fullAttendance.byDept?.length" class="full-attendance-depts">
-              <div class="fa-dept-title">各科室满勤率（悬停或聚焦卡片查看满勤名单）</div>
+            <div v-if="byDeptSortedByRate.length" class="full-attendance-depts">
+              <div class="fa-dept-title">各科室满勤率（悬停或聚焦卡片查看满勤名单，按满勤率从高到低排列）</div>
               <div class="fa-dept-grid">
                 <div
-                  v-for="d in fullAttendance.byDept"
+                  v-for="d in byDeptSortedByRate"
                   :key="d.lsys"
                   class="fa-dept-card-wrap"
                   tabindex="0"
@@ -322,6 +322,7 @@
 
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
+import { useRouter } from 'vue-router'
 import {
   getStatisticsPermission,
   getDeptLsysList,
@@ -334,6 +335,7 @@ import {
   getLeaderDeptComparison,
 } from '@/api/attendance'
 
+const router = useRouter()
 const lsys = ref('')
 const permLevel = ref(1)
 /** 部长/副部长可选任意科室；组长/主任仅本科室，与 lsys 一致 */
@@ -503,17 +505,39 @@ const chartDeptOptions = computed(() => {
 })
 
 const leaveAllRecordsLink = computed(() => {
-  const q = { tab: 'leave', from: 'leader' }
+  const q = { tab: 'leave', from: 'leader', view: 'ledger' }
   if (filterYear.value) q.year = filterYear.value
   if (filterMonth.value) q.month = filterMonth.value
   return { path: '/attendance/manual', query: q }
 })
 const tripAllRecordsLink = computed(() => {
-  const q = { from: 'leader' }
+  const q = { from: 'leader', view: 'ledger' }
   if (filterYear.value) q.year = filterYear.value
   if (filterMonth.value) q.month = filterMonth.value
-  return { path: '/attendance/business-trip/all-records', query: q }
+  return { path: '/attendance/business-trip', query: q }
 })
+
+function goLeave(personName) {
+  const q = { tab: 'leave', from: 'leader', view: 'ledger' }
+  if (filterYear.value) q.year = filterYear.value
+  if (filterMonth.value && !personName) q.month = filterMonth.value
+  if (personName) q.focusName = personName
+  router.push({ path: '/attendance/manual', query: q })
+}
+function goOvertime(personName) {
+  const q = { tab: 'overtime', from: 'leader' }
+  if (filterYear.value) q.year = filterYear.value
+  if (filterMonth.value && !personName) q.month = filterMonth.value
+  if (personName) q.focusName = personName
+  router.push({ path: '/attendance/manual', query: q })
+}
+function goTrip(personName) {
+  const q = { from: 'leader', view: 'ledger' }
+  if (filterYear.value) q.year = filterYear.value
+  if (filterMonth.value && !personName) q.month = filterMonth.value
+  if (personName) q.focusName = personName
+  router.push({ path: '/attendance/business-trip', query: q })
+}
 
 /** 满勤柱状图只显示已过去的月份（当年只显示到当前月，未来年不显示） */
 const fullAttendanceByMonthFiltered = computed(() => {
@@ -548,6 +572,12 @@ function getFullCountBarHeightPx(value, max) {
 function deptFullNames(d) {
   return Array.isArray(d?.fullNames) ? d.fullNames : []
 }
+
+const byDeptSortedByRate = computed(() => {
+  const list = fullAttendance.value?.byDept
+  if (!list?.length) return []
+  return [...list].sort((a, b) => (b.rate || 0) - (a.rate || 0))
+})
 
 const fetchFullAttendanceChart = async () => {
   try {
@@ -886,6 +916,11 @@ onMounted(async () => {
 .person-name { color: var(--color-text-primary); }
 
 .person-value { color: var(--color-primary); font-weight: var(--font-weight-medium); }
+
+.clickable { cursor: pointer; transition: background 0.15s, box-shadow 0.15s; border-radius: var(--radius-sm, 4px); }
+.clickable:hover { background: var(--color-bg-hover, rgba(0,0,0,.04)); }
+.dashboard-total.clickable:hover { box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.person-item.clickable { padding-left: var(--spacing-xs); padding-right: var(--spacing-xs); margin: 0 calc(var(--spacing-xs, 4px) * -1); }
 
 .init-hint {
   padding: var(--spacing-xl);

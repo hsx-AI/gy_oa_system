@@ -198,13 +198,17 @@ def _row_to_record(row) -> dict:
     return rec
 
 
-def _business_trip_list_gcr_clause(viewer_name: str, scope: str):
+def _business_trip_list_gcr_clause(
+    viewer_name: str,
+    scope: str,
+    filter_lsys: Optional[str] = None,
+):
     """
-    公出 /list：scope=self 仅本人；scope=lsys 同属室（主任/副主任）；scope=all 全员（仅综合技术室主任/副主任）。
+    公出 /list：scope=self 仅本人；scope=lsys 同属室（主任/副主任）；
+    scope=all：部长/副部长/系统管理员为不限制；综合技术室主任/副主任为 yggl 全员子查询（与请假/台账规则一致）。
+    scope=all 且 filter_lsys 非空时，仅筛选该 yggl.lsys（须具备 canViewAll）。
     返回 (sql_fragment, params list, meta)。
     """
-    from routers.approvers import _jb_match
-
     scope = (scope or "self").strip().lower()
     if scope not in ("self", "lsys", "all"):
         raise HTTPException(status_code=400, detail="无效的 scope")
@@ -213,17 +217,38 @@ def _business_trip_list_gcr_clause(viewer_name: str, scope: str):
         raise HTTPException(status_code=400, detail="姓名不能为空")
     meta = {"canViewLsys": False, "canViewAll": False, "lsysLabel": ""}
     user = _get_user_info(viewer)
+    admin1 = (_get_admin1() or "").strip()
+    is_admin_user = bool(admin1 and viewer == admin1)
+    jb = ""
     if user:
         jb = (user.get("jb") or "").strip()
         lsys = (user.get("lsys") or "").strip()
         meta["lsysLabel"] = lsys
         meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
-        meta["canViewAll"] = is_zonghe_tech_director(user)
+    is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+    zonghe_dir = bool(user and is_zonghe_tech_director(user))
+    meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir
+
+    fl = (filter_lsys or "").strip()
+    if scope == "all" and fl:
+        if not meta["canViewAll"]:
+            raise HTTPException(status_code=403, detail="无权限按科室筛选公出记录")
+        clause = (
+            "g.gcr IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
+            "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
+        )
+        return clause, [fl], meta
+
     if scope == "self":
         return "g.gcr = %s", [viewer], meta
     if scope == "all":
         if not meta["canViewAll"]:
-            raise HTTPException(status_code=403, detail="仅综合技术室主任、副主任可查看全员公出记录")
+            raise HTTPException(
+                status_code=403,
+                detail="仅部长、副部长、综合技术室主任/副主任或系统管理员可查看全员公出记录",
+            )
+        if is_admin_user or is_minister:
+            return "1=1", [], meta
         clause = (
             "g.gcr IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
             "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
@@ -234,37 +259,51 @@ def _business_trip_list_gcr_clause(viewer_name: str, scope: str):
         return clause, [], meta
     if not meta["canViewLsys"]:
         raise HTTPException(status_code=403, detail="仅主任、副主任可查看本专业全员公出记录")
-    lsys = (user.get("lsys") or "").strip()
+    lsys_u = (user.get("lsys") or "").strip()
     clause = (
         "g.gcr IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
         "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
     )
-    return clause, [lsys], meta
+    return clause, [lsys_u], meta
 
 
 @router.get("/list")
 async def get_business_trip_list(
     name: str,
     year: Optional[int] = None,
+    month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按自然月过滤"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
-    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
+    scope: str = Query(
+        "self",
+        description="self=仅本人，lsys=同属室全员（主任/副主任），all=全员（部长/副部长/综合技术室主任/副主任/系统管理员）",
+    ),
+    filter_lsys: Optional[str] = Query(
+        None,
+        description="scope=all 时可选，按 yggl.lsys 仅看该科室",
+    ),
 ):
-    """获取公出记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all。all_years=true 时返回全部年份。"""
+    """获取公出记录列表。部长/副部长或综合技术室主任等可选 all，并可 filter_lsys 指定科室。"""
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
-        gcr_where, gcr_params, meta = _business_trip_list_gcr_clause(name, scope)
+        gcr_where, gcr_params, meta = _business_trip_list_gcr_clause(name, scope, filter_lsys)
         year_expr = "COALESCE(g.wpsj, g.gcsj, g.yjcfsj, g.yjfhsj)"
         order_by = f" ORDER BY {year_expr} DESC"
         if all_years:
             where_sql = f" WHERE ({gcr_where})"
             params: tuple = tuple(gcr_params)
         else:
-            where_sql = (
-                f" WHERE ({gcr_where}) AND ({year_expr} LIKE %s OR YEAR({year_expr}) = %s)"
-            )
-            params = tuple(gcr_params) + (f"{year}%", year)
+            if month is not None:
+                where_sql = (
+                    f" WHERE ({gcr_where}) AND YEAR({year_expr}) = %s AND MONTH({year_expr}) = %s"
+                )
+                params = tuple(gcr_params) + (year, month)
+            else:
+                where_sql = (
+                    f" WHERE ({gcr_where}) AND ({year_expr} LIKE %s OR YEAR({year_expr}) = %s)"
+                )
+                params = tuple(gcr_params) + (f"{year}%", year)
 
         try:
             query = (

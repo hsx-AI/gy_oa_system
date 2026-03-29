@@ -188,9 +188,11 @@
         </div>
       </section>
 
-      <!-- 公出节假日换休票审批 -->
-      <section v-show="activeTab === 'holiday-exchange'" class="approval-section card">
+      <!-- 换休票审批（公出节假日换休票 + 换休票管理） -->
+      <section v-show="activeTab === 'hxp'" class="approval-section card">
         <div class="card-body">
+          <!-- 公出节假日换休票 -->
+          <h4 class="sub-section-title" v-if="holidayExchangeList.length || hxpManageList.length">公出节假日换休票</h4>
           <div class="batch-actions" v-if="holidayExchangeList.length">
             <label class="checkbox-label">
               <input type="checkbox" :checked="holidayExchangeSelectedAll" @change="toggleHolidayExchangeSelectAll">
@@ -250,9 +252,86 @@
               </tbody>
             </table>
           </div>
-          <p class="empty-text" v-else>暂无待审批的公出节假日换休票申请</p>
+          <p class="empty-text" v-else-if="!hxpManageList.length">暂无待审批的换休票申请</p>
+
+          <!-- 换休票增减管理 -->
+          <h4 class="sub-section-title" v-if="hxpManageList.length" :class="{ 'mt-section': holidayExchangeList.length }">换休票增减管理</h4>
+          <div class="table-wrap" v-if="hxpManageList.length">
+            <table class="approval-table">
+              <thead>
+                <tr>
+                  <th>申请人</th>
+                  <th>操作类型</th>
+                  <th>数量</th>
+                  <th>原因</th>
+                  <th>涉及员工</th>
+                  <th>申请时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in hxpManageList" :key="item.id">
+                  <td>{{ item.applicant }}</td>
+                  <td>{{ item.action === 'add' ? '增加' : '减少' }}</td>
+                  <td>{{ item.amount }} 张</td>
+                  <td class="cell-hxp-ly" :title="item.ly">{{ item.ly }}</td>
+                  <td class="cell-hxp-names" :title="item.names.join('、')">{{ item.namesCount }}人：{{ item.names.slice(0, 3).join('、') }}{{ item.namesCount > 3 ? '…' : '' }}</td>
+                  <td>{{ item.applyTime }}</td>
+                  <td class="approval-actions">
+                    <button type="button" class="btn btn-link" @click="showHxpManageDetail(item)">查看</button>
+                    <button type="button" class="btn btn-approve" @click="handleHxpManageApprove(item)">通过</button>
+                    <button type="button" class="btn btn-reject" @click="openHxpManageReject(item)">驳回</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
         </div>
       </section>
+
+      <!-- 换休票管理详情弹窗 -->
+      <div v-if="hxpManageDetailVisible" class="modal-overlay" @click.self="hxpManageDetailVisible = false">
+        <div class="modal-content detail-modal">
+          <div class="modal-header">
+            <h3>换休票管理审批详情</h3>
+            <button type="button" class="close-btn" @click="hxpManageDetailVisible = false">&times;</button>
+          </div>
+          <div class="modal-body" v-if="hxpManageDetailData">
+            <p><strong>申请人：</strong>{{ hxpManageDetailData.applicant }}</p>
+            <p><strong>操作类型：</strong>{{ hxpManageDetailData.action === 'add' ? '增加换休票' : '减少换休票' }}</p>
+            <p><strong>数量：</strong>{{ hxpManageDetailData.amount }} 张</p>
+            <p><strong>原因：</strong>{{ hxpManageDetailData.ly }}</p>
+            <p><strong>申请时间：</strong>{{ hxpManageDetailData.applyTime }}</p>
+            <p><strong>涉及员工（{{ hxpManageDetailData.namesCount }}人）：</strong></p>
+            <div class="hxp-names-detail">
+              <span v-for="n in hxpManageDetailData.names" :key="n" class="hxp-name-tag">{{ n }}</span>
+            </div>
+          </div>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-approve" @click="handleHxpManageApprove(hxpManageDetailData); hxpManageDetailVisible = false">通过</button>
+            <button type="button" class="btn btn-reject" @click="hxpManageDetailVisible = false; openHxpManageReject(hxpManageDetailData)">驳回</button>
+            <button type="button" class="btn btn-secondary" @click="hxpManageDetailVisible = false">关闭</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- 换休票管理驳回弹窗 -->
+      <div v-if="hxpManageRejectVisible" class="modal-overlay" @click.self="hxpManageRejectVisible = false">
+        <div class="modal-card modal-reject">
+          <h3 class="modal-title">驳回原因</h3>
+          <p class="modal-hint">选填驳回原因，申请人将看到该原因。</p>
+          <textarea
+            v-model="hxpManageRejectReason"
+            class="modal-textarea"
+            placeholder="请输入驳回原因（选填）"
+            rows="4"
+          ></textarea>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="hxpManageRejectVisible = false">取消</button>
+            <button type="button" class="btn btn-reject" @click="confirmHxpManageReject">确认驳回</button>
+          </div>
+        </div>
+      </div>
 
       <!-- 详情弹窗 -->
       <div v-if="detailVisible" class="modal-overlay" @click.self="detailVisible = false">
@@ -414,6 +493,7 @@ import {
   holidayExchangeBatchApprove,
   getHolidayExchangeDownloadUrl
 } from '@/api/attendance'
+import { getPendingHxpApprovals, hxpApprovalAction } from '@/api/admin'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
 const route = useRoute()
@@ -427,7 +507,7 @@ const tabs = [
   { key: 'leave', label: '请假审批' },
   { key: 'overtime', label: '加班审批' },
   { key: 'business-trip', label: '公出审批' },
-  { key: 'holiday-exchange', label: '节假日换休票' }
+  { key: 'hxp', label: '换休票审批' }
 ]
 
 const activeTab = ref('leave')
@@ -449,6 +529,13 @@ const overtimeDetailAttendance = ref([])  // 加班详情：申请人当日的�
 const overtimeDetailAttendanceLoading = ref(false)
 const overtimeValidation = ref({})  // 加班智能校验结果 { [id]: { pass, reason? } }
 const overtimeValidateLoading = ref(false)
+
+const hxpManageList = ref([])
+const hxpManageDetailVisible = ref(false)
+const hxpManageDetailData = ref(null)
+const hxpManageRejectVisible = ref(false)
+const hxpManageRejectReason = ref('')
+const hxpManageRejectTarget = ref(null)
 
 const leaveSelectedAll = computed(() =>
   leaveList.value.length > 0 && selectedLeaveIds.value.length === leaveList.value.length
@@ -476,8 +563,11 @@ const materialFileDownloadUrl = computed(() => {
 
 onMounted(() => {
   const type = route.query.type
-  if (type === 'leave' || type === 'overtime' || type === 'business-trip' || type === 'holiday-exchange') {
+  if (type === 'leave' || type === 'overtime' || type === 'business-trip' || type === 'hxp') {
     activeTab.value = type
+  }
+  if (type === 'holiday-exchange' || type === 'hxp-manage') {
+    activeTab.value = 'hxp'
   }
   init()
 })
@@ -498,6 +588,7 @@ async function init() {
     fetchOvertimeList()
     fetchBusinessTripList()
     fetchHolidayExchangeList()
+    fetchHxpManageList()
   }
 }
 
@@ -537,6 +628,57 @@ async function fetchHolidayExchangeList() {
   }
 }
 
+async function fetchHxpManageList() {
+  try {
+    const res = await getPendingHxpApprovals({ approver: currentUser })
+    hxpManageList.value = res.data || []
+  } catch {
+    hxpManageList.value = []
+  }
+}
+
+function showHxpManageDetail(item) {
+  hxpManageDetailData.value = item
+  hxpManageDetailVisible.value = true
+}
+
+async function handleHxpManageApprove(item) {
+  if (!confirm(`确认通过该换休票${item.action === 'add' ? '增加' : '减少'}申请？（涉及 ${item.namesCount} 人，每人 ${item.amount} 张）`)) return
+  try {
+    const res = await hxpApprovalAction(item.id, { action: 'approve', approver: currentUser })
+    alert(res.message || '已通过')
+    hxpManageDetailVisible.value = false
+    fetchHxpManageList()
+  } catch (e) {
+    alert(e.response?.data?.detail || '操作失败')
+  }
+}
+
+function openHxpManageReject(item) {
+  hxpManageRejectTarget.value = item
+  hxpManageRejectReason.value = ''
+  hxpManageRejectVisible.value = true
+}
+
+async function confirmHxpManageReject() {
+  const item = hxpManageRejectTarget.value
+  if (!item) return
+  try {
+    await hxpApprovalAction(item.id, {
+      action: 'reject',
+      approver: currentUser,
+      reason: (hxpManageRejectReason.value || '').trim(),
+    })
+    hxpManageRejectVisible.value = false
+    hxpManageRejectTarget.value = null
+    hxpManageDetailVisible.value = false
+    fetchHxpManageList()
+    alert('已驳回')
+  } catch (e) {
+    alert(e.response?.data?.detail || '操作失败')
+  }
+}
+
 function getHolidayExchangeFileUrl(filename) {
   return getHolidayExchangeDownloadUrl(filename)
 }
@@ -545,7 +687,7 @@ function pendingCount(key) {
   if (key === 'leave') return leaveList.value.length
   if (key === 'overtime') return overtimeList.value.length
   if (key === 'business-trip') return businessTripList.value.length
-  if (key === 'holiday-exchange') return holidayExchangeList.value.length
+  if (key === 'hxp') return holidayExchangeList.value.length + hxpManageList.value.length
   return 0
 }
 
@@ -1212,6 +1354,40 @@ async function batchApprove(type) {
   text-decoration: none;
 }
 .detail-file-list a:hover { text-decoration: underline; }
+
+.sub-section-title {
+  font-size: var(--font-size-base);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  margin: 0 0 var(--spacing-md);
+  padding-bottom: var(--spacing-xs);
+  border-bottom: 2px solid var(--color-primary);
+  display: inline-block;
+}
+.mt-section {
+  margin-top: var(--spacing-xl);
+}
+
+.cell-hxp-ly, .cell-hxp-names {
+  max-width: 180px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.hxp-names-detail {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: var(--spacing-xs);
+}
+.hxp-name-tag {
+  display: inline-block;
+  padding: 2px 10px;
+  background: #eef2ff;
+  color: #4f46e5;
+  border-radius: 100px;
+  font-size: var(--font-size-sm);
+}
 
 .cell-rest-summary {
   max-width: 220px;

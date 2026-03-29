@@ -29,29 +29,27 @@
             <p class="record-card__desc">{{ recordFilterLabel }}</p>
           </div>
           <div class="record-card__filters">
-            <button
-              type="button"
-              class="btn btn-outline"
-              @click="$router.push('/attendance/business-trip/all-records')"
-            >
-              全部公出记录
-            </button>
-            <label class="filter-label">筛选：</label>
-            <select
-              v-if="tripListMeta.canViewLsys || tripListMeta.canViewAll"
-              v-model="recordScope"
-              class="filter-select filter-select--scope"
-            >
-              <option value="self">仅本人</option>
-              <option v-if="tripListMeta.canViewLsys" value="lsys">
-                本专业全员（{{ tripListMeta.lsysLabel || '隶属室' }}）
-              </option>
-              <option v-if="tripListMeta.canViewAll" value="all">全员</option>
+            <label class="filter-label">范围</label>
+            <select v-model="recordDataRange" class="filter-select filter-select--scope">
+              <option value="self">本人</option>
+              <option value="major">本专业</option>
+              <template v-if="tripListMeta.canViewAll">
+                <option value="all">全部科室</option>
+                <option v-for="d in deptLsysOptions" :key="'lsys-' + d" :value="'lsys:' + d">
+                  {{ d }}
+                </option>
+              </template>
             </select>
+            <label class="filter-label">年份</label>
             <select v-model.number="recordYear" class="filter-select">
               <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
-            <span class="filter-text">全年</span>
+            <label class="filter-label">月份</label>
+            <select v-model="recordMonthPermission" class="filter-select">
+              <option :value="null">全年</option>
+              <option v-for="m in 12" :key="'pm'+m" :value="m">{{ m }}月</option>
+            </select>
+            <label class="filter-label">状态</label>
             <select v-model="recordStatusFilter" class="filter-select">
               <option value="">全部</option>
               <option value="已通过">已通过</option>
@@ -107,7 +105,14 @@
                   <td>{{ r.status === '审批中' && r.currentApprover ? r.currentApprover : '—' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button v-if="r.status === '已驳回'" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedBusinessTrip(r)">删除</button>
+                    <button
+                      v-if="r.status === '已驳回' && isOwnTripRow(r)"
+                      type="button"
+                      class="btn btn-sm btn-danger"
+                      @click="deleteRejectedBusinessTrip(r)"
+                    >
+                      删除
+                    </button>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -358,7 +363,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getApprovers, submitBusinessTripApply, getBusinessTripList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
+import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusinessTripAllRecords, getDeptLsysList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
@@ -423,8 +428,12 @@ const recordYearOptions = computed(() => {
   return Array.from({ length: 6 }, (_, i) => y - i)  // 当前年及前5年
 })
 
-const recordScope = ref('self')
+/** self | major | all | lsys:科室名（领导选具体科室） */
+const recordDataRange = ref('self')
 const tripListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
+const deptLsysOptions = ref([])
+/** 月份筛选，null=全年 */
+const recordMonthPermission = ref(null)
 const recordKeyword = ref('')
 const recordSort = ref('assignTime_desc')
 const TRIP_LOCAL_SORT_FIELDS = [
@@ -473,30 +482,61 @@ const recordDisplayList = computed(() => {
   return list.slice(start, start + size)
 })
 
+function isOwnTripRow(r) {
+  return (r?.person || '').trim() === (form.name || '').trim()
+}
+
 const recordFilterLabel = computed(() => {
-  const statusText = recordStatusFilter.value === 'processing_rejected' ? '、审批中/已驳回' : recordStatusFilter.value ? `、${recordStatusFilter.value}` : ''
-  const who =
-    recordScope.value === 'lsys'
-      ? `本专业（${tripListMeta.value.lsysLabel || '隶属室'}）全员`
-      : recordScope.value === 'all'
-        ? '全员（审批范围内）'
-        : '本人'
-  return `展示 ${recordYear.value}年全年${who}的公出记录${statusText}`
+  const statusText = recordStatusFilter.value === 'processing_rejected' ? '，状态：审批中/已驳回' : recordStatusFilter.value ? `，状态：${recordStatusFilter.value}` : ''
+  const dr = recordDataRange.value
+  let who = '本人'
+  if (dr === 'major') {
+    who = tripListMeta.value.canViewLsys
+      ? `本专业（${tripListMeta.value.lsysLabel || '隶属室'}）`
+      : '本科室'
+  } else if (dr === 'all') {
+    who = '全部科室'
+  } else if (dr.startsWith('lsys:')) {
+    who = dr.slice(5) || '科室'
+  }
+  const rm = recordMonthPermission.value
+  const ym =
+    rm != null && rm >= 1 && rm <= 12
+      ? `${recordYear.value}年${rm}月`
+      : `${recordYear.value}年全年`
+  return `${ym}，${who}${statusText}`
 })
 
 // 每页条数或状态筛选变化时回到第一页
 watch(recordPageSize, () => { recordPage.value = 1 })
 watch(recordStatusFilter, () => { recordPage.value = 1 })
 watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
-watch(recordYear, () => { fetchBusinessTripList() })
-watch(recordScope, () => {
+const tripRecordsFetchKey = computed(() =>
+  [recordDataRange.value, recordYear.value, recordMonthPermission.value].join('|')
+)
+
+let tripRecordsMounted = false
+watch(tripRecordsFetchKey, () => {
+  if (!tripRecordsMounted) return
   recordPage.value = 1
-  fetchBusinessTripList()
+  fetchTripRecords()
 })
 
-// 返回登记候选记录：已通过且未做返回登记
+watch(
+  () => tripListMeta.value.canViewAll,
+  (can) => {
+    if (!can && (recordDataRange.value === 'all' || recordDataRange.value.startsWith('lsys:'))) {
+      recordDataRange.value = 'self'
+    }
+  }
+)
+
+// 返回登记候选：仅本人、已通过且未做返回登记（列表含他人时不应出现在此）
 const returnCandidates = computed(() =>
-  myRecordList.value.filter(r => r.status === '已通过' && !(Number(r.fhdjStatus) === 1))
+  myRecordList.value.filter(
+    (r) =>
+      isOwnTripRow(r) && r.status === '已通过' && !(Number(r.fhdjStatus) === 1)
+  )
 )
 
 const returnForm = reactive({
@@ -578,14 +618,69 @@ watch(showApplyModal, (visible) => {
   if (visible && tripScope.value === '市内公出') form.location = '市内'
 })
 
-const fetchBusinessTripList = async () => {
+async function refreshTripListMeta() {
+  try {
+    const res = await getBusinessTripList({
+      name: form.name,
+      year: recordYear.value,
+      scope: 'self'
+    })
+    if (res?.meta) {
+      tripListMeta.value = {
+        canViewLsys: !!res.meta.canViewLsys,
+        canViewAll: !!res.meta.canViewAll,
+        lsysLabel: (res.meta.lsysLabel || '').trim()
+      }
+      if (tripListMeta.value.canViewAll && deptLsysOptions.value.length === 0) {
+        const lr = await getDeptLsysList()
+        if (lr.success && lr.list?.length) deptLsysOptions.value = lr.list
+      }
+    }
+  } catch (_) {
+    /* 忽略，列表请求仍会带 meta */
+  }
+}
+
+const fetchTripRecords = async () => {
   loadingList.value = true
   try {
+    const dr = recordDataRange.value
+    const pm = recordMonthPermission.value
+
+    if (dr === 'major' && !tripListMeta.value.canViewLsys) {
+      const params = { name: form.name, year: recordYear.value }
+      if (pm != null && pm >= 1 && pm <= 12) params.month = pm
+      const res = await getBusinessTripAllRecords(params)
+      if (res.success && res.data) {
+        myRecordList.value = res.data.map((r) => ({
+          ...r,
+          actualReturnTime: r.actualReturnTime ? r.actualReturnTime.replace(' ', 'T').slice(0, 16) : ''
+        }))
+      } else {
+        myRecordList.value = []
+      }
+      return
+    }
+
     const params = {
       name: form.name,
       year: recordYear.value,
-      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
+      scope: 'self'
     }
+    if (pm != null && pm >= 1 && pm <= 12) params.month = pm
+
+    if (dr === 'self') {
+      params.scope = 'self'
+    } else if (dr === 'major') {
+      params.scope = 'lsys'
+    } else if (dr === 'all') {
+      params.scope = 'all'
+    } else if (dr.startsWith('lsys:')) {
+      params.scope = 'all'
+      const room = dr.slice(5).trim()
+      if (room) params.filter_lsys = room
+    }
+
     const res = await getBusinessTripList(params)
     if (res.success && res.data) {
       myRecordList.value = res.data.map((r) => ({
@@ -598,20 +693,32 @@ const fetchBusinessTripList = async () => {
           canViewAll: !!res.meta.canViewAll,
           lsysLabel: (res.meta.lsysLabel || '').trim()
         }
+        if (tripListMeta.value.canViewAll && deptLsysOptions.value.length === 0) {
+          const lr = await getDeptLsysList()
+          if (lr.success && lr.list?.length) deptLsysOptions.value = lr.list
+        }
       }
-      if (recordScope.value === 'lsys' && !tripListMeta.value.canViewLsys) {
-        recordScope.value = 'self'
+      if ((dr === 'all' || dr.startsWith('lsys:')) && !tripListMeta.value.canViewAll) {
+        recordDataRange.value = 'self'
       }
-      if (recordScope.value === 'all' && !tripListMeta.value.canViewAll) {
-        recordScope.value = 'self'
-      }
+    } else {
+      myRecordList.value = []
     }
   } catch (err) {
     console.error('获取公出记录失败:', err)
     const st = err?.response?.status
-    if (st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
-      recordScope.value = 'self'
-      await fetchBusinessTripList()
+    if (
+      st === 403 &&
+      recordDataRange.value !== 'self' &&
+      recordDataRange.value !== 'major'
+    ) {
+      recordDataRange.value = 'self'
+      await fetchTripRecords()
+      return
+    }
+    if (st === 403 && recordDataRange.value === 'major' && tripListMeta.value.canViewLsys) {
+      recordDataRange.value = 'self'
+      await fetchTripRecords()
       return
     }
     myRecordList.value = []
@@ -626,7 +733,7 @@ async function deleteRejectedBusinessTrip(r) {
   try {
     await deleteBusinessTripRecord(r.id, { name: form.name })
     alert('已删除')
-    fetchBusinessTripList()
+    fetchTripRecords()
   } catch (e) {
     alert(e.response?.data?.detail || e.message || '删除失败')
   }
@@ -642,13 +749,29 @@ onMounted(async () => {
       canApprove.value = false
     }
   }
-  // 从首页点击流程：以业务时间(委派年+状态)筛选，再按 focusId 定位到该条并滚动
+  await refreshTripListMeta()
+
   const q = route.query
-  if (q.focusId) {
+  if (q.view === 'ledger' || q.from === 'leader') {
+    if (tripListMeta.value.canViewAll) {
+      recordDataRange.value = 'all'
+    }
+    const qy = parseInt(q.year, 10)
+    if (qy > 2000) {
+      recordYear.value = qy
+      const qm = parseInt(q.month, 10)
+      recordMonthPermission.value = qm >= 1 && qm <= 12 ? qm : null
+    }
+    if (q.from === 'leader') {
+      recordStatusFilter.value = '已通过'
+      if (q.focusName) recordKeyword.value = q.focusName
+    }
+  } else if (q.focusId) {
     if (q.year) recordYear.value = Number(q.year)
     if (q.status === 'processing_rejected' || q.status === '已通过') recordStatusFilter.value = q.status
   }
-  await fetchBusinessTripList()
+  tripRecordsMounted = true
+  await fetchTripRecords()
   if (q.focusId) {
     const list = filteredRecordList.value
     const idx = list.findIndex(r => String(r.id) === String(q.focusId))
@@ -798,7 +921,7 @@ const submitApplication = async () => {
     if (res.success) {
       alert('登记已提交')
       showApplyModal.value = false
-      fetchBusinessTripList()
+      fetchTripRecords()
     } else {
       alert(res.message || '提交失败')
     }
@@ -841,7 +964,7 @@ const submitReturn = async () => {
     if (res.success) {
       alert('返回登记已提交')
       showReturnModal.value = false
-      fetchBusinessTripList()
+      fetchTripRecords()
     } else {
       alert(res.message || '返回登记提交失败')
     }
@@ -922,6 +1045,11 @@ watch(showApplyModal, async (visible) => {
 .record-card__filters .filter-text {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+.record-card__filters .filter-select--scope {
+  min-width: 10rem;
+  max-width: 20rem;
 }
 
 .record-card__filters .filter-select {

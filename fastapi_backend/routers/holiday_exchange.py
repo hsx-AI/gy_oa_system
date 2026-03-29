@@ -333,7 +333,7 @@ def _calc_days(date_from: str, date_to: str) -> int:
         return 0
 
 
-def _add_exchange_tickets(name: str, tickets: float):
+def _add_exchange_tickets(name: str, tickets: float, ly: str = "公出节假日换休"):
     """向 hxp 表增加换休票"""
     if not name or tickets <= 0:
         return
@@ -342,16 +342,17 @@ def _add_exchange_tickets(name: str, tickets: float):
         if tickets <= 0:
             return
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        ly_val = (ly or "").strip()
         try:
             hxp_id = uuid.uuid4().hex
             db.execute_update(
-                "INSERT INTO hxp (id, name, sl, sj) VALUES (%s, %s, %s, %s)",
-                (hxp_id, name.strip(), tickets, now),
+                "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
+                (hxp_id, name.strip(), tickets, now, ly_val),
             )
         except Exception:
             db.execute_update(
-                "INSERT INTO hxp (name, sl, sj) VALUES (%s, %s, %s)",
-                (name.strip(), tickets, now),
+                "INSERT INTO hxp (name, sl, sj, ly) VALUES (%s, %s, %s, %s)",
+                (name.strip(), tickets, now, ly_val),
             )
     except Exception as e:
         logger.warning("公出节假日换休票入账失败: %s", e)
@@ -467,6 +468,8 @@ async def get_holiday_exchange_list(
     month: Optional[int] = None,
     status: Optional[str] = Query("all"),
     scope: str = Query("self"),
+    filter_lsys: Optional[str] = Query(None, description="按科室筛选（scope=all时生效）"),
+    filter_name: Optional[str] = Query(None, description="按姓名关键字筛选"),
 ):
     """获取公出节假日换休票记录列表"""
     try:
@@ -476,6 +479,10 @@ async def get_holiday_exchange_list(
         if scope == "self":
             conds.append("xm = %s")
             params.append(name.strip())
+        elif scope == "all":
+            if filter_lsys:
+                conds.append("lsys = %s")
+                params.append(filter_lsys.strip())
         elif scope == "lsys":
             rows = db.execute_query(
                 "SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (name.strip(),)
@@ -487,6 +494,10 @@ async def get_holiday_exchange_list(
             else:
                 conds.append("xm = %s")
                 params.append(name.strip())
+
+        if filter_name and filter_name.strip():
+            conds.append("xm LIKE %s")
+            params.append(f"%{filter_name.strip()}%")
 
         if year:
             conds.append("YEAR(apply_time) = %s")

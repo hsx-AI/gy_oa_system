@@ -200,8 +200,8 @@ export function submitBusinessTripApply(data) {
 }
 
 /**
- * 获取本人公出记录列表
- * @param {Object} params - { name, year?, month? }
+ * 获取公出记录列表
+ * @param {Object} params - { name, year?, month?, scope?: 'self'|'lsys'|'all', filter_lsys?: string }
  */
 export function getBusinessTripList(params) {
   return request({
@@ -599,6 +599,18 @@ export function holidayExchangeApproveAction(id, data) {
 /** 公出节假日换休票批量审批 */
 export function holidayExchangeBatchApprove(data) {
   return request({ url: '/approval/holiday-exchange/batch', method: 'post', data })
+}
+
+// ==================== 换休票未读通知 API ====================
+
+/** 获取指定员工的未读换休票记录 */
+export function getUnreadHxp(params) {
+  return request({ url: '/approval/hxp/unread', method: 'get', params })
+}
+
+/** 将换休票记录标记为已读 */
+export function markHxpRead(data) {
+  return request({ url: '/approval/hxp/mark-read', method: 'post', data })
 }
 
 // ==================== 加班/请假统计 API ====================

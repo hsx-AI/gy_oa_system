@@ -11,7 +11,10 @@ import {
   getPendingHolidayExchange,
   getBusinessTripList,
   getUploadConfig,
+  getUnreadHxp,
+  markHxpRead,
 } from '@/api/attendance'
+import { getPendingHxpApprovals } from '@/api/admin'
 import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
 
 function readUserName() {
@@ -43,6 +46,8 @@ const tripReturnLoading = ref(false)
 const sixianghuibaoTodoTotal = ref(0)
 /** 人事档案系统 GET pending-count 返回的 data.needAuditCount（仅展示此项，不展示 myPendingCount） */
 const personnelNeedAudit = ref(0)
+const hxpUnreadList = ref([])
+const hxpApprovalPendingList = ref([])
 const todoRealTotal = ref(0)
 
 const displayTodoList = computed(() => {
@@ -77,6 +82,28 @@ const displayTodoList = computed(() => {
       isPersonnel: true,
     })
   }
+  for (const hxp of hxpUnreadList.value) {
+    list.push({
+      uniqueId: `hxp-${hxp.id}`,
+      type: '换休票入账',
+      description: `您获得 ${hxp.sl} 张换休票（来源：${hxp.ly}）`,
+      applicant: '本人',
+      time: formatRelativeTime(hxp.sj),
+      isHxpNotice: true,
+      hxpId: hxp.id,
+    })
+  }
+  for (const item of hxpApprovalPendingList.value) {
+    list.push({
+      uniqueId: `hxp-approval-${item.id}`,
+      tabType: 'hxp',
+      type: '换休票管理审批',
+      description: `${item.applicant}申请为${item.namesCount}人${item.action === 'add' ? '增加' : '减少'}${item.amount}张换休票`,
+      applicant: item.applicant,
+      time: formatRelativeTime(item.applyTime),
+      isHxpApproval: true,
+    })
+  }
   return list
 })
 
@@ -85,6 +112,8 @@ const totalBadgeCount = computed(() => {
   if (tripReturnPendingCount.value > 0) count += 1
   if (sixianghuibaoTodoTotal.value > 0) count += 1
   count += Math.max(0, Number(personnelNeedAudit.value) || 0)
+  count += hxpUnreadList.value.length
+  count += hxpApprovalPendingList.value.length
   return count
 })
 
@@ -153,7 +182,7 @@ async function fetchTodoList() {
     heList.forEach((r) => {
       items.push({
         uniqueId: `he-${r.id}`,
-        tabType: 'holiday-exchange',
+        tabType: 'hxp',
         type: '节假日换休票',
         description: `${r.applicant}的公出节假日换休票（${r.dateFrom || ''}至${r.dateTo || ''}，${r.days ?? ''}天）`,
         applicant: r.applicant,
@@ -194,6 +223,34 @@ async function fetchPersonnelPending() {
   }
 }
 
+async function fetchUnreadHxp() {
+  const name = readUserName()
+  if (!name) {
+    hxpUnreadList.value = []
+    return
+  }
+  try {
+    const res = await getUnreadHxp({ name })
+    hxpUnreadList.value = res?.data || []
+  } catch {
+    hxpUnreadList.value = []
+  }
+}
+
+async function fetchHxpApprovalPending() {
+  const name = readUserName()
+  if (!name) {
+    hxpApprovalPendingList.value = []
+    return
+  }
+  try {
+    const res = await getPendingHxpApprovals({ approver: name })
+    hxpApprovalPendingList.value = res?.data || []
+  } catch {
+    hxpApprovalPendingList.value = []
+  }
+}
+
 async function fetchTripReturnPending() {
   const userName = readUserName()
   if (!userName) {
@@ -220,6 +277,8 @@ export async function refreshWorkplaceTodos() {
     fetchTripReturnPending(),
     fetchSixianghuibaoTodos(),
     fetchPersonnelPending(),
+    fetchUnreadHxp(),
+    fetchHxpApprovalPending(),
   ])
 }
 
@@ -257,7 +316,25 @@ export function useWorkplaceTodos() {
     }
   }
 
+  async function handleHxpRead(task) {
+    if (!task.hxpId) return
+    try {
+      await markHxpRead({ ids: [task.hxpId] })
+      hxpUnreadList.value = hxpUnreadList.value.filter((h) => h.id !== task.hxpId)
+    } catch {
+      // 静默失败
+    }
+  }
+
   function handleTodoAction(task) {
+    if (task.isHxpNotice) {
+      handleHxpRead(task)
+      return
+    }
+    if (task.isHxpApproval) {
+      router.push({ path: '/attendance/approvals', query: { type: 'hxp' } })
+      return
+    }
     if (task.isPersonnel) {
       goPersonnelArchiveLazy()
       return

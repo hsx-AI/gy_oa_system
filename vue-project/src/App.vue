@@ -232,7 +232,7 @@
                         <div class="todo-popover-item__bottom">
                           <span class="todo-popover-item__meta">{{ task.applicant }}{{ task.time ? ' · ' + task.time : '' }}</span>
                           <button type="button" class="todo-popover-item__btn" @click="onHeaderTodoAction(task)">
-                            {{ task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')) }}
+                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')))) }}
                           </button>
                         </div>
                       </li>
@@ -422,7 +422,9 @@ const canManageHxp = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   const a1 = (admin1.value || '').trim()
   const a2 = (admin2.value || '').trim()
-  return (a1 && name === a1) || (a2 && name === a2)
+  if ((a1 && name === a1) || (a2 && name === a2)) return true
+  const jb = (currentUser.value?.jb || '').trim()
+  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
 })
 
 // 是否显示领导人看板（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）

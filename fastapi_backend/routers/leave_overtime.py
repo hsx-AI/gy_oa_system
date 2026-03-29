@@ -14,7 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from database import db
 from config import settings
-from utils.helpers import format_datetime_plain, normalize_datetime_for_db
+from utils.helpers import format_datetime_plain, normalize_datetime_for_db, normalize_qj_tian_days
 import logging
 import math
 import uuid
@@ -90,10 +90,11 @@ async def apply_leave(
         if need_2j_val and not (approver2 or "").strip():
             raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
 
-        dur = float(duration) if duration else 0
+        raw_dur = float(duration) if duration else 0
+        dur = normalize_qj_tian_days(raw_dur)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         xiaoshi = str(round(dur * 8, 2))
-        # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5
+        # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5（基于已规范化的 dur）
         hxpxh = round(round(dur * 4) / 2, 2) if type in ("员工换休票", "换休") and dur > 0 else 0
         need_2j = 1 if need_2j_val and approver2 else 0
 
@@ -185,9 +186,10 @@ async def apply_leave_json(req: LeaveApplyRequest):
         if req.needSecondApproval and not (req.approver2 or "").strip():
             raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        xiaoshi = str(round(req.duration * 8, 2))
-        # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5
-        hxpxh = round(round(req.duration * 4) / 2, 2) if req.type in ("员工换休票", "换休") and req.duration and req.duration > 0 else 0
+        dur = normalize_qj_tian_days(req.duration)
+        xiaoshi = str(round(dur * 8, 2))
+        # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5（基于已规范化的 dur）
+        hxpxh = round(round(dur * 4) / 2, 2) if req.type in ("员工换休票", "换休") and dur > 0 else 0
         need_2j = 1 if req.needSecondApproval and req.approver2 else 0
         rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s AND (COALESCE(zaizhi,0)=0) LIMIT 1", (req.name,))
         lsys = (rows[0]["lsys"] or "").strip() if rows else ""
@@ -207,7 +209,7 @@ async def apply_leave_json(req: LeaveApplyRequest):
             req.department or "", req.name or "", req.type or "事假", req.shift or "白班",
             req.contactMethod or "电话", req.reason or "", smcl_text,
             start_time_norm, end_time_norm, start_time_norm[:10] if start_time_norm else "",
-            str(req.duration), xiaoshi, now, req.approver1 or "", need_2j, spr2_val,
+            str(dur), xiaoshi, now, req.approver1 or "", need_2j, spr2_val,
             req.reason or "", lsys, hxpxh, 0
         )
         last_id = db.execute_insert(sql, params)

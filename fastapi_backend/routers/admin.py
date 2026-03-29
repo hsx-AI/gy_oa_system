@@ -11,9 +11,11 @@ from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from database import db
 from routers.db_manager import _get_admin1
+from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, date
 import uuid
+import json
 import logging
 
 try:
@@ -40,6 +42,29 @@ def _get_admin2() -> Optional[str]:
     except Exception as e:
         logger.debug(f"读取 webconfig.admin2 失败: {e}")
     return None
+
+
+def _jb_is_minister_or_deputy(jb: str) -> bool:
+    """yggl.jb 是否为部长/副部长（含 部长1 等变体）。"""
+    j = (jb or "").strip()
+    return j == "部长" or j.startswith("部长") or j == "副部长" or j.startswith("副部长")
+
+
+def _can_manage_hxp_batch(name: str) -> bool:
+    """换休票批量管理页：系统管理员 admin1、人事管理员 admin2、或 yggl 部长/副部长。"""
+    ns = (name or "").strip()
+    if not ns:
+        return False
+    a1 = _get_admin1()
+    if a1 and ns == a1:
+        return True
+    a2 = _get_admin2()
+    if a2 and ns == a2:
+        return True
+    rows = db.execute_query("SELECT jb FROM yggl WHERE name = %s LIMIT 1", (ns,))
+    if not rows:
+        return False
+    return _jb_is_minister_or_deputy(rows[0].get("jb") or "")
 
 
 def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
@@ -387,17 +412,15 @@ class HxpBatchRequest(BaseModel):
 @router.post("/hxp/batch")
 async def hxp_batch(req: HxpBatchRequest):
     """
-    批量增减换休票。仅 admin1 / admin2 可操作。
+    批量增减换休票。系统管理员、人事管理员或 yggl 部长/副部长可操作。
     add：为每人新增一条 hxp 记录，sj=当前时间。
     subtract：按过期日期从早到晚扣减，不足则跳过。
     """
     name = (req.current_user or "").strip()
     if not name:
         raise HTTPException(status_code=403, detail="未登录")
-    a1 = _get_admin1()
-    a2 = _get_admin2()
-    if not ((a1 and name == a1) or (a2 and name == a2)):
-        raise HTTPException(status_code=403, detail="仅系统管理员或人事管理员可执行此操作")
+    if not _can_manage_hxp_batch(name):
+        raise HTTPException(status_code=403, detail="仅系统管理员、人事管理员或部长/副部长可执行此操作")
 
     names = [n.strip() for n in req.names if n.strip()]
     if not names:
@@ -483,3 +506,514 @@ async def hxp_batch(req: HxpBatchRequest):
         "message": f"处理完成：成功 {ok_count}，失败 {fail_count}",
         "results": results,
     }
+
+
+# ==================== 换休票统计 ====================
+
+
+@router.get("/hxp/summary")
+async def hxp_summary(
+    current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
+    keyword: Optional[str] = Query(None, description="姓名关键字"),
+    lsys: Optional[str] = Query(None, description="隶属室筛选"),
+):
+    """全员换休票余额汇总（系统管理员、人事管理员或部长/副部长）"""
+    cu = (current_user or "").strip()
+    if not cu or not _can_manage_hxp_batch(cu):
+        raise HTTPException(status_code=403, detail="无权查看换休票统计")
+    today_str = date.today().strftime("%Y-%m-%d")
+
+    emp_rows = db.execute_query(
+        "SELECT name, lsys FROM yggl WHERE COALESCE(zaizhi,0) = 0 ORDER BY lsys, name"
+    )
+    if not emp_rows:
+        return {"success": True, "data": [], "lsys_list": []}
+
+    hxp_rows = db.execute_query("SELECT name, sl, sj FROM hxp WHERE sl > 0") or []
+
+    hxp_by_name: Dict[str, float] = {}
+    for r in hxp_rows:
+        n = (r.get("name") or "").strip()
+        try:
+            sl = float(r.get("sl") or 0)
+        except (TypeError, ValueError):
+            sl = 0.0
+        if sl <= 0:
+            continue
+        exp = compute_expire_date(r.get("sj"))
+        if exp and exp < today_str:
+            continue
+        hxp_by_name[n] = hxp_by_name.get(n, 0.0) + sl
+
+    lsys_set = set()
+    data = []
+    for emp in emp_rows:
+        name = (emp.get("name") or "").strip()
+        emp_lsys = (emp.get("lsys") or "").strip()
+        if not name:
+            continue
+        if emp_lsys:
+            lsys_set.add(emp_lsys)
+        if keyword and keyword.strip() not in name:
+            continue
+        if lsys and lsys.strip() and emp_lsys != lsys.strip():
+            continue
+        total = round(hxp_by_name.get(name, 0.0), 2)
+        data.append({"name": name, "lsys": emp_lsys, "total": total})
+
+    data.sort(key=lambda x: (-x["total"], x["name"]))
+    return {"success": True, "data": data, "lsys_list": sorted(lsys_set)}
+
+
+@router.get("/hxp/detail")
+async def hxp_detail(
+    current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
+    name: str = Query(..., description="员工姓名"),
+):
+    """查询指定员工的全部换休票获取记录（系统管理员、人事管理员或部长/副部长）"""
+    cu = (current_user or "").strip()
+    if not cu or not _can_manage_hxp_batch(cu):
+        raise HTTPException(status_code=403, detail="无权查看换休票明细")
+    rows = db.execute_query(
+        "SELECT id, name, sl, sj, ly FROM hxp WHERE name = %s ORDER BY sj DESC",
+        (name.strip(),),
+    )
+    today_str = date.today().strftime("%Y-%m-%d")
+    items = []
+    for r in (rows or []):
+        try:
+            sl = float(r.get("sl") or 0)
+        except (TypeError, ValueError):
+            sl = 0.0
+        sj_raw = r.get("sj")
+        if hasattr(sj_raw, "strftime"):
+            sj_str = sj_raw.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            sj_str = str(sj_raw or "")
+        exp = compute_expire_date(r.get("sj"))
+        expired = bool(exp and exp < today_str)
+        items.append({
+            "id": r.get("id") or "",
+            "sl": round(sl, 2),
+            "sj": sj_str,
+            "ly": (r.get("ly") or "").strip() or "-",
+            "expire": exp,
+            "expired": expired,
+        })
+    return {"success": True, "name": name.strip(), "data": items}
+
+
+# ==================== 换休票审批流程 ====================
+
+
+def _ensure_hxp_approval_table():
+    """启动时确保 hxp_approval 表存在。"""
+    try:
+        db.execute_update("""
+            CREATE TABLE IF NOT EXISTS hxp_approval (
+                id VARCHAR(36) PRIMARY KEY,
+                applicant VARCHAR(50) NOT NULL,
+                action VARCHAR(10) NOT NULL,
+                amount DECIMAL(10,3) NOT NULL,
+                ly VARCHAR(500) NOT NULL DEFAULT '',
+                names_json TEXT NOT NULL,
+                approver VARCHAR(50) NOT NULL,
+                status TINYINT NOT NULL DEFAULT 0,
+                reject_reason VARCHAR(500) DEFAULT '',
+                apply_time DATETIME,
+                approve_time DATETIME
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """, ())
+        logger.info("hxp_approval 表已就绪")
+    except Exception as e:
+        logger.warning(f"hxp_approval 表创建/检查失败（可能已存在）: {e}")
+
+
+_ensure_hxp_approval_table()
+
+
+class HxpApplyRequest(BaseModel):
+    current_user: str
+    names: List[str]
+    amount: float
+    action: str       # "add" | "subtract"
+    ly: str           # 原因（必填）
+    approver: str     # 审批人姓名
+
+
+@router.post("/hxp/apply")
+async def hxp_apply(req: HxpApplyRequest):
+    """提交换休票增减审批申请。系统管理员、人事管理员或 yggl 部长/副部长可操作。"""
+    name = (req.current_user or "").strip()
+    if not name:
+        raise HTTPException(status_code=403, detail="未登录")
+    if not _can_manage_hxp_batch(name):
+        raise HTTPException(status_code=403, detail="仅系统管理员、人事管理员或部长/副部长可提交")
+
+    names = [n.strip() for n in req.names if n.strip()]
+    if not names:
+        raise HTTPException(status_code=400, detail="姓名列表不能为空")
+    amount = round(req.amount, 3)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="数量必须大于 0")
+    if req.action not in ("add", "subtract"):
+        raise HTTPException(status_code=400, detail="action 必须为 add 或 subtract")
+    ly = (req.ly or "").strip()
+    if not ly:
+        raise HTTPException(status_code=400, detail="原因不能为空")
+    approver = (req.approver or "").strip()
+    if not approver:
+        raise HTTPException(status_code=400, detail="审批人不能为空")
+
+    urows = db.execute_query("SELECT jb FROM yggl WHERE name = %s LIMIT 1", (name,))
+    if urows and _jb_is_minister_or_deputy(urows[0].get("jb") or ""):
+        if approver == name:
+            raise HTTPException(status_code=400, detail="部长/副部长不能选择自己作为审批人")
+
+    rid = uuid.uuid4().hex
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.execute_update(
+        "INSERT INTO hxp_approval (id, applicant, action, amount, ly, names_json, approver, status, apply_time) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, 0, %s)",
+        (rid, name, req.action, amount, ly, json.dumps(names, ensure_ascii=False), approver, now_str),
+    )
+    return {
+        "success": True,
+        "message": f"已提交审批，等待 {approver} 审批",
+        "id": rid,
+    }
+
+
+@router.get("/hxp/pending-approvals")
+async def hxp_pending_approvals(approver: str = Query(..., description="审批人姓名")):
+    """查询待审批的换休票申请（status=0 且 approver 匹配）。"""
+    rows = db.execute_query(
+        "SELECT id, applicant, action, amount, ly, names_json, approver, status, apply_time "
+        "FROM hxp_approval WHERE approver = %s AND status = 0 ORDER BY apply_time DESC",
+        (approver.strip(),),
+    )
+    data = []
+    for r in (rows or []):
+        try:
+            names_list = json.loads(r.get("names_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            names_list = []
+        at = r.get("apply_time")
+        if hasattr(at, "strftime"):
+            at = at.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            at = str(at or "")
+        data.append({
+            "id": r["id"],
+            "applicant": r.get("applicant") or "",
+            "action": r.get("action") or "",
+            "amount": float(r.get("amount") or 0),
+            "ly": r.get("ly") or "",
+            "names": names_list,
+            "namesCount": len(names_list),
+            "approver": r.get("approver") or "",
+            "applyTime": at,
+        })
+    return {"success": True, "data": data}
+
+
+class HxpApprovalActionRequest(BaseModel):
+    action: str       # "approve" | "reject"
+    approver: str
+    reason: str = ""
+
+
+@router.post("/hxp/approval/{approval_id}/action")
+async def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
+    """审批换休票申请：通过 / 驳回。"""
+    approver = (req.approver or "").strip()
+    if not approver:
+        raise HTTPException(status_code=400, detail="审批人不能为空")
+
+    rows = db.execute_query(
+        "SELECT id, applicant, action, amount, ly, names_json, approver, status "
+        "FROM hxp_approval WHERE id = %s LIMIT 1",
+        (approval_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="审批单不存在")
+    record = rows[0]
+    if record.get("status") != 0:
+        raise HTTPException(status_code=400, detail="该审批单已处理")
+    if (record.get("approver") or "").strip() != approver:
+        raise HTTPException(status_code=403, detail="您不是该申请的审批人")
+
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if req.action == "reject":
+        db.execute_update(
+            "UPDATE hxp_approval SET status = 22, reject_reason = %s, approve_time = %s WHERE id = %s",
+            ((req.reason or "").strip(), now_str, approval_id),
+        )
+        return {"success": True, "message": "已驳回"}
+
+    if req.action != "approve":
+        raise HTTPException(status_code=400, detail="action 必须为 approve 或 reject")
+
+    # 执行实际换休票增减
+    try:
+        names_list = json.loads(record.get("names_json") or "[]")
+    except (json.JSONDecodeError, TypeError):
+        names_list = []
+    amount = float(record.get("amount") or 0)
+    act = (record.get("action") or "").strip()
+    ly = (record.get("ly") or "").strip() or "管理员操作"
+    applicant = (record.get("applicant") or "").strip()
+    today = date.today().strftime("%Y-%m-%d")
+
+    results = []
+    for emp_name in names_list:
+        emp_rows = db.execute_query(
+            "SELECT name FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (emp_name,),
+        )
+        if not emp_rows:
+            results.append({"name": emp_name, "ok": False, "msg": "未找到在职员工"})
+            continue
+
+        if act == "add":
+            hxp_id = uuid.uuid4().hex
+            try:
+                db.execute_update(
+                    "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
+                    (hxp_id, emp_name, amount, now_str, ly),
+                )
+                results.append({"name": emp_name, "ok": True, "msg": f"+{amount}"})
+            except Exception as e:
+                results.append({"name": emp_name, "ok": False, "msg": str(e)})
+
+        elif act == "subtract":
+            try:
+                hxp_rows = db.execute_query(
+                    "SELECT id, sl, sj FROM hxp WHERE name = %s AND sl > 0 ORDER BY id",
+                    (emp_name,),
+                )
+                rows_with_exp = []
+                for r in hxp_rows:
+                    exp = compute_expire_date(r.get("sj"))
+                    if exp and exp < today:
+                        continue
+                    rows_with_exp.append((r, parse_expire_for_sort(exp) if exp else (9999, 12)))
+                rows_with_exp.sort(key=lambda x: x[1])
+
+                avail = sum(float(r.get("sl") or 0) for r, _ in rows_with_exp)
+                if avail < amount:
+                    results.append({"name": emp_name, "ok": False, "msg": f"余额不足（可用 {avail}）"})
+                    continue
+
+                remain = amount
+                for row, _ in rows_with_exp:
+                    if remain <= 0:
+                        break
+                    rid = row["id"]
+                    sl = float(row.get("sl") or 0)
+                    if sl <= 0:
+                        continue
+                    if remain >= sl:
+                        db.execute_update("DELETE FROM hxp WHERE id = %s", (rid,))
+                        remain = round(remain - sl, 3)
+                    else:
+                        db.execute_update(
+                            "UPDATE hxp SET sl = ROUND(sl - %s, 3) WHERE id = %s",
+                            (round(remain, 3), rid),
+                        )
+                        remain = 0
+                results.append({"name": emp_name, "ok": True, "msg": f"-{amount}"})
+            except Exception as e:
+                results.append({"name": emp_name, "ok": False, "msg": str(e)})
+
+    db.execute_update(
+        "UPDATE hxp_approval SET status = 2, approve_time = %s WHERE id = %s",
+        (now_str, approval_id),
+    )
+
+    ok_count = sum(1 for r in results if r["ok"])
+    fail_count = len(results) - ok_count
+    return {
+        "success": True,
+        "message": f"已通过并执行：成功 {ok_count}，失败 {fail_count}",
+        "results": results,
+    }
+
+
+@router.get("/hxp/my-requests")
+async def hxp_my_requests(applicant: str = Query(..., description="申请人姓名")):
+    """查询自己提交的换休票审批申请。"""
+    rows = db.execute_query(
+        "SELECT id, applicant, action, amount, ly, names_json, approver, status, reject_reason, apply_time, approve_time "
+        "FROM hxp_approval WHERE applicant = %s ORDER BY apply_time DESC LIMIT 50",
+        (applicant.strip(),),
+    )
+    data = []
+    for r in (rows or []):
+        try:
+            names_list = json.loads(r.get("names_json") or "[]")
+        except (json.JSONDecodeError, TypeError):
+            names_list = []
+        at = r.get("apply_time")
+        if hasattr(at, "strftime"):
+            at = at.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            at = str(at or "")
+        apt = r.get("approve_time")
+        if hasattr(apt, "strftime"):
+            apt = apt.strftime("%Y-%m-%d %H:%M:%S")
+        else:
+            apt = str(apt or "")
+        status_val = int(r.get("status") or 0)
+        status_text = "待审批" if status_val == 0 else ("已通过" if status_val == 2 else "已驳回")
+        data.append({
+            "id": r["id"],
+            "action": r.get("action") or "",
+            "amount": float(r.get("amount") or 0),
+            "ly": r.get("ly") or "",
+            "names": names_list,
+            "namesCount": len(names_list),
+            "approver": r.get("approver") or "",
+            "status": status_val,
+            "statusText": status_text,
+            "rejectReason": (r.get("reject_reason") or "").strip(),
+            "applyTime": at,
+            "approveTime": apt,
+        })
+    return {"success": True, "data": data}
+
+
+# ==================== 部长信息简报（首页滚动信息） ====================
+
+
+@router.get("/leader-briefing")
+async def get_leader_briefing(
+    name: str = Query(..., description="当前用户姓名"),
+    days: int = Query(7, ge=1, le=30, description="最近 N 天"),
+):
+    """
+    部长首页「重要信息审阅」：最近 N 天内审批通过的换休票获取 + 公出记录。
+    仅部长可调用。
+    """
+    from routers.approvers import _get_user_info, _jb_match
+
+    user = _get_user_info(name)
+    if not user:
+        raise HTTPException(status_code=403, detail="用户不存在")
+    jb = (user.get("jb") or "").strip()
+    admin1 = (_get_admin1() or "").strip()
+    is_admin = bool(admin1 and (name or "").strip() == admin1)
+    if not (is_admin or _jb_match(jb, "部长")):
+        raise HTTPException(status_code=403, detail="仅部长可查看")
+
+    items = []
+
+    try:
+        hxp_rows = db.execute_query(
+            """SELECT h.xm, h.days, h.hxp_count, h.date_from, h.date_to,
+                      h.spr, h.spr2, h.apply_time
+               FROM holiday_exchange h
+               WHERE h.status = 4
+                 AND h.apply_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+               ORDER BY h.apply_time DESC""",
+            (days,),
+        )
+        for r in hxp_rows:
+            xm = (r.get("xm") or "").strip()
+            cnt = r.get("hxp_count") or r.get("days") or 0
+            cnt_f = float(cnt)
+            cnt_display = int(cnt_f) if cnt_f == int(cnt_f) else f"{cnt_f:g}"
+            spr = (r.get("spr") or "").strip()
+            spr2 = (r.get("spr2") or "").strip()
+            approvers = "、".join(filter(None, [spr, spr2]))
+            d_from = str(r.get("date_from") or "")[:10]
+            d_to = str(r.get("date_to") or "")[:10]
+            date_range = d_from if d_from == d_to else f"{d_from}~{d_to}"
+            at = str(r.get("apply_time") or "")[:10]
+            at_year = at[:4] if len(at) >= 4 else ""
+            items.append({
+                "type": "hxp",
+                "time": at,
+                "name": xm,
+                "year": at_year,
+                "text": f"{at}，{xm}，值班获得换休票{cnt_display}张（{date_range}，{approvers}审批）",
+            })
+    except Exception as e:
+        logger.warning(f"leader-briefing 查换休票失败: {e}")
+
+    try:
+        batch_rows = db.execute_query(
+            """SELECT a.applicant, a.action, a.amount, a.ly, a.names_json,
+                      a.approver, a.approve_time
+               FROM hxp_approval a
+               WHERE a.status = 2
+                 AND a.approve_time >= DATE_SUB(NOW(), INTERVAL %s DAY)
+               ORDER BY a.approve_time DESC""",
+            (days,),
+        )
+        for r in batch_rows:
+            applicant = (r.get("applicant") or "").strip()
+            action = r.get("action") or "add"
+            amount = r.get("amount") or 0
+            amt_f = float(amount)
+            amt_display = int(amt_f) if amt_f == int(amt_f) else f"{amt_f:g}"
+            ly = (r.get("ly") or "").strip()
+            approver = (r.get("approver") or "").strip()
+            names_list = []
+            try:
+                names_list = json.loads(r.get("names_json") or "[]")
+            except Exception:
+                pass
+            names_str = "、".join(names_list[:5])
+            if len(names_list) > 5:
+                names_str += f"等{len(names_list)}人"
+            at = r.get("approve_time")
+            if hasattr(at, "strftime"):
+                at = at.strftime("%Y-%m-%d")
+            else:
+                at = str(at or "")[:10]
+            at_year = at[:4] if len(at) >= 4 else ""
+            action_text = "增加" if action == "add" else "减少"
+            items.append({
+                "type": "hxp_batch",
+                "time": at,
+                "name": applicant,
+                "year": at_year,
+                "text": f"{at}，{applicant}为{names_str}{action_text}换休票{amt_display}张，原因：{ly}（{approver}审批）",
+            })
+    except Exception as e:
+        logger.warning(f"leader-briefing 查换休票批量审批失败: {e}")
+
+    try:
+        trip_rows = db.execute_query(
+            """SELECT g.gcr, g.gcdd, g.gcrw, g.bld, g.szr,
+                      g.bldpztime, g.wpsj, g.yjcfsj
+               FROM gcsqb g
+               WHERE g.bldzt = 2 AND g.szrzt = 2
+                 AND g.bldpztime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+               ORDER BY g.bldpztime DESC""",
+            (days,),
+        )
+        for r in trip_rows:
+            gcr = (r.get("gcr") or "").strip()
+            gcdd = (r.get("gcdd") or "").strip()
+            gcrw = (r.get("gcrw") or "").strip()
+            bld = (r.get("bld") or "").strip()
+            szr = (r.get("szr") or "").strip()
+            approvers = "、".join(filter(None, [szr, bld]))
+            reason = gcrw if gcrw else "公出"
+            at = str(r.get("bldpztime") or r.get("wpsj") or "")[:10]
+            at_year = at[:4] if len(at) >= 4 else ""
+            items.append({
+                "type": "trip",
+                "time": at,
+                "name": gcr,
+                "year": at_year,
+                "text": f"{at}，{gcr}，因{reason}去{gcdd}公出（{approvers}审批）",
+            })
+    except Exception as e:
+        logger.warning(f"leader-briefing 查公出失败: {e}")
+
+    items.sort(key=lambda x: x.get("time", ""), reverse=True)
+    return {"success": True, "items": items}

@@ -27,7 +27,7 @@
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
                   <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
-                    {{ task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')) }}
+                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')))) }}
                   </button>
                 </div>
               </li>
@@ -82,6 +82,43 @@
       </div>
     </section>
 
+    <!-- 重要信息审阅（仅部长可见） -->
+    <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
+      <article class="dashboard-card dashboard-card--briefing">
+        <header class="dashboard-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--briefing" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">重要信息审阅</span>
+            <span class="dashboard-card__badge">{{ briefingItems.length }}</span>
+          </h2>
+          <span class="briefing-hint">最近7天</span>
+        </header>
+        <div
+          class="briefing-marquee"
+          @mouseenter="pauseMarquee"
+          @mouseleave="resumeMarquee"
+        >
+          <div class="briefing-track" ref="briefingTrackRef">
+            <div
+              v-for="(item, idx) in briefingItemsDup"
+              :key="idx"
+              class="briefing-item"
+              :class="'briefing-item--' + item.type"
+              @click="goBriefingDetail(item)"
+            >
+              <span class="briefing-tag">{{ item.type === 'hxp' || item.type === 'hxp_batch' ? '换休票' : '公出' }}</span>
+              <span class="briefing-text">{{ item.text }}</span>
+              <span class="briefing-arrow">→</span>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <!-- 功能导航卡片 -->
     <div class="container">
       <div v-for="group in featureGroups" :key="group.title" class="feature-group mt-xl">
@@ -114,7 +151,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getLeaveList,
@@ -122,6 +159,7 @@ import {
   getBusinessTripList,
   getUploadConfig,
 } from '@/api/attendance'
+import { getLeaderBriefing } from '@/api/admin'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
@@ -140,6 +178,66 @@ const admin2 = ref('')
 const admin1 = ref('')
 const personnelArchiveUrl = ref('')
 const canAccessDbManager = ref(false)
+
+const isBuzhang = ref(false)
+const briefingItems = ref([])
+const briefingTrackRef = ref(null)
+let marqueeTimer = null
+let marqueeOffset = 0
+let marqueePaused = false
+
+function startMarquee() {
+  stopMarquee()
+  if (briefingItems.value.length <= 4) return
+  marqueeOffset = 0
+  const step = () => {
+    if (marqueePaused) { marqueeTimer = requestAnimationFrame(step); return }
+    const el = briefingTrackRef.value
+    if (!el) { marqueeTimer = requestAnimationFrame(step); return }
+    marqueeOffset += 0.4
+    if (marqueeOffset >= el.scrollHeight / 2) marqueeOffset = 0
+    el.style.transform = `translateY(-${marqueeOffset}px)`
+    marqueeTimer = requestAnimationFrame(step)
+  }
+  marqueeTimer = requestAnimationFrame(step)
+}
+function stopMarquee() { if (marqueeTimer) { cancelAnimationFrame(marqueeTimer); marqueeTimer = null } }
+function pauseMarquee() { marqueePaused = true }
+function resumeMarquee() { marqueePaused = false }
+
+const briefingItemsDup = computed(() => {
+  const arr = briefingItems.value
+  return arr.length > 4 ? [...arr, ...arr] : arr
+})
+
+function goBriefingDetail(item) {
+  if (item.type === 'trip') {
+    const q = { from: 'leader', scope: 'all', focusName: item.name || '' }
+    if (item.year) q.year = item.year
+    router.push({ path: '/attendance/business-trip', query: q })
+  } else if (item.type === 'hxp') {
+    const q = { focusName: item.name || '', scope: 'all', status: 'approved' }
+    if (item.year) q.year = item.year
+    router.push({ path: '/admin/hxp-records', query: q })
+  } else if (item.type === 'hxp_batch') {
+    router.push('/admin/hxp-manage')
+  }
+}
+
+async function fetchBriefing() {
+  const name = (userName.value || '').trim()
+  if (!name) return
+  try {
+    const res = await getLeaderBriefing({ name, days: 7 })
+    if (res && res.success && res.items) {
+      briefingItems.value = res.items
+      if (res.items.length > 0) {
+        await nextTick()
+        startMarquee()
+      }
+    }
+  } catch { /* 非部长会403，忽略 */ }
+}
 
 /** 根据 permission 字段判断当前用户是否可见该卡片 */
 function canShowFeature(permission) {
@@ -163,6 +261,8 @@ function canShowFeature(permission) {
       return true
     case 'exceptions':
       return isAdmin1 || (!!d && name === d) || jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
+    case 'hxpRecords':
+      return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || (!!a2 && name === a2)
     case 'employeeAdmin':
       return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任') || (!!a2 && name === a2)
     case 'dbManager':
@@ -207,6 +307,15 @@ const rawFeatureGroups = [
         path: '/statistics',
         color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
         iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
+      },
+      {
+        id: 'hxp-records',
+        title: '换休票明细查询',
+        description: '汇总查看所有人的公出节假日换休票申请记录与审批状态',
+        path: '/admin/hxp-records',
+        permission: 'hxpRecords',
+        color: 'linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%)',
+        iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
       },
       {
         id: 'upload',
@@ -486,13 +595,18 @@ async function fetchRequestList() {
   }
 }
 
+onBeforeUnmount(() => { stopMarquee() })
+
 onMounted(() => {
   const info = getStoredUserInfo()
   userName.value = info.name || info.userName || ''
   userJb.value = info.jb || ''
   userLsys.value = (info.dept || info.lsys || '').trim()
+  const jb = (info.jb || '').trim()
+  isBuzhang.value = jb === '部长' || jb.startsWith('部长')
   refreshWorkplaceTodos()
   fetchRequestList()
+  if (isBuzhang.value) fetchBriefing()
   getUploadConfig().then(res => {
     if (res && res.success) {
       dakaman.value = res.dakaman != null ? String(res.dakaman).trim() : ''
@@ -970,6 +1084,100 @@ async function navigateTo(feature) {
   }
 }
 
+/* 重要信息审阅 - 滚动播放窗口 */
+.briefing-section {
+  margin-bottom: var(--spacing-xxl);
+  padding: 0;
+}
+
+.dashboard-card--briefing {
+  border-left: 3px solid #667eea;
+}
+
+.dashboard-card__icon--briefing {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+}
+
+.briefing-hint {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.briefing-marquee {
+  height: 160px;
+  overflow: hidden;
+  position: relative;
+  padding: var(--spacing-sm) var(--spacing-xl);
+}
+
+.briefing-track {
+  will-change: transform;
+}
+
+.briefing-item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 8px 4px;
+  border-bottom: 1px dashed var(--color-border-lighter);
+  line-height: 1.5;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  transition: background 0.15s;
+}
+
+.briefing-item:hover {
+  background: var(--color-bg-spotlight, #f8f9fa);
+}
+
+.briefing-item:last-child {
+  border-bottom: none;
+}
+
+.briefing-arrow {
+  flex-shrink: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.briefing-item:hover .briefing-arrow {
+  opacity: 1;
+  color: var(--color-primary);
+}
+
+.briefing-tag {
+  flex-shrink: 0;
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  padding: 1px 8px;
+  border-radius: var(--radius-sm);
+  white-space: nowrap;
+}
+
+.briefing-item--hxp .briefing-tag {
+  color: #b45309;
+  background: #fef3c7;
+}
+
+.briefing-item--trip .briefing-tag {
+  color: #0369a1;
+  background: #e0f2fe;
+}
+
+.briefing-item--hxp_batch .briefing-tag {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+
+.briefing-text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
 @media (max-width: 768px) {
   .page-header {
     padding: var(--spacing-xxl) 0;
@@ -991,6 +1199,10 @@ async function navigateTo(feature) {
   
   .features-grid {
     grid-template-columns: 1fr;
+  }
+
+  .briefing-section {
+    padding: 0 var(--spacing-md);
   }
 }
 </style>

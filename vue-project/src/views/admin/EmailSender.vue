@@ -54,7 +54,7 @@
             <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z"/><line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/></svg>
             考勤异常提醒邮件
           </h3>
-          <p class="section-desc">一键向所有考勤异常人员发送提醒邮件，附带考勤异常报表</p>
+          <p class="section-desc">对每位异常人员私发个人提醒，并向科室领导发送汇总邮件</p>
 
           <div class="reminder-config">
             <div class="reminder-row">
@@ -165,30 +165,117 @@
                 <span class="stat-badge warn" v-if="previewData.no_email_count">{{ previewData.no_email_count }} 人无邮箱</span>
               </div>
             </div>
-            <div class="preview-field">
-              <strong>主题：</strong>{{ previewData.subject }}
+
+            <div class="preview-section-label">
+              <strong>一、个人提醒邮件</strong>
+              <span class="stat-badge">将发送 {{ previewData.total_personal_sendable }} 封</span>
             </div>
             <div class="preview-field">
-              <strong>正文：</strong>
-              <pre class="preview-body">{{ previewData.body }}</pre>
-            </div>
-            <div v-if="previewData.no_email_names && previewData.no_email_names.length" class="preview-field warn-box">
-              <strong>⚠ 以下人员无企业邮箱，将无法收到邮件：</strong>
-              <span>{{ previewData.no_email_names.join('、') }}</span>
+              <strong>主题：</strong>{{ previewData.personal_subject }}
             </div>
             <div class="preview-field">
-              <strong>收件人列表：</strong>
+              <strong>正文示例：</strong>
+              <pre class="preview-body">{{ previewData.personal_body_sample }}</pre>
+            </div>
+            <div class="preview-field">
+              <strong>收件人列表（每人一封）：</strong>
               <div class="recipients-list">
-                <div v-for="r in previewData.recipients" :key="r.name" class="recipient-item">
+                <div v-for="r in previewData.personal_recipients" :key="r.name" class="recipient-item">
                   <span class="r-name">{{ r.name }}</span>
+                  <span class="r-dept">{{ r.dept }}</span>
                   <span class="r-days">{{ r.days }}天</span>
                   <span class="r-email" :class="{ missing: !r.has_email }">{{ r.email || '无邮箱' }}</span>
                 </div>
               </div>
             </div>
-            <div class="preview-field">
-              <strong>附件：</strong>考勤异常表_{{ reminderYear }}年{{ reminderMonth }}月.xlsx
+            <div v-if="previewData.no_email_names && previewData.no_email_names.length" class="preview-field warn-box">
+              <strong>以下人员无企业邮箱，将无法收到邮件：</strong>
+              <span>{{ previewData.no_email_names.join('、') }}</span>
             </div>
+
+            <div class="preview-divider"></div>
+
+            <div class="preview-section-label">
+              <strong>二、科室领导汇总邮件</strong>
+              <span class="stat-badge">{{ previewData.total_leader_emails }} 个科室</span>
+              <span class="stat-badge">将发送 {{ previewData.total_leader_sendable }} 封</span>
+            </div>
+            <div v-for="le in previewData.leader_emails" :key="le.dept" class="leader-email-block">
+              <div class="leader-email-dept">
+                <strong>{{ le.dept }}</strong>（{{ le.people_count }}人异常）→
+                <span v-if="le.leaders.length">
+                  <span v-for="(l, li) in le.leaders" :key="l.name">
+                    {{ l.name }}({{ l.jb }}<span :class="{ 'r-email': true, missing: !l.has_email }">{{ l.email ? ' ' + l.email : ' 无邮箱' }}</span>){{ li < le.leaders.length - 1 ? '、' : '' }}
+                  </span>
+                </span>
+                <span v-else class="no-leader-hint">未找到领导</span>
+              </div>
+              <pre class="preview-body preview-body--compact">{{ le.body }}</pre>
+            </div>
+
+            <div class="preview-field">
+              <strong>附件（随领导汇总邮件发送）：</strong>考勤异常表_{{ reminderYear }}年{{ reminderMonth }}月.xlsx
+            </div>
+          </div>
+        </div>
+
+        <!-- 自动发送配置 -->
+        <div class="card auto-section">
+          <h3 class="section-title">
+            <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+            定时自动发送
+          </h3>
+          <p class="section-desc">配置后系统将在指定日期自动发送上月考勤异常提醒（个人私发 + 领导汇总）</p>
+
+          <div class="auto-config">
+            <div class="auto-row">
+              <label class="checkbox-label">
+                <input type="checkbox" v-model="autoEnabled" />
+                启用自动发送
+              </label>
+            </div>
+
+            <div class="auto-schedules">
+              <div v-for="(s, i) in autoSchedules" :key="'sch-'+i" class="schedule-item">
+                <span class="schedule-label">每月</span>
+                <select v-model.number="s.day" class="select-input select-sm">
+                  <option v-for="d in 28" :key="d" :value="d">{{ d }}号</option>
+                </select>
+                <select v-model.number="s.hour" class="select-input select-sm">
+                  <option v-for="h in 24" :key="h" :value="h - 1">{{ (h - 1).toString().padStart(2, '0') }}时</option>
+                </select>
+                <span class="schedule-label">:</span>
+                <select v-model.number="s.minute" class="select-input select-sm">
+                  <option v-for="m in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]" :key="m" :value="m">{{ m.toString().padStart(2, '0') }}分</option>
+                </select>
+                <span class="schedule-hint">发送上月提醒</span>
+                <button type="button" class="btn-remove" @click="removeSchedule(i)" title="删除">&times;</button>
+              </div>
+              <button type="button" class="btn btn-outline btn-sm" @click="addSchedule">+ 添加计划</button>
+            </div>
+
+            <div class="auto-actions">
+              <button class="btn btn-primary btn-sm" :disabled="autoSaving" @click="saveAutoConfig">
+                {{ autoSaving ? '保存中…' : '保存配置' }}
+              </button>
+              <span v-if="autoMsg" class="send-msg" :class="autoMsgType">{{ autoMsg }}</span>
+            </div>
+          </div>
+
+          <div class="auto-log-section">
+            <div class="auto-log-header" @click="showAutoLog = !showAutoLog; if (showAutoLog) refreshAutoLog()">
+              <strong>发送记录</strong>
+              <svg class="toggle-icon" :class="{ open: showAutoLog }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+            </div>
+            <div v-if="showAutoLog && autoLog.length" class="auto-log-list">
+              <div v-for="(entry, i) in autoLog" :key="'log-'+i" class="log-item" :class="entry.status === 'ok' ? 'log-ok' : 'log-err'">
+                <span class="log-time">{{ entry.time }}</span>
+                <span class="log-trigger">{{ entry.trigger }}</span>
+                <span class="log-target">{{ entry.year }}年{{ entry.month }}月</span>
+                <span class="log-msg">{{ entry.message }}</span>
+              </div>
+            </div>
+            <p v-else-if="showAutoLog" class="empty-hint">暂无发送记录</p>
           </div>
         </div>
 
@@ -319,7 +406,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getEmailConfig, updateEmailConfig, sendEmail, previewAttendanceReminder, sendAttendanceReminder } from '@/api/email'
+import { getEmailConfig, updateEmailConfig, sendEmail, previewAttendanceReminder, sendAttendanceReminder, getAutoReminderConfig, saveAutoReminderConfig, getAutoReminderLog } from '@/api/email'
 
 const canAccess = ref(false)
 const configured = ref(false)
@@ -366,6 +453,66 @@ const previewData = ref(null)
 const reminderSending = ref(false)
 const reminderMsg = ref('')
 const reminderMsgType = ref('')
+
+const autoEnabled = ref(false)
+const autoSchedules = ref([])
+const autoLog = ref([])
+const autoSaving = ref(false)
+const autoMsg = ref('')
+const autoMsgType = ref('')
+const showAutoLog = ref(false)
+
+function addSchedule() {
+  autoSchedules.value.push({ day: 5, hour: 9, minute: 0 })
+}
+
+function removeSchedule(i) {
+  autoSchedules.value.splice(i, 1)
+}
+
+async function loadAutoConfig() {
+  const name = getCurrentUser()
+  if (!name) return
+  try {
+    const res = await getAutoReminderConfig(name)
+    if (res && res.success) {
+      autoEnabled.value = !!res.enabled
+      autoSchedules.value = res.schedules || []
+      autoLog.value = res.log || []
+    }
+  } catch (_) { /* ignore */ }
+}
+
+async function saveAutoConfig() {
+  autoSaving.value = true
+  autoMsg.value = ''
+  try {
+    const res = await saveAutoReminderConfig({
+      current_user: getCurrentUser(),
+      enabled: autoEnabled.value,
+      schedules: autoSchedules.value,
+    })
+    if (res && res.success) {
+      autoMsg.value = res.message || '已保存'
+      autoMsgType.value = 'success'
+    } else {
+      autoMsg.value = res?.detail || '保存失败'
+      autoMsgType.value = 'error'
+    }
+  } catch (e) {
+    autoMsg.value = e?.response?.data?.detail || '保存失败'
+    autoMsgType.value = 'error'
+  } finally {
+    autoSaving.value = false
+  }
+}
+
+async function refreshAutoLog() {
+  try {
+    const res = await getAutoReminderLog(getCurrentUser())
+    if (res && res.success) autoLog.value = res.log || []
+  } catch (_) { /* ignore */ }
+}
 
 function getCurrentUser() {
   try {
@@ -630,9 +777,11 @@ async function handlePreview() {
 
 async function handleSendReminder() {
   if (!previewData.value) return
+  const p = previewData.value
   const testList = [...reminderTestTo.value]
   const testDisplay = testList.length ? testList.join('、') : 'hsx@hec-china.com（默认）'
-  if (!confirm(`确认发送${reminderMonth.value}月考勤异常提醒邮件？${reminderTestMode.value ? `（测试模式，将发送到：${testDisplay}）` : `将发送给 ${previewData.value.has_email_count} 位收件人`}`)) return
+  const realDesc = `个人提醒 ${p.total_personal_sendable} 封 + 领导汇总 ${p.total_leader_emails} 封`
+  if (!confirm(`确认发送${reminderMonth.value}月考勤异常提醒？\n${reminderTestMode.value ? `（测试模式，发送到：${testDisplay}）` : realDesc}`)) return
 
   reminderSending.value = true
   reminderMsg.value = ''
@@ -663,7 +812,10 @@ async function handleSendReminder() {
   }
 }
 
-onMounted(loadConfig)
+onMounted(() => {
+  loadConfig()
+  loadAutoConfig()
+})
 </script>
 
 <style scoped>
@@ -954,6 +1106,40 @@ onMounted(loadConfig)
   font-size: 13px;
   color: #92400e;
 }
+.preview-section-label {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 16px 0 10px;
+  font-size: 15px;
+  color: #1f2937;
+}
+.preview-divider {
+  border-top: 1px dashed #d1d5db;
+  margin: 18px 0 8px;
+}
+.leader-email-block {
+  margin-bottom: 14px;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+  padding: 10px 14px;
+  background: #fff;
+}
+.leader-email-dept {
+  font-size: 13px;
+  color: #374151;
+  margin-bottom: 6px;
+  line-height: 1.6;
+}
+.no-leader-hint { color: #dc2626; font-style: italic; }
+.preview-body--compact {
+  font-size: 12px;
+  padding: 10px;
+  line-height: 1.6;
+  max-height: 160px;
+  overflow-y: auto;
+}
+.r-dept { font-size: 12px; color: #6b7280; min-width: 80px; }
 .recipients-list {
   margin-top: 6px;
   max-height: 200px;
@@ -994,8 +1180,51 @@ onMounted(loadConfig)
 .att-size { color: #9ca3af; font-size: 12px; }
 .attachment-btn { cursor: pointer; align-self: flex-start; }
 
+/* 自动发送 */
+.auto-config { display: flex; flex-direction: column; gap: 14px; margin-bottom: 16px; }
+.auto-row label { display: flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 500; cursor: pointer; }
+.auto-row input[type="checkbox"] { accent-color: #6366f1; width: 16px; height: 16px; }
+.auto-schedules { display: flex; flex-direction: column; gap: 8px; }
+.schedule-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: #f9fafb;
+  border: 1px solid #e5e7eb;
+  border-radius: 8px;
+}
+.schedule-label { font-size: 13px; color: #374151; white-space: nowrap; }
+.schedule-hint { font-size: 12px; color: #9ca3af; flex: 1; }
+.select-sm { padding: 5px 8px; font-size: 13px; min-width: auto; }
+.btn-remove {
+  background: none; border: none; color: #9ca3af; font-size: 18px;
+  cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.btn-remove:hover { color: #dc2626; }
+.auto-actions { display: flex; align-items: center; gap: 12px; }
+.auto-log-section { border-top: 1px solid #f3f4f6; padding-top: 14px; }
+.auto-log-header {
+  display: flex; align-items: center; gap: 8px;
+  cursor: pointer; user-select: none; font-size: 14px; color: #374151;
+}
+.auto-log-list { margin-top: 10px; max-height: 260px; overflow-y: auto; }
+.log-item {
+  display: flex; gap: 10px; padding: 6px 10px;
+  border-bottom: 1px solid #f3f4f6; font-size: 12px; align-items: center;
+}
+.log-item:last-child { border-bottom: none; }
+.log-time { color: #6b7280; min-width: 120px; }
+.log-trigger { color: #6366f1; min-width: 100px; }
+.log-target { color: #374151; min-width: 80px; font-weight: 500; }
+.log-msg { flex: 1; }
+.log-ok .log-msg { color: #059669; }
+.log-err .log-msg { color: #dc2626; }
+.empty-hint { font-size: 13px; color: #9ca3af; margin: 8px 0; }
+
 @media (max-width: 640px) {
   .container { padding: 0 12px; }
   .card { padding: 16px; }
+  .schedule-item { flex-wrap: wrap; }
 }
 </style>

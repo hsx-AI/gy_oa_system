@@ -607,8 +607,19 @@ onMounted(async () => {
     const day = String(date.getDate()).padStart(2, '0')
     dateOptions.value.push(`${year}-${month}-${day}`)
   }
-  // 从首页点击流程：以业务时间(加班日期年月+状态)筛选，再按 focusId 定位到该条并滚动
   const q = route.query
+  // 领导看板跳转：全员+已通过+年月+可选姓名
+  if (q.from === 'leader') {
+    if (q.year && q.month) {
+      recordMonth.value = `${q.year}-${String(q.month).padStart(2, '0')}`
+    } else if (q.year) {
+      recordMonth.value = String(q.year)
+    }
+    recordStatus.value = 'approved'
+    recordScope.value = 'all'
+    if (q.focusName) recordKeyword.value = q.focusName
+  }
+  // 从首页点击流程：以业务时间(加班日期年月+状态)筛选，再按 focusId 定位到该条并滚动
   if (q.focusId) {
     if (q.month) recordMonth.value = String(q.month).slice(0, 7)
     if (q.status === 'processing' || q.status === 'approved' || q.status === 'all') recordStatus.value = q.status

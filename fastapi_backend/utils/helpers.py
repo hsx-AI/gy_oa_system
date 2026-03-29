@@ -2,6 +2,7 @@
 """
 辅助函数
 """
+import math
 from datetime import datetime, date
 from typing import Any, Optional
 
@@ -66,6 +67,21 @@ def normalize_datetime_for_db(val: Any) -> str:
         sec = segs[2].zfill(2) if len(segs) > 2 else "00"
         time_part = f"{h}:{m}:{sec}"
     return f"{date_part} {time_part}"
+
+
+def normalize_qj_tian_days(d: Any) -> float:
+    """
+    请假表 qj.tian：最小粒度 0.25 天，与前端 leaveDuration 一致。
+    正值向上取整到 0.25 的整数倍且不少于 0.25；0 或非正数返回 0。
+    """
+    try:
+        x = float(d)
+    except (TypeError, ValueError):
+        return 0.0
+    if x <= 0:
+        return 0.0
+    q = max(1, math.ceil(round(x * 4, 6)))
+    return round(q / 4.0, 2)
 
 
 def safe_time_str(val: Any) -> str:
