@@ -14,6 +14,7 @@
           >
             审批
           </button>
+          <button class="btn btn-outline" @click="$router.push('/attendance/business-trip/map')">公出地图</button>
           <button class="btn btn-primary" @click="showApplyModal = true">公出登记</button>
           <button class="btn btn-primary" @click="openReturnModal">返回登记</button>
         </div>
@@ -240,7 +241,11 @@
             <div class="form-group full">
               <label>公出地点</label>
               <input v-if="isCityTrip" id="bt-location" type="text" :value="'市内'" readonly class="readonly-input">
-              <input v-else id="bt-location" type="text" v-model="form.location" name="location" autocomplete="street-address" placeholder="请输入公出地点">
+              <LocationPicker
+                v-else
+                v-model="form.location"
+                :mode="tripScope === '境外公出' ? 'abroad' : 'domestic'"
+              />
             </div>
           </div>
 
@@ -367,6 +372,7 @@ import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusiness
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
+import LocationPicker from '@/components/LocationPicker.vue'
 
 const router = useRouter()
 const route = useRoute()

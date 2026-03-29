@@ -190,6 +190,11 @@ const routes = [
     name: 'HxpRecords',
     component: () => import('../views/admin/HxpRecords.vue'),
     meta: { title: '换休票明细查询' }
+  },
+  {
+    path: '/attendance/business-trip/map',
+    name: 'BusinessTripMap',
+    component: () => import('@/views/attendance/BusinessTripMap.vue')
   }
   // 未来可以添加更多路由：
   // {
