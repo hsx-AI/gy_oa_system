@@ -526,17 +526,11 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   btForm.projectName = ''
   btForm.location = '市内'
 
-  // 从建议中提取时间段，填充 datetime-local 格式
+  // 从建议中提取时间段，与后端建议区间秒级一致（缺省秒补 00）
   const timeMatch = (suggestion?.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
   if (date && timeMatch) {
-    const pad = (t) => {
-      const p = t.split(':')
-      const hh = String(parseInt(p[0] || 0, 10)).padStart(2, '0')
-      const mm = String(parseInt(p[1] || 0, 10)).padStart(2, '0')
-      return `${hh}:${mm}`
-    }
-    btForm.startTime = `${date}T${pad(timeMatch[1])}`
-    btForm.endTime = `${date}T${pad(timeMatch[2])}`
+    btForm.startTime = `${date}T${toTimeValue(timeMatch[1])}`
+    btForm.endTime = `${date}T${toTimeValue(timeMatch[2])}`
   } else if (date) {
     btForm.startTime = `${date}T08:00`
     btForm.endTime = `${date}T17:00`

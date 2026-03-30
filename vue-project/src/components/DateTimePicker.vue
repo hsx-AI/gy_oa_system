@@ -16,6 +16,10 @@
         <select class="dtp__minute" :value="innerMinute" @change="onMinuteChange" :disabled="disabled || innerHour === 24">
           <option v-for="m in minuteOptions" :key="m" :value="m">{{ String(m).padStart(2, '0') }}</option>
         </select>
+        <span class="dtp__sep">:</span>
+        <select class="dtp__second" :value="innerSecond" @change="onSecondChange" :disabled="disabled || innerHour === 24">
+          <option v-for="sec in secondOptions" :key="sec" :value="sec">{{ String(sec).padStart(2, '0') }}</option>
+        </select>
       </div>
     </div>
     <div class="dtp__presets" v-if="!disabled">
@@ -24,7 +28,7 @@
         :key="p.h + '-' + p.m"
         type="button"
         class="dtp__preset-btn"
-        :class="{ 'dtp__preset-btn--active': innerHour === p.h && innerMinute === p.m }"
+        :class="{ 'dtp__preset-btn--active': innerHour === p.h && innerMinute === p.m && innerSecond === 0 }"
         @click="applyPreset(p)"
       >{{ p.label }}</button>
     </div>
@@ -46,6 +50,7 @@ const emit = defineEmits(['update:modelValue'])
 const innerDate = ref('')
 const innerHour = ref(8)
 const innerMinute = ref(0)
+const innerSecond = ref(0)
 
 const hourOptions = computed(() => {
   const opts = []
@@ -62,6 +67,12 @@ const minuteOptions = computed(() => {
   const step = props.minuteStep || 1
   const opts = []
   for (let m = 0; m < 60; m += step) opts.push(m)
+  return opts
+})
+
+const secondOptions = computed(() => {
+  const opts = []
+  for (let s = 0; s < 60; s++) opts.push(s)
   return opts
 })
 
@@ -87,14 +98,15 @@ const timeHint = computed(() => {
 })
 
 function parseModelValue(val) {
-  if (!val || typeof val !== 'string') return { date: '', hour: 8, minute: 0 }
+  if (!val || typeof val !== 'string') return { date: '', hour: 8, minute: 0, second: 0 }
   const s = val.trim().replace(' ', 'T')
-  const match = s.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2}))?/)
-  if (!match) return { date: '', hour: 8, minute: 0 }
+  const match = s.match(/^(\d{4}-\d{2}-\d{2})(?:T(\d{2}):(\d{2})(?::(\d{2}))?)?/)
+  if (!match) return { date: '', hour: 8, minute: 0, second: 0 }
   return {
     date: match[1],
     hour: match[2] != null ? parseInt(match[2], 10) : 8,
-    minute: match[3] != null ? parseInt(match[3], 10) : 0
+    minute: match[3] != null ? parseInt(match[3], 10) : 0,
+    second: match[4] != null ? parseInt(match[4], 10) : 0
   }
 }
 
@@ -106,6 +118,7 @@ function emitValue() {
   let d = innerDate.value
   let h = innerHour.value
   let m = innerMinute.value
+  let sec = innerSecond.value
   if (h === 24) {
     const dt = new Date(d + 'T00:00:00')
     dt.setDate(dt.getDate() + 1)
@@ -115,10 +128,12 @@ function emitValue() {
     d = `${y}-${mo}-${da}`
     h = 0
     m = 0
+    sec = 0
   }
   const hh = String(h).padStart(2, '0')
   const mm = String(m).padStart(2, '0')
-  emit('update:modelValue', `${d}T${hh}:${mm}`)
+  const ss = String(sec).padStart(2, '0')
+  emit('update:modelValue', `${d}T${hh}:${mm}:${ss}`)
 }
 
 let skipSync = false
@@ -129,6 +144,7 @@ watch(() => props.modelValue, (val) => {
   innerDate.value = parsed.date
   innerHour.value = parsed.hour
   innerMinute.value = parsed.minute
+  innerSecond.value = Math.min(59, Math.max(0, parsed.second || 0))
 }, { immediate: true })
 
 function onDateInput(e) {
@@ -139,7 +155,10 @@ function onDateInput(e) {
 
 function onHourChange(e) {
   innerHour.value = parseInt(e.target.value, 10)
-  if (innerHour.value === 24) innerMinute.value = 0
+  if (innerHour.value === 24) {
+    innerMinute.value = 0
+    innerSecond.value = 0
+  }
   skipSync = true
   emitValue()
 }
@@ -150,9 +169,16 @@ function onMinuteChange(e) {
   emitValue()
 }
 
+function onSecondChange(e) {
+  innerSecond.value = parseInt(e.target.value, 10)
+  skipSync = true
+  emitValue()
+}
+
 function applyPreset(p) {
   innerHour.value = p.h
   innerMinute.value = p.m
+  innerSecond.value = 0
   skipSync = true
   emitValue()
 }
@@ -188,7 +214,8 @@ function applyPreset(p) {
 }
 
 .dtp__hour,
-.dtp__minute {
+.dtp__minute,
+.dtp__second {
   padding: 8px 4px;
   border: 1px solid var(--color-border-base, #d9d9d9);
   border-radius: var(--radius-sm, 4px);
@@ -202,18 +229,21 @@ function applyPreset(p) {
   width: 130px;
 }
 
-.dtp__minute {
-  width: 60px;
+.dtp__minute,
+.dtp__second {
+  width: 56px;
 }
 
 .dtp__hour:focus,
-.dtp__minute:focus {
+.dtp__minute:focus,
+.dtp__second:focus {
   border-color: var(--color-primary, #1677ff);
   outline: none;
 }
 
 .dtp__hour:disabled,
-.dtp__minute:disabled {
+.dtp__minute:disabled,
+.dtp__second:disabled {
   background: var(--color-bg-layout, #f5f5f5);
   cursor: not-allowed;
 }

@@ -8,6 +8,12 @@
       <select class="tp__minute" :value="innerMinute" @change="onMinuteChange" :disabled="disabled || innerHour === 24">
         <option v-for="m in minuteOptions" :key="m" :value="m">{{ String(m).padStart(2, '0') }}</option>
       </select>
+      <template v-if="withSeconds">
+        <span class="tp__sep">:</span>
+        <select class="tp__second" :value="innerSecond" @change="onSecondChange" :disabled="disabled || innerHour === 24">
+          <option v-for="sec in secondOptions" :key="sec" :value="sec">{{ String(sec).padStart(2, '0') }}</option>
+        </select>
+      </template>
     </div>
     <div class="tp__presets" v-if="!disabled">
       <button
@@ -15,7 +21,7 @@
         :key="p.h + '-' + p.m"
         type="button"
         class="tp__preset-btn"
-        :class="{ 'tp__preset-btn--active': innerHour === p.h && innerMinute === p.m }"
+        :class="{ 'tp__preset-btn--active': innerHour === p.h && innerMinute === p.m && (!withSeconds || innerSecond === 0) }"
         @click="applyPreset(p)"
       >{{ p.label }}</button>
     </div>
@@ -36,6 +42,7 @@ const emit = defineEmits(['update:modelValue'])
 
 const innerHour = ref(8)
 const innerMinute = ref(0)
+const innerSecond = ref(0)
 
 const hourOptions = computed(() => {
   const opts = []
@@ -51,6 +58,12 @@ const hourOptions = computed(() => {
 const minuteOptions = computed(() => {
   const opts = []
   for (let m = 0; m < 60; m++) opts.push(m)
+  return opts
+})
+
+const secondOptions = computed(() => {
+  const opts = []
+  for (let s = 0; s < 60; s++) opts.push(s)
   return opts
 })
 
@@ -74,21 +87,31 @@ const timeHint = computed(() => {
 })
 
 function parseModelValue(val) {
-  if (!val || typeof val !== 'string') return { hour: 8, minute: 0 }
+  if (!val || typeof val !== 'string') return { hour: 8, minute: 0, second: 0 }
   const s = val.trim()
   const parts = s.split(':')
-  if (parts.length < 2) return { hour: 8, minute: 0 }
+  if (parts.length < 2) return { hour: 8, minute: 0, second: 0 }
   const h = parseInt(parts[0], 10)
   const m = parseInt(parts[1], 10)
-  if (isNaN(h) || isNaN(m)) return { hour: 8, minute: 0 }
-  return { hour: Math.min(24, Math.max(0, h)), minute: Math.min(59, Math.max(0, m)) }
+  const sec = parts.length >= 3 ? parseInt(parts[2], 10) : 0
+  if (isNaN(h) || isNaN(m)) return { hour: 8, minute: 0, second: 0 }
+  return {
+    hour: Math.min(24, Math.max(0, h)),
+    minute: Math.min(59, Math.max(0, m)),
+    second: isNaN(sec) ? 0 : Math.min(59, Math.max(0, sec))
+  }
 }
 
 function emitValue() {
   const hh = String(innerHour.value).padStart(2, '0')
   const mm = String(innerMinute.value).padStart(2, '0')
   const base = `${hh}:${mm}`
-  emit('update:modelValue', props.withSeconds ? base + ':00' : base)
+  if (props.withSeconds) {
+    const ss = String(innerSecond.value).padStart(2, '0')
+    emit('update:modelValue', `${base}:${ss}`)
+  } else {
+    emit('update:modelValue', base)
+  }
 }
 
 let skipSync = false
@@ -98,11 +121,15 @@ watch(() => props.modelValue, (val) => {
   const parsed = parseModelValue(val)
   innerHour.value = parsed.hour
   innerMinute.value = parsed.minute
+  innerSecond.value = parsed.second
 }, { immediate: true })
 
 function onHourChange(e) {
   innerHour.value = parseInt(e.target.value, 10)
-  if (innerHour.value === 24) innerMinute.value = 0
+  if (innerHour.value === 24) {
+    innerMinute.value = 0
+    innerSecond.value = 0
+  }
   skipSync = true
   emitValue()
 }
@@ -113,9 +140,16 @@ function onMinuteChange(e) {
   emitValue()
 }
 
+function onSecondChange(e) {
+  innerSecond.value = parseInt(e.target.value, 10)
+  skipSync = true
+  emitValue()
+}
+
 function applyPreset(p) {
   innerHour.value = p.h
   innerMinute.value = p.m
+  innerSecond.value = 0
   skipSync = true
   emitValue()
 }
@@ -129,7 +163,8 @@ function applyPreset(p) {
 }
 
 .tp__hour,
-.tp__minute {
+.tp__minute,
+.tp__second {
   padding: 8px 4px;
   border: 1px solid var(--color-border-base, #d9d9d9);
   border-radius: var(--radius-sm, 4px);
@@ -144,19 +179,22 @@ function applyPreset(p) {
   min-width: 0;
 }
 
-.tp__minute {
-  width: 60px;
+.tp__minute,
+.tp__second {
+  width: 56px;
   flex-shrink: 0;
 }
 
 .tp__hour:focus,
-.tp__minute:focus {
+.tp__minute:focus,
+.tp__second:focus {
   border-color: var(--color-primary, #1677ff);
   outline: none;
 }
 
 .tp__hour:disabled,
-.tp__minute:disabled {
+.tp__minute:disabled,
+.tp__second:disabled {
   background: var(--color-bg-layout, #f5f5f5);
   cursor: not-allowed;
 }

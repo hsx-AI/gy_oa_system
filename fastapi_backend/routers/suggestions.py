@@ -10,7 +10,7 @@ from attendance_db import attendance_db
 from database import db
 from utils.helpers import normalize_date_str, time_to_decimal, format_time
 from utils.holiday_loader import load_holidays_dict
-from datetime import datetime, timedelta, date
+from datetime import datetime, timedelta, date, time as dt_time
 import math
 import os
 import logging
@@ -142,6 +142,121 @@ def _interval_overlaps(
     return False
 
 
+def _work_time_segments_excluding_lunch(s_start: str, s_end: str) -> List[tuple[str, str]]:
+    """
+    将建议区间按自然日切开，并在每个工作日内去掉 12:00–13:00 午休（不计考勤）。
+    返回若干闭区间 [a,b]（字符串可比较），用于判断「有效工作时段」是否被请假/公出覆盖。
+    """
+    try:
+        t0 = datetime.strptime(s_start[:19], "%Y-%m-%d %H:%M:%S")
+        t1 = datetime.strptime(s_end[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return []
+    if t1 < t0:
+        return []
+    out: List[tuple[str, str]] = []
+    d = t0.date()
+    end_d = t1.date()
+    while d <= end_d:
+        day_lo = datetime.combine(d, dt_time(0, 0, 0))
+        day_hi = datetime.combine(d, dt_time(23, 59, 59))
+        seg_lo = max(t0, day_lo)
+        seg_hi = min(t1, day_hi)
+        if seg_lo <= seg_hi:
+            am_end = datetime.combine(d, dt_time(12, 0, 0))
+            pm_start = datetime.combine(d, dt_time(13, 0, 0))
+            m0 = seg_lo
+            m1 = min(seg_hi, am_end)
+            if m0 <= m1:
+                out.append((m0.strftime("%Y-%m-%d %H:%M:%S"), m1.strftime("%Y-%m-%d %H:%M:%S")))
+            a0 = max(seg_lo, pm_start)
+            a1 = seg_hi
+            if a0 <= a1:
+                out.append((a0.strftime("%Y-%m-%d %H:%M:%S"), a1.strftime("%Y-%m-%d %H:%M:%S")))
+        d += timedelta(days=1)
+    return out
+
+
+def _merge_interval_str_pairs(pairs: List[tuple[str, str]]) -> List[tuple[str, str]]:
+    """合并重叠或端点相接的区间，返回按起点排序的不相交列表。"""
+    norm: List[tuple[str, str]] = []
+    for a, b in pairs:
+        ca = _to_comparable_dt(a)
+        cb = _to_comparable_dt(b)
+        if not ca or not cb or ca > cb:
+            continue
+        norm.append((ca, cb))
+    norm.sort(key=lambda x: x[0])
+    if not norm:
+        return []
+    merged: List[tuple[str, str]] = [norm[0]]
+    for a, b in norm[1:]:
+        la, lb = merged[-1]
+        if a <= lb:
+            nb = b if b > lb else lb
+            merged[-1] = (la, nb)
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _inclusive_segment_covered_by_merged(need_lo: str, need_hi: str, merged: List[tuple[str, str]]) -> bool:
+    """闭区间 [need_lo, need_hi] 的每一时刻是否都落在 merged 区间的并集内。"""
+    if not merged:
+        return False
+    try:
+        a = datetime.strptime(need_lo[:19], "%Y-%m-%d %H:%M:%S")
+        b = datetime.strptime(need_hi[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return False
+    if a > b:
+        return True
+    need = a
+    while need <= b:
+        found = False
+        for ms, me in merged:
+            msv = datetime.strptime(ms[:19], "%Y-%m-%d %H:%M:%S")
+            mev = datetime.strptime(me[:19], "%Y-%m-%d %H:%M:%S")
+            if msv <= need <= mev:
+                need = mev + timedelta(seconds=1)
+                found = True
+                break
+        if not found:
+            return False
+        if need > b:
+            return True
+    return True
+
+
+def _absence_covered_by_qj_and_gcsqb_patched(
+    s_start: str,
+    s_end: str,
+    qj_rows: List[Dict],
+    gcsqb_rows: List[Dict],
+) -> bool:
+    """
+    status=1 缺勤建议：请假 + 公出可拼凑覆盖；按工作日扣除 12:00–13:00 后再判断。
+    任一「有效工作子区间」未被并集盖住则未处理完成。
+    """
+    required = _work_time_segments_excluding_lunch(s_start, s_end)
+    if not required:
+        return False
+    raw_pairs: List[tuple[str, str]] = []
+    for r in qj_rows or []:
+        raw_pairs.append((r.get("timefrom"), r.get("timeto")))
+    for r in gcsqb_rows or []:
+        raw_pairs.append(
+            (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime"))
+        )
+    merged = _merge_interval_str_pairs(raw_pairs)
+    if not merged:
+        return False
+    for seg_lo, seg_hi in required:
+        if not _inclusive_segment_covered_by_merged(seg_lo, seg_hi, merged):
+            return False
+    return True
+
+
 def _suggestion_handled(
     start_time: Any,
     end_time: Any,
@@ -153,8 +268,9 @@ def _suggestion_handled(
     """
     判断建议时间区间 [start_time, end_time] 是否已处理完成。
     status=0(加班): 与某条 jiaban(已通过) 的 [timefrom,timeto] 有交集即可（含手动填报区间短于建议区间的情况）；
-    status=1(缺勤): 建议区间被某条 qj(已通过) 或 gcsqb(已通过且含 yjcfsj/yjfhsj)
-                   的区间包含或相等（优先用预计出发/返回时间，不再依赖实际返回登记）。
+    status=1(缺勤): 单条 qj / gcsqb 整段包含建议区间，或多条请假+公出拼凑覆盖；
+                   覆盖判定按自然日扣除 12:00–13:00 午休后再比较（与 8 小时工作制一致）。
+                   公出优先 yjcfsj/yjfhsj，缺省回退 gcsj/sjfhtime。
     """
     s_start = _to_comparable_dt(start_time)
     s_end = _to_comparable_dt(end_time)
@@ -163,15 +279,18 @@ def _suggestion_handled(
     if status == 0:
         return _interval_overlaps(s_start, s_end, jiaban_rows, lambda r: (r.get("timefrom"), r.get("timeto")))
     if status == 1:
+        # 单条整段覆盖（兼容旧数据）
         if _interval_covered(s_start, s_end, qj_rows, lambda r: (r.get("timefrom"), r.get("timeto"))):
             return True
-        # 公出：用预计出发/返回时间覆盖缺勤区间；若预计时间缺失再回退到实际时间
-        return _interval_covered(
+        if _interval_covered(
             s_start,
             s_end,
             gcsqb_rows,
             lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
-        )
+        ):
+            return True
+        # 多段请假/公出拼凑 + 扣除午休 12:00–13:00
+        return _absence_covered_by_qj_and_gcsqb_patched(s_start, s_end, qj_rows, gcsqb_rows)
     return False
 
 
@@ -186,7 +305,7 @@ def _suggestion_under_review(
     """
     判断建议时间区间是否已被「已提交但未审批通过」的记录覆盖（正在审核）。
     status=0: 与 jiaban(jiabanzt in 0,1,3) 的时间段有交集即可；
-    status=1: 被 qj(qjzt in 0,1,3) 或 gcsqb(未双审通过，按 yjcfsj/yjfhsj 时间段) 覆盖。
+    status=1: 单条覆盖或多条 qj+gcsqb 拼凑覆盖（扣除 12:00–13:00 午休），规则同 _suggestion_handled。
     """
     s_start = _to_comparable_dt(start_time)
     s_end = _to_comparable_dt(end_time)
@@ -197,12 +316,14 @@ def _suggestion_under_review(
     if status == 1:
         if _interval_covered(s_start, s_end, qj_pending, lambda r: (r.get("timefrom"), r.get("timeto"))):
             return True
-        return _interval_covered(
+        if _interval_covered(
             s_start,
             s_end,
             gcsqb_pending,
             lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
-        )
+        ):
+            return True
+        return _absence_covered_by_qj_and_gcsqb_patched(s_start, s_end, qj_pending, gcsqb_pending)
     return False
 
 
