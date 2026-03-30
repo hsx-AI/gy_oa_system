@@ -699,6 +699,39 @@ async def export_attendance_exceptions(
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 
+def _dict_get_ci(row: Optional[dict], *keys: str):
+    """从查询结果行按列名读取（大小写不敏感，兼容不同驱动返回的键名）。"""
+    if not row:
+        return None
+    lower_map = {str(k).lower(): v for k, v in row.items()}
+    for k in keys:
+        if k.lower() in lower_map:
+            return lower_map[k.lower()]
+    return None
+
+
+def _leave_handler_category_from_gclx(raw) -> str:
+    """
+    异常处理表「请假类别」中公出一行的展示文案：与 gcsqb.gclx 一致。
+    标准值：市内公出 / 境内公出 / 境外公出；gclx 为空时默认「境内公出」。
+    """
+    if raw is None:
+        return "境内公出"
+    s = str(raw).strip()
+    if not s:
+        return "境内公出"
+    if s in ("市内公出", "境内公出", "境外公出"):
+        return s
+    # 兼容简写或历史脏数据
+    if "境外" in s:
+        return "境外公出"
+    if "市内" in s:
+        return "市内公出"
+    if "境内" in s:
+        return "境内公出"
+    return s
+
+
 def _parse_datetime_for_excel(val) -> Optional[datetime]:
     """将 DB 返回的 timefrom/timeto 转为 datetime，用于 Excel 的 DATE TIME 列。"""
     if val is None:
@@ -728,7 +761,8 @@ async def export_leave_handler_table(
     """
     导出异常处理表：按月全员请假信息 + 公出信息，XLS（Excel）格式。
     列顺序：A 员工代码(string) B 姓名(string) C 部门(string，固定「智能制造工艺部」)
-    D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string，公出记为「公出」)。
+    D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string)。
+    请假走 qj.qjfs；公出走 gcsqb.gclx（市内公出/境内公出/境外公出），gclx 为空时默认「境内公出」。
     数据来源：qj 表（已通过 qjzt=4）+ gcsqb 表（已通过 bldzt=2,szrzt=2，时间用 yjcfsj/yjfhsj）；员工代码来自 yggl.gh。
     """
     import calendar
@@ -765,7 +799,8 @@ async def export_leave_handler_table(
         # 公出：gcsqb 已通过，当月 yjcfsj 或 yjfhsj 落在该月即纳入；时间用 yjcfsj、yjfhsj
         try:
             gcsqb_sql = """
-                SELECT g.gcr AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto, g.gclx AS gclx, TRIM(y.gh) AS gh
+                SELECT g.gcr AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto,
+                       NULLIF(TRIM(COALESCE(g.gclx, '')), '') AS gclx, TRIM(y.gh) AS gh
                 FROM gcsqb g
                 LEFT JOIN yggl y ON g.gcr = y.name
                 WHERE g.bldzt = 2 AND g.szrzt = 2
@@ -778,15 +813,15 @@ async def export_leave_handler_table(
             """
             gcsqb_rows = db.execute_query(gcsqb_sql, (start_date, end_date, start_date, end_date)) or []
             for r in gcsqb_rows:
-                gclx = (r.get("gclx") or "").strip()
-                if not gclx:
-                    gclx = "公出"
+                category = _leave_handler_category_from_gclx(_dict_get_ci(r, "gclx"))
+                gh_v = _dict_get_ci(r, "gh")
+                xm_v = _dict_get_ci(r, "xm")
                 rows.append({
-                    "gh": (r.get("gh") or "").strip(),
-                    "xm": (r.get("xm") or "").strip(),
-                    "timefrom": r.get("timefrom"),
-                    "timeto": r.get("timeto"),
-                    "qjfs": gclx,
+                    "gh": "" if gh_v is None else str(gh_v).strip(),
+                    "xm": "" if xm_v is None else str(xm_v).strip(),
+                    "timefrom": _dict_get_ci(r, "timefrom"),
+                    "timeto": _dict_get_ci(r, "timeto"),
+                    "qjfs": category,
                 })
         except Exception as e:
             logger.warning("导出异常处理表时查询公出失败（可能无 gcsqb/yjcfsj 列）: %s", e)

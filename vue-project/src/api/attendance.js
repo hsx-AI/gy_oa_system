@@ -543,6 +543,7 @@ export function exportAttendanceExceptions(params) {
 
 /**
  * 导出异常处理表：按月全员请假信息 XLS（员工代码、姓名、部门、请假开始/结束时间、请假类别）
+ * 公出类行为 gcsqb.gclx：市内公出 / 境内公出 / 境外公出（空则默认「境内公出」）
  * @param {Object} params - { year, month, current_user }
  */
 export function exportLeaveHandlerTable(params) {
