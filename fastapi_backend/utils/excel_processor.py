@@ -70,6 +70,33 @@ class ExcelProcessor:
         return None
 
     @staticmethod
+    def _dedup_close_times(group: List[Dict], threshold_sec: int = 5) -> List[Dict]:
+        """
+        合并同日同人 threshold_sec 秒内的重复打卡。
+        相邻两条时间差 ≤ threshold_sec 时，保留第一条；
+        若第二条有明确 inout_mark 而第一条没有，则继承其 mark。
+        必须在按 attendance_time 排序后调用。
+        """
+        if len(group) <= 1:
+            return group
+        result = [group[0]]
+        for rec in group[1:]:
+            prev = result[-1]
+            try:
+                t_prev = datetime.strptime(prev["attendance_time"], "%H:%M:%S")
+                t_curr = datetime.strptime(rec["attendance_time"], "%H:%M:%S")
+                diff = abs((t_curr - t_prev).total_seconds())
+            except (ValueError, KeyError):
+                diff = threshold_sec + 1
+            if diff <= threshold_sec:
+                if prev.get("inout_mark") is None and rec.get("inout_mark") is not None:
+                    result[-1] = dict(prev)
+                    result[-1]["inout_mark"] = rec["inout_mark"]
+            else:
+                result.append(rec)
+        return result
+
+    @staticmethod
     def _resolve_inout_mark_sequence(group: List[Dict]) -> List[int]:
         """
         按已排序的同日打卡序列，为每条生成 0/1。
@@ -308,6 +335,7 @@ class ExcelProcessor:
         
         for (employee_id, attendance_date), group in grouped.items():
             group.sort(key=lambda x: x['attendance_time'])
+            group = self._dedup_close_times(group)
             sub = group[:10]
             marks = self._resolve_inout_mark_sequence(sub)
             
