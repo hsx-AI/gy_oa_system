@@ -808,7 +808,10 @@ def _append_auto_reminder_log(entry: dict):
 class AutoReminderConfigRequest(BaseModel):
     current_user: str
     enabled: bool
-    schedules: list = Field(default_factory=list, description='[{"day":5,"hour":9,"minute":0}, ...]')
+    schedules: list = Field(
+        default_factory=list,
+        description='[{"day":5,"hour":9,"minute":0,"monthScope":"last"}, ...] monthScope: last=上月考勤, current=本月考勤',
+    )
 
 
 @router.get("/auto-reminder-config")
@@ -826,8 +829,11 @@ async def save_auto_reminder_config_api(req: AutoReminderConfigRequest):
         d = int(s.get("day", 0))
         h = int(s.get("hour", 9))
         m = int(s.get("minute", 0))
+        scope = str(s.get("monthScope") or "last").strip().lower()
+        if scope not in ("last", "current"):
+            scope = "last"
         if (1 <= d <= 31 or d == -1) and 0 <= h <= 23 and 0 <= m <= 59:
-            valid.append({"day": d, "hour": h, "minute": m})
+            valid.append({"day": d, "hour": h, "minute": m, "monthScope": scope})
     _save_auto_reminder_config(req.enabled, valid)
     return {"success": True, "message": f"已保存（{'启用' if req.enabled else '停用'}，{len(valid)} 条计划）"}
 
@@ -945,10 +951,13 @@ async def auto_reminder_background_loop():
             _, last_day_of_month = _cal.monthrange(now.year, now.month)
             for sch in cfg["schedules"]:
                 d, h, m = int(sch.get("day", 0)), int(sch.get("hour", 9)), int(sch.get("minute", 0))
+                scope = str(sch.get("monthScope") or "last").strip().lower()
+                if scope not in ("last", "current"):
+                    scope = "last"
                 match_day = (now.day == d) or (d == -1 and now.day == last_day_of_month)
                 if not match_day or now.hour != h or abs(now.minute - m) > 1:
                     continue
-                run_key = f"{now.strftime('%Y-%m-%d')}_{d}_{h}:{m:02d}"
+                run_key = f"{now.strftime('%Y-%m-%d')}_{d}_{h}:{m:02d}_{scope}"
                 if run_key in last_triggered:
                     continue
                 last_triggered[run_key] = True
@@ -957,15 +966,23 @@ async def auto_reminder_background_loop():
                     for k in keys[:100]:
                         del last_triggered[k]
 
-                if now.month == 1:
+                if scope == "current":
+                    target_year, target_month = now.year, now.month
+                elif now.month == 1:
                     target_year, target_month = now.year - 1, 12
                 else:
                     target_year, target_month = now.year, now.month - 1
 
                 day_label = "最后一天" if d == -1 else f"{d}号"
-                logger.info(f"[AutoReminder] 触发自动发送: {target_year}年{target_month}月 (计划: 每月{day_label} {h}:{m:02d})")
-                print(f"[AutoReminder] 触发: {target_year}年{target_month}月")
-                await _execute_auto_send(target_year, target_month, f"每月{day_label} {h}:{m:02d}")
+                month_label = "本月" if scope == "current" else "上月"
+                logger.info(
+                    f"[AutoReminder] 触发自动发送: {target_year}年{target_month}月 ({month_label}) "
+                    f"(计划: 每月{day_label} {h}:{m:02d})"
+                )
+                print(f"[AutoReminder] 触发: {target_year}年{target_month}月 ({month_label})")
+                await _execute_auto_send(
+                    target_year, target_month, f"每月{day_label} {h}:{m:02d} · {month_label}考勤"
+                )
         except Exception as e:
             logger.error(f"[AutoReminder] 循环异常: {e}")
             await asyncio.sleep(300)

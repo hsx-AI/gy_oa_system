@@ -225,7 +225,7 @@
             <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
             定时自动发送
           </h3>
-          <p class="section-desc">配置后系统将在指定日期自动发送上月考勤异常提醒（个人私发 + 领导汇总）</p>
+          <p class="section-desc">配置后系统将在指定日期自动发送考勤异常提醒（个人私发 + 领导汇总）；每条计划可单独选择针对上月或本月数据</p>
 
           <div class="auto-config">
             <div class="auto-row">
@@ -249,7 +249,10 @@
                 <select v-model.number="s.minute" class="select-input select-sm">
                   <option v-for="m in [0, 5, 10, 15, 20, 25, 30, 35, 40, 45, 50, 55]" :key="m" :value="m">{{ m.toString().padStart(2, '0') }}分</option>
                 </select>
-                <span class="schedule-hint">发送上月提醒</span>
+                <select v-model="s.monthScope" class="select-input select-sm schedule-scope">
+                  <option value="last">发送上月考勤</option>
+                  <option value="current">发送本月考勤</option>
+                </select>
                 <button type="button" class="btn-remove" @click="removeSchedule(i)" title="删除">&times;</button>
               </div>
               <button type="button" class="btn btn-outline btn-sm" @click="addSchedule">+ 添加计划</button>
@@ -464,7 +467,7 @@ const autoMsgType = ref('')
 const showAutoLog = ref(false)
 
 function addSchedule() {
-  autoSchedules.value.push({ day: 5, hour: 9, minute: 0 })
+  autoSchedules.value.push({ day: 5, hour: 9, minute: 0, monthScope: 'last' })
 }
 
 function removeSchedule(i) {
@@ -478,7 +481,12 @@ async function loadAutoConfig() {
     const res = await getAutoReminderConfig(name)
     if (res && res.success) {
       autoEnabled.value = !!res.enabled
-      autoSchedules.value = res.schedules || []
+      autoSchedules.value = (res.schedules || []).map((row) => ({
+        day: row.day,
+        hour: row.hour,
+        minute: row.minute,
+        monthScope: row.monthScope === 'current' ? 'current' : 'last',
+      }))
       autoLog.value = res.log || []
     }
   } catch (_) { /* ignore */ }
@@ -1188,6 +1196,7 @@ onMounted(() => {
 .auto-schedules { display: flex; flex-direction: column; gap: 8px; }
 .schedule-item {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 8px 12px;
@@ -1196,7 +1205,7 @@ onMounted(() => {
   border-radius: 8px;
 }
 .schedule-label { font-size: 13px; color: #374151; white-space: nowrap; }
-.schedule-hint { font-size: 12px; color: #9ca3af; flex: 1; }
+.schedule-scope { flex: 1; min-width: 132px; max-width: 100%; }
 .select-sm { padding: 5px 8px; font-size: 13px; min-width: auto; }
 .btn-remove {
   background: none; border: none; color: #9ca3af; font-size: 18px;
