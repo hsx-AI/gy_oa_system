@@ -239,7 +239,8 @@
               <div v-for="(s, i) in autoSchedules" :key="'sch-'+i" class="schedule-item">
                 <span class="schedule-label">每月</span>
                 <select v-model.number="s.day" class="select-input select-sm">
-                  <option v-for="d in 28" :key="d" :value="d">{{ d }}号</option>
+                  <option v-for="d in 31" :key="d" :value="d">{{ d }}号</option>
+                  <option :value="-1">最后一天</option>
                 </select>
                 <select v-model.number="s.hour" class="select-input select-sm">
                   <option v-for="h in 24" :key="h" :value="h - 1">{{ (h - 1).toString().padStart(2, '0') }}时</option>

@@ -246,6 +246,16 @@ export function updateBusinessTripReturnTime(id, data) {
   })
 }
 
+/** 获取可延长的公出记录（本科室已通过且未返回登记） */
+export function getExtendableBusinessTrips(params) {
+  return request({ url: '/business-trip/extendable-list', method: 'get', params })
+}
+
+/** 公出延长：修改预计返回时间并重新提交部领导审批 */
+export function extendBusinessTrip(id, data) {
+  return request({ url: `/business-trip/${id}/extend`, method: 'post', data })
+}
+
 // ==================== 审批 API ====================
 
 /** 检查是否有审批权限（员工无权限） */

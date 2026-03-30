@@ -763,7 +763,7 @@ async def export_leave_handler_table(
     列顺序：A 员工代码(string) B 姓名(string) C 部门(string，固定「智能制造工艺部」)
     D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string)。
     请假走 qj.qjfs；公出走 gcsqb.gclx（市内公出/境内公出/境外公出），gclx 为空时默认「境内公出」。
-    数据来源：qj 表（已通过 qjzt=4）+ gcsqb 表（已通过 bldzt=2,szrzt=2，时间用 yjcfsj/yjfhsj）；员工代码来自 yggl.gh。
+    数据来源：qj 表（已通过 qjzt=4 + 审核中 qjzt IN(0,1,3)）+ gcsqb 表（已通过+审核中，排除驳回 bldzt/szrzt=22）。
     """
     import calendar
     allowed, _, _ = _can_see_attendance_exceptions(current_user or "")
@@ -784,26 +784,26 @@ async def export_leave_handler_table(
         start_date = f"{year}-{month:02d}-01"
         end_date = f"{year}-{month:02d}-{last_day:02d}"
 
-        # 全员请假：qj 已通过，按月份筛选；员工代码取 yggl.gh
+        # 全员请假：已通过(qjzt=4) + 审核中(qjzt IN 0,1,3)，排除驳回；按月份筛选
         sql = """
             SELECT qj.xm AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
                    TRIM(yggl.gh) AS gh
             FROM qj
             LEFT JOIN yggl ON qj.xm = yggl.name
-            WHERE qj.qjzt = 4
+            WHERE qj.qjzt IN (0, 1, 3, 4)
               AND (qj.timefrom LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)
             ORDER BY qj.timefrom ASC
         """
         rows = db.execute_query(sql, (f"{month_str}%", month_str)) or []
 
-        # 公出：gcsqb 已通过，当月 yjcfsj 或 yjfhsj 落在该月即纳入；时间用 yjcfsj、yjfhsj
+        # 公出：已通过 + 审核中，排除驳回(bldzt=22 或 szrzt=22)
         try:
             gcsqb_sql = """
                 SELECT g.gcr AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto,
                        NULLIF(TRIM(COALESCE(g.gclx, '')), '') AS gclx, TRIM(y.gh) AS gh
                 FROM gcsqb g
                 LEFT JOIN yggl y ON g.gcr = y.name
-                WHERE g.bldzt = 2 AND g.szrzt = 2
+                WHERE g.bldzt != 22 AND g.szrzt != 22
                   AND (g.yjcfsj IS NOT NULL OR g.yjfhsj IS NOT NULL)
                   AND (
                     (g.yjcfsj IS NOT NULL AND DATE(g.yjcfsj) >= %s AND DATE(g.yjcfsj) <= %s)

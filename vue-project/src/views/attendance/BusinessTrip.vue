@@ -15,6 +15,7 @@
             审批
           </button>
           <button class="btn btn-outline" @click="$router.push('/attendance/business-trip/map')">公出地图</button>
+          <button v-if="canExtend" class="btn btn-outline" @click="openExtendModal">公出延长</button>
           <button class="btn btn-primary" @click="showApplyModal = true">公出登记</button>
           <button class="btn btn-primary" @click="openReturnModal">返回登记</button>
         </div>
@@ -362,13 +363,59 @@
         </form>
       </div>
     </div>
+    <!-- 公出延长弹窗 -->
+    <div v-if="showExtendModal" class="modal-overlay" @click.self="showExtendModal = false">
+      <div class="modal-content">
+        <button type="button" class="modal-close-btn" @click="showExtendModal = false">&times;</button>
+        <h2>公出延长</h2>
+        <p class="modal-hint">修改预计返回时间，将重新提交部领导审批</p>
+        <form @submit.prevent="submitExtend" class="application-form">
+          <div class="form-group">
+            <label>选择公出记录</label>
+            <select v-model="extendForm.selectedId" @change="onExtendSelect">
+              <option value="">请选择</option>
+              <option v-for="r in extendableList" :key="r.id" :value="r.id">
+                {{ r.person }} · {{ r.location }} · {{ r.expectedStartTime }}～{{ r.expectedReturnTime }}
+              </option>
+            </select>
+          </div>
+          <div v-if="extendForm.selectedId" class="form-row">
+            <div class="form-group half">
+              <label>原预计返回时间</label>
+              <input type="text" :value="extendForm.oldReturnTime" readonly class="readonly-input">
+            </div>
+            <div class="form-group half">
+              <label>新预计返回时间</label>
+              <input type="datetime-local" v-model="extendForm.newReturnTime" required>
+            </div>
+          </div>
+          <div class="form-group" v-if="extendForm.selectedId">
+            <label>部领导</label>
+            <select v-model="extendForm.deptLeader" required :disabled="extendLoadingApprovers">
+              <option value="">请选择部领导</option>
+              <option v-for="p in extendDeptLeaders" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+          <div class="form-group" v-if="extendForm.selectedId">
+            <label>备注（选填）</label>
+            <input type="text" v-model="extendForm.remark" placeholder="延长原因说明">
+          </div>
+          <div class="form-actions">
+            <button type="button" @click="showExtendModal = false">取消</button>
+            <button type="submit" class="btn-primary" :disabled="extendSubmitting">
+              {{ extendSubmitting ? '提交中…' : '确认延长' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusinessTripAllRecords, getDeptLsysList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord } from '@/api/attendance'
+import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusinessTripAllRecords, getDeptLsysList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
@@ -566,6 +613,19 @@ function initUserInfo() {
 
 const userInfo = initUserInfo()
 const canApprove = ref(false)
+const canExtend = ref(false)
+const showExtendModal = ref(false)
+const extendableList = ref([])
+const extendDeptLeaders = ref([])
+const extendLoadingApprovers = ref(false)
+const extendSubmitting = ref(false)
+const extendForm = reactive({
+  selectedId: '',
+  oldReturnTime: '',
+  newReturnTime: '',
+  deptLeader: '',
+  remark: ''
+})
 // 公出类型：市内公出 / 境内公出 / 境外公出
 const tripScope = ref('市内公出')
 const isCityTrip = computed(() => tripScope.value === '市内公出')
@@ -754,6 +814,9 @@ onMounted(async () => {
     } catch (_) {
       canApprove.value = false
     }
+    // 班组长/主任/副主任检查延长权限
+    const jb = (userInfo.jb || '').trim()
+    canExtend.value = ['组长', '主任', '副主任'].some(kw => jb.includes(kw)) || canApprove.value
   }
   await refreshTripListMeta()
 
@@ -979,6 +1042,79 @@ const submitReturn = async () => {
     const msg = Array.isArray(detail) ? detail.map(d => d.msg || d).join('; ') : (detail || err.message)
     alert(msg || '返回登记提交失败，请稍后重试')
   }
+}
+
+// ==================== 公出延长 ====================
+const openExtendModal = async () => {
+  const name = (userInfo.name || '').trim()
+  if (!name) return
+  try {
+    const res = await getExtendableBusinessTrips({ name })
+    extendableList.value = (res && res.list) || []
+  } catch (e) {
+    const detail = e.response?.data?.detail || e.message
+    alert(detail || '获取可延长列表失败')
+    return
+  }
+  if (!extendableList.value.length) {
+    alert('暂无可延长的公出记录（需已通过审批且未返回登记）')
+    return
+  }
+  extendForm.selectedId = ''
+  extendForm.oldReturnTime = ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  extendForm.remark = ''
+  extendDeptLeaders.value = []
+  showExtendModal.value = true
+}
+
+const onExtendSelect = async () => {
+  const rec = extendableList.value.find(r => r.id === extendForm.selectedId)
+  extendForm.oldReturnTime = rec ? rec.expectedReturnTime : ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  if (extendForm.selectedId) {
+    extendLoadingApprovers.value = true
+    try {
+      const res = await getApprovers({ name: rec?.person || userInfo.name, level: 'dept_leader' })
+      extendDeptLeaders.value = (res && res.approvers) ? res.approvers.map(a => a.name) : []
+    } catch (_) {
+      extendDeptLeaders.value = []
+    }
+    extendLoadingApprovers.value = false
+    const origLeader = (rec?.deptLeader || '').trim()
+    if (origLeader && extendDeptLeaders.value.includes(origLeader)) {
+      extendForm.deptLeader = origLeader
+    }
+  }
+}
+
+const submitExtend = async () => {
+  if (!extendForm.selectedId) { alert('请选择公出记录'); return }
+  if (!extendForm.newReturnTime) { alert('请填写新的预计返回时间'); return }
+  if (!extendForm.deptLeader) { alert('请选择部领导'); return }
+  extendSubmitting.value = true
+  try {
+    const res = await extendBusinessTrip(extendForm.selectedId, {
+      current_user: (userInfo.name || '').trim(),
+      new_return_time: extendForm.newReturnTime,
+      dept_leader: extendForm.deptLeader,
+      remark: extendForm.remark
+    })
+    if (res.success) {
+      alert(res.message || '延长已提交')
+      showExtendModal.value = false
+      fetchTripRecords()
+    } else {
+      alert(res.message || '提交失败')
+    }
+  } catch (err) {
+    const detail = err.response?.data?.detail
+    const msg = Array.isArray(detail) ? detail.map(d => d.msg || d).join('; ') : (detail || err.message)
+    alert(msg || '延长提交失败')
+  }
+  extendSubmitting.value = false
 }
 
 watch(showApplyModal, async (visible) => {
@@ -1282,10 +1418,11 @@ watch(showApplyModal, async (visible) => {
 }
 
 .modal-content {
+  position: relative;
   background: white;
   padding: var(--spacing-xl);
   border-radius: var(--radius-md);
-  width: 800px; /* 进一步增加宽度 */
+  width: 800px;
   max-width: 95%;
   max-height: 90vh;
   overflow-y: auto;
@@ -1453,5 +1590,32 @@ button:hover {
   background: var(--color-primary-light);
   border-color: var(--color-primary-light);
   color: white;
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  line-height: 1;
+  padding: 4px 8px;
+}
+.modal-close-btn:hover {
+  color: var(--color-text-primary);
+}
+
+.modal-hint {
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  margin: 4px 0 0;
+}
+
+.readonly-input {
+  background: var(--color-bg-light, #f5f5f5);
+  cursor: default;
 }
 </style>

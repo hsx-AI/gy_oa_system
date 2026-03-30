@@ -442,6 +442,139 @@ async def set_business_trip_return_time(item_id: str, body: ReturnTimeBody):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+class ExtendTripRequest(BaseModel):
+    """公出延长请求"""
+    current_user: str
+    new_return_time: str
+    dept_leader: str
+    remark: str = ""
+
+
+@router.post("/{item_id}/extend")
+async def extend_business_trip(item_id: str, req: ExtendTripRequest):
+    """
+    公出延长：班组长/主任/副主任可为本科室已通过且未返回登记的公出修改预计返回时间，
+    同时重置审批状态为二级审批（仅需部领导审批），附带备注。
+    """
+    viewer = (req.current_user or "").strip()
+    if not viewer:
+        raise HTTPException(status_code=400, detail="当前用户不能为空")
+    user = _get_user_info(viewer)
+    if not user:
+        raise HTTPException(status_code=403, detail="用户信息不存在")
+    jb = (user.get("jb") or "").strip()
+    viewer_lsys = (user.get("lsys") or "").strip()
+    admin1 = (_get_admin1() or "").strip()
+    is_admin = bool(admin1 and viewer == admin1)
+    can_extend = (
+        _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任") or is_admin
+    )
+    if not can_extend:
+        raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可操作公出延长")
+
+    rows = db.execute_query(
+        "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, gcrw FROM gcsqb WHERE id = %s",
+        (item_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="公出记录不存在")
+    r = rows[0]
+    bldzt = int(r.get("bldzt") or 0)
+    szrzt = int(r.get("szrzt") or 0)
+    fhdj = int(r.get("fhdj_status") or 0)
+    if not (bldzt == 2 and szrzt == 2):
+        raise HTTPException(status_code=400, detail="仅可延长已通过审批的公出记录")
+    if fhdj == 1:
+        raise HTTPException(status_code=400, detail="已完成返回登记的公出无法延长，请重新登记")
+
+    gcr = (r.get("gcr") or "").strip()
+    if not is_admin:
+        emp = _get_user_info(gcr)
+        emp_lsys = (emp.get("lsys") or "").strip() if emp else ""
+        if emp_lsys != viewer_lsys:
+            raise HTTPException(status_code=403, detail="只能延长本科室人员的公出记录")
+
+    new_dt = _to_dt(req.new_return_time)
+    if not new_dt:
+        raise HTTPException(status_code=400, detail="新的预计返回时间格式不正确")
+
+    dept_leader = (req.dept_leader or "").strip()
+    if not dept_leader:
+        raise HTTPException(status_code=400, detail="请选择部领导")
+
+    remark = (req.remark or "").strip()
+    old_task = (r.get("gcrw") or "").strip()
+    extend_note = f"[公出延长 {datetime.now().strftime('%Y-%m-%d %H:%M')} by {viewer}] 原预计返回: {_fmt_dt(r.get('yjfhsj'))}，延长至: {new_dt}"
+    if remark:
+        extend_note += f"，备注: {remark}"
+    new_task = f"{old_task}\n{extend_note}" if old_task else extend_note
+
+    sql = """
+        UPDATE gcsqb
+        SET yjfhsj = %s, bld = %s, bldzt = 1, szrzt = 2,
+            bldpztime = NULL, bhyy = NULL, gcrw = %s
+        WHERE id = %s
+    """
+    n = db.execute_update(sql, (new_dt, dept_leader, new_task, item_id))
+    if n <= 0:
+        raise HTTPException(status_code=500, detail="更新失败")
+
+    return {"success": True, "message": f"已延长公出并提交部领导({dept_leader})审批"}
+
+
+@router.get("/extendable-list")
+async def get_extendable_business_trips(name: str = Query(..., description="当前用户姓名")):
+    """获取当前用户科室内可延长的公出记录（已通过且未返回登记）"""
+    viewer = (name or "").strip()
+    if not viewer:
+        raise HTTPException(status_code=400, detail="姓名不能为空")
+    user = _get_user_info(viewer)
+    if not user:
+        raise HTTPException(status_code=403, detail="用户信息不存在")
+    jb = (user.get("jb") or "").strip()
+    viewer_lsys = (user.get("lsys") or "").strip()
+    admin1 = (_get_admin1() or "").strip()
+    is_admin = bool(admin1 and viewer == admin1)
+    can_extend = (
+        _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任") or is_admin
+    )
+    if not can_extend:
+        raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可查看")
+
+    one_year_ago = datetime.now().replace(year=datetime.now().year - 1).strftime("%Y-%m-%d %H:%M:%S")
+    base = f"g.bldzt = 2 AND g.szrzt = 2 AND COALESCE(g.fhdj_status, 0) = 0 AND COALESCE(g.yjcfsj, g.yjfhsj) >= %s"
+
+    if is_admin:
+        where = base
+        params: tuple = (one_year_ago,)
+    else:
+        where = (
+            f"{base} "
+            "AND g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0)"
+        )
+        params = (one_year_ago, viewer_lsys)
+
+    sql = f"""
+        SELECT g.id, g.gcr, g.gcdd, g.yjcfsj, g.yjfhsj, g.gclx, g.xmmc, g.gcrw, g.bld
+        FROM gcsqb g WHERE {where}
+        ORDER BY g.yjcfsj DESC
+    """
+    rows = db.execute_query(sql, params) or []
+    result = []
+    for row in rows:
+        result.append({
+            "id": row.get("id"),
+            "person": (row.get("gcr") or "").strip(),
+            "location": (row.get("gcdd") or "").strip(),
+            "tripScope": (row.get("gclx") or "").strip(),
+            "projectName": (row.get("xmmc") or "").strip(),
+            "expectedStartTime": _fmt_dt(row.get("yjcfsj")),
+            "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
+            "deptLeader": (row.get("bld") or "").strip(),
+        })
+    return {"success": True, "list": result}
+
+
 @router.delete("/{item_id}")
 async def delete_business_trip_rejected(item_id: str, name: str):
     """删除本人已驳回的公出记录（仅 bldzt=22 或 szrzt=22 可删），数据库物理删除"""

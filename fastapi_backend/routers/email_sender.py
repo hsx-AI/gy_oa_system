@@ -826,7 +826,7 @@ async def save_auto_reminder_config_api(req: AutoReminderConfigRequest):
         d = int(s.get("day", 0))
         h = int(s.get("hour", 9))
         m = int(s.get("minute", 0))
-        if 1 <= d <= 28 and 0 <= h <= 23 and 0 <= m <= 59:
+        if (1 <= d <= 31 or d == -1) and 0 <= h <= 23 and 0 <= m <= 59:
             valid.append({"day": d, "hour": h, "minute": m})
     _save_auto_reminder_config(req.enabled, valid)
     return {"success": True, "message": f"已保存（{'启用' if req.enabled else '停用'}，{len(valid)} 条计划）"}
@@ -941,9 +941,12 @@ async def auto_reminder_background_loop():
                 continue
 
             now = datetime.now()
+            import calendar as _cal
+            _, last_day_of_month = _cal.monthrange(now.year, now.month)
             for sch in cfg["schedules"]:
                 d, h, m = int(sch.get("day", 0)), int(sch.get("hour", 9)), int(sch.get("minute", 0))
-                if now.day != d or now.hour != h or abs(now.minute - m) > 1:
+                match_day = (now.day == d) or (d == -1 and now.day == last_day_of_month)
+                if not match_day or now.hour != h or abs(now.minute - m) > 1:
                     continue
                 run_key = f"{now.strftime('%Y-%m-%d')}_{d}_{h}:{m:02d}"
                 if run_key in last_triggered:
@@ -959,9 +962,10 @@ async def auto_reminder_background_loop():
                 else:
                     target_year, target_month = now.year, now.month - 1
 
-                logger.info(f"[AutoReminder] 触发自动发送: {target_year}年{target_month}月 (计划: 每月{d}号 {h}:{m:02d})")
+                day_label = "最后一天" if d == -1 else f"{d}号"
+                logger.info(f"[AutoReminder] 触发自动发送: {target_year}年{target_month}月 (计划: 每月{day_label} {h}:{m:02d})")
                 print(f"[AutoReminder] 触发: {target_year}年{target_month}月")
-                await _execute_auto_send(target_year, target_month, f"每月{d}号 {h}:{m:02d}")
+                await _execute_auto_send(target_year, target_month, f"每月{day_label} {h}:{m:02d}")
         except Exception as e:
             logger.error(f"[AutoReminder] 循环异常: {e}")
             await asyncio.sleep(300)
