@@ -731,7 +731,7 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     # -------------------------------------------------
     # 4. 缺勤检查逻辑：
     #    规则：如果刷离时间在工作时段（8:00–17:00 开区间）内，则 "刷离时间 → 下次刷入时间" 为缺勤。
-    #    午休 12:00–13:00 不再分段——请假时系统会自动扣除午休，无需拆成两条建议。
+    #    午休 12:00–13:00 不分段——跨午休的缺勤作为一条建议；但完全落在午休内的间隙忽略。
     # -------------------------------------------------
     for idx, (t_in, t_out) in enumerate(intervals):
         out_val = time_to_decimal(t_out)
@@ -751,12 +751,23 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
             else:
                 gap_end = next_in
 
+            gap_end_val = time_to_decimal(gap_end)
+
+            # 间隙完全在午休 12:00–13:00 内，不算缺勤
+            if gap_start_val >= WORK_AM_END and gap_end_val <= WORK_PM_START:
+                continue
+
             if gap_end > gap_start:
                 suggestions.append(_sugg(
                     format_time(gap_start), format_time(gap_end), 1,
                     f"【考勤建议】检测到缺勤，建议补录 {format_time(gap_start)} 到 {format_time(gap_end)} 的考勤"
                 ))
         else:
+            # 午休内离开且是最后一个区间：缺勤从 13:00 开始到 17:00
+            if gap_start_val >= WORK_AM_END and gap_start_val < WORK_PM_START:
+                gap_start = gap_start.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
+                gap_start_val = WORK_PM_START
+
             if gap_start_val < WORK_PM_END:
                 end_dt = gap_start.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
                 suggestions.append(_sugg(
