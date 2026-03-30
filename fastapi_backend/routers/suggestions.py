@@ -650,11 +650,10 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
     # -------------------------------------------------
-    # 2. 迟到 / 上午缺勤检测（基于当天第一次「进」的时间）
+    # 2. 迟到 / 缺勤检测（基于当天第一次「进」的时间，不按午休分段）
     #    8 < first < 12   → 迟到：8:00 → first
-    #    12 <= first < 13 → 上午全缺勤：8:00 → 12:00（午休不计）
-    #    13 <= first < 17 → 上午全缺勤 + 下午迟到：8:00→12:00, 13:00→first
-    #    first >= 17      → 全天缺勤：8:00→17:00（一条建议；加班仍由第5步检测）
+    #    12 <= first < 17 → 缺勤：8:00 → first（含午休，请假时系统自动扣除）
+    #    first >= 17      → 全天缺勤：8:00 → 17:00
     # -------------------------------------------------
     first_in_time = None
     for t, m in time_mark_pairs:
@@ -671,21 +670,11 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
             "08:00:00", format_time(first_in_time), 1,
             f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(first_in_time)} 的考勤"
         ))
-    elif WORK_AM_END <= first_val < WORK_PM_START:
+    elif WORK_AM_END <= first_val < WORK_PM_END:
         suggestions.append(_sugg(
-            "08:00:00", "12:00:00", 1,
-            "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+            "08:00:00", format_time(first_in_time), 1,
+            f"【考勤建议】检测到缺勤，建议补录 08:00 到 {format_time(first_in_time)} 的考勤"
         ))
-    elif WORK_PM_START <= first_val < WORK_PM_END:
-        suggestions.append(_sugg(
-            "08:00:00", "12:00:00", 1,
-            "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
-        ))
-        if first_val > WORK_PM_START:
-            suggestions.append(_sugg(
-                "13:00:00", format_time(first_in_time), 1,
-                f"【考勤建议】检测到下午迟到，建议补录 13:00 到 {format_time(first_in_time)} 的考勤"
-            ))
     elif first_val >= WORK_PM_END:
         suggestions.append(_sugg(
             "08:00:00", "17:00:00", 1,
@@ -728,21 +717,11 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
                     "08:00:00", format_time(eff_dt), 1,
                     f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(eff_dt)} 的考勤"
                 ))
-            elif WORK_AM_END <= eff_work_start < WORK_PM_START:
+            elif WORK_AM_END <= eff_work_start < WORK_PM_END:
                 suggestions.append(_sugg(
-                    "08:00:00", "12:00:00", 1,
-                    "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+                    "08:00:00", format_time(eff_dt), 1,
+                    f"【考勤建议】检测到缺勤，建议补录 08:00 到 {format_time(eff_dt)} 的考勤"
                 ))
-            elif WORK_PM_START <= eff_work_start < WORK_PM_END:
-                suggestions.append(_sugg(
-                    "08:00:00", "12:00:00", 1,
-                    "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
-                ))
-                if eff_work_start > WORK_PM_START:
-                    suggestions.append(_sugg(
-                        "13:00:00", format_time(eff_dt), 1,
-                        f"【考勤建议】检测到下午迟到，建议补录 13:00 到 {format_time(eff_dt)} 的考勤"
-                    ))
             elif eff_work_start >= WORK_PM_END:
                 suggestions.append(_sugg(
                     "08:00:00", "17:00:00", 1,
@@ -751,60 +730,26 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
 
     # -------------------------------------------------
     # 4. 缺勤检查逻辑：
-    #    规则：如果刷离时间在工作时间区间内（开区间 8–12、13–17，整点 8/12/13/17 不报），
-    #          则 "刷离时间 → 下次刷入时间" 为缺勤；若为最后区间则补到 17:00。
-    #    午休 [12:00, 13:00) 内出门：缺勤从 13:00 开始算（午休不算缺勤）。
+    #    规则：如果刷离时间在工作时段（8:00–17:00 开区间）内，则 "刷离时间 → 下次刷入时间" 为缺勤。
+    #    午休 12:00–13:00 不再分段——请假时系统会自动扣除午休，无需拆成两条建议。
     # -------------------------------------------------
     for idx, (t_in, t_out) in enumerate(intervals):
         out_val = time_to_decimal(t_out)
 
-        in_am = WORK_AM_START < out_val < WORK_AM_END
-        in_pm = WORK_PM_START < out_val < WORK_PM_END
-        in_lunch = WORK_AM_END <= out_val < WORK_PM_START
-
-        if not (in_am or in_pm) and not in_lunch:
+        if not (WORK_AM_START < out_val < WORK_PM_END):
             continue
 
-        # 午休期间出门，缺勤起点跳到 13:00
-        if in_lunch:
-            gap_start = t_out.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
-        else:
-            gap_start = t_out
-
-        gap_start_val = time_to_decimal(gap_start)
+        gap_start = t_out
+        gap_start_val = out_val
 
         if idx + 1 < len(intervals):
             next_in = intervals[idx + 1][0]
             next_in_val = time_to_decimal(next_in)
-            # 下次入门在午休前 → 缺勤到下次入门；入门在午休后 → 也要跳过午休
-            if next_in_val <= WORK_AM_END:
-                gap_end = next_in
-            elif WORK_AM_END <= next_in_val < WORK_PM_START:
-                # 下次入门也在午休内，不产生缺勤
-                continue
-            elif next_in_val > WORK_PM_END:
+
+            if next_in_val > WORK_PM_END:
                 gap_end = gap_start.replace(hour=WORK_PM_END, minute=0, second=0, microsecond=0)
             else:
                 gap_end = next_in
-
-            # 如果缺勤起点也在午休前，需要拆成上午段和下午段
-            if not in_lunch and out_val < WORK_AM_END and gap_start_val < WORK_AM_END:
-                gap_end_val = time_to_decimal(gap_end)
-                if gap_end_val > WORK_PM_START:
-                    # 跨午休：拆为上午缺勤 + 下午缺勤
-                    am_end = t_out.replace(hour=WORK_AM_END, minute=0, second=0, microsecond=0)
-                    if am_end > t_out:
-                        suggestions.append(_sugg(
-                            format_time(t_out), format_time(am_end), 1,
-                            f"【考勤建议】检测到缺勤，建议补录 {format_time(t_out)} 到 {format_time(am_end)} 的考勤"
-                        ))
-                    pm_start = t_out.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
-                    if gap_end > pm_start:
-                        suggestions.append(_sugg(
-                            format_time(pm_start), format_time(gap_end), 1,
-                            f"【考勤建议】检测到缺勤，建议补录 {format_time(pm_start)} 到 {format_time(gap_end)} 的考勤"
-                        ))
-                    continue
 
             if gap_end > gap_start:
                 suggestions.append(_sugg(
