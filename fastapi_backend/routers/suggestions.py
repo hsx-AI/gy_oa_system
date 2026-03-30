@@ -650,7 +650,11 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
     # -------------------------------------------------
-    # 2. 迟到检测（基于当天第一次「进」的时间）
+    # 2. 迟到 / 上午缺勤检测（基于当天第一次「进」的时间）
+    #    8 < first < 12   → 迟到：8:00 → first
+    #    12 <= first < 13 → 上午全缺勤：8:00 → 12:00（午休不计）
+    #    13 <= first < 17 → 上午全缺勤 + 下午迟到：8:00→12:00, 13:00→first
+    #    first >= 17      → 全天缺勤：8:00→17:00（一条建议；加班仍由第5步检测）
     # -------------------------------------------------
     first_in_time = None
     for t, m in time_mark_pairs:
@@ -667,11 +671,83 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
             "08:00:00", format_time(first_in_time), 1,
             f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(first_in_time)} 的考勤"
         ))
+    elif WORK_AM_END <= first_val < WORK_PM_START:
+        suggestions.append(_sugg(
+            "08:00:00", "12:00:00", 1,
+            "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+        ))
+    elif WORK_PM_START <= first_val < WORK_PM_END:
+        suggestions.append(_sugg(
+            "08:00:00", "12:00:00", 1,
+            "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+        ))
+        if first_val > WORK_PM_START:
+            suggestions.append(_sugg(
+                "13:00:00", format_time(first_in_time), 1,
+                f"【考勤建议】检测到下午迟到，建议补录 13:00 到 {format_time(first_in_time)} 的考勤"
+            ))
+    elif first_val >= WORK_PM_END:
+        suggestions.append(_sugg(
+            "08:00:00", "17:00:00", 1,
+            "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）"
+        ))
 
     # -------------------------------------------------
     # 3. 根据进/出标记构建（刷入，刷离）区间
     # -------------------------------------------------
     intervals = build_intervals_from_marks(time_mark_pairs)
+
+    # -------------------------------------------------
+    # 3b. 早班前到岗但未待到工作时段的补充检测
+    #     当 first_val <= 8 时，step 2 不会触发任何分支（视为"准时到岗"），
+    #     但实际可能在 8:00 前就离开了。需要通过区间判断真正覆盖工作时段的"有效首次到岗时间"。
+    # -------------------------------------------------
+    if first_val <= WORK_AM_START and intervals:
+        eff_work_start = None
+        for t_in, t_out in intervals:
+            iv_in = time_to_decimal(t_in)
+            iv_out = time_to_decimal(t_out)
+            if iv_out <= WORK_AM_START:
+                continue
+            if iv_in <= WORK_AM_START:
+                eff_work_start = WORK_AM_START
+                break
+            else:
+                eff_work_start = iv_in
+                break
+
+        if eff_work_start is None:
+            suggestions.append(_sugg(
+                "08:00:00", "17:00:00", 1,
+                "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）"
+            ))
+        elif eff_work_start > WORK_AM_START:
+            eff_dt = decimal_to_dt(date_obj, eff_work_start)
+            if eff_work_start < WORK_AM_END:
+                suggestions.append(_sugg(
+                    "08:00:00", format_time(eff_dt), 1,
+                    f"【考勤建议】检测到迟到，建议补录 08:00 到 {format_time(eff_dt)} 的考勤"
+                ))
+            elif WORK_AM_END <= eff_work_start < WORK_PM_START:
+                suggestions.append(_sugg(
+                    "08:00:00", "12:00:00", 1,
+                    "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+                ))
+            elif WORK_PM_START <= eff_work_start < WORK_PM_END:
+                suggestions.append(_sugg(
+                    "08:00:00", "12:00:00", 1,
+                    "【考勤建议】检测到上午缺勤，建议补录 08:00 到 12:00 的考勤"
+                ))
+                if eff_work_start > WORK_PM_START:
+                    suggestions.append(_sugg(
+                        "13:00:00", format_time(eff_dt), 1,
+                        f"【考勤建议】检测到下午迟到，建议补录 13:00 到 {format_time(eff_dt)} 的考勤"
+                    ))
+            elif eff_work_start >= WORK_PM_END:
+                suggestions.append(_sugg(
+                    "08:00:00", "17:00:00", 1,
+                    "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）"
+                ))
 
     # -------------------------------------------------
     # 4. 缺勤检查逻辑：
