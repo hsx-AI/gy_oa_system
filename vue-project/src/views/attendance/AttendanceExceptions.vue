@@ -48,8 +48,24 @@
           <table class="data-table">
             <thead>
               <tr>
-                <th>日期</th>
-                <th>姓名</th>
+                <th
+                  scope="col"
+                  class="th-sortable"
+                  :class="{ 'th-sortable--active': sortBy === 'date' }"
+                  title="点击切换升序/降序"
+                  @click="toggleSort('date')"
+                >
+                  日期<span v-if="sortBy === 'date'" class="sort-ind">{{ sortDir === 'asc' ? ' ↑' : ' ↓' }}</span>
+                </th>
+                <th
+                  scope="col"
+                  class="th-sortable"
+                  :class="{ 'th-sortable--active': sortBy === 'name' }"
+                  title="点击切换升序/降序"
+                  @click="toggleSort('name')"
+                >
+                  姓名<span v-if="sortBy === 'name'" class="sort-ind">{{ sortDir === 'asc' ? ' ↑' : ' ↓' }}</span>
+                </th>
                 <th>所在单位</th>
                 <th v-for="n in timeSlots" :key="'th' + n">考勤时间{{ n }}</th>
                 <th v-if="isDakaman">操作</th>
@@ -57,16 +73,16 @@
             </thead>
             <tbody>
               <tr v-if="loading">
-                <td :colspan="isDakaman ? 12 : 11" class="text-center text-tertiary">
+                <td :colspan="3 + timeSlots.length + (isDakaman ? 1 : 0)" class="text-center text-tertiary">
                   加载中…
                 </td>
               </tr>
               <tr v-else-if="filteredRecords.length === 0">
-                <td :colspan="isDakaman ? 12 : 11" class="text-center text-tertiary">
+                <td :colspan="3 + timeSlots.length + (isDakaman ? 1 : 0)" class="text-center text-tertiary">
                   {{ loadError ? loadError : (selectedDept ? '该科室暂无考勤异常记录' : '暂无考勤异常记录') }}
                 </td>
               </tr>
-              <tr v-for="record in filteredRecords" :key="record.id || `${record.employee_name}-${record.attendance_date}`">
+              <tr v-for="record in displayRecords" :key="record.id || `${record.employee_name}-${record.attendance_date}`">
                 <td>
                   <span class="table-date">{{ record.attendance_date }}</span>
                 </td>
@@ -81,7 +97,7 @@
                 <td>
                   <span class="text-secondary">{{ record.department }}</span>
                 </td>
-                <td v-if="isFullDayAbsence(record)" colspan="8" class="full-day-absence-cell">
+                <td v-if="isFullDayAbsence(record)" :colspan="timeSlots.length" class="full-day-absence-cell">
                   <span class="full-day-absence-badge">全天缺勤</span>
                 </td>
                 <template v-else>
@@ -163,6 +179,19 @@ const exportingLeaveHandler = ref(false)
 const isDakaman = ref(false)
 const processingId = ref(null)
 
+/** 表格排序：'' 表示保持接口顺序 */
+const sortBy = ref('')
+const sortDir = ref('asc')
+
+function toggleSort(field) {
+  if (sortBy.value === field) {
+    sortDir.value = sortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    sortBy.value = field
+    sortDir.value = 'asc'
+  }
+}
+
 const leaveTypeOptions = ['换休', '带薪年休假', '事假', '病假', '婚假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假']
 
 const processModal = reactive({
@@ -188,6 +217,26 @@ const departmentOptions = computed(() => {
 const filteredRecords = computed(() => {
   if (!selectedDept.value) return records.value
   return records.value.filter(r => (r.department || '').trim() === selectedDept.value)
+})
+
+const displayRecords = computed(() => {
+  const list = filteredRecords.value.slice()
+  if (sortBy.value === 'date') {
+    list.sort((a, b) => {
+      const da = String(a.attendance_date || '')
+      const db = String(b.attendance_date || '')
+      const cmp = da.localeCompare(db, undefined, { numeric: true })
+      return sortDir.value === 'asc' ? cmp : -cmp
+    })
+  } else if (sortBy.value === 'name') {
+    list.sort((a, b) => {
+      const na = String(a.employee_name || '')
+      const nb = String(b.employee_name || '')
+      const cmp = na.localeCompare(nb, 'zh-CN')
+      return sortDir.value === 'asc' ? cmp : -cmp
+    })
+  }
+  return list
 })
 
 function getCurrentUserName() {
@@ -517,6 +566,22 @@ onMounted(() => {
   color: var(--color-text-secondary);
   border-bottom: 1px solid var(--color-border-lighter);
   white-space: nowrap;
+}
+
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  transition: color 0.15s;
+}
+.th-sortable:hover {
+  color: var(--color-text-primary);
+}
+.th-sortable--active {
+  color: var(--color-text-primary);
+}
+.sort-ind {
+  font-weight: var(--font-weight-regular, 400);
+  opacity: 0.9;
 }
 
 .data-table td {

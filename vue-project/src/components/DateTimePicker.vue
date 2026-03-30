@@ -187,6 +187,7 @@ function applyPreset(p) {
 <style scoped>
 .dtp__row {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
@@ -226,7 +227,9 @@ function applyPreset(p) {
 }
 
 .dtp__hour {
-  width: 130px;
+  min-width: 148px;
+  width: 168px;
+  max-width: 100%;
 }
 
 .dtp__minute,

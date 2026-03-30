@@ -363,7 +363,9 @@ async function handleSubmit() {
 
 <style scoped>
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
-.modal-content { position: relative; background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: 700px; max-width: 95%; max-height: 90vh; overflow-y: auto; }
+.modal-content { position: relative; background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: min(960px, 96vw); max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+.form-row:has(.dtp) { flex-wrap: wrap; }
+.form-group.half:has(.dtp) { flex: 1 1 min(100%, 440px); min-width: 0; }
 .modal-close-btn { position: absolute; top: 12px; right: 16px; background: none; border: none; font-size: 24px; color: var(--color-text-tertiary); cursor: pointer; line-height: 1; padding: 4px; z-index: 1; }
 .modal-close-btn:hover { color: var(--color-text-primary); }
 .modal-hint { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin: 0 0 var(--spacing-md); }
