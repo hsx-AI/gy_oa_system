@@ -65,10 +65,16 @@ async def get_sixianghuibao_todos(
                     "pending_reviews": data.get("pending_reviews", 0),
                     "returned_reports": data.get("returned_reports", 0),
                     "total": data.get("total", 0),
+                    "role": data.get("role", ""),
+                    "role_label": data.get("role_label", ""),
+                    "action_label": data.get("action_label", ""),
+                    "hint": data.get("hint", ""),
+                    "author_names": data.get("author_names", []),
                 }
     except Exception as e:
         logger.warning("请求思想汇报待办失败: %s", e)
-    return {"username": name, "pending_reviews": 0, "returned_reports": 0, "total": 0}
+    return {"username": name, "pending_reviews": 0, "returned_reports": 0, "total": 0,
+            "role": "", "role_label": "", "action_label": "", "hint": "", "author_names": []}
 
 
 @router.get("/personnel-pending")

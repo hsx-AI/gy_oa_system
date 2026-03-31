@@ -44,6 +44,8 @@ const todoLoading = ref(false)
 const tripReturnPendingCount = ref(0)
 const tripReturnLoading = ref(false)
 const sixianghuibaoTodoTotal = ref(0)
+const sixianghuibaoHint = ref('')
+const sixianghuibaoRole = ref('')
 /** 人事档案系统 GET pending-count 返回的 data.needAuditCount（仅展示此项，不展示 myPendingCount） */
 const personnelNeedAudit = ref(0)
 const hxpUnreadList = ref([])
@@ -63,13 +65,19 @@ const displayTodoList = computed(() => {
     })
   }
   if (sixianghuibaoTodoTotal.value > 0) {
+    const hint = sixianghuibaoHint.value
+    const role = sixianghuibaoRole.value
+    const isZzs = role === 'zzs'
+    const typeLabel = isZzs ? '思想汇报待审阅' : '思想汇报待处理'
+    const desc = hint || `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待处理`
     list.push({
       uniqueId: 'sixianghuibao-todos',
-      type: '思想汇报待处理',
-      description: `您有 ${sixianghuibaoTodoTotal.value} 篇思想汇报待处理`,
+      type: typeLabel,
+      description: desc,
       applicant: '思想汇报系统',
       time: '',
       isSixianghuibao: true,
+      btnLabel: isZzs ? '去审阅' : '去处理',
     })
   }
   if (personnelNeedAudit.value > 0) {
@@ -207,8 +215,12 @@ async function fetchSixianghuibaoTodos() {
   try {
     const res = await getSixianghuibaoTodos({ name })
     sixianghuibaoTodoTotal.value = Math.max(0, Number(res?.total) || 0)
+    sixianghuibaoHint.value = res?.hint || ''
+    sixianghuibaoRole.value = res?.role || ''
   } catch {
     sixianghuibaoTodoTotal.value = 0
+    sixianghuibaoHint.value = ''
+    sixianghuibaoRole.value = ''
   }
 }
 
