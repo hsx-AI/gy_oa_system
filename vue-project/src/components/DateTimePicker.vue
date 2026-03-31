@@ -193,8 +193,8 @@ function applyPreset(p) {
 }
 
 .dtp__date {
-  flex: 1;
-  min-width: 0;
+  flex: 1 1 auto;
+  min-width: 130px;
   padding: 8px 12px;
   border: 1px solid var(--color-border-base, #d9d9d9);
   border-radius: var(--radius-sm, 4px);
