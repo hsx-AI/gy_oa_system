@@ -21,7 +21,12 @@
             <p class="record-card__desc">{{ recordFilterLabel }}</p>
           </div>
           <div class="record-card__filters">
-            <label class="filter-label">筛选：</label>
+            <select v-if="canViewAll" v-model="recordScope" class="filter-select filter-select--scope">
+              <option value="self">本人</option>
+              <option value="lsys">本专业</option>
+              <option value="all">全部科室</option>
+              <option v-for="d in deptOptions" :key="d" :value="'lsys:' + d">{{ d }}</option>
+            </select>
             <input type="month" v-model="recordMonth" class="filter-input">
             <select v-model="recordStatus" class="filter-select">
               <option value="all">全部</option>
@@ -29,10 +34,17 @@
               <option value="approved">已通过</option>
               <option value="rejected">已驳回</option>
             </select>
+            <input
+              v-if="canViewAll && recordScope !== 'self'"
+              v-model.trim="nameFilter"
+              type="search"
+              class="filter-input filter-input--search"
+              placeholder="搜索姓名"
+            >
           </div>
         </div>
         <div class="card-body record-card__body">
-          <div class="table-wrap" v-if="recordList.length">
+          <div class="table-wrap" v-if="filteredList.length">
             <table class="record-table">
               <thead>
                 <tr>
@@ -100,8 +112,8 @@
               </tbody>
             </table>
           </div>
-          <div class="record-pagination" v-if="recordList.length">
-            <span class="record-pagination__total">共 {{ recordList.length }} 条</span>
+          <div class="record-pagination" v-if="filteredList.length">
+            <span class="record-pagination__total">共 {{ filteredList.length }} 条</span>
             <span class="record-pagination__size">
               每页
               <select v-model.number="pageSize" class="record-pagination__select">
@@ -231,7 +243,9 @@ import {
   deleteHolidayExchangeRecord,
   getHolidayExchangeDownloadUrl,
   getApprovers,
-  getHolidays
+  getHolidays,
+  getDeptLsysList,
+  getUploadConfig
 } from '@/api/attendance'
 
 const showApplyModal = ref(false)
@@ -242,10 +256,22 @@ const userInfo = (() => {
   return {
     name: u.name || u.userName || '',
     dept: u.dept || u.department || '',
+    jb: (u.jb || '').trim(),
   }
 })()
 const userName = userInfo.name
 const userDept = userInfo.dept
+
+const canViewAll = ref(false)
+const recordScope = ref('self')
+const deptOptions = ref([])
+
+const isLeaderRole = computed(() => {
+  const jb = userInfo.jb
+  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+    || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.startsWith('副主任')
+    || jb === '班组长' || jb.startsWith('班组长')
+})
 
 const form = reactive({
   ranges: [{ from: '', to: '' }],
@@ -391,30 +417,40 @@ async function fetchApprovers() {
 
 // 记录列表
 const recordList = ref([])
+const nameFilter = ref('')
 const _d = new Date()
 const recordMonth = ref(`${_d.getFullYear()}-${String(_d.getMonth() + 1).padStart(2, '0')}`)
 const recordStatus = ref('all')
 const page = ref(1)
 const pageSize = ref(10)
 
-const totalPages = computed(() => Math.max(1, Math.ceil(recordList.value.length / pageSize.value)))
+const filteredList = computed(() => {
+  const kw = nameFilter.value.trim().toLowerCase()
+  if (!kw || recordScope.value === 'self') return recordList.value
+  return recordList.value.filter(r => (r.applicant || '').toLowerCase().includes(kw))
+})
+const totalPages = computed(() => Math.max(1, Math.ceil(filteredList.value.length / pageSize.value)))
 const paginatedList = computed(() => {
   const start = (page.value - 1) * pageSize.value
-  return recordList.value.slice(start, start + pageSize.value)
+  return filteredList.value.slice(start, start + pageSize.value)
 })
 
 const recordFilterLabel = computed(() => {
   const m = (recordMonth.value || '').trim()
   const statusMap = { all: '全部', processing: '审批中', approved: '已通过', rejected: '已驳回' }
   const st = statusMap[recordStatus.value] || '全部'
+  const scopeMap = { self: '本人', lsys: '本专业', all: '全部科室' }
+  const sc = recordScope.value.startsWith('lsys:') ? recordScope.value.slice(5) : (scopeMap[recordScope.value] || '本人')
+  const parts = [sc, st]
   if (m) {
     const [y, mo] = m.split('-')
-    return `展示 ${y}年${parseInt(mo)}月，${st} 的申请记录`
+    parts.unshift(`${y}年${parseInt(mo)}月`)
   }
-  return `展示 ${_d.getFullYear()}年全年，${st} 的申请记录`
+  if (nameFilter.value.trim()) parts.push(`搜索: ${nameFilter.value.trim()}`)
+  return parts.join('，')
 })
 
-watch([recordMonth, recordStatus], () => { page.value = 1; fetchList() })
+watch([recordMonth, recordStatus, recordScope], () => { page.value = 1; fetchList() })
 watch(pageSize, () => { page.value = 1 })
 
 async function fetchList() {
@@ -425,6 +461,16 @@ async function fetchList() {
       const [y, mo] = m.split('-')
       if (y) params.year = parseInt(y)
       if (mo) params.month = parseInt(mo)
+    }
+    if (recordScope.value === 'all') {
+      params.scope = 'all'
+    } else if (recordScope.value.startsWith('lsys:')) {
+      params.scope = 'all'
+      params.filter_lsys = recordScope.value.slice(5)
+    } else if (recordScope.value === 'lsys') {
+      params.scope = 'lsys'
+    } else {
+      params.scope = 'self'
     }
     const res = await getHolidayExchangeList(params)
     recordList.value = (res.success && res.data) ? res.data : []
@@ -537,7 +583,23 @@ watch(showApplyModal, (v) => {
   if (v) fetchApprovers()
 })
 
-onMounted(() => {
+onMounted(async () => {
+  let isDakaman = false
+  try {
+    const cfg = await getUploadConfig()
+    const dk = (cfg?.dakaman || '').trim()
+    isDakaman = !!(dk && userName.trim() === dk)
+  } catch {}
+
+  canViewAll.value = isLeaderRole.value || isDakaman
+
+  if (canViewAll.value) {
+    try {
+      const res = await getDeptLsysList()
+      deptOptions.value = (res && res.data) || []
+    } catch {}
+  }
+
   fetchList()
 })
 </script>
@@ -561,7 +623,9 @@ onMounted(() => {
 .record-card__filters { display: flex; align-items: center; gap: var(--spacing-sm); flex-shrink: 0; }
 .record-card__filters .filter-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .record-card__filters .filter-input { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
+.record-card__filters .filter-input--search { min-width: 7rem; max-width: 10rem; }
 .record-card__filters .filter-select { padding: 6px 10px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
+.record-card__filters .filter-select--scope { min-width: 9rem; max-width: 18rem; }
 .record-card__desc { margin: 0; font-size: var(--font-size-sm); color: var(--color-text-secondary); font-weight: normal; }
 .record-card__body { padding: 0; background: white; }
 .record-card__body .table-wrap { overflow-x: auto; }

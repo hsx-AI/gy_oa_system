@@ -68,25 +68,49 @@
                   <th>姓名</th>
                   <th>科室</th>
                   <th>加班日期</th>
+                  <th>日期性质</th>
                   <th>天数</th>
                   <th>换休票</th>
+                  <th>佐证材料</th>
                   <th>状态</th>
                   <th>一级审批</th>
                   <th>二级审批</th>
                   <th>申请时间</th>
+                  <th>驳回原因</th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in filteredRecords" :key="r.id">
+                <tr v-for="r in filteredRecords" :key="r.id" @click="openDetail(r)" class="clickable-row">
                   <td class="td-name">{{ r.applicant }}</td>
                   <td>{{ r.department }}</td>
-                  <td>{{ r.dateFrom === r.dateTo ? r.dateFrom : r.dateFrom + ' ~ ' + r.dateTo }}</td>
+                  <td>
+                    <template v-if="r.dateRanges && r.dateRanges.length > 1">
+                      <div v-for="(seg, si) in r.dateRanges" :key="si" class="cell-range-seg">{{ seg.from }} ~ {{ seg.to }}</div>
+                    </template>
+                    <template v-else>{{ r.dateFrom === r.dateTo ? r.dateFrom : r.dateFrom + ' ~ ' + r.dateTo }}</template>
+                  </td>
+                  <td class="cell-rest-summary" :title="r.restDaySummary">{{ r.restDaySummary || '—' }}</td>
                   <td class="td-num">{{ r.days }}</td>
                   <td class="td-num td-hxp">{{ formatHxp(r.hxpCount) }}</td>
+                  <td>
+                    <template v-if="r.materialFiles && r.materialFiles.length">
+                      <a
+                        v-for="(f, fi) in r.materialFiles"
+                        :key="fi"
+                        :href="getDownloadUrl(f.name)"
+                        target="_blank"
+                        rel="noopener"
+                        class="file-link"
+                        @click.stop
+                      >{{ f.original || f.name }}</a>
+                    </template>
+                    <span v-else class="td-muted">—</span>
+                  </td>
                   <td><span class="status-tag" :class="r.statusClass">{{ r.status }}</span></td>
                   <td>{{ r.spr }}</td>
                   <td>{{ r.spr2 }}</td>
                   <td>{{ r.applyTime }}</td>
+                  <td class="reject-reason-cell">{{ r.statusCode === 22 && r.rejectReason ? r.rejectReason : '—' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -98,13 +122,63 @@
         </div>
       </div>
     </div>
+
+    <!-- 详情弹窗 -->
+    <div v-if="detailRecord" class="modal-overlay" @click.self="detailRecord = null">
+      <div class="detail-modal">
+        <div class="detail-modal__header">
+          <h3>换休票申请详情</h3>
+          <button type="button" class="detail-modal__close" @click="detailRecord = null">&times;</button>
+        </div>
+        <div class="detail-modal__body">
+          <p><strong>申请人：</strong>{{ detailRecord.applicant }}</p>
+          <p><strong>科室：</strong>{{ detailRecord.department || '—' }}</p>
+          <template v-if="detailRecord.dateRanges && detailRecord.dateRanges.length > 1">
+            <p><strong>加班时间段：</strong>共 {{ detailRecord.dateRanges.length }} 段</p>
+            <div class="detail-ranges">
+              <div v-for="(seg, si) in detailRecord.dateRanges" :key="si" class="detail-range-line">
+                {{ si + 1 }}. {{ seg.from }} 至 {{ seg.to }}
+              </div>
+            </div>
+          </template>
+          <template v-else>
+            <p><strong>加班开始日期：</strong>{{ detailRecord.dateFrom }}</p>
+            <p><strong>加班截止日期：</strong>{{ detailRecord.dateTo }}</p>
+          </template>
+          <p><strong>日期性质：</strong>{{ detailRecord.restDaySummary || '—' }}</p>
+          <div v-if="detailRecord.restDayBreakdown && detailRecord.restDayBreakdown.length" class="detail-breakdown">
+            <p><strong>逐日说明：</strong></p>
+            <ul class="detail-breakdown-list">
+              <li v-for="(line, li) in detailRecord.restDayBreakdown" :key="li"
+                  :class="{ 'breakdown-sep': line.startsWith('---') }">{{ line }}</li>
+            </ul>
+          </div>
+          <p><strong>加班天数：</strong>{{ detailRecord.days }} 天</p>
+          <p><strong>换休票数量：</strong>{{ formatHxp(detailRecord.hxpCount) }} 张</p>
+          <div>
+            <p><strong>佐证材料：</strong></p>
+            <ul v-if="detailRecord.materialFiles && detailRecord.materialFiles.length" class="detail-file-list">
+              <li v-for="(f, fi) in detailRecord.materialFiles" :key="fi">
+                <a :href="getDownloadUrl(f.name)" target="_blank" rel="noopener">{{ f.original || f.name }}</a>
+              </li>
+            </ul>
+            <p v-else class="td-muted">无</p>
+          </div>
+          <p><strong>一级审批人：</strong>{{ detailRecord.spr }}</p>
+          <p><strong>二级审批人：</strong>{{ detailRecord.spr2 }}</p>
+          <p><strong>申请时间：</strong>{{ detailRecord.applyTime }}</p>
+          <p><strong>审批状态：</strong><span class="status-tag" :class="detailRecord.statusClass">{{ detailRecord.status }}</span></p>
+          <p v-if="detailRecord.statusCode === 22 && detailRecord.rejectReason"><strong>驳回原因：</strong>{{ detailRecord.rejectReason }}</p>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getHolidayExchangeList, getDeptLsysList, getUploadConfig } from '@/api/attendance'
+import { getHolidayExchangeList, getDeptLsysList, getUploadConfig, getHolidayExchangeDownloadUrl } from '@/api/attendance'
 
 const route = useRoute()
 const now = new Date()
@@ -161,6 +235,16 @@ const filterLabel = computed(() => {
   if (nameFilter.value.trim()) parts.push(`搜索: ${nameFilter.value.trim()}`)
   return parts.join('，')
 })
+
+const detailRecord = ref(null)
+
+function openDetail(r) {
+  detailRecord.value = r
+}
+
+function getDownloadUrl(filename) {
+  return getHolidayExchangeDownloadUrl(filename)
+}
 
 function formatHxp(v) {
   if (v == null) return '—'
@@ -389,6 +473,99 @@ onMounted(async () => {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
+
+.clickable-row { cursor: pointer; }
+
+.cell-rest-summary {
+  max-width: 180px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  line-height: 1.45;
+  word-break: break-word;
+}
+.cell-range-seg { font-size: var(--font-size-xs); line-height: 1.6; }
+
+.file-link {
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: var(--font-size-xs);
+}
+.file-link:hover { text-decoration: underline; }
+
+.td-muted { color: var(--color-text-tertiary); }
+
+.reject-reason-cell {
+  max-width: 160px;
+  word-break: break-word;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+}
+
+/* 详情弹窗 */
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+.detail-modal {
+  background: white;
+  border-radius: var(--radius-md);
+  width: 680px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.15));
+}
+.detail-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+.detail-modal__header h3 { margin: 0; }
+.detail-modal__close {
+  border: none; background: none; font-size: 24px;
+  cursor: pointer; color: var(--color-text-tertiary); padding: 0 4px; line-height: 1;
+}
+.detail-modal__close:hover { color: var(--color-text-primary); }
+.detail-modal__body {
+  overflow-y: auto;
+  padding: var(--spacing-lg) var(--spacing-xl) var(--spacing-xl);
+  font-size: var(--font-size-sm);
+  line-height: 1.8;
+}
+.detail-modal__body p { margin: 4px 0; }
+.detail-ranges { padding-left: var(--spacing-md); margin-bottom: var(--spacing-sm); }
+.detail-range-line { font-size: var(--font-size-sm); line-height: 1.7; }
+.detail-breakdown { margin: var(--spacing-sm) 0; }
+.detail-breakdown-list {
+  margin: var(--spacing-xs) 0 0;
+  padding-left: 1.25rem;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.5;
+}
+.detail-breakdown-list li { margin-bottom: 4px; }
+.detail-breakdown-list li.breakdown-sep {
+  list-style: none; margin-left: -1.25rem;
+  font-weight: 600; color: var(--color-text-primary);
+  margin-top: var(--spacing-sm);
+}
+.detail-file-list {
+  margin: var(--spacing-xs) 0;
+  padding-left: 1.25rem;
+}
+.detail-file-list li { margin-bottom: 4px; }
+.detail-file-list a {
+  color: var(--color-primary);
+  text-decoration: none;
+}
+.detail-file-list a:hover { text-decoration: underline; }
 
 @media (max-width: 768px) {
   .record-card__header {

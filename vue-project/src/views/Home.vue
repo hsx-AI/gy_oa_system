@@ -95,12 +95,21 @@
             <span class="dashboard-card__title-text">重要信息审阅</span>
             <span class="dashboard-card__badge">{{ briefingItems.length }}</span>
           </h2>
-          <span class="briefing-hint">最近7天</span>
+          <div class="briefing-header-right">
+            <select v-model="briefingDays" class="briefing-days-select" @change="fetchBriefing">
+              <option :value="3">最近3天</option>
+              <option :value="7">最近7天</option>
+              <option :value="30">最近30天</option>
+            </select>
+            <button type="button" class="briefing-viewall-btn" @click="showBriefingModal = true">查看全部</button>
+          </div>
         </header>
         <div
           class="briefing-marquee"
-          @mouseenter="pauseMarquee"
-          @mouseleave="resumeMarquee"
+          :class="{ 'briefing-marquee--hover': briefingHover }"
+          @mouseenter="onMarqueeEnter"
+          @mouseleave="onMarqueeLeave"
+          @wheel.prevent="onMarqueeWheel"
         >
           <div class="briefing-track" ref="briefingTrackRef">
             <div
@@ -118,6 +127,30 @@
         </div>
       </article>
     </section>
+
+    <!-- 信息审阅全部列表弹窗 -->
+    <div v-if="showBriefingModal" class="modal-overlay" @click.self="showBriefingModal = false">
+      <div class="briefing-modal">
+        <div class="briefing-modal__header">
+          <h2>重要信息审阅（最近{{ briefingDays }}天，共{{ briefingItems.length }}条）</h2>
+          <button type="button" class="briefing-modal__close" @click="showBriefingModal = false">&times;</button>
+        </div>
+        <div class="briefing-modal__body">
+          <div
+            v-for="(item, idx) in briefingItems"
+            :key="idx"
+            class="briefing-modal__item"
+            :class="'briefing-modal__item--' + item.type"
+            @click="goBriefingDetail(item); showBriefingModal = false"
+          >
+            <span class="briefing-modal__idx">{{ idx + 1 }}</span>
+            <span class="briefing-tag">{{ item.type === 'hxp' || item.type === 'hxp_batch' ? '换休票' : '公出' }}</span>
+            <span class="briefing-modal__text">{{ item.text }}</span>
+          </div>
+          <p v-if="!briefingItems.length" class="briefing-modal__empty">暂无信息</p>
+        </div>
+      </div>
+    </div>
 
     <!-- 功能导航卡片 -->
     <div class="container">
@@ -182,6 +215,9 @@ const canAccessDbManager = ref(false)
 const isBuzhang = ref(false)
 const briefingItems = ref([])
 const briefingTrackRef = ref(null)
+const briefingDays = ref(7)
+const briefingHover = ref(false)
+const showBriefingModal = ref(false)
 let marqueeTimer = null
 let marqueeOffset = 0
 let marqueePaused = false
@@ -195,15 +231,34 @@ function startMarquee() {
     const el = briefingTrackRef.value
     if (!el) { marqueeTimer = requestAnimationFrame(step); return }
     marqueeOffset += 0.4
-    if (marqueeOffset >= el.scrollHeight / 2) marqueeOffset = 0
+    const halfH = el.scrollHeight / 2
+    if (halfH > 0 && marqueeOffset >= halfH) marqueeOffset = 0
     el.style.transform = `translateY(-${marqueeOffset}px)`
     marqueeTimer = requestAnimationFrame(step)
   }
   marqueeTimer = requestAnimationFrame(step)
 }
 function stopMarquee() { if (marqueeTimer) { cancelAnimationFrame(marqueeTimer); marqueeTimer = null } }
-function pauseMarquee() { marqueePaused = true }
-function resumeMarquee() { marqueePaused = false }
+
+function onMarqueeEnter() {
+  briefingHover.value = true
+  marqueePaused = true
+}
+function onMarqueeLeave() {
+  briefingHover.value = false
+  marqueePaused = false
+}
+function onMarqueeWheel(e) {
+  const el = briefingTrackRef.value
+  if (!el) return
+  marqueeOffset += e.deltaY * 0.5
+  const halfH = el.scrollHeight / 2
+  if (halfH > 0) {
+    if (marqueeOffset < 0) marqueeOffset = halfH + marqueeOffset
+    if (marqueeOffset >= halfH) marqueeOffset -= halfH
+  }
+  el.style.transform = `translateY(-${marqueeOffset}px)`
+}
 
 const briefingItemsDup = computed(() => {
   const arr = briefingItems.value
@@ -228,9 +283,12 @@ async function fetchBriefing() {
   const name = (userName.value || '').trim()
   if (!name) return
   try {
-    const res = await getLeaderBriefing({ name, days: 7 })
+    stopMarquee()
+    const res = await getLeaderBriefing({ name, days: briefingDays.value })
     if (res && res.success && res.items) {
       briefingItems.value = res.items
+      marqueeOffset = 0
+      if (briefingTrackRef.value) briefingTrackRef.value.style.transform = 'translateY(0)'
       if (res.items.length > 0) {
         await nextTick()
         startMarquee()
@@ -1100,9 +1158,35 @@ async function navigateTo(feature) {
   background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
 }
 
-.briefing-hint {
+.briefing-header-right {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.briefing-days-select {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
   font-size: var(--font-size-xs);
-  color: var(--color-text-tertiary);
+  color: var(--color-text-secondary);
+  background: white;
+  cursor: pointer;
+}
+
+.briefing-viewall-btn {
+  padding: 4px 12px;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
+  background: white;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.briefing-viewall-btn:hover {
+  background: var(--color-primary);
+  color: white;
 }
 
 .briefing-marquee {
@@ -1110,6 +1194,11 @@ async function navigateTo(feature) {
   overflow: hidden;
   position: relative;
   padding: var(--spacing-sm) var(--spacing-xl);
+  cursor: default;
+  transition: box-shadow 0.2s;
+}
+.briefing-marquee--hover {
+  box-shadow: inset 0 -20px 20px -20px rgba(0,0,0,0.06), inset 0 20px 20px -20px rgba(0,0,0,0.06);
 }
 
 .briefing-track {
@@ -1178,6 +1267,86 @@ async function navigateTo(feature) {
   min-width: 0;
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
+}
+
+.modal-overlay {
+  position: fixed; top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 100;
+}
+
+.briefing-modal {
+  background: white;
+  border-radius: var(--radius-md);
+  width: 780px;
+  max-width: 95vw;
+  max-height: 85vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: var(--shadow-lg, 0 10px 40px rgba(0,0,0,0.15));
+}
+.briefing-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+.briefing-modal__header h2 {
+  margin: 0;
+  font-size: var(--font-size-lg, 18px);
+}
+.briefing-modal__close {
+  border: none;
+  background: none;
+  font-size: 24px;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  padding: 0 4px;
+  line-height: 1;
+}
+.briefing-modal__close:hover {
+  color: var(--color-text-primary);
+}
+.briefing-modal__body {
+  overflow-y: auto;
+  padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+}
+.briefing-modal__item {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  padding: 10px var(--spacing-md);
+  border-bottom: 1px solid var(--color-border-lighter);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.briefing-modal__item:hover {
+  background: var(--color-bg-spotlight, #f8f9fa);
+}
+.briefing-modal__item:last-child {
+  border-bottom: none;
+}
+.briefing-modal__idx {
+  flex-shrink: 0;
+  width: 26px;
+  text-align: center;
+  font-size: var(--font-size-xs);
+  font-weight: 600;
+  color: var(--color-text-tertiary);
+}
+.briefing-modal__text {
+  flex: 1;
+  min-width: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  line-height: 1.5;
+}
+.briefing-modal__empty {
+  text-align: center;
+  color: var(--color-text-tertiary);
+  padding: var(--spacing-xxl) 0;
 }
 
 @media (max-width: 768px) {
