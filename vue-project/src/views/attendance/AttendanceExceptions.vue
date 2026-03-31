@@ -132,8 +132,18 @@
           <p class="modal-info">
             <strong>{{ processModal.record?.employee_name }}</strong>
             <span class="text-secondary"> · {{ processModal.record?.department }}</span>
-            <span class="text-secondary"> · {{ processModal.record?.attendance_date }}</span>
           </p>
+          <div class="modal-field">
+            <label>处理日期</label>
+            <div class="date-range-row">
+              <input type="date" v-model="processModal.dateFrom" class="modal-input date-input" />
+              <span class="date-sep">至</span>
+              <input type="date" v-model="processModal.dateTo" class="modal-input date-input" />
+            </div>
+            <p class="date-hint">
+              范围内共 <strong>{{ processModal.matchCount }}</strong> 天有异常记录
+            </p>
+          </div>
           <div class="modal-field">
             <label>处理类型</label>
             <div class="action-toggle">
@@ -147,6 +157,14 @@
               <option v-for="lt in leaveTypeOptions" :key="lt" :value="lt">{{ lt }}</option>
             </select>
           </div>
+          <div v-if="processModal.processType === 'business_trip'" class="modal-field">
+            <label>公出类型</label>
+            <select v-model="processModal.tripScope" class="modal-select">
+              <option value="市内公出">市内公出</option>
+              <option value="境内公出">境内公出</option>
+              <option value="境外公出">境外公出</option>
+            </select>
+          </div>
           <div class="modal-field">
             <label>备注</label>
             <input type="text" v-model="processModal.reason" class="modal-input" placeholder="选填" />
@@ -154,8 +172,8 @@
         </div>
         <div class="modal-footer">
           <button class="btn btn-outline" @click="closeProcessModal">取消</button>
-          <button class="btn btn-primary" @click="confirmProcess" :disabled="processingId !== null">
-            {{ processingId !== null ? '处理中…' : '确认提交' }}
+          <button class="btn btn-primary" @click="confirmProcess" :disabled="processingId !== null || processModal.matchCount === 0">
+            {{ processingId !== null ? '处理中…' : (processModal.matchCount > 1 ? `确认提交（${processModal.matchCount}天）` : '确认提交') }}
           </button>
         </div>
       </div>
@@ -164,7 +182,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted } from 'vue'
+import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { getAttendanceExceptions, exportAttendanceExceptions, exportLeaveHandlerTable, dakamanProcessException } from '@/api/attendance'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
@@ -199,7 +217,11 @@ const processModal = reactive({
   record: null,
   processType: 'leave',
   leaveType: '事假',
+  tripScope: '境内公出',
   reason: '打卡管理员代处理',
+  dateFrom: '',
+  dateTo: '',
+  matchCount: 0,
 })
 
 const now = new Date()
@@ -384,11 +406,29 @@ function recordKey(record) {
   return `${record.employee_name}-${record.attendance_date}`
 }
 
+function updateMatchCount() {
+  const rec = processModal.record
+  if (!rec) { processModal.matchCount = 0; return }
+  const empName = rec.employee_name
+  const dept = rec.department
+  const from = processModal.dateFrom
+  const to = processModal.dateTo
+  if (!from || !to) { processModal.matchCount = 0; return }
+  processModal.matchCount = records.value.filter(r =>
+    r.employee_name === empName && r.department === dept &&
+    r.attendance_date >= from && r.attendance_date <= to
+  ).length
+}
+
 function openProcessModal(record) {
   processModal.record = record
   processModal.processType = 'leave'
   processModal.leaveType = '事假'
+  processModal.tripScope = '境内公出'
   processModal.reason = '打卡管理员代处理'
+  processModal.dateFrom = record.attendance_date
+  processModal.dateTo = record.attendance_date
+  processModal.matchCount = 1
   processModal.show = true
 }
 
@@ -400,31 +440,53 @@ function closeProcessModal() {
 async function confirmProcess() {
   const rec = processModal.record
   if (!rec) return
-  const key = recordKey(rec)
-  processingId.value = key
-  try {
-    const res = await dakamanProcessException({
-      current_user: getCurrentUserName(),
-      employee_name: rec.employee_name,
-      department: rec.department,
-      attendance_date: rec.attendance_date,
-      process_type: processModal.processType,
-      leave_type: processModal.leaveType,
-      reason: processModal.reason || '打卡管理员代处理',
-    })
-    if (res && res.success) {
-      records.value = records.value.filter(r => recordKey(r) !== key)
-      closeProcessModal()
-      alert(res.message || '处理成功')
-    } else {
-      alert(res?.message || '处理失败')
+  const empName = rec.employee_name
+  const dept = rec.department
+  const from = processModal.dateFrom
+  const to = processModal.dateTo
+  if (!from || !to) { alert('请选择日期范围'); return }
+
+  const matchingRecords = records.value.filter(r =>
+    r.employee_name === empName && r.department === dept &&
+    r.attendance_date >= from && r.attendance_date <= to
+  )
+  if (!matchingRecords.length) { alert('所选日期范围内无异常记录'); return }
+  if (matchingRecords.length > 1 && !confirm(`将一次性处理 ${matchingRecords.length} 天的异常，确认？`)) return
+
+  processingId.value = 'batch'
+  let successCount = 0
+  let failMessages = []
+  for (const r of matchingRecords) {
+    try {
+      const res = await dakamanProcessException({
+        current_user: getCurrentUserName(),
+        employee_name: r.employee_name,
+        department: r.department,
+        attendance_date: r.attendance_date,
+        process_type: processModal.processType,
+        leave_type: processModal.leaveType,
+        trip_scope: processModal.tripScope,
+        reason: processModal.reason || '打卡管理员代处理',
+      })
+      if (res && res.success) {
+        successCount++
+        records.value = records.value.filter(x => recordKey(x) !== recordKey(r))
+      } else {
+        failMessages.push(`${r.attendance_date}: ${res?.message || '失败'}`)
+      }
+    } catch (err) {
+      failMessages.push(`${r.attendance_date}: ${err?.response?.data?.detail || err?.message || '失败'}`)
     }
-  } catch (e) {
-    alert(e?.response?.data?.detail || e?.message || '处理失败')
-  } finally {
-    processingId.value = null
   }
+  processingId.value = null
+  closeProcessModal()
+  let msg = `已处理 ${successCount}/${matchingRecords.length} 天`
+  if (failMessages.length) msg += '\n\n部分失败：\n' + failMessages.join('\n')
+  alert(msg)
 }
+
+watch(() => processModal.dateFrom, updateMatchCount)
+watch(() => processModal.dateTo, updateMatchCount)
 
 onMounted(() => {
   loadExceptions()
@@ -764,6 +826,25 @@ onMounted(() => {
   color: var(--color-text-primary);
   background: var(--color-bg-container);
   box-sizing: border-box;
+}
+.date-range-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.date-range-row .date-input {
+  flex: 1;
+  min-width: 0;
+}
+.date-sep {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+  flex-shrink: 0;
+}
+.date-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  color: var(--color-text-tertiary);
 }
 .modal-footer {
   display: flex;

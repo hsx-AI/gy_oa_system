@@ -219,6 +219,13 @@ def _business_trip_list_gcr_clause(
     user = _get_user_info(viewer)
     admin1 = (_get_admin1() or "").strip()
     is_admin_user = bool(admin1 and viewer == admin1)
+    # 打卡管理员 dakaman 与系统管理员同等权限查看全员
+    try:
+        _dk_rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
+        _dakaman = (_dk_rows[0].get("dakaman") or "").strip() if _dk_rows else ""
+    except Exception:
+        _dakaman = ""
+    is_dakaman = bool(_dakaman and viewer == _dakaman)
     jb = ""
     if user:
         jb = (user.get("jb") or "").strip()
@@ -227,7 +234,7 @@ def _business_trip_list_gcr_clause(
         meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
     is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
     zonghe_dir = bool(user and is_zonghe_tech_director(user))
-    meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir
+    meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir or is_dakaman
 
     fl = (filter_lsys or "").strip()
     if scope == "all" and fl:
@@ -247,7 +254,7 @@ def _business_trip_list_gcr_clause(
                 status_code=403,
                 detail="仅部长、副部长、综合技术室主任/副主任或系统管理员可查看全员公出记录",
             )
-        if is_admin_user or is_minister:
+        if is_admin_user or is_minister or is_dakaman:
             return "1=1", [], meta
         clause = (
             "g.gcr IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
@@ -357,7 +364,13 @@ async def get_business_trip_all_records(
             return {"success": True, "data": [], "total": 0, "scope": "none"}
         name_stripped = (name or "").strip()
         admin1 = _get_admin1()
-        if admin1 and name_stripped == admin1:
+        try:
+            _dk_rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
+            _dakaman = (_dk_rows[0].get("dakaman") or "").strip() if _dk_rows else ""
+        except Exception:
+            _dakaman = ""
+        is_dk = bool(_dakaman and name_stripped == _dakaman)
+        if (admin1 and name_stripped == admin1) or is_dk:
             is_leader = True
             lsys = ""
         else:

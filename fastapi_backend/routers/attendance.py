@@ -1041,6 +1041,7 @@ class DakamanProcessRequest(BaseModel):
     attendance_date: str  # YYYY-MM-DD
     process_type: str  # leave | business_trip
     leave_type: str = "事假"  # qjfs: 换休/带薪年休假/事假/病假 etc.
+    trip_scope: str = "境内公出"  # gclx: 市内公出/境内公出/境外公出
     reason: str = "打卡管理员代处理"
 
 
@@ -1130,19 +1131,22 @@ async def dakaman_process_exception(req: DakamanProcessRequest):
             created_ids.append(new_id)
 
         elif req.process_type == "business_trip":
+            gclx = (req.trip_scope or "").strip()
+            if gclx not in ("市内公出", "境内公出", "境外公出"):
+                gclx = "境内公出"
             sql = """
                 INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj,
                     yjfhsj, yjcfsj, xmmc, tzdbh, bcgczrs, gcdd, qkje, gcrw,
-                    szr, bld, gcsj, sjfhtime, bldzt, szrzt, sqsj, lsysjm)
-                VALUES (%s, '境内公出', '', %s, '', %s, '', %s,
+                    szr, bld, gcsj, sjfhtime, bldzt, szrzt, fhdj_status)
+                VALUES (%s, %s, '', %s, '', %s, '', %s,
                     %s, %s, '', '', '1', '', 0, %s,
-                    %s, %s, %s, %s, 2, 2, %s, %s)
+                    %s, %s, %s, %s, 2, 2, 1)
             """
             params = (
-                new_id, emp_name, dept, now,
+                new_id, gclx, emp_name, dept, now,
                 et_str, st_str,
                 req.reason or "打卡管理员代处理",
-                current_user, current_user, st_str, et_str, now, lsys,
+                current_user, current_user, st_str, et_str,
             )
             db.execute_insert(sql, params)
             created_ids.append(new_id)
