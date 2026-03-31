@@ -455,7 +455,7 @@ const canShowUpload = computed(() => {
   return (!!d && name === d) || (!!a1 && name === a1)
 })
 
-// 是否显示考勤异常管理（班组长/主任/副主任 或 打卡管理员 或 系统管理员 admin1）
+// 是否显示考勤异常管理（部长/副部长、班组长/主任/副主任、打卡管理员、系统管理员 admin1）
 const canShowAttendanceExceptions = computed(() => {
   const jb = (currentUser.value?.jb || '').trim()
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
@@ -463,6 +463,8 @@ const canShowAttendanceExceptions = computed(() => {
   const d = (dakaman.value || '').trim()
   if (a1 && name === a1) return true
   if (d && name === d) return true
+  const isMinister = jb === '部长' || (jb && jb.startsWith('部长')) || jb === '副部长' || (jb && jb.startsWith('副部长'))
+  if (isMinister) return true
   return jb === '组长' || (jb && jb.startsWith('组长')) ||
     jb === '主任' || (jb && jb.startsWith('主任')) ||
     jb === '副主任' || (jb && jb.includes('副主任'))

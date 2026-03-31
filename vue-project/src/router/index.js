@@ -311,10 +311,11 @@ router.beforeEach(async (to, _from, next) => {
       const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
       const isDakaman = dakaman && name === dakaman
       const isAdmin1 = admin1 && name === admin1
+      const isMinister = jb === '部长' || (jb && jb.startsWith('部长')) || jb === '副部长' || (jb && jb.startsWith('副部长'))
       const isDeptLeader = jb === '组长' || (jb && jb.startsWith('组长')) ||
         jb === '主任' || (jb && jb.startsWith('主任')) ||
         jb === '副主任' || (jb && jb.includes('副主任'))
-      if (isAdmin1 || isDakaman || isDeptLeader) {
+      if (isAdmin1 || isDakaman || isMinister || isDeptLeader) {
         next()
       } else {
         next('/')

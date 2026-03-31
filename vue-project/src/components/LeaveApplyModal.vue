@@ -122,7 +122,7 @@ const props = defineProps({
 
 const emit = defineEmits(['close', 'submitted'])
 
-const leaveTypes = ['换休', '带薪年休假', '婚假', '事假', '病假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假', '脱产学习', '集团调用']
+const leaveTypes = ['换休', '带薪年休假', '婚假', '事假', '病假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假', '脱产学习', '集团调用', '异常打卡']
 
 const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
 const form = reactive({

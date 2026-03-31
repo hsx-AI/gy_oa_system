@@ -52,29 +52,31 @@ def _get_dakaman() -> Optional[str]:
 def _can_see_attendance_exceptions(current_user: str) -> tuple:
     """
     判断当前用户是否有权查看考勤异常。
-    返回 (allowed: bool, lsys: str|None, is_dakaman: bool)。
-    - 系统管理员(admin1)、打卡管理员(dakaman)：可看全部（dakaman 含部办人员）。
-    - 班组长/主任/副主任：仅可看本室。
-    - 部长/副部长/员工等：无权限。
+    返回 (allowed: bool, lsys: str|None, is_dakaman: bool, include_buban: bool)。
+    - 系统管理员(admin1)、打卡管理员(dakaman)：可看全部含部办；is_dakaman True。
+    - 部长/副部长：可看全部含部办；is_dakaman False（无代处理列）。
+    - 班组长/主任/副主任：仅本室；include_buban False。
     """
     current_user = (current_user or "").strip()
     if not current_user:
-        return False, None, False
+        return False, None, False, False
     dakaman = _get_dakaman()
     is_dk = bool(dakaman and current_user == dakaman)
     admin1 = _get_admin1()
     if admin1 and current_user == admin1:
-        return True, None, True
+        return True, None, True, True
     if is_dk:
-        return True, None, True
+        return True, None, True, True
     user = _get_user_info(current_user)
     if not user:
-        return False, None, False
+        return False, None, False, False
     jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return True, None, False, True
     if _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
         lsys = (user.get("lsys") or "").strip()
-        return True, lsys if lsys else None, False
-    return False, None, False
+        return True, lsys if lsys else None, False, False
+    return False, None, False, False
 
 
 def _build_attendance_exceptions_data(year: int, month: int, filter_lsys: Optional[str], include_buban: bool = False) -> List[dict]:
@@ -592,17 +594,17 @@ async def get_attendance_exceptions(
     current_user: Optional[str] = Query(None, description="当前登录用户姓名，用于权限校验"),
 ):
     """
-    考勤异常列表。权限：打卡管理员可看全部（含部办）；各科室班组长/主任/副主任仅可看本室。
+    考勤异常列表。权限：打卡管理员、部长/副部长可看全部（含部办）；各科室班组长/主任/副主任仅可看本室。
     返回指定年月内「智能建议需请假/缺勤且未完成请假或公出」的异常日对应的打卡记录。
     """
-    allowed, filter_lsys, is_dakaman = _can_see_attendance_exceptions(current_user or "")
+    allowed, filter_lsys, is_dakaman, include_buban = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
-            detail="仅班组长/主任/副主任或打卡管理员可查看考勤异常",
+            detail="仅班组长/主任/副主任、部长/副部长或打卡管理员可查看考勤异常",
         )
     try:
-        built = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=is_dakaman)
+        built = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=include_buban)
         if not built:
             msg = "本室无考勤异常" if filter_lsys else "无考勤异常"
             return AttendanceQueryResponse(success=True, message=msg, total=0, data=[], is_dakaman=is_dakaman)
@@ -631,11 +633,11 @@ async def export_attendance_exceptions(
     导出指定月份的考勤异常列表为 Excel。
     权限同 /attendance/exceptions。
     """
-    allowed, filter_lsys, is_dakaman = _can_see_attendance_exceptions(current_user or "")
+    allowed, filter_lsys, is_dakaman, include_buban = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
-            detail="仅班组长/主任/副主任或打卡管理员可导出考勤异常",
+            detail="仅班组长/主任/副主任、部长/副部长或打卡管理员可导出考勤异常",
         )
     try:
         try:
@@ -644,7 +646,7 @@ async def export_attendance_exceptions(
         except ImportError:
             raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
 
-        rows = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=is_dakaman)
+        rows = _build_attendance_exceptions_data(year, month, filter_lsys, include_buban=include_buban)
         wb = Workbook()
         ws = wb.active
         ws.title = "考勤异常"
@@ -766,11 +768,11 @@ async def export_leave_handler_table(
     数据来源：qj 表（已通过 qjzt=4 + 审核中 qjzt IN(0,1,3)）+ gcsqb 表（已通过+审核中，排除驳回 bldzt/szrzt=22）。
     """
     import calendar
-    allowed, _, _ = _can_see_attendance_exceptions(current_user or "")
+    allowed, _, _, _ = _can_see_attendance_exceptions(current_user or "")
     if not allowed:
         raise HTTPException(
             status_code=403,
-            detail="仅班组长/主任/副主任或打卡管理员可导出异常处理表",
+            detail="仅班组长/主任/副主任、部长/副部长或打卡管理员可导出异常处理表",
         )
     try:
         try:

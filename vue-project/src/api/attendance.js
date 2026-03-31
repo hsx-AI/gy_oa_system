@@ -524,7 +524,7 @@ export function getAttendanceDates(params) {
 }
 
 /**
- * 考勤异常列表（打卡管理员或班组长/主任/副主任）
+ * 考勤异常列表（打卡管理员、部长/副部长全员；班组长/主任/副主任本科室）
  * 数据量可能较大，不设短超时，避免加载超时
  * @param {Object} params - { year, month, current_user }
  */
@@ -538,7 +538,7 @@ export function getAttendanceExceptions(params) {
 }
 
 /**
- * 导出考勤异常列表为 Excel（打卡管理员或班组长/主任/副主任）
+ * 导出考勤异常列表为 Excel（权限同 getAttendanceExceptions）
  * @param {Object} params - { year, month, current_user }
  */
 export function exportAttendanceExceptions(params) {

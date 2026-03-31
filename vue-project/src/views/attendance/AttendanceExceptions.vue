@@ -192,7 +192,7 @@ function toggleSort(field) {
   }
 }
 
-const leaveTypeOptions = ['换休', '带薪年休假', '事假', '病假', '婚假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假']
+const leaveTypeOptions = ['换休', '带薪年休假', '事假', '病假', '婚假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假', '异常打卡']
 
 const processModal = reactive({
   show: false,

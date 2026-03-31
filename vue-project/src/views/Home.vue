@@ -260,7 +260,9 @@ function canShowFeature(permission) {
     case 'overtimePay':
       return true
     case 'exceptions':
-      return isAdmin1 || (!!d && name === d) || jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
+      return isAdmin1 || (!!d && name === d) ||
+        jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
+        jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
     case 'hxpRecords':
       return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || (!!a2 && name === a2)
     case 'employeeAdmin':
@@ -338,7 +340,7 @@ const rawFeatureGroups = [
       {
         id: 'exceptions',
         title: '考勤异常管理',
-        description: '班组长/主任查看异常建议，需请假或公出覆盖的智能提示',
+        description: '部长/副部长查看全员异常；班组长/主任查看本科室异常（需请假或公出覆盖的智能提示）',
         path: '/attendance/exceptions',
         permission: 'exceptions',
         color: 'linear-gradient(135deg, #ff9a9e 0%, #fecfef 100%)',
