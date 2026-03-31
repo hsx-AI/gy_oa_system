@@ -224,7 +224,12 @@
                   <td><input type="checkbox" :value="item.id" v-model="selectedHolidayExchangeIds"></td>
                   <td>{{ item.applicant }}</td>
                   <td>{{ item.department }}</td>
-                  <td>{{ item.dateFrom }} 至 {{ item.dateTo }}</td>
+                  <td>
+                    <template v-if="item.dateRanges && item.dateRanges.length > 1">
+                      <div v-for="(seg, si) in item.dateRanges" :key="si" class="cell-range-seg">{{ seg.from }}~{{ seg.to }}</div>
+                    </template>
+                    <template v-else>{{ item.dateFrom }} 至 {{ item.dateTo }}</template>
+                  </td>
                   <td class="cell-rest-summary" :title="item.restDaySummary">{{ item.restDaySummary || '—' }}</td>
                   <td>{{ item.days }}</td>
                   <td>{{ item.hxpCount }}</td>
@@ -413,13 +418,25 @@
             <template v-else-if="detailType === 'holiday-exchange'">
               <p><strong>申请人：</strong>{{ detailData.applicant }}</p>
               <p><strong>班组：</strong>{{ detailData.department || '-' }}</p>
-              <p><strong>加班开始日期：</strong>{{ detailData.dateFrom }}</p>
-              <p><strong>加班截止日期：</strong>{{ detailData.dateTo }}</p>
+              <template v-if="detailData.dateRanges && detailData.dateRanges.length > 1">
+                <p><strong>加班时间段：</strong>共 {{ detailData.dateRanges.length }} 段</p>
+                <div class="detail-ranges-list">
+                  <div v-for="(seg, si) in detailData.dateRanges" :key="si" class="detail-range-item">
+                    <span class="detail-range-idx">{{ si + 1 }}.</span>
+                    {{ seg.from }} 至 {{ seg.to }}
+                  </div>
+                </div>
+              </template>
+              <template v-else>
+                <p><strong>加班开始日期：</strong>{{ detailData.dateFrom }}</p>
+                <p><strong>加班截止日期：</strong>{{ detailData.dateTo }}</p>
+              </template>
               <p><strong>日期性质：</strong>{{ detailData.restDaySummary || '—' }}</p>
               <div v-if="detailData.restDayBreakdown && detailData.restDayBreakdown.length" class="detail-rest-breakdown">
                 <p><strong>逐日说明：</strong></p>
                 <ul class="detail-rest-day-list">
-                  <li v-for="(line, idx) in detailData.restDayBreakdown" :key="idx">{{ line }}</li>
+                  <li v-for="(line, idx) in detailData.restDayBreakdown" :key="idx"
+                      :class="{ 'rest-day-sep': line.startsWith('---') }">{{ line }}</li>
                 </ul>
               </div>
               <p><strong>加班天数：</strong>{{ detailData.days }} 天</p>
@@ -1408,4 +1425,12 @@ async function batchApprove(type) {
   line-height: 1.5;
 }
 .detail-rest-day-list li { margin-bottom: 4px; }
+.detail-rest-day-list li.rest-day-sep {
+  list-style: none; margin-left: -1.25rem; font-weight: 600;
+  color: var(--color-text-primary); margin-top: var(--spacing-sm);
+}
+.detail-ranges-list { margin: var(--spacing-xs) 0 var(--spacing-sm); padding-left: var(--spacing-md); }
+.detail-range-item { font-size: var(--font-size-sm); line-height: 1.7; color: var(--color-text-primary); }
+.detail-range-idx { font-weight: 600; color: var(--color-text-secondary); margin-right: 4px; }
+.cell-range-seg { font-size: var(--font-size-xs); line-height: 1.6; }
 </style>

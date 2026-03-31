@@ -66,6 +66,14 @@ def _ensure_table():
 
 _ensure_table()
 
+# 新增 date_ranges 列（JSON 存多段时间）
+try:
+    db.execute_update(
+        "ALTER TABLE holiday_exchange ADD COLUMN date_ranges TEXT COMMENT '多时间段JSON [{from,to},...]'"
+    )
+except Exception:
+    pass
+
 
 def _normalize_date_key(s: str) -> str:
     """与 holiday 表、前端统一的 YYYY-MM-DD 键"""
@@ -141,31 +149,57 @@ def _summarize_rest_day_lines(lines: List[str]) -> str:
     return f"共{len(lines)}天：" + "，".join(parts)
 
 
-def holiday_exchange_rest_day_info(date_from, date_to) -> Tuple[List[str], str]:
+def holiday_exchange_rest_day_info(date_from, date_to, date_ranges_json=None) -> Tuple[List[str], str]:
     """
-    根据假期表解析区间内每日性质。
+    根据假期表解析区间内每日性质。支持多时间段（date_ranges_json）。
     返回 (逐日说明列表, 汇总句)
     """
-    try:
-        d1 = datetime.strptime(str(date_from)[:10], "%Y-%m-%d").date()
-        d2 = datetime.strptime(str(date_to)[:10], "%Y-%m-%d").date()
-    except Exception:
+    ranges = []
+    if date_ranges_json:
+        try:
+            parsed = json.loads(date_ranges_json) if isinstance(date_ranges_json, str) else date_ranges_json
+            if isinstance(parsed, list):
+                for seg in parsed:
+                    try:
+                        r_from = datetime.strptime(str(seg.get("from", ""))[:10], "%Y-%m-%d").date()
+                        r_to = datetime.strptime(str(seg.get("to", ""))[:10], "%Y-%m-%d").date()
+                        if r_to >= r_from:
+                            ranges.append((r_from, r_to))
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+    if not ranges:
+        try:
+            d1 = datetime.strptime(str(date_from)[:10], "%Y-%m-%d").date()
+            d2 = datetime.strptime(str(date_to)[:10], "%Y-%m-%d").date()
+            if d2 >= d1:
+                ranges.append((d1, d2))
+        except Exception:
+            return [], ""
+
+    if not ranges:
         return [], ""
-    if d2 < d1:
-        return [], ""
+
     years = set()
-    cur = d1
-    while cur <= d2:
-        years.add(cur.year)
-        cur += timedelta(days=1)
+    for d1, d2 in ranges:
+        cur = d1
+        while cur <= d2:
+            years.add(cur.year)
+            cur += timedelta(days=1)
     type_map = _merge_holiday_type_map(years)
     festival_map = _merge_festival_map(years)
+
     lines: List[str] = []
-    cur = d1
-    while cur <= d2:
-        lines.append(_describe_each_rest_day(cur, type_map, festival_map))
-        cur += timedelta(days=1)
-    return lines, _summarize_rest_day_lines(lines)
+    for i, (d1, d2) in enumerate(ranges):
+        if len(ranges) > 1:
+            lines.append(f"--- 第{i + 1}段: {d1} 至 {d2} ---")
+        cur = d1
+        while cur <= d2:
+            lines.append(_describe_each_rest_day(cur, type_map, festival_map))
+            cur += timedelta(days=1)
+    return lines, _summarize_rest_day_lines([l for l in lines if not l.startswith("---")])
 
 
 def _is_company_rest_day(d: date, holidays: dict) -> bool:
@@ -370,13 +404,12 @@ async def submit_holiday_exchange(
     approver1: str = Form(...),
     approver2: str = Form(...),
     files: List[UploadFile] = File(...),
+    dateRanges: str = Form(""),
 ):
-    """提交公出节假日换休票申请"""
+    """提交公出节假日换休票申请（支持多时间段）"""
     try:
         if not (name or "").strip():
             raise HTTPException(status_code=400, detail="姓名不能为空")
-        if not dateFrom or not dateTo:
-            raise HTTPException(status_code=400, detail="请选择加班时间范围")
         if not (approver1 or "").strip():
             raise HTTPException(status_code=400, detail="请选择一级审批人")
         if not (approver2 or "").strip():
@@ -384,13 +417,51 @@ async def submit_holiday_exchange(
         if not files:
             raise HTTPException(status_code=400, detail="请上传佐证材料")
 
-        try:
-            d_from = datetime.strptime(dateFrom[:10], "%Y-%m-%d").date()
-            d_to = datetime.strptime(dateTo[:10], "%Y-%m-%d").date()
-        except ValueError:
-            raise HTTPException(status_code=400, detail="加班日期格式无效")
-        _validate_holiday_exchange_range(d_from, d_to)
-        _validate_gcsqb_covers_range((name or "").strip(), d_from, d_to)
+        ranges: List[Tuple[date, date]] = []
+        date_ranges_json = (dateRanges or "").strip()
+        if date_ranges_json:
+            try:
+                parsed = json.loads(date_ranges_json)
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    for seg in parsed:
+                        seg_from = str(seg.get("from", ""))[:10]
+                        seg_to = str(seg.get("to", ""))[:10]
+                        try:
+                            r_from = datetime.strptime(seg_from, "%Y-%m-%d").date()
+                            r_to = datetime.strptime(seg_to, "%Y-%m-%d").date()
+                            if r_to < r_from:
+                                raise HTTPException(status_code=400, detail=f"时间段 {seg_from} ~ {seg_to} 截止日期不能早于起始日期")
+                            ranges.append((r_from, r_to))
+                        except ValueError:
+                            raise HTTPException(status_code=400, detail=f"日期格式无效: {seg_from} ~ {seg_to}")
+            except json.JSONDecodeError:
+                pass
+
+        if not ranges:
+            if not dateFrom or not dateTo:
+                raise HTTPException(status_code=400, detail="请选择加班时间范围")
+            try:
+                d_from = datetime.strptime(dateFrom[:10], "%Y-%m-%d").date()
+                d_to = datetime.strptime(dateTo[:10], "%Y-%m-%d").date()
+            except ValueError:
+                raise HTTPException(status_code=400, detail="加班日期格式无效")
+            ranges.append((d_from, d_to))
+            date_ranges_json = ""
+
+        name_clean = name.strip()
+
+        total_days = 0
+        for r_from, r_to in ranges:
+            _validate_holiday_exchange_range(r_from, r_to)
+            _validate_gcsqb_covers_range(name_clean, r_from, r_to)
+            total_days += (r_to - r_from).days + 1
+
+        if total_days <= 0:
+            raise HTTPException(status_code=400, detail="加班日期范围无效")
+        hxp_count = round(total_days / 8, 4)
+
+        overall_from = min(r[0] for r in ranges).strftime("%Y-%m-%d")
+        overall_to = max(r[1] for r in ranges).strftime("%Y-%m-%d")
 
         _ensure_upload_dir()
         saved_files = []
@@ -412,14 +483,8 @@ async def submit_holiday_exchange(
         if not saved_files:
             raise HTTPException(status_code=400, detail="请上传佐证材料")
 
-        days = _calc_days(dateFrom, dateTo)
-        if days <= 0:
-            raise HTTPException(status_code=400, detail="加班日期范围无效")
-        hxp_count = round(days / 8, 4)
-
         bz = (department or "").strip()
         lsys = ""
-        name_clean = name.strip()
         if name_clean:
             rows = db.execute_query(
                 "SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (name_clean,)
@@ -432,18 +497,23 @@ async def submit_holiday_exchange(
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         new_id = uuid.uuid4().hex
 
+        stored_ranges = json.dumps(
+            [{"from": r[0].strftime("%Y-%m-%d"), "to": r[1].strftime("%Y-%m-%d")} for r in ranges],
+            ensure_ascii=False,
+        ) if len(ranges) > 1 or date_ranges_json else None
+
         sql = """
             INSERT INTO holiday_exchange
                 (id, bz, xm, date_from, date_to, days, hxp_count,
-                 material_files, spr, spr2, status, apply_time, lsys)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s)
+                 material_files, spr, spr2, status, apply_time, lsys, date_ranges)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, %s)
         """
         params = (
             new_id, bz, name_clean,
-            dateFrom[:10], dateTo[:10], days, hxp_count,
+            overall_from, overall_to, total_days, hxp_count,
             json.dumps(saved_files, ensure_ascii=False),
             approver1.strip(), approver2.strip(),
-            now, lsys,
+            now, lsys, stored_ranges,
         )
         db.execute_update(sql, params)
 
@@ -451,7 +521,7 @@ async def submit_holiday_exchange(
             "success": True,
             "message": "申请已提交",
             "id": new_id,
-            "days": days,
+            "days": total_days,
             "hxp_count": hxp_count,
         }
     except HTTPException:
@@ -539,13 +609,23 @@ async def get_holiday_exchange_list(
                 cur = r.get("spr2") or ""
 
             df, dt = r.get("date_from"), r.get("date_to")
-            brk, smy = holiday_exchange_rest_day_info(df, dt)
+            dr_raw = r.get("date_ranges")
+            brk, smy = holiday_exchange_rest_day_info(df, dt, dr_raw)
+
+            dr_list = None
+            if dr_raw:
+                try:
+                    dr_list = json.loads(dr_raw) if isinstance(dr_raw, str) else dr_raw
+                except Exception:
+                    pass
+
             data.append({
                 "id": r.get("id"),
                 "department": r.get("bz") or "",
                 "applicant": r.get("xm") or "",
                 "dateFrom": str(df or ""),
                 "dateTo": str(dt or ""),
+                "dateRanges": dr_list,
                 "days": r.get("days") or 0,
                 "hxpCount": float(r.get("hxp_count") or 0),
                 "materialFiles": files,
@@ -622,13 +702,21 @@ async def get_pending_holiday_exchange(approver: str = Query(...)):
                 pass
             sv = r.get("status") or 0
             df, dt = r.get("date_from"), r.get("date_to")
-            brk, smy = holiday_exchange_rest_day_info(df, dt)
+            dr_raw = r.get("date_ranges")
+            brk, smy = holiday_exchange_rest_day_info(df, dt, dr_raw)
+            dr_list = None
+            if dr_raw:
+                try:
+                    dr_list = json.loads(dr_raw) if isinstance(dr_raw, str) else dr_raw
+                except Exception:
+                    pass
             data.append({
                 "id": r.get("id"),
                 "applicant": r.get("xm") or "",
                 "department": r.get("bz") or "",
                 "dateFrom": str(df or ""),
                 "dateTo": str(dt or ""),
+                "dateRanges": dr_list,
                 "days": r.get("days") or 0,
                 "hxpCount": float(r.get("hxp_count") or 0),
                 "materialFiles": files,
@@ -658,7 +746,14 @@ async def get_holiday_exchange_detail(item_id: str):
     except Exception:
         pass
     df, dt = r.get("date_from"), r.get("date_to")
-    brk, smy = holiday_exchange_rest_day_info(df, dt)
+    dr_raw = r.get("date_ranges")
+    brk, smy = holiday_exchange_rest_day_info(df, dt, dr_raw)
+    dr_list = None
+    if dr_raw:
+        try:
+            dr_list = json.loads(dr_raw) if isinstance(dr_raw, str) else dr_raw
+        except Exception:
+            pass
     return {
         "success": True,
         "data": {
@@ -667,6 +762,7 @@ async def get_holiday_exchange_detail(item_id: str):
             "department": r.get("bz") or "",
             "dateFrom": str(df or ""),
             "dateTo": str(dt or ""),
+            "dateRanges": dr_list,
             "days": r.get("days") or 0,
             "hxpCount": float(r.get("hxp_count") or 0),
             "materialFiles": files,

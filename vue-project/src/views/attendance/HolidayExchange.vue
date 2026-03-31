@@ -55,8 +55,18 @@
                 <tr v-for="r in paginatedList" :key="r.id">
                   <td>{{ r.department || '—' }}</td>
                   <td>{{ r.applicant || '—' }}</td>
-                  <td>{{ r.dateFrom }}</td>
-                  <td>{{ r.dateTo }}</td>
+                  <td>
+                    <template v-if="r.dateRanges && r.dateRanges.length > 1">
+                      <div v-for="(seg, si) in r.dateRanges" :key="si" class="cell-range-seg">{{ seg.from }}</div>
+                    </template>
+                    <template v-else>{{ r.dateFrom }}</template>
+                  </td>
+                  <td>
+                    <template v-if="r.dateRanges && r.dateRanges.length > 1">
+                      <div v-for="(seg, si) in r.dateRanges" :key="si" class="cell-range-seg">{{ seg.to }}</div>
+                    </template>
+                    <template v-else>{{ r.dateTo }}</template>
+                  </td>
                   <td class="cell-rest-summary" :title="r.restDaySummary">{{ r.restDaySummary || '—' }}</td>
                   <td>{{ r.days }}</td>
                   <td>{{ r.hxpCount }}</td>
@@ -129,14 +139,20 @@
           </div>
 
           <div class="form-group">
-            <label>加班时间</label>
-            <div class="date-range-row">
-              <input type="date" v-model="form.dateFrom" required>
-              <span class="date-range-sep">至</span>
-              <input type="date" v-model="form.dateTo" required>
+            <label>加班时间 <span class="range-count-hint" v-if="form.ranges.length > 1">（共 {{ form.ranges.length }} 段）</span></label>
+            <div v-for="(rng, idx) in form.ranges" :key="idx" class="range-item">
+              <span class="range-index" v-if="form.ranges.length > 1">{{ idx + 1 }}.</span>
+              <div class="date-range-row">
+                <input type="date" v-model="rng.from" required>
+                <span class="date-range-sep">至</span>
+                <input type="date" v-model="rng.to" required>
+              </div>
+              <button type="button" class="range-remove-btn" v-if="form.ranges.length > 1" @click="removeRange(idx)" title="移除此段">&times;</button>
+              <span class="range-days" v-if="rangeDays(rng) > 0">{{ rangeDays(rng) }}天</span>
             </div>
+            <button type="button" class="range-add-btn" @click="addRange">+ 添加时间段</button>
             <div class="calc-info" v-if="calcDays > 0">
-              <p>加班天数：<strong>{{ calcDays }}</strong> 天</p>
+              <p>加班天数：<strong>{{ calcDays }}</strong> 天<span v-if="form.ranges.length > 1">（{{ form.ranges.length }} 段合计）</span></p>
               <p>换休票数量：<strong>{{ calcTickets }}</strong> 张（计算规则：加班天数 ÷ 8）</p>
             </div>
             <p class="date-range-hint">
@@ -232,11 +248,26 @@ const userName = userInfo.name
 const userDept = userInfo.dept
 
 const form = reactive({
-  dateFrom: '',
-  dateTo: '',
+  ranges: [{ from: '', to: '' }],
   approver1: '',
   approver2: '',
 })
+
+function addRange() {
+  form.ranges.push({ from: '', to: '' })
+}
+
+function removeRange(idx) {
+  if (form.ranges.length > 1) form.ranges.splice(idx, 1)
+}
+
+function rangeDays(rng) {
+  if (!rng.from || !rng.to) return 0
+  const d1 = new Date(rng.from)
+  const d2 = new Date(rng.to)
+  if (isNaN(d1) || isNaN(d2) || d2 < d1) return 0
+  return Math.round((d2 - d1) / 86400000) + 1
+}
 
 const selectedFiles = ref([])
 const fileInputRef = ref(null)
@@ -268,11 +299,11 @@ function formatFileSize(bytes) {
 }
 
 const calcDays = computed(() => {
-  if (!form.dateFrom || !form.dateTo) return 0
-  const d1 = new Date(form.dateFrom)
-  const d2 = new Date(form.dateTo)
-  if (isNaN(d1) || isNaN(d2) || d2 < d1) return 0
-  return Math.round((d2 - d1) / (86400000)) + 1
+  let total = 0
+  for (const rng of form.ranges) {
+    total += rangeDays(rng)
+  }
+  return total
 })
 
 const calcTickets = computed(() => {
@@ -420,13 +451,16 @@ async function deleteRecord(r) {
 }
 
 async function handleSubmit() {
-  if (!form.dateFrom || !form.dateTo) {
-    alert('请选择加班时间范围')
-    return
-  }
-  if (new Date(form.dateTo) < new Date(form.dateFrom)) {
-    alert('截止日期不能早于起始日期')
-    return
+  for (let i = 0; i < form.ranges.length; i++) {
+    const rng = form.ranges[i]
+    if (!rng.from || !rng.to) {
+      alert(`第 ${i + 1} 段时间范围未填写完整`)
+      return
+    }
+    if (new Date(rng.to) < new Date(rng.from)) {
+      alert(`第 ${i + 1} 段截止日期不能早于起始日期`)
+      return
+    }
   }
   if (!selectedFiles.value.length) {
     alert('请上传佐证材料')
@@ -443,23 +477,34 @@ async function handleSubmit() {
 
   submitting.value = true
   try {
-    const invalidDates = await findInvalidDatesInRange(form.dateFrom, form.dateTo)
-    if (invalidDates.length) {
-      const sample = invalidDates.slice(0, 8).join('、')
-      const tail = invalidDates.length > 8 ? ` 等共 ${invalidDates.length} 天` : ''
-      alert(
-        '公出节假日换休票仅可选择周末及公司节假日（以「假期与调休」维护的数据为准）。' +
-          `以下日期为工作日或非放假安排，请调整区间：${sample}${tail}`
-      )
-      return
+    for (let i = 0; i < form.ranges.length; i++) {
+      const rng = form.ranges[i]
+      const invalidDates = await findInvalidDatesInRange(rng.from, rng.to)
+      if (invalidDates.length) {
+        const label = form.ranges.length > 1 ? `第 ${i + 1} 段` : ''
+        const sample = invalidDates.slice(0, 8).join('、')
+        const tail = invalidDates.length > 8 ? ` 等共 ${invalidDates.length} 天` : ''
+        alert(
+          `${label}公出节假日换休票仅可选择周末及公司节假日（以「假期与调休」维护的数据为准）。` +
+            `以下日期为工作日或非放假安排，请调整区间：${sample}${tail}`
+        )
+        return
+      }
     }
+
+    const allFrom = form.ranges.map(r => r.from).sort()
+    const allTo = form.ranges.map(r => r.to).sort()
+
     const fd = new FormData()
     fd.append('name', userName)
     fd.append('department', userDept)
-    fd.append('dateFrom', form.dateFrom)
-    fd.append('dateTo', form.dateTo)
+    fd.append('dateFrom', allFrom[0])
+    fd.append('dateTo', allTo[allTo.length - 1])
     fd.append('approver1', form.approver1)
     fd.append('approver2', form.approver2)
+    if (form.ranges.length > 1) {
+      fd.append('dateRanges', JSON.stringify(form.ranges.map(r => ({ from: r.from, to: r.to }))))
+    }
     for (const f of selectedFiles.value) {
       fd.append('files', f)
     }
@@ -482,8 +527,7 @@ async function handleSubmit() {
 }
 
 function resetForm() {
-  form.dateFrom = ''
-  form.dateTo = ''
+  form.ranges = [{ from: '', to: '' }]
   form.approver1 = ''
   form.approver2 = ''
   selectedFiles.value = []
@@ -572,9 +616,35 @@ onMounted(() => {
 .form-group input[readonly] { background-color: var(--color-bg-layout); cursor: not-allowed; }
 .required-mark { color: #dc2626; }
 
-.date-range-row { display: flex; align-items: center; gap: var(--spacing-md); }
-.date-range-row input { flex: 1; }
+.range-item {
+  display: flex; align-items: center; gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+.range-index {
+  flex-shrink: 0; font-size: var(--font-size-sm); font-weight: 600;
+  color: var(--color-text-secondary); min-width: 20px;
+}
+.date-range-row { display: flex; align-items: center; gap: var(--spacing-md); flex: 1; }
+.date-range-row input { flex: 1; min-width: 130px; }
 .date-range-sep { color: var(--color-text-secondary); flex-shrink: 0; }
+.range-remove-btn {
+  flex-shrink: 0; border: none; background: none; color: #dc2626;
+  font-size: 20px; cursor: pointer; padding: 0 4px; line-height: 1;
+}
+.range-remove-btn:hover { color: #991b1b; }
+.range-days {
+  flex-shrink: 0; font-size: var(--font-size-xs); color: var(--color-primary);
+  font-weight: 500; min-width: 40px; text-align: right;
+}
+.range-add-btn {
+  display: inline-block; padding: 4px 14px; border: 1px dashed var(--color-primary);
+  color: var(--color-primary); background: #f0f7ff; border-radius: var(--radius-sm);
+  cursor: pointer; font-size: var(--font-size-sm); margin-bottom: var(--spacing-sm);
+  transition: background 0.2s;
+}
+.range-add-btn:hover { background: #dbeafe; }
+.range-count-hint { font-weight: 400; font-size: var(--font-size-xs); color: var(--color-text-secondary); }
+.cell-range-seg { font-size: var(--font-size-xs); line-height: 1.6; }
 
 .calc-info { margin-top: var(--spacing-sm); padding: var(--spacing-sm) var(--spacing-md); background: #eff6ff; border-radius: var(--radius-sm); border: 1px solid #bfdbfe; }
 .calc-info p { margin: 4px 0; font-size: var(--font-size-sm); color: #1e40af; }
