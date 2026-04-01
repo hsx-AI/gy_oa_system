@@ -242,11 +242,18 @@
             <div class="form-group full">
               <label>公出地点</label>
               <input v-if="isCityTrip" id="bt-location" type="text" :value="'市内'" readonly class="readonly-input">
-              <LocationPicker
-                v-else
-                v-model="form.location"
-                :mode="tripScope === '境外公出' ? 'abroad' : 'domestic'"
-              />
+              <div v-else class="multi-location-wrap">
+                <div v-for="(loc, li) in form.locations" :key="'loc-'+li" class="multi-location-item">
+                  <span class="multi-location-idx" v-if="form.locations.length > 1">{{ li + 1 }}</span>
+                  <LocationPicker
+                    :modelValue="form.locations[li]"
+                    @update:modelValue="v => { form.locations[li] = v; syncLocationFromParts() }"
+                    :mode="tripScope === '境外公出' ? 'abroad' : 'domestic'"
+                  />
+                  <button v-if="form.locations.length > 1" type="button" class="multi-location-remove" @click="removeLocation(li)" title="删除此地点">&times;</button>
+                </div>
+                <button type="button" class="btn-add-location" @click="addLocation">+ 添加地点</button>
+              </div>
             </div>
           </div>
 
@@ -640,6 +647,7 @@ const form = reactive({
   workNo: '',
   projectName: '',
   location: '',
+  locations: [''],
   startTime: '',
   endTime: '',
   amount: 0,
@@ -658,6 +666,7 @@ const resetForm = () => {
   form.workNo = ''
   form.projectName = ''
   form.location = tripScope.value === '市内公出' ? '市内' : ''
+  form.locations = ['']
   form.startTime = ''
   form.endTime = ''
   form.amount = 0
@@ -668,20 +677,38 @@ const resetForm = () => {
   form.confirmed = false
 }
 
+function addLocation() {
+  form.locations.push('')
+}
+function removeLocation(idx) {
+  if (form.locations.length > 1) {
+    form.locations.splice(idx, 1)
+    syncLocationFromParts()
+  }
+}
+function syncLocationFromParts() {
+  form.location = form.locations.filter(s => (s || '').trim()).join('、')
+}
+
 // 切换公出类型时：市内则固定地点并清空选填项
 watch(tripScope, (scope) => {
   if (scope === '市内公出') {
     form.location = '市内'
+    form.locations = ['']
     form.assignTime = ''
     form.noticeNo = ''
     form.workNo = ''
     form.projectName = ''
     form.amount = 0
+  } else {
+    form.locations = ['']
+    form.location = ''
   }
 })
 // 打开登记弹窗时，若为市内公出则确保地点为市内
 watch(showApplyModal, (visible) => {
   if (visible && tripScope.value === '市内公出') form.location = '市内'
+  if (visible && tripScope.value !== '市内公出' && !form.locations.length) form.locations = ['']
 })
 
 async function refreshTripListMeta() {
@@ -951,7 +978,11 @@ const toDateTime = (s) => {
 }
 
 const submitApplication = async () => {
-  if (isCityTrip.value) form.location = '市内'
+  if (isCityTrip.value) {
+    form.location = '市内'
+  } else {
+    syncLocationFromParts()
+  }
   const tips = []
   if (!(form.location || '').trim()) tips.push('公出地点')
   if (!(form.task || '').trim()) tips.push('公出任务')
@@ -1617,5 +1648,66 @@ button:hover {
 .readonly-input {
   background: var(--color-bg-light, #f5f5f5);
   cursor: default;
+}
+
+.multi-location-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.multi-location-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+.multi-location-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #e0e7ff;
+  color: #3b52b5;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+.multi-location-item .location-picker {
+  flex: 1;
+}
+.multi-location-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin-top: 4px;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  background: #fff;
+  color: #ef4444;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all .15s;
+}
+.multi-location-remove:hover {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+.btn-add-location {
+  align-self: flex-start;
+  padding: 4px 14px;
+  border: 1px dashed #93c5fd;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all .15s;
+}
+.btn-add-location:hover {
+  background: #dbeafe;
+  border-color: #3b82f6;
 }
 </style>

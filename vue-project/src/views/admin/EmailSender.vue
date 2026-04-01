@@ -272,7 +272,7 @@
               <svg class="toggle-icon" :class="{ open: showAutoLog }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
             </div>
             <div v-if="showAutoLog && autoLog.length" class="auto-log-list">
-              <div v-for="(entry, i) in autoLog" :key="'log-'+i" class="log-item" :class="entry.status === 'ok' ? 'log-ok' : 'log-err'">
+              <div v-for="(entry, i) in autoLog" :key="'log-'+i" class="log-item" :class="entry.status === 'ok' ? 'log-ok' : entry.status === 'skipped' ? 'log-skip' : 'log-err'">
                 <span class="log-time">{{ entry.time }}</span>
                 <span class="log-trigger">{{ entry.trigger }}</span>
                 <span class="log-target">{{ entry.year }}年{{ entry.month }}月</span>
@@ -1229,6 +1229,7 @@ onMounted(() => {
 .log-target { color: #374151; min-width: 80px; font-weight: 500; }
 .log-msg { flex: 1; }
 .log-ok .log-msg { color: #059669; }
+.log-skip .log-msg { color: #d97706; }
 .log-err .log-msg { color: #dc2626; }
 .empty-hint { font-size: 13px; color: #9ca3af; margin: 8px 0; }
 

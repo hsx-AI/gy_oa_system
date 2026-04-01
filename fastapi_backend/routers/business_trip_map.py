@@ -18,6 +18,7 @@ def _load_json(path):
         return json.load(f)
 
 _city_province_map: dict = _load_json(os.path.join(_DATA_DIR, "city_province_map.json"))
+_city_coordinates: dict = _load_json(os.path.join(_DATA_DIR, "city_coordinates.json"))
 
 _PROVINCE_NAMES = list(set(_city_province_map.values()))
 
@@ -32,6 +33,28 @@ for full_name in _city_province_map:
 _CITY_SHORT_SORTED = sorted(_CITY_SHORT_MAP.keys(), key=lambda n: len(n), reverse=True)
 
 MUNICIPALITIES = {"北京": "北京市", "上海": "上海市", "天津": "天津市", "重庆": "重庆市"}
+
+_PROVINCE_CENTROIDS = {
+    "北京市": [116.4074, 39.9042], "天津市": [117.1901, 39.1256],
+    "河北省": [114.5149, 38.0428], "山西省": [112.5489, 37.8706],
+    "内蒙古自治区": [111.7490, 40.8427], "辽宁省": [123.4315, 41.8057],
+    "吉林省": [125.3245, 43.8868], "黑龙江省": [126.6424, 45.7570],
+    "上海市": [121.4737, 31.2304], "江苏省": [118.7969, 32.0603],
+    "浙江省": [120.1551, 30.2741], "安徽省": [117.2272, 31.8206],
+    "福建省": [119.2965, 26.0745], "江西省": [115.8581, 28.6820],
+    "山东省": [117.1205, 36.6519], "河南省": [113.6254, 34.7466],
+    "湖北省": [114.3054, 30.5931], "湖南省": [112.9388, 28.2282],
+    "广东省": [113.2644, 23.1291], "广西壮族自治区": [108.3200, 22.8244],
+    "海南省": [110.3494, 20.0174], "重庆市": [106.5516, 29.5630],
+    "四川省": [104.0657, 30.5723], "贵州省": [106.6302, 26.6477],
+    "云南省": [102.8329, 24.8801], "西藏自治区": [91.1322, 29.6600],
+    "陕西省": [108.9402, 34.3416], "甘肃省": [103.8343, 36.0611],
+    "青海省": [101.7782, 36.6171], "宁夏回族自治区": [106.2782, 38.4664],
+    "新疆维吾尔自治区": [87.6177, 43.7928],
+    "香港特别行政区": [114.1694, 22.3193],
+    "澳门特别行政区": [113.5439, 22.1987],
+    "台湾省": [121.5654, 25.0330],
+}
 
 CHINA_REGION_ALIASES = {
     "香港": "香港特别行政区",
@@ -89,15 +112,24 @@ def parse_china_location(gcdd: str):
 
 
 def normalize_world_country(gcdd: str):
+    """解析单段境外地点文本，提取国家名"""
     if not gcdd:
         return None
     gcdd = str(gcdd).strip()
-    separators = ["/", "／", ",", "，", "、", ";", "；", "(", "（"]
-    for sep in separators:
+    inner_seps = ["/", "／", ",", "，", ";", "；", "(", "（"]
+    for sep in inner_seps:
         if sep in gcdd:
             gcdd = gcdd.split(sep)[0].strip()
             break
     return gcdd or None
+
+
+def split_multi_locations(gcdd: str) -> list:
+    """将 '、' 分隔的多地点字符串拆分为独立地点列表"""
+    if not gcdd:
+        return []
+    parts = [p.strip() for p in str(gcdd).split("、") if p.strip()]
+    return parts if parts else [gcdd.strip()]
 
 
 # ── 工具函数 ──────────────────────────────────────
@@ -159,8 +191,8 @@ async def business_trip_map():
 
     for r in rows:
         gclx = (r.get("gclx") or "").strip()
-        gcdd = (r.get("gcdd") or "").strip()
-        if not gcdd or gclx == "市内公出":
+        gcdd_raw = (r.get("gcdd") or "").strip()
+        if not gcdd_raw or gclx == "市内公出":
             continue
 
         start = to_date(r.get("yjcfsj"))
@@ -168,34 +200,78 @@ async def business_trip_map():
         if not start or not end:
             continue
 
-        person = {
+        base_person = {
             "name": r.get("gcr") or "",
             "dept": r.get("gcdw") or "未分组部门",
             "project": r.get("xmmc") or "",
-            "location": gcdd,
+            "location": gcdd_raw,
             "period": f"{start} ~ {end}",
             "passed": days_between(start, today),
             "remain": days_between(today, end)
         }
 
+        loc_parts = split_multi_locations(gcdd_raw)
+
         if gclx == "境内公出":
-            province, city = parse_china_location(gcdd)
-            if not province:
-                continue
-            china_map[province].append(person)
-            if city:
-                china_city_map[city].append(person)
-            if province != "黑龙江省":
-                china_lines.add(province)
+            seen_provinces = set()
+            for part in loc_parts:
+                province, city = parse_china_location(part)
+                if not province or province in seen_provinces:
+                    continue
+                seen_provinces.add(province)
+                china_map[province].append(base_person)
+                if city:
+                    china_city_map[city].append(base_person)
+                if province != "黑龙江省":
+                    china_lines.add(province)
 
         elif gclx == "境外公出":
-            country = normalize_world_country(gcdd)
-            if not country:
-                continue
-            world_map[country].append(person)
-            world_lines.add(country)
+            seen_countries = set()
+            for part in loc_parts:
+                country = normalize_world_country(part)
+                if not country or country in seen_countries:
+                    continue
+                seen_countries.add(country)
+                world_map[country].append(base_person)
+                world_lines.add(country)
 
     city_count_map = {city: len(persons) for city, persons in china_city_map.items()}
+
+    def _slim_persons(plist):
+        """精简人员列表用于前端弹窗"""
+        return [{"name": p["name"], "dept": p["dept"], "project": p["project"],
+                 "location": p["location"], "period": p["period"],
+                 "passed": p["passed"], "remain": p["remain"]} for p in plist]
+
+    city_points_list = []
+    for city, persons in china_city_map.items():
+        coord = _city_coordinates.get(city)
+        if coord:
+            city_points_list.append({
+                "name": city,
+                "count": len(persons),
+                "coord": coord,
+                "persons": _slim_persons(persons)
+            })
+
+    covered_keys = set()
+    for city, persons in china_city_map.items():
+        if _city_coordinates.get(city):
+            for p in persons:
+                covered_keys.add(p["name"] + "|" + p["location"])
+
+    for province, persons in china_map.items():
+        uncovered = [p for p in persons
+                     if (p["name"] + "|" + p["location"]) not in covered_keys]
+        if uncovered:
+            coord = _PROVINCE_CENTROIDS.get(province)
+            if coord:
+                city_points_list.append({
+                    "name": province,
+                    "count": len(uncovered),
+                    "coord": coord,
+                    "persons": _slim_persons(uncovered)
+                })
 
     china_tree = build_tree(china_map)
     world_tree = build_tree(world_map)
@@ -207,6 +283,7 @@ async def business_trip_map():
             "tree": china_tree,
             "total": sum(item["count"] for item in china_tree),
             "cityPoints": city_count_map,
+            "cityList": city_points_list,
         },
         "world": {
             "points": [{"name": k, "value": len(v)} for k, v in world_map.items()],
