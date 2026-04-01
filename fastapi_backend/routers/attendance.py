@@ -513,8 +513,8 @@ async def fetch_and_upload(
 
 
 async def run_fetch_and_upload_report():
-    """供定时任务调用（执行时刻见 SCHEDULER_HOUR/MINUTE）：拉取报表并导入，智能建议截止日为「运行当日」。
-    建议在当日 24 点前运行，以处理当天打卡数据。失败时最多重试 3 次。"""
+    """供定时任务调用（执行时刻见 SCHEDULER_HOUR/MINUTE）：拉取报表并导入，智能建议截止日为「前一天」。
+    建议在次日凌晨运行，以处理前一天的完整打卡数据。失败时最多重试 3 次。"""
     import asyncio
     import httpx
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -567,9 +567,9 @@ async def run_fetch_and_upload_report():
                     await asyncio.sleep(retry_delay_seconds)
                 continue
             attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-            today_str = datetime.now().strftime("%Y-%m-%d")
+            yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
             loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), today_str))
+            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), yesterday_str))
             logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
             return
         except Exception as e:
