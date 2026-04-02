@@ -100,12 +100,10 @@
                   <td>{{ r.currentApprover || '—' }}</td>
                   <td class="reject-reason-cell">{{ r.statusCode === 22 && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button
-                      v-if="r.statusCode === 22 && r.applicant === userName"
-                      type="button"
-                      class="btn btn-sm btn-danger"
-                      @click="deleteRecord(r)"
-                    >删除</button>
+                    <template v-if="r.statusCode === 22 && r.applicant === userName">
+                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitRecord(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-danger" @click="deleteRecord(r)">删除</button>
+                    </template>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -241,6 +239,7 @@ import {
   submitHolidayExchange,
   getHolidayExchangeList,
   deleteHolidayExchangeRecord,
+  resubmitHolidayExchangeRecord,
   getHolidayExchangeDownloadUrl,
   getApprovers,
   getHolidays,
@@ -482,6 +481,18 @@ async function fetchList() {
 
 function getDownloadUrl(filename) {
   return getHolidayExchangeDownloadUrl(filename)
+}
+
+async function resubmitRecord(r) {
+  if (!r?.id || r.statusCode !== 22) return
+  if (!confirm('确认将此换休票申请重新提交审批？')) return
+  try {
+    await resubmitHolidayExchangeRecord(r.id, { name: userName })
+    alert('已重新提交，等待审批')
+    fetchList()
+  } catch (e) {
+    alert(e.response?.data?.detail || e.message || '重新提交失败')
+  }
 }
 
 async function deleteRecord(r) {

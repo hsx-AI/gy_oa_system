@@ -588,6 +588,34 @@ async def get_extendable_business_trips(name: str = Query(..., description="当�
     return {"success": True, "list": result}
 
 
+@router.post("/{item_id}/resubmit")
+async def resubmit_business_trip(item_id: str, name: str = Query(...)):
+    """将已驳回的公出记录重新提交审批（szrzt/bldzt 22→0，清除驳回原因）"""
+    try:
+        rows = db.execute_query("SELECT id, bldzt, szrzt, gcr FROM gcsqb WHERE id = %s", (item_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        r = rows[0]
+        bldzt = int(r.get("bldzt") or 0)
+        szrzt = int(r.get("szrzt") or 0)
+        if bldzt != 22 and szrzt != 22:
+            raise HTTPException(status_code=400, detail="仅可重新提交已驳回的公出记录")
+        if (r.get("gcr") or "").strip() != (name or "").strip():
+            raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.execute_update(
+            "UPDATE gcsqb SET szrzt = 0, bldzt = 0, bhyy = NULL, szrpztime = NULL, bldpztime = NULL, sqsj = %s "
+            "WHERE id = %s AND gcr = %s AND (bldzt = 22 OR szrzt = 22)",
+            (now, item_id, name.strip())
+        )
+        return {"success": True, "message": "已重新提交"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重新提交公出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="重新提交失败")
+
+
 @router.delete("/{item_id}")
 async def delete_business_trip_rejected(item_id: str, name: str):
     """删除本人已驳回的公出记录（仅 bldzt=22 或 szrzt=22 可删），数据库物理删除"""

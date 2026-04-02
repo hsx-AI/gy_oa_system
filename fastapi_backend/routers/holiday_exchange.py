@@ -647,6 +647,33 @@ async def get_holiday_exchange_list(
         raise HTTPException(status_code=500, detail=f"查询失败: {e}")
 
 
+@router.post("/holiday-exchange/{item_id}/resubmit")
+async def resubmit_holiday_exchange(item_id: str, name: str = Query(...)):
+    """将已驳回的换休票申请重新提交审批（status 22→0，清除驳回原因）"""
+    try:
+        rows = db.execute_query(
+            "SELECT id, xm, status FROM holiday_exchange WHERE id = %s", (item_id,)
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        r = rows[0]
+        if r.get("status") != 22:
+            raise HTTPException(status_code=400, detail="仅可重新提交已驳回的记录")
+        if (r.get("xm") or "").strip() != name.strip():
+            raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.execute_update(
+            "UPDATE holiday_exchange SET status = 0, bhyy = NULL, created_at = %s WHERE id = %s AND status = 22 AND xm = %s",
+            (now, item_id, name.strip())
+        )
+        return {"success": True, "message": "已重新提交"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error("重新提交换休票失败: %s", e)
+        raise HTTPException(status_code=500, detail="重新提交失败")
+
+
 @router.delete("/holiday-exchange/{item_id}")
 async def delete_holiday_exchange(item_id: str, name: str = Query(...)):
     """删除已驳回的记录"""

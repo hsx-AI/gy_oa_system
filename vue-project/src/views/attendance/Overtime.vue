@@ -94,7 +94,10 @@
                   <td>{{ r.currentApprover || '-' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button v-if="r.status === '已驳回' && isMyOvertimeRecord(r)" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedOvertime(r)">删除</button>
+                    <template v-if="r.status === '已驳回' && isMyOvertimeRecord(r)">
+                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitOvertime(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedOvertime(r)">删除</button>
+                    </template>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -234,7 +237,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getOvertimeList, submitOvertimeRegister, getApprovers, getOvertimeWebconfig, checkCanApprove, deleteOvertimeRecord, getHolidays } from '@/api/attendance'
+import { getOvertimeList, submitOvertimeRegister, getApprovers, getOvertimeWebconfig, checkCanApprove, deleteOvertimeRecord, resubmitOvertimeRecord, getHolidays } from '@/api/attendance'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
@@ -569,6 +572,18 @@ const fetchOvertimeList = async () => {
     myRecordList.value = []
   } finally {
     loadingList.value = false
+  }
+}
+
+async function resubmitOvertime(r) {
+  if (!r?.id || r.status !== '已驳回') return
+  if (!confirm('确认将此加班记录重新提交审批？')) return
+  try {
+    await resubmitOvertimeRecord(r.id, { name: form.name })
+    alert('已重新提交，等待审批')
+    fetchOvertimeList()
+  } catch (e) {
+    alert(e.response?.data?.detail || e.message || '重新提交失败')
   }
 }
 

@@ -841,6 +841,29 @@ async def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
     }
 
 
+@router.post("/hxp/approval/{approval_id}/resubmit")
+async def resubmit_hxp_approval(approval_id: str, applicant: str = Query(...)):
+    """将已驳回的换休票管理申请重新提交（status 22→0，清除驳回原因）"""
+    rows = db.execute_query(
+        "SELECT id, applicant, status FROM hxp_approval WHERE id = %s LIMIT 1",
+        (approval_id,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="记录不存在")
+    r = rows[0]
+    if r.get("status") != 22:
+        raise HTTPException(status_code=400, detail="仅可重新提交已驳回的申请")
+    if (r.get("applicant") or "").strip() != applicant.strip():
+        raise HTTPException(status_code=403, detail="只能重新提交本人的申请")
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.execute_update(
+        "UPDATE hxp_approval SET status = 0, reject_reason = NULL, approve_time = NULL, apply_time = %s "
+        "WHERE id = %s AND status = 22 AND applicant = %s",
+        (now_str, approval_id, applicant.strip()),
+    )
+    return {"success": True, "message": "已重新提交"}
+
+
 @router.get("/hxp/my-requests")
 async def hxp_my_requests(applicant: str = Query(..., description="申请人姓名")):
     """查询自己提交的换休票审批申请。"""

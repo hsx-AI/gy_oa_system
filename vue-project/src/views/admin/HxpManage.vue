@@ -118,6 +118,7 @@
                   <th>状态</th>
                   <th>申请时间</th>
                   <th>驳回原因</th>
+                  <th>处理</th>
                 </tr>
               </thead>
               <tbody>
@@ -134,6 +135,10 @@
                   </td>
                   <td>{{ r.applyTime }}</td>
                   <td>{{ r.rejectReason || '-' }}</td>
+                  <td>
+                    <button v-if="r.status === 22" type="button" class="btn btn-sm btn-primary" @click="resubmitHxpRequest(r)">重新提交</button>
+                    <span v-else>—</span>
+                  </td>
                 </tr>
               </tbody>
             </table>
@@ -232,7 +237,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getHxpSummary, getHxpDetail, submitHxpApproval, getMyHxpRequests } from '@/api/admin'
+import { getHxpSummary, getHxpDetail, submitHxpApproval, getMyHxpRequests, resubmitHxpApproval } from '@/api/admin'
 import { getUploadConfig, getApprovers } from '@/api/attendance'
 
 const canAccess = ref(false)
@@ -335,6 +340,18 @@ async function loadMyRequests() {
     myRequests.value = []
   } finally {
     myRequestsLoading.value = false
+  }
+}
+
+async function resubmitHxpRequest(r) {
+  if (!r?.id || r.status !== 22) return
+  if (!confirm('确认将此换休票管理申请重新提交审批？')) return
+  try {
+    await resubmitHxpApproval(r.id, { applicant: currentUserName.value })
+    alert('已重新提交，等待审批')
+    loadMyRequests()
+  } catch (e) {
+    alert(e.response?.data?.detail || e.message || '重新提交失败')
   }
 }
 

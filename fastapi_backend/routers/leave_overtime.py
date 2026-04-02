@@ -478,6 +478,31 @@ async def get_leave_all_records(
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
+@router.post("/leave/{item_id}/resubmit")
+async def resubmit_leave(item_id: str, name: str = Query(...)):
+    """将已驳回的请假记录重新提交审批（qjzt 22→0，清除驳回原因）"""
+    try:
+        rows = db.execute_query("SELECT id, qjzt, xm FROM qj WHERE id = %s", (item_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        r = rows[0]
+        if (r.get("qjzt") or 0) != 22:
+            raise HTTPException(status_code=400, detail="仅可重新提交已驳回的请假记录")
+        if (r.get("xm") or "").strip() != (name or "").strip():
+            raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.execute_update(
+            "UPDATE qj SET qjzt = 0, bhyy = NULL, qjtime = %s WHERE id = %s AND qjzt = 22 AND xm = %s",
+            (now, item_id, name.strip())
+        )
+        return {"success": True, "message": "已重新提交"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重新提交请假失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="重新提交失败")
+
+
 @router.delete("/leave/{item_id}")
 async def delete_leave_rejected(item_id: str, name: str):
     """删除本人已驳回的请假记录（仅 qjzt=22 可删），数据库物理删除"""
@@ -805,6 +830,31 @@ async def get_overtime_list(
     except Exception as e:
         logger.error(f"查询加班记录失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
+@router.post("/overtime/{item_id}/resubmit")
+async def resubmit_overtime(item_id: str, name: str = Query(...)):
+    """将已驳回的加班记录重新提交审批（jiabanzt 22→0，清除驳回原因）"""
+    try:
+        rows = db.execute_query("SELECT id, jiabanzt, xm FROM jiaban WHERE id = %s", (item_id,))
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        r = rows[0]
+        if (r.get("jiabanzt") or 0) != 22:
+            raise HTTPException(status_code=400, detail="仅可重新提交已驳回的加班记录")
+        if (r.get("xm") or "").strip() != (name or "").strip():
+            raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        db.execute_update(
+            "UPDATE jiaban SET jiabanzt = 0, bhyy = NULL, jiabantime = %s WHERE id = %s AND jiabanzt = 22 AND xm = %s",
+            (now, item_id, name.strip())
+        )
+        return {"success": True, "message": "已重新提交"}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"重新提交加班失败: {str(e)}")
+        raise HTTPException(status_code=500, detail="重新提交失败")
 
 
 @router.delete("/overtime/{item_id}")

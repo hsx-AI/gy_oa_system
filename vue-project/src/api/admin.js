@@ -69,6 +69,11 @@ export function getMyHxpRequests(params) {
   return request({ url: '/admin/hxp/my-requests', method: 'get', params })
 }
 
+/** 重新提交已驳回的换休票管理申请 */
+export function resubmitHxpApproval(id, params) {
+  return request({ url: `/admin/hxp/approval/${id}/resubmit`, method: 'post', params })
+}
+
 /** 部长信息简报：最近 N 天换休票+公出审批通过记录 */
 export function getLeaderBriefing(params) {
   return request({ url: '/admin/leader-briefing', method: 'get', params })

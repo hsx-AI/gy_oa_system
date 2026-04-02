@@ -124,7 +124,10 @@
                   <td>{{ r.currentApprover || '-' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
-                    <button v-if="r.status === '已驳回' && isMyLeaveRecord(r)" type="button" class="btn btn-sm btn-danger" @click="deleteRejectedLeave(r)">删除</button>
+                    <template v-if="r.status === '已驳回' && isMyLeaveRecord(r)">
+                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitLeave(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedLeave(r)">删除</button>
+                    </template>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -284,7 +287,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getLeaveList, getLeaveAllRecords, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord } from '@/api/attendance'
+import { getLeaveList, getLeaveAllRecords, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord, resubmitLeaveRecord } from '@/api/attendance'
 import { calcDurationFromTimes, normalizeDateKey, normalizeLeaveDaysForDisplay } from '@/utils/leaveDuration'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
@@ -666,6 +669,18 @@ const fetchLeaveList = async () => {
     myRecordList.value = []
   } finally {
     loadingList.value = false
+  }
+}
+
+async function resubmitLeave(r) {
+  if (!r?.id || r.status !== '已驳回') return
+  if (!confirm('确认将此请假记录重新提交审批？')) return
+  try {
+    await resubmitLeaveRecord(r.id, { name: form.name })
+    alert('已重新提交，等待审批')
+    fetchLeaveList()
+  } catch (e) {
+    alert(e.response?.data?.detail || e.message || '重新提交失败')
   }
 }
 
