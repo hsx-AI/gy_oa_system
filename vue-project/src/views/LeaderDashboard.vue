@@ -87,7 +87,16 @@
                   <line x1="8" y1="2" x2="8" y2="6"/>
                   <line x1="3" y1="10" x2="21" y2="10"/>
                 </svg>
-                <h3>请假汇总</h3>
+                <h3>{{ showHxLeaveOnly ? '换休请假汇总' : '请假汇总' }}</h3>
+                <button
+                  class="ot-toggle-btn"
+                  :class="{ active: showHxLeaveOnly }"
+                  type="button"
+                  @click="toggleHxLeaveOnly"
+                  title="点击在全部请假与仅换休、员工换休票之间切换"
+                >
+                  切换换休请假
+                </button>
               </div>
               <div class="dashboard-card-body">
                 <div class="dashboard-total clickable" @click="goLeave()" title="点击查看全部请假记录">
@@ -95,11 +104,12 @@
                   <span class="total-unit">天</span>
                 </div>
                 <div class="dashboard-meta">共 {{ leaveStats.personCount ?? 0 }} 人</div>
+                <div v-if="showHxLeaveOnly" class="ot-net-hint">仅统计类型为「换休」「员工换休票」的已通过请假（按天）</div>
                 <div v-if="leaveStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in leaveStats.list" :key="item.name" class="person-item clickable" @click="goLeave(item.name)" :title="`点击查看 ${item.name} 的请假记录`">
-                      <span class="person-name">{{ item.name }}</span>
+                    <li v-for="(item, idx) in leaveStats.list" :key="item.name" class="person-item clickable" @click="goLeave(item.name)" :title="`点击查看 ${item.name} 的请假记录`">
+                      <span class="person-name"><span class="person-rank">{{ idx + 1 }}</span>{{ item.name }}</span>
                       <span class="person-value">{{ item.days }} 天</span>
                     </li>
                   </ul>
@@ -115,8 +125,8 @@
                   <polyline points="12 6 12 12 16 14"/>
                 </svg>
                 <h3>{{ showNetOvertime ? '净加班' : '加班汇总' }}</h3>
-                <button class="ot-toggle-btn" :class="{ active: showNetOvertime }" @click="toggleNetOvertime" title="净加班 = 加班时长 − 换休请假时长">
-                  {{ showNetOvertime ? '总加班' : '净加班' }}
+                <button class="ot-toggle-btn" :class="{ active: showNetOvertime }" @click="toggleNetOvertime" title="净加班 = 加班时长 − 换休请假时长，点击在总加班与净加班之间切换">
+                  切换净加班
                 </button>
               </div>
               <div class="dashboard-card-body">
@@ -129,8 +139,8 @@
                 <div v-if="overtimeStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in overtimeStats.list" :key="item.name" class="person-item clickable" @click="goOvertime(item.name)" :title="`点击查看 ${item.name} 的加班记录`">
-                      <span class="person-name">{{ item.name }}</span>
+                    <li v-for="(item, idx) in overtimeStats.list" :key="item.name" class="person-item clickable" @click="goOvertime(item.name)" :title="`点击查看 ${item.name} 的加班记录`">
+                      <span class="person-name"><span class="person-rank">{{ idx + 1 }}</span>{{ item.name }}</span>
                       <span class="person-value">{{ item.hours }} 小时</span>
                     </li>
                   </ul>
@@ -155,8 +165,8 @@
                 <div v-if="tripStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
                   <ul class="person-list">
-                    <li v-for="item in tripStats.list" :key="item.name" class="person-item clickable" @click="goTrip(item.name)" :title="`点击查看 ${item.name} 的公出记录`">
-                      <span class="person-name">{{ item.name }}</span>
+                    <li v-for="(item, idx) in tripStats.list" :key="item.name" class="person-item clickable" @click="goTrip(item.name)" :title="`点击查看 ${item.name} 的公出记录`">
+                      <span class="person-name"><span class="person-rank">{{ idx + 1 }}</span>{{ item.name }}</span>
                       <span class="person-value">{{ item.days }} 天</span>
                     </li>
                   </ul>
@@ -351,6 +361,7 @@ const hasFetched = ref(false)
 
 const leaveStats = ref({})
 const overtimeStats = ref({})
+const showHxLeaveOnly = ref(false)
 const showNetOvertime = ref(false)
 const tripStats = ref({})
 
@@ -640,7 +651,7 @@ const fetchData = async () => {
       fullAttRes,
       deptCompRes,
     ] = await Promise.all([
-      getDeptLeaveStats(params),
+      getDeptLeaveStats(showHxLeaveOnly.value ? { ...params, hx_only: true } : params),
       getDeptOvertimeStats(showNetOvertime.value ? { ...params, net: true } : params),
       getDeptBusinessTripStats(params),
       filterMonth.value ? getLeaderFullAttendance({ year, month, lsys: lsysToUse || undefined }) : getLeaderFullAttendanceYear({ year, lsys: lsysToUse || undefined }),
@@ -659,9 +670,25 @@ const fetchData = async () => {
   }
 }
 
+async function toggleHxLeaveOnly() {
+  showHxLeaveOnly.value = !showHxLeaveOnly.value
+  const lsysToUse = permLevel.value === 3 ? selectedLsys.value : lsys.value
+  if (permLevel.value !== 3 && !lsysToUse) return
+  const params = { year: filterYear.value }
+  if (lsysToUse) params.lsys = lsysToUse
+  if (filterMonth.value) params.month = parseInt(filterMonth.value)
+  if (showHxLeaveOnly.value) params.hx_only = true
+  try {
+    const res = await getDeptLeaveStats(params)
+    if (res.success) leaveStats.value = res
+  } catch (e) {
+    console.error('切换换休请假统计失败:', e)
+  }
+}
+
 async function toggleNetOvertime() {
   showNetOvertime.value = !showNetOvertime.value
-  const lsysToUse = permLevel.value === 3 ? filterLsys.value : lsys.value
+  const lsysToUse = permLevel.value === 3 ? selectedLsys.value : lsys.value
   const params = { year: filterYear.value }
   if (lsysToUse) params.lsys = lsysToUse
   if (filterMonth.value) params.month = parseInt(filterMonth.value)
@@ -915,6 +942,7 @@ onMounted(async () => {
 
 .person-name { color: var(--color-text-primary); }
 
+.person-rank { display: inline-block; min-width: 1.6em; text-align: right; margin-right: 0.4em; color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
 .person-value { color: var(--color-primary); font-weight: var(--font-weight-medium); }
 
 .clickable { cursor: pointer; transition: background 0.15s, box-shadow 0.15s; border-radius: var(--radius-sm, 4px); }

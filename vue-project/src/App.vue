@@ -11,34 +11,34 @@
           <span class="sidebar-title">集成办公平台</span>
         </div>
         <nav class="sidebar-nav">
-          <router-link to="/" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
               <polyline points="9 22 9 12 15 12 15 22" />
             </svg>
             <span>首页</span>
           </router-link>
-          <router-link to="/profile" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/profile" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
               <circle cx="12" cy="7" r="4" />
             </svg>
             <span>员工信息</span>
           </router-link>
-          <router-link to="/attendance" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/attendance" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 11l3 3L22 4" />
               <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
             </svg>
             <span>考勤智能填报</span>
           </router-link>
-          <router-link to="/attendance/business-trip" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/attendance/business-trip" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
             </svg>
             <span>公出管理</span>
           </router-link>
-          <router-link to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="20" x2="18" y2="10" />
               <line x1="12" y1="20" x2="12" y2="4" />
@@ -46,14 +46,14 @@
             </svg>
             <span>统计汇总</span>
           </router-link>
-          <router-link to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="1" x2="12" y2="23" />
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
             <span>其他绩效激励统计</span>
           </router-link>
-          <router-link to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="4" width="18" height="18" rx="2" />
               <path d="M3 10h18" />
@@ -107,7 +107,7 @@
             </svg>
             <span>文件编号</span>
           </router-link>
-          <router-link to="/file/policy-query" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/file/policy-query" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
@@ -117,7 +117,7 @@
             </svg>
             <span>制度查询</span>
           </router-link>
-          <router-link to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
               <rect x="9" y="3" width="6" height="4" rx="1" />
@@ -125,14 +125,14 @@
             </svg>
             <span>技术问题手册</span>
           </router-link>
-          <a href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
+          <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 14l9-5-9-5-9 5 9 5z" />
               <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
             </svg>
             <span>思想汇报管理</span>
           </a>
-          <a href="javascript:;" class="sidebar-item" @click.prevent="goPersonnelArchive">
+          <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goPersonnelArchive">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
               <polyline points="14 2 14 8 20 8" />
@@ -476,6 +476,12 @@ const canShowAttendanceExceptions = computed(() => {
   return jb === '组长' || (jb && jb.startsWith('组长')) ||
     jb === '主任' || (jb && jb.startsWith('主任')) ||
     jb === '副主任' || (jb && jb.includes('副主任'))
+})
+
+// "其他部门成员"：仅可使用文件编号功能，隐藏其余所有侧边栏入口
+const isOtherDeptUser = computed(() => {
+  const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
+  return lsys === '其他部门成员'
 })
 
 // 切换用户菜单

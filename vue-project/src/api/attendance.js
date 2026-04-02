@@ -351,6 +351,7 @@ export function businessTripBatchApprove(data) {
 // ==================== 科室统计 API ====================
 
 /** 本科室请假统计 */
+/** @param {Object} params - { year?, month?, quarter?, lsys?, hx_only?: boolean } */
 export function getDeptLeaveStats(params) {
   return request({ url: '/dept/leave', method: 'get', params })
 }

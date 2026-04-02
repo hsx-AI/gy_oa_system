@@ -223,10 +223,11 @@ async def apply_leave_json(req: LeaveApplyRequest):
         raise HTTPException(status_code=500, detail=f"申请失败: {str(e)}")
 
 
-def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
+def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_lsys: str = None):
     """
     请假/加班列表：scope=self 仅本人；scope=lsys 同 lsys 全员（主任/副主任）；
     scope=all：部长/副部长/打卡管理员/系统管理员为不限制 xm（与原「全部请假记录」一致）；
+    scope=all + target_lsys：按指定专业筛选（需 canViewAll 权限）；
     综合技术室主任/副主任为 yggl 子查询（排除部办等，与统计规则一致）。
     返回 (xm_where_sql, xm_params, meta dict)。
     """
@@ -239,11 +240,10 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
     viewer = (viewer_name or "").strip()
     if not viewer:
         raise HTTPException(status_code=400, detail="姓名不能为空")
-    meta = {"canViewLsys": False, "canViewAll": False, "lsysLabel": ""}
+    meta = {"canViewLsys": False, "canViewAll": False, "lsysLabel": "", "lsysList": []}
     user = _get_user_info(viewer)
     admin1 = (_get_admin1() or "").strip()
     is_admin_user = bool(admin1 and viewer == admin1)
-    # 打卡管理员 dakaman 与系统管理员同等权限查看全员
     try:
         _dk_rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
         _dakaman = (_dk_rows[0].get("dakaman") or "").strip() if _dk_rows else ""
@@ -251,6 +251,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
         _dakaman = ""
     is_dakaman = bool(_dakaman and viewer == _dakaman)
     jb = ""
+    lsys = ""
     if user:
         jb = (user.get("jb") or "").strip()
         lsys = (user.get("lsys") or "").strip()
@@ -259,6 +260,20 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
     is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
     zonghe_dir = bool(user and is_zonghe_tech_director(user))
     meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir or is_dakaman
+
+    if meta["canViewAll"]:
+        try:
+            _lsys_rows = db.execute_query(
+                "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
+                "WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
+                "AND RIGHT(TRIM(lsys),1) != '1' AND TRIM(lsys) != %s "
+                "AND COALESCE(zaizhi,0)=0 ORDER BY lsys",
+                ("部办",),
+            )
+            meta["lsysList"] = [r["lsys"].strip() for r in _lsys_rows if r.get("lsys")]
+        except Exception:
+            meta["lsysList"] = []
+
     if scope == "self":
         return "xm = %s", [viewer], meta
     if scope == "all":
@@ -269,6 +284,14 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
                 if resource == "leave"
                 else "仅部长、副部长、综合技术室主任/副主任或系统管理员可查看全员加班记录",
             )
+        tl = (target_lsys or "").strip()
+        if tl:
+            clause = (
+                "xm IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
+                "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
+                "AND RIGHT(TRIM(y.name), 1) <> '1')"
+            )
+            return clause, [tl], meta
         if is_admin_user or is_minister or is_dakaman:
             return "1=1", [], meta
         clause = (
@@ -284,7 +307,6 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str):
             status_code=403,
             detail="仅主任、副主任可查看本专业全员请假记录" if resource == "leave" else "仅主任、副主任可查看本专业全员加班记录",
         )
-    lsys = (user.get("lsys") or "").strip()
     clause = (
         "xm IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
         "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
@@ -299,16 +321,17 @@ async def get_leave_list(
     month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按请假开始时间所在年月筛选"),
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
-    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员或指定专业"),
+    target_lsys: Optional[str] = Query(None, description="指定查看某个专业（需 canViewAll 权限，配合 scope=all 使用）"),
 ):
     """
-    获取请假记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all 查看全员。
+    获取请假记录列表。默认仅本人；主任/副主任可选 lsys；部长等可选 all 查看全员或 target_lsys 查看指定专业。
     """
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
-        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "leave")
+        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "leave", target_lsys)
 
         if all_years:
             query = f"""
@@ -780,16 +803,17 @@ async def get_overtime_list(
     month: Optional[int] = None,
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
-    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员（仅综合技术室主任/副主任）"),
+    scope: str = Query("self", description="self=仅本人，lsys=同属室全员，all=全员或指定专业"),
+    target_lsys: Optional[str] = Query(None, description="指定查看某个专业（需 canViewAll 权限，配合 scope=all 使用）"),
 ):
     """
-    获取加班记录列表。默认仅本人；主任/副主任可选 lsys；综合技术室主任/副主任可选 all 查看全员。
+    获取加班记录列表。默认仅本人；主任/副主任可选 lsys；部长等可选 all 查看全员或 target_lsys 查看指定专业。
     """
     try:
         if year is None and not all_years:
             year = datetime.now().year
 
-        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "overtime")
+        xm_where, xm_params, meta = _record_scope_xm_clause(name, scope, "overtime", target_lsys)
 
         if all_years:
             query = f"""

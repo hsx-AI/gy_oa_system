@@ -265,6 +265,19 @@ router.beforeEach(async (to, _from, next) => {
     return
   }
 
+  // "其他部门成员"仅可访问文件编号相关页面
+  try {
+    const u = JSON.parse(raw)
+    const lsys = (u.dept || u.lsys || '').trim()
+    if (lsys === '其他部门成员') {
+      const allowed = ['/file/numbering', '/file/tech-category', '/file/workno']
+      if (!allowed.includes(to.path)) {
+        next('/file/numbering')
+        return
+      }
+    }
+  } catch { /* ignore */ }
+
   // 以下为各页面单独权限校验
   if (to.path === '/leader-dashboard') {
     try {

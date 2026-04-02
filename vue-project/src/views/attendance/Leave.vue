@@ -24,52 +24,35 @@
           <div class="record-card__filters">
             <label class="filter-label">数据范围：</label>
             <select v-model="recordSource" class="filter-select filter-select--source">
-              <option value="permission">按权限（本人 / 本专业 / 全员）</option>
-              <option value="ledger">请假台账（本科室或全员汇总，仅已通过，原「全部请假记录」）</option>
+              <option value="self">本人</option>
+              <option v-if="leaveListMeta.canViewAll" value="all">全员</option>
+              <template v-if="leaveListMeta.canViewAll && leaveListMeta.lsysList?.length">
+                <option v-for="ls in leaveListMeta.lsysList" :key="ls" :value="'dept:' + ls">{{ ls }}</option>
+              </template>
+              <template v-else-if="leaveListMeta.canViewLsys && leaveListMeta.lsysLabel">
+                <option :value="'dept:' + leaveListMeta.lsysLabel">{{ leaveListMeta.lsysLabel }}</option>
+              </template>
             </select>
-            <template v-if="recordSource === 'permission'">
-              <label class="filter-label">人员范围：</label>
-              <select
-                v-if="leaveListMeta.canViewLsys || leaveListMeta.canViewAll"
-                v-model="recordScope"
-                class="filter-select filter-select--scope"
-              >
-                <option value="self">仅本人</option>
-                <option v-if="leaveListMeta.canViewLsys" value="lsys">
-                  本专业全员（{{ leaveListMeta.lsysLabel || '隶属室' }}）
-                </option>
-                <option v-if="leaveListMeta.canViewAll" value="all">全员</option>
-              </select>
-              <span v-else class="filter-text">仅本人</span>
-              <label class="filter-label">年份</label>
-              <select v-model.number="recordYear" class="filter-select">
-                <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
-              </select>
-              <label class="filter-label">月份</label>
-              <select v-model="recordMonth" class="filter-select">
-                <option :value="null">全年</option>
-                <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
-              </select>
-              <label class="filter-label">状态</label>
-              <select v-model="recordStatus" class="filter-select">
-                <option value="processing">审批中/已驳回</option>
-                <option value="approved">已通过</option>
-                <option value="all">全部</option>
-              </select>
-            </template>
-            <template v-else>
-              <span class="filter-hint-ledger">{{ ledgerScopeHint }}</span>
-              <label class="filter-label">年份</label>
-              <select v-model="ledgerYearStr" class="filter-select" @change="onLedgerYearChange">
-                <option value="">全部年份</option>
-                <option v-for="y in recordYearOptions" :key="'ly' + y" :value="String(y)">{{ y }}年</option>
-              </select>
-              <label class="filter-label">月份</label>
-              <select v-model="ledgerMonth" class="filter-select" :disabled="!ledgerYearStr">
-                <option :value="null">全年</option>
-                <option v-for="m in 12" :key="'lm' + m" :value="m">{{ m }}月</option>
-              </select>
-            </template>
+            <label class="filter-label">年份</label>
+            <select v-model.number="recordYear" class="filter-select">
+              <option v-for="y in recordYearOptions" :key="y" :value="y">{{ y }}年</option>
+            </select>
+            <label class="filter-label">月份</label>
+            <select v-model="recordMonth" class="filter-select">
+              <option :value="null">全年</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+            </select>
+            <label class="filter-label">状态</label>
+            <select v-model="recordStatus" class="filter-select">
+              <option value="processing">审批中/已驳回</option>
+              <option value="approved">已通过</option>
+              <option value="all">全部</option>
+            </select>
+            <label class="filter-label">类型</label>
+            <select v-model="recordLeaveType" class="filter-select">
+              <option value="">全部类型</option>
+              <option v-for="t in leaveTypes" :key="t" :value="t">{{ t }}</option>
+            </select>
             <input
               v-model.trim="recordKeyword"
               type="search"
@@ -287,7 +270,7 @@
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getLeaveList, getLeaveAllRecords, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord, resubmitLeaveRecord } from '@/api/attendance'
+import { getLeaveList, submitLeaveApplication, getApprovers, getEmployeeProfile, getHolidays, checkCanApprove, deleteLeaveRecord, resubmitLeaveRecord } from '@/api/attendance'
 import { calcDurationFromTimes, normalizeDateKey, normalizeLeaveDaysForDisplay } from '@/utils/leaveDuration'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
@@ -316,6 +299,7 @@ const myRecordList = ref([])
 const recordPage = ref(1)
 const recordPageSize = ref(10)
 const recordKeyword = ref('')
+const recordLeaveType = ref('')
 const recordSort = ref('startTime_desc')
 const LEAVE_SORT_FIELDS = [
   { field: 'startTime', type: 'date', get: (r) => r.startTime },
@@ -325,6 +309,10 @@ const LEAVE_SORT_FIELDS = [
 ]
 const recordProcessedList = computed(() => {
   let list = myRecordList.value
+  const lt = recordLeaveType.value
+  if (lt) {
+    list = list.filter((r) => (r.type || '') === lt)
+  }
   const kw = recordKeyword.value
   if (kw && kw.trim()) {
     list = list.filter((r) =>
@@ -352,7 +340,7 @@ const recordDisplayList = computed(() => {
   return list.slice(start, start + size)
 })
 watch(recordPageSize, () => { recordPage.value = 1 })
-watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
+watch([recordKeyword, recordSort, recordLeaveType], () => { recordPage.value = 1 })
 
 // 本人记录筛选：年份+全年，审批状态默认全部
 const recordYear = ref(new Date().getFullYear())
@@ -363,52 +351,27 @@ const recordYearOptions = computed(() => {
 const recordStatus = ref('all')
 /** null = 全年，1–12 = 仅该月（按请假开始时间） */
 const recordMonth = ref(null)
-const recordScope = ref('self')
-/** permission=/leave/list；ledger=/leave/all-records（仅已通过，本科室或部长/综合室全员） */
-const recordSource = ref('permission')
-const ledgerYearStr = ref('')
-const ledgerMonth = ref(null)
-const ledgerApiScope = ref('none')
-const leaveListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
-
-const ledgerScopeHint = computed(() => {
-  if (ledgerApiScope.value === 'all') return '当前为全员请假台账（部长/副部长或综合技术室主任权限），仅已通过'
-  if (ledgerApiScope.value === 'dept') return '当前为本科室请假台账，仅已通过'
-  return '请假台账暂无可见范围，请确认账号隶属科室'
-})
-
-function onLedgerYearChange() {
-  if (!ledgerYearStr.value) ledgerMonth.value = null
-}
+/** self=本人, lsys=本专业, all=全员, dept:XX室=指定专业, ledger=请假台账 */
+const recordSource = ref('self')
+const leaveListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '', lsysList: [] })
 
 const showApplicantColumn = computed(() => {
-  if (recordSource.value === 'ledger') return true
-  return recordScope.value === 'lsys' || recordScope.value === 'all'
+  return recordSource.value !== 'self'
 })
 
 const recordFilterLabel = computed(() => {
-  if (recordSource.value === 'ledger') {
-    const y = ledgerYearStr.value
-    const m = ledgerMonth.value
-    let time = '全部年份'
-    if (y) {
-      time = m ? `${y}年${m}月` : `${y}年全年`
-    }
-    const scope =
-      ledgerApiScope.value === 'all' ? '全员' : ledgerApiScope.value === 'dept' ? '本科室' : '—'
-    return `请假台账：${time}，${scope}，仅已通过`
-  }
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
-  const who =
-    recordScope.value === 'lsys'
-      ? `本专业（${leaveListMeta.value.lsysLabel || '隶属室'}）全员`
-      : recordScope.value === 'all'
-        ? '全员（审批范围内）'
-        : '本人'
+  let who = '本人'
+  const src = recordSource.value
+  if (src === 'all') {
+    who = '全员'
+  } else if (src.startsWith('dept:')) {
+    who = src.slice(5)
+  }
   const rm = recordMonth.value
   const hasMonth = rm != null && rm !== '' && Number.isFinite(Number(rm))
   const ym = hasMonth ? `${recordYear.value}年${Number(rm)}月` : `${recordYear.value}年全年`
-  return `按权限查看：${ym}，${statusText}，${who}的请假记录`
+  return `${ym}，${statusText}，${who}的请假记录`
 })
 
 function isMyLeaveRecord(r) {
@@ -422,10 +385,7 @@ const leaveFetchKey = computed(() =>
     recordSource.value,
     recordYear.value,
     recordStatus.value,
-    recordScope.value,
     recordMonth.value,
-    ledgerYearStr.value,
-    ledgerMonth.value,
   ].join('|')
 )
 let leaveListMounted = false
@@ -448,7 +408,7 @@ function leaveTypeClass(type) {
 
 // 请假类型选项
 const leaveTypes = [
-  '换休', '带薪年休假', '婚假', '事假', '病假', '丧假',
+  '换休', '员工换休票', '带薪年休假', '婚假', '事假', '病假', '丧假',
   '哺乳假', '产假', '产前检查', '护理假', '探亲假', '脱产学习', '集团调用', '异常打卡'
 ]
 
@@ -590,54 +550,31 @@ const resetForm = () => {
   form.approver2 = ''
 }
 
-function mapLedgerRowToList(r) {
-  return {
-    id: r.id,
-    applicant: (r.name != null ? String(r.name) : '').trim(),
-    type: r.type || '请假',
-    startTime: r.startTime || '',
-    endTime: r.endTime || '',
-    duration: Number(r.duration) || 0,
-    hours: Number(r.hours) || 0,
-    reason: (r.reason || '').trim(),
-    applyTime: r.applyTime || '',
-    status: '已通过',
-    statusClass: 'status-approved',
-    currentApprover: '',
-    rejectReason: ''
-  }
-}
 
 const fetchLeaveList = async () => {
   loadingList.value = true
   try {
-    if (recordSource.value === 'ledger') {
-      const params = { name: form.name }
-      const y = ledgerYearStr.value ? parseInt(ledgerYearStr.value, 10) : NaN
-      if (y > 2000) {
-        params.year = y
-        if (ledgerMonth.value != null && ledgerMonth.value >= 1 && ledgerMonth.value <= 12) {
-          params.month = ledgerMonth.value
-        }
-      }
-      const res = await getLeaveAllRecords(params)
-      if (res.success && res.data) {
-        ledgerApiScope.value = res.scope || 'none'
-        myRecordList.value = res.data.map(mapLedgerRowToList)
+    const src = recordSource.value
+    let scope = 'self'
+    let targetLsys = null
+    if (src === 'all') {
+      scope = 'all'
+    } else if (src.startsWith('dept:')) {
+      const deptName = src.slice(5)
+      if (leaveListMeta.value.canViewAll) {
+        scope = 'all'
+        targetLsys = deptName
       } else {
-        ledgerApiScope.value = 'none'
-        myRecordList.value = []
+        scope = 'lsys'
       }
-      return
     }
-
-    ledgerApiScope.value = 'none'
     const params = {
       name: form.name,
       year: recordYear.value,
       status: recordStatus.value,
-      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
+      scope,
     }
+    if (targetLsys) params.target_lsys = targetLsys
     const rm = recordMonth.value
     if (rm != null && rm !== '' && Number.isFinite(Number(rm))) {
       params.month = Number(rm)
@@ -649,21 +586,19 @@ const fetchLeaveList = async () => {
         leaveListMeta.value = {
           canViewLsys: !!res.meta.canViewLsys,
           canViewAll: !!res.meta.canViewAll,
-          lsysLabel: (res.meta.lsysLabel || '').trim()
+          lsysLabel: (res.meta.lsysLabel || '').trim(),
+          lsysList: res.meta.lsysList || []
         }
       }
-      if (recordScope.value === 'lsys' && !leaveListMeta.value.canViewLsys) {
-        recordScope.value = 'self'
-      }
-      if (recordScope.value === 'all' && !leaveListMeta.value.canViewAll) {
-        recordScope.value = 'self'
+      if ((src === 'all' || src.startsWith('dept:')) && !leaveListMeta.value.canViewAll && !leaveListMeta.value.canViewLsys) {
+        recordSource.value = 'self'
       }
     }
   } catch (err) {
     console.error('获取请假记录失败:', err)
     const st = err?.response?.status
-    if (recordSource.value === 'permission' && st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
-      recordScope.value = 'self'
+    if (st === 403 && recordSource.value !== 'self') {
+      recordSource.value = 'self'
       await fetchLeaveList()
       return
     }
@@ -712,17 +647,14 @@ onMounted(async () => {
     }
   }
   const q = route.query
-  // 领导看板 / 旧「全部请假记录」：请假台账（/leave/all-records），与公出「公出台账」一致
   if (q.from === 'leader' || q.from === 'all-records' || q.view === 'ledger') {
-    recordSource.value = 'ledger'
+    recordSource.value = 'all'
+    recordStatus.value = 'approved'
     const qy = parseInt(q.year, 10)
     if (qy > 2000) {
-      ledgerYearStr.value = String(qy)
+      recordYear.value = qy
       const qm = parseInt(q.month, 10)
-      if (qm >= 1 && qm <= 12) ledgerMonth.value = qm
-    } else {
-      ledgerYearStr.value = ''
-      ledgerMonth.value = null
+      if (qm >= 1 && qm <= 12) recordMonth.value = qm
     }
     if (q.focusName) recordKeyword.value = q.focusName
   } else if (q.focusId) {

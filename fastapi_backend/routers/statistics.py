@@ -180,6 +180,40 @@ def _allocate_leave_tian_to_period(
     return tian_f * float(ov_days) / float(total_span)
 
 
+def _leave_overlap_fraction(
+    leave_start: date, leave_end: date, period_start: date, period_end: date
+) -> float:
+    """请假区间与统计区间日历重叠比例 (0~1]，用于将整笔换休小时分摊到当期。"""
+    if not leave_start or not leave_end:
+        return 0.0
+    total_span = (leave_end - leave_start).days + 1
+    if total_span <= 0:
+        return 0.0
+    ov_s = max(leave_start, period_start)
+    ov_e = min(leave_end, period_end)
+    if ov_e < ov_s:
+        return 0.0
+    ov_days = (ov_e - ov_s).days + 1
+    return float(ov_days) / float(total_span)
+
+
+def _qj_hx_row_total_hours(row: Dict) -> float:
+    """单条换休类请假的总小时：优先 xiaoshi，否则 tian×8（与申请端一致）。"""
+    try:
+        xs_raw = row.get("xiaoshi")
+        if xs_raw is not None and str(xs_raw).strip() != "":
+            xs = float(str(xs_raw).strip().replace(",", "."))
+            if xs > 0:
+                return xs
+    except (TypeError, ValueError):
+        pass
+    try:
+        tian = float(row.get("tian") or 0)
+    except (TypeError, ValueError):
+        tian = 0.0
+    return max(0.0, tian * 8.0)
+
+
 def _leave_overlap_sql_bounds() -> str:
     """WHERE 片段：请假区间与 [ps, pe] 闭区间有交集（ps/pe 为 'YYYY-MM-DD' 字符串）。"""
     return """
@@ -266,12 +300,14 @@ async def get_dept_leave_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = None,
-    quarter: Optional[str] = None
+    quarter: Optional[str] = None,
+    hx_only: Optional[bool] = Query(False, description="为 true 时仅统计请假类型为换休、员工换休票的记录"),
 ):
     """
     科室请假统计（按人汇总天数）。不传 lsys 时为全员（排除部办）。
     返回: { totalDays, personCount, list: [{ name, days }] }
     仅统计 qjzt=4 已通过。
+    hx_only=true 时仅 qjfs 为换休/员工换休票（TRIM 后匹配）。
     跨月/跨季请假按日历重叠比例将 tian 分摊到各统计区间（与领导人看板月份/季度/全年一致）。
     """
     try:
@@ -297,12 +333,14 @@ async def get_dept_leave_stats(
         pe_str = period_end.strftime("%Y-%m-%d")
         ps_str = period_start.strftime("%Y-%m-%d")
         ov = _leave_overlap_sql_bounds()
+        hx_filter = " AND TRIM(qjfs) IN ('换休','员工换休票')" if hx_only else ""
 
         if all_staff:
             query = f"""
                 SELECT xm AS name, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
                 FROM qj
                 WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
+                {hx_filter}
                 {ov}
             """
             rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, pe_str, ps_str))
@@ -311,6 +349,7 @@ async def get_dept_leave_stats(
                 SELECT xm AS name, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
                 FROM qj
                 WHERE lsys = %s AND qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1'
+                {hx_filter}
                 {ov}
             """
             rows = db.execute_query(query, (lsys, pe_str, ps_str))
@@ -348,45 +387,6 @@ async def get_dept_leave_stats(
 # ==================== 加班科室统计 ====================
 
 
-def _query_hx_hours(
-    names: List[str],
-    year: int,
-    month: Optional[int] = None,
-    quarter: Optional[str] = None,
-    lsys: Optional[str] = None,
-    all_staff: bool = True,
-) -> Dict[str, float]:
-    """查询指定人员在时间段内的换休请假小时数（qjfs IN ('换休','员工换休票'), qjzt=4）。"""
-    if not names:
-        return {}
-
-    placeholders = ",".join(["%s"] * len(names))
-    base_where = f"qjzt = 4 AND qjfs IN ('换休','员工换休票') AND xm IN ({placeholders})"
-    params: list = list(names)
-
-    if month:
-        month_str = f"{year}-{month:02d}"
-        base_where += " AND (timefrom LIKE %s OR timefromdate LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)"
-        params += [f"{month_str}%", f"{month_str}%", month_str]
-    elif quarter:
-        q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
-        lo, hi = q_map.get(quarter, (1, 12))
-        base_where += f" AND YEAR(timefrom) = %s AND MONTH(timefrom) BETWEEN {lo} AND {hi}"
-        params.append(year)
-    else:
-        base_where += " AND (timefrom LIKE %s OR timefromdate LIKE %s OR YEAR(timefrom) = %s)"
-        params += [f"{year}%", f"{year}%", year]
-
-    query = f"""
-        SELECT xm AS name, SUM(CAST(COALESCE(xiaoshi, 0) AS DECIMAL(10,2))) AS hx_hours
-        FROM qj
-        WHERE {base_where}
-        GROUP BY xm
-    """
-    rows = db.execute_query(query, tuple(params))
-    return {(r.get("name") or "").strip(): float(r.get("hx_hours") or 0) for r in rows}
-
-
 def _query_hx_hours_all(
     year: int,
     month: Optional[int] = None,
@@ -394,36 +394,70 @@ def _query_hx_hours_all(
     lsys: Optional[str] = None,
     all_staff: bool = True,
 ) -> Dict[str, float]:
-    """按科室/全员查询换休请假小时数，不限定姓名列表。"""
-    if all_staff:
-        scope = "INNER JOIN yggl ON qj.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)"
-        params: list = [LEADER_EXCLUDE_LSYS]
-    else:
-        scope = "INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
-        params = [lsys]
-
-    base_where = "qj.qjzt = 4 AND qj.qjfs IN ('换休','员工换休票')"
-    if month:
-        month_str = f"{year}-{month:02d}"
-        base_where += " AND (qj.timefrom LIKE %s OR qj.timefromdate LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)"
-        params += [f"{month_str}%", f"{month_str}%", month_str]
-    elif quarter:
-        q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
-        lo, hi = q_map.get(quarter, (1, 12))
-        base_where += f" AND YEAR(qj.timefrom) = %s AND MONTH(qj.timefrom) BETWEEN {lo} AND {hi}"
-        params.append(year)
-    else:
-        base_where += " AND (qj.timefrom LIKE %s OR qj.timefromdate LIKE %s OR YEAR(qj.timefrom) = %s)"
-        params += [f"{year}%", f"{year}%", year]
-
-    query = f"""
-        SELECT qj.xm AS name, SUM(CAST(COALESCE(qj.xiaoshi, 0) AS DECIMAL(10,2))) AS hx_hours
-        FROM qj {scope}
-        WHERE {base_where}
-        GROUP BY qj.xm
     """
-    rows = db.execute_query(query, tuple(params))
-    return {(r.get("name") or "").strip(): float(r.get("hx_hours") or 0) for r in rows}
+    统计期内每人应扣换休小时：qjzt=4 且 qjfs 为换休/员工换休票；
+    与请假统计一致，按请假区间与统计期日历重叠比例分摊整笔小时；
+    小时优先 xiaoshi，缺省按 tian×8。净加班 = 该人加班小时 − 该值。
+    """
+    import calendar
+
+    if month:
+        period_start = date(year, int(month), 1)
+        period_end = date(year, int(month), calendar.monthrange(year, int(month))[1])
+    elif quarter:
+        q = str(quarter).strip()
+        q_map = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}
+        lo, hi = q_map.get(q, (1, 12))
+        period_start = date(year, lo, 1)
+        period_end = date(year, hi, calendar.monthrange(year, hi)[1])
+    else:
+        period_start = date(year, 1, 1)
+        period_end = date(year, 12, 31)
+
+    pe_str = period_end.strftime("%Y-%m-%d")
+    ps_str = period_start.strftime("%Y-%m-%d")
+    ov = _leave_overlap_sql_bounds()
+
+    if all_staff:
+        query = f"""
+            SELECT TRIM(qj.xm) AS name, qj.timefrom, qj.timeto, qj.timefromdate,
+                CAST(qj.tian AS DECIMAL(10,2)) AS tian, qj.xiaoshi
+            FROM qj INNER JOIN yggl ON qj.xm = yggl.name
+                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+                AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
+            WHERE qj.qjzt = 4 AND TRIM(qj.qjfs) IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1'
+            {ov}
+        """
+        rows = db.execute_query(query, (LEADER_EXCLUDE_LSYS, pe_str, ps_str))
+    else:
+        query = f"""
+            SELECT TRIM(qj.xm) AS name, qj.timefrom, qj.timeto, qj.timefromdate,
+                CAST(qj.tian AS DECIMAL(10,2)) AS tian, qj.xiaoshi
+            FROM qj INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys = %s
+                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+                AND (COALESCE(yggl.zaizhi,0)=0)
+            WHERE qj.qjzt = 4 AND TRIM(qj.qjfs) IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1'
+            {ov}
+        """
+        rows = db.execute_query(query, (lsys, pe_str, ps_str))
+
+    by_name: Dict[str, float] = defaultdict(float)
+    for r in rows or []:
+        name = (r.get("name") or "").strip()
+        if not name:
+            continue
+        ls_d, le_d = _qj_leave_date_bounds(r)
+        if not ls_d or not le_d:
+            continue
+        h_full = _qj_hx_row_total_hours(r)
+        if h_full <= 0:
+            continue
+        frac = _leave_overlap_fraction(ls_d, le_d, period_start, period_end)
+        if frac <= 0:
+            continue
+        by_name[name] += h_full * frac
+
+    return dict(by_name)
 
 
 @router.get("/dept/overtime")
@@ -436,7 +470,8 @@ async def get_dept_overtime_stats(
 ):
     """
     科室加班统计（按人汇总小时）。不传 lsys 时为全员（排除部办）。
-    net=true 时，每人小时数减去该时间段内换休请假的 xiaoshi 合计。
+    net=true 时，每人加班小时减去该人在同期换休类请假（换休/员工换休票）应扣小时，
+    与请假统计一致按日历重叠比例分摊；小时优先取 xiaoshi，缺省按 tian×8。
     返回: { totalHours, personCount, list: [{ name, hours }] }
     仅统计 jiabanzt=4 已通过
     """
@@ -454,11 +489,11 @@ async def get_dept_overtime_stats(
         if month:
             month_str = f"{year}-{month:02d}"
             query = f"""
-                SELECT jiaban.xm AS name, SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                 FROM jiaban {join_cond}
                 WHERE jiaban.jiabanzt = 4
                 AND (jiaban.timedate LIKE %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s)
-                GROUP BY jiaban.xm
+                GROUP BY TRIM(jiaban.xm)
                 ORDER BY hours DESC
             """
             rows = db.execute_query(query, join_param + (f"{month_str}%", month_str))
@@ -473,21 +508,21 @@ async def get_dept_overtime_stats(
                 else:
                     mon_cond = "MONTH(jiaban.timedate) BETWEEN 10 AND 12"
                 query = f"""
-                    SELECT jiaban.xm AS name, SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                    SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                     FROM jiaban {join_cond}
                     WHERE jiaban.jiabanzt = 4
                     AND YEAR(jiaban.timedate) = %s AND {mon_cond}
-                    GROUP BY jiaban.xm
+                    GROUP BY TRIM(jiaban.xm)
                     ORDER BY hours DESC
                 """
                 rows = db.execute_query(query, join_param + (year,))
             else:
                 query = f"""
-                    SELECT jiaban.xm AS name, SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                    SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                     FROM jiaban {join_cond}
                     WHERE jiaban.jiabanzt = 4
                     AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)
-                    GROUP BY jiaban.xm
+                    GROUP BY TRIM(jiaban.xm)
                     ORDER BY hours DESC
                 """
                 rows = db.execute_query(query, join_param + (f"{year}%", year))
@@ -846,37 +881,37 @@ async def get_dept_business_trip_stats(
 
         if month:
             trip_raw_query = f"""
-                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj
+                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
                 FROM {join_cond}
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                  AND COALESCE(gcsqb.gcsj, gcsqb.wpsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.gcsj, gcsqb.wpsj) >= %s
+                  AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
             """
             trip_rows = db.execute_query(trip_raw_query, join_param + (month_end.strftime("%Y-%m-%d"), month_start.strftime("%Y-%m-%d")))
         elif quarter and q_start and q_end:
             month_str_s = q_start.strftime("%Y-%m-%d")
             month_str_e = q_end.strftime("%Y-%m-%d")
             trip_raw_query = f"""
-                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj
+                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
                 FROM {join_cond}
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                  AND COALESCE(gcsqb.gcsj, gcsqb.wpsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.gcsj, gcsqb.wpsj) >= %s
+                  AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
             """
             trip_rows = db.execute_query(trip_raw_query, join_param + (month_str_e, month_str_s))
         else:
             month_str = f"{year}%"
             trip_raw_query = f"""
-                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj
+                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
                 FROM {join_cond}
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                  AND (gcsqb.wpsj LIKE %s OR gcsqb.gcsj LIKE %s OR YEAR(COALESCE(gcsqb.gcsj, gcsqb.wpsj)) = %s)
+                  AND YEAR(COALESCE(gcsqb.gcsj, gcsqb.yjcfsj)) = %s
             """
-            trip_rows = db.execute_query(trip_raw_query, join_param + (month_str, month_str, year))
+            trip_rows = db.execute_query(trip_raw_query, join_param + (year,))
 
         by_person: dict = defaultdict(list)
         for row in trip_rows:
             gcr = (row.get("gcr") or "").strip()
-            start_d = _parse_date(row.get("gcsj") or row.get("wpsj"))
-            end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj") or row.get("gcsj") or row.get("wpsj"))
+            start_d = _parse_date(row.get("gcsj") or row.get("yjcfsj"))
+            end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj"))
             if start_d and end_d and end_d >= start_d:
                 by_person[gcr].append((start_d, end_d))
 
@@ -1368,9 +1403,7 @@ async def get_leader_dept_comparison(
         import calendar
 
         month_str = f"{year}-{month:02d}%" if month else f"{year}%"
-        month_cond_leave = "AND (timefrom LIKE %s OR SUBSTRING(timefrom, 1, 7) = %s)" if month else "AND (timefrom LIKE %s OR YEAR(timefrom) = %s)"
         month_cond_overtime = "AND (timedate LIKE %s OR SUBSTRING(timedate, 1, 7) = %s)" if month else "AND (timedate LIKE %s OR YEAR(timedate) = %s)"
-        params_leave = (month_str, month_str) if month else (month_str, year)
         params_overtime = (month_str, month_str) if month else (month_str, year)
 
         if month:
@@ -1413,7 +1446,7 @@ async def get_leader_dept_comparison(
         leave_by_lsys = {k: round(v, 2) for k, v in leave_by_lsys_acc.items()}
 
         overtime_query = f"""
-            SELECT yggl.lsys, SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS total
+            SELECT yggl.lsys, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS total
             FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != '' AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
             WHERE jiaban.jiabanzt = 4 {month_cond_overtime}
             GROUP BY yggl.lsys
@@ -1428,28 +1461,28 @@ async def get_leader_dept_comparison(
         year_end = date(year, 12, 31)
         if month:
             trip_raw_query = """
-                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj, yggl.lsys
+                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
                 FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                  AND COALESCE(gcsqb.gcsj, gcsqb.wpsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.gcsj, gcsqb.wpsj) >= %s
+                  AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
             """
             trip_rows = db.execute_query(trip_raw_query, (LEADER_EXCLUDE_LSYS, month_end.strftime("%Y-%m-%d"), month_start.strftime("%Y-%m-%d")))
         else:
             trip_raw_query = """
-                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj, yggl.lsys
+                SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
                 FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                  AND (gcsqb.wpsj LIKE %s OR gcsqb.gcsj LIKE %s OR YEAR(COALESCE(gcsqb.gcsj, gcsqb.wpsj)) = %s)
+                  AND YEAR(COALESCE(gcsqb.gcsj, gcsqb.yjcfsj)) = %s
             """
-            trip_rows = db.execute_query(trip_raw_query, (LEADER_EXCLUDE_LSYS, month_str, month_str, year))
+            trip_rows = db.execute_query(trip_raw_query, (LEADER_EXCLUDE_LSYS, year))
         by_person_trip: dict = defaultdict(list)
         for row in trip_rows:
             gcr = (row.get("gcr") or "").strip()
             lsys = (row.get("lsys") or "").strip()
             if not lsys:
                 continue
-            start_d = _parse_date(row.get("gcsj") or row.get("wpsj"))
-            end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj") or row.get("gcsj") or row.get("wpsj"))
+            start_d = _parse_date(row.get("gcsj") or row.get("yjcfsj"))
+            end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj"))
             if start_d and end_d and end_d >= start_d:
                 by_person_trip[(gcr, lsys)].append((start_d, end_d))
         trip_by_lsys = defaultdict(float)
@@ -1468,15 +1501,32 @@ async def get_leader_dept_comparison(
                 trip_by_lsys[lsys] += round(days, 2)
         trip_by_lsys = dict(trip_by_lsys)
 
-        # 按科室汇总换休请假小时，用于计算净加班
-        hx_query = f"""
-            SELECT yggl.lsys, SUM(CAST(COALESCE(qj.xiaoshi, 0) AS DECIMAL(10,2))) AS total
-            FROM qj INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != '' AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
-            WHERE qj.qjzt = 4 AND qj.qjfs IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1' {month_cond_leave}
-            GROUP BY yggl.lsys
+        # 按科室汇总换休请假小时（与 /dept/overtime net 一致：区间重叠比例 × 小时）
+        hx_raw = f"""
+            SELECT yggl.lsys, qj.timefrom, qj.timeto, qj.timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian, qj.xiaoshi
+            FROM qj INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != ''
+                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+            WHERE qj.qjzt = 4 AND TRIM(qj.qjfs) IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1'
+                AND TRIM(yggl.lsys) != %s
+            {leave_ov}
         """
-        hx_rows = db.execute_query(hx_query, params_leave)
-        hx_by_lsys = {r["lsys"].strip(): round(float(r.get("total") or 0), 2) for r in hx_rows if r.get("lsys")}
+        hx_rows = db.execute_query(hx_raw, (LEADER_EXCLUDE_LSYS, leave_pe_str, leave_ps_str))
+        hx_by_lsys_acc: Dict[str, float] = defaultdict(float)
+        for row in hx_rows or []:
+            lsys_k = (row.get("lsys") or "").strip()
+            if not lsys_k or lsys_k == LEADER_EXCLUDE_LSYS:
+                continue
+            ls_d, le_d = _qj_leave_date_bounds(row)
+            if not ls_d or not le_d:
+                continue
+            h_full = _qj_hx_row_total_hours(row)
+            if h_full <= 0:
+                continue
+            frac = _leave_overlap_fraction(ls_d, le_d, leave_period_start, leave_period_end)
+            if frac <= 0:
+                continue
+            hx_by_lsys_acc[lsys_k] += h_full * frac
+        hx_by_lsys = {k: round(v, 2) for k, v in hx_by_lsys_acc.items()}
 
         if month:
             workdays = _count_workdays_in_month(year, month)
@@ -1536,7 +1586,7 @@ async def get_leader_rankings(
         if type_ == "overtime":
             query = """
                 SELECT jiaban.xm AS name, yggl.lsys,
-                    SUM(CAST(COALESCE(jiaban.jbf, jiaban.tian1, 0) AS DECIMAL(10,2))) AS value
+                    SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS value
                 FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE jiaban.jiabanzt = 4 AND RIGHT(TRIM(jiaban.xm), 1) != '1' AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)
                 GROUP BY jiaban.xm, yggl.lsys ORDER BY value DESC
@@ -1587,28 +1637,27 @@ async def get_leader_rankings(
             month_end = date(year, month, calendar.monthrange(year, month)[1]) if month else None
             if month:
                 trip_raw_query = """
-                    SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj, yggl.lsys
+                    SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
                     FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
                     WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                      AND COALESCE(gcsqb.gcsj, gcsqb.wpsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.gcsj, gcsqb.wpsj) >= %s
+                      AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
                 """
                 trip_rows = db.execute_query(trip_raw_query, (month_end.strftime("%Y-%m-%d"), month_start.strftime("%Y-%m-%d")))
             else:
                 trip_raw_query = """
-                    SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.wpsj, yggl.lsys
+                    SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
                     FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
                     WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
-                      AND (gcsqb.wpsj LIKE %s OR gcsqb.gcsj LIKE %s OR YEAR(COALESCE(gcsqb.gcsj, gcsqb.wpsj)) = %s)
+                      AND YEAR(COALESCE(gcsqb.gcsj, gcsqb.yjcfsj)) = %s
                 """
-                trip_param = (month_str, month_str, year)
-                trip_rows = db.execute_query(trip_raw_query, trip_param)
+                trip_rows = db.execute_query(trip_raw_query, (year,))
             # 按 (gcr, lsys) 分组，每人收集 [start, end] 区间后做并集再算天数
             by_person: dict = defaultdict(list)
             for row in trip_rows:
                 gcr = (row.get("gcr") or "").strip()
                 lsys = (row.get("lsys") or "").strip()
-                start_d = _parse_date(row.get("gcsj") or row.get("wpsj"))
-                end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj") or row.get("gcsj") or row.get("wpsj"))
+                start_d = _parse_date(row.get("gcsj") or row.get("yjcfsj"))
+                end_d = _parse_date(row.get("sjfhtime") or row.get("yjfhsj"))
                 if start_d and end_d and end_d >= start_d:
                     by_person[(gcr, lsys)].append((start_d, end_d))
             list_trip = []

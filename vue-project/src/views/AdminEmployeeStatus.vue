@@ -374,6 +374,13 @@ async function setStatus(empName, zaizhi) {
 }
 
 async function onDeptLevelChange(row, field) {
+  const label = field === 'lsys' ? '科室' : '级别'
+  const newVal = field === 'lsys' ? row.lsys : (row.jb || '（空）')
+  const ok = confirm(`确认将「${row.name}」的${label}修改为「${newVal}」？`)
+  if (!ok) {
+    await loadList()
+    return
+  }
   const name = getCurrentUser()
   if (!name) return
   updateDeptLevelLoading.value = row.name

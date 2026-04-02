@@ -22,17 +22,16 @@
             <p class="record-card__desc">{{ recordFilterLabel }}</p>
           </div>
           <div class="record-card__filters">
-            <label class="filter-label">筛选：</label>
-            <select
-              v-if="overtimeListMeta.canViewLsys || overtimeListMeta.canViewAll"
-              v-model="recordScope"
-              class="filter-select filter-select--scope"
-            >
-              <option value="self">仅本人</option>
-              <option v-if="overtimeListMeta.canViewLsys" value="lsys">
-                本专业全员（{{ overtimeListMeta.lsysLabel || '隶属室' }}）
-              </option>
+            <label class="filter-label">数据范围：</label>
+            <select v-model="recordScope" class="filter-select filter-select--source">
+              <option value="self">本人</option>
               <option v-if="overtimeListMeta.canViewAll" value="all">全员</option>
+              <template v-if="overtimeListMeta.canViewAll && overtimeListMeta.lsysList?.length">
+                <option v-for="ls in overtimeListMeta.lsysList" :key="ls" :value="'dept:' + ls">{{ ls }}</option>
+              </template>
+              <template v-else-if="overtimeListMeta.canViewLsys && overtimeListMeta.lsysLabel">
+                <option :value="'dept:' + overtimeListMeta.lsysLabel">{{ overtimeListMeta.lsysLabel }}</option>
+              </template>
             </select>
             <input type="month" v-model="recordMonth" class="filter-input">
             <select v-model="recordStatus" class="filter-select">
@@ -300,18 +299,19 @@ const _d2 = new Date()
 const recordMonth = ref(`${_d2.getFullYear()}-${String(_d2.getMonth() + 1).padStart(2, '0')}`)
 const recordStatus = ref('processing')
 const recordScope = ref('self')
-const overtimeListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '' })
-const showApplicantColumn = computed(() => recordScope.value === 'lsys' || recordScope.value === 'all')
+const overtimeListMeta = ref({ canViewLsys: false, canViewAll: false, lsysLabel: '', lsysList: [] })
+const showApplicantColumn = computed(() => recordScope.value !== 'self')
 
 const recordFilterLabel = computed(() => {
   const r = (recordMonth.value || '').trim()
   const statusText = recordStatus.value === 'approved' ? '已通过' : recordStatus.value === 'processing' ? '审批中/已驳回' : '全部'
-  const who =
-    recordScope.value === 'lsys'
-      ? `本专业（${overtimeListMeta.value.lsysLabel || '隶属室'}）全员`
-      : recordScope.value === 'all'
-        ? '全员（审批范围内）'
-        : '本人'
+  let who = '本人'
+  const src = recordScope.value
+  if (src === 'all') {
+    who = '全员'
+  } else if (src.startsWith('dept:')) {
+    who = src.slice(5)
+  }
   if (r) {
     const [y, m] = r.split('-')
     return `展示 ${y}年${parseInt(m, 10)}月，${statusText} ${who}的加班记录`
@@ -534,12 +534,27 @@ const fetchOvertimeList = async () => {
   loadingList.value = true
   try {
     const r = (recordMonth.value || '').trim()
+    const src = recordScope.value
+    let scope = 'self'
+    let targetLsys = null
+    if (src === 'all') {
+      scope = 'all'
+    } else if (src.startsWith('dept:')) {
+      const deptName = src.slice(5)
+      if (overtimeListMeta.value.canViewAll) {
+        scope = 'all'
+        targetLsys = deptName
+      } else {
+        scope = 'lsys'
+      }
+    }
     const params = {
       name: form.name,
       year: new Date().getFullYear(),
       status: recordStatus.value,
-      scope: recordScope.value === 'lsys' ? 'lsys' : recordScope.value === 'all' ? 'all' : 'self'
+      scope,
     }
+    if (targetLsys) params.target_lsys = targetLsys
     if (r) {
       const [y, m] = r.split('-')
       if (y) params.year = parseInt(y, 10)
@@ -552,20 +567,18 @@ const fetchOvertimeList = async () => {
         overtimeListMeta.value = {
           canViewLsys: !!res.meta.canViewLsys,
           canViewAll: !!res.meta.canViewAll,
-          lsysLabel: (res.meta.lsysLabel || '').trim()
+          lsysLabel: (res.meta.lsysLabel || '').trim(),
+          lsysList: res.meta.lsysList || []
         }
       }
-      if (recordScope.value === 'lsys' && !overtimeListMeta.value.canViewLsys) {
-        recordScope.value = 'self'
-      }
-      if (recordScope.value === 'all' && !overtimeListMeta.value.canViewAll) {
+      if ((src === 'all' || src.startsWith('dept:')) && !overtimeListMeta.value.canViewAll && !overtimeListMeta.value.canViewLsys) {
         recordScope.value = 'self'
       }
     }
   } catch (err) {
     console.error('获取加班记录失败:', err)
     const st = err?.response?.status
-    if (st === 403 && (recordScope.value === 'lsys' || recordScope.value === 'all')) {
+    if (st === 403 && recordScope.value !== 'self') {
       recordScope.value = 'self'
       await fetchOvertimeList()
       return
