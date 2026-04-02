@@ -117,6 +117,14 @@
             </svg>
             <span>制度查询</span>
           </router-link>
+          <router-link to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+              <rect x="9" y="3" width="6" height="4" rx="1" />
+              <path d="M9 14l2 2 4-4" />
+            </svg>
+            <span>技术问题手册</span>
+          </router-link>
           <a href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 14l9-5-9-5-9 5 9 5z" />

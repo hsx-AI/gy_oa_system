@@ -3,7 +3,7 @@
 公出节假日领换休票 API
 - 独立数据库表 holiday_exchange
 - 表单：姓名、班组、加班时间(日期范围,天级)、佐证材料(必须)
-- 自动计算换休票数量 = 加班天数 / 8
+- 自动计算换休票数量 = 加班天数 / 4
 - 二级审批：一级(科室主任) -> 二级(部长/副部长) -> 通过; 驳回=22
 """
 from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
@@ -458,7 +458,7 @@ async def submit_holiday_exchange(
 
         if total_days <= 0:
             raise HTTPException(status_code=400, detail="加班日期范围无效")
-        hxp_count = round(total_days / 8, 4)
+        hxp_count = round(total_days / 4, 4)
 
         overall_from = min(r[0] for r in ranges).strftime("%Y-%m-%d")
         overall_to = max(r[1] for r in ranges).strftime("%Y-%m-%d")

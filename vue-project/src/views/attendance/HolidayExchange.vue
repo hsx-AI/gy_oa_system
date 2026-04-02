@@ -165,7 +165,7 @@
             <button type="button" class="range-add-btn" @click="addRange">+ 添加时间段</button>
             <div class="calc-info" v-if="calcDays > 0">
               <p>加班天数：<strong>{{ calcDays }}</strong> 天<span v-if="form.ranges.length > 1">（{{ form.ranges.length }} 段合计）</span></p>
-              <p>换休票数量：<strong>{{ calcTickets }}</strong> 张（计算规则：加班天数 ÷ 8）</p>
+              <p>换休票数量：<strong>{{ calcTickets }}</strong> 张（计算规则：加班天数 ÷ 4）</p>
             </div>
             <p class="date-range-hint">
               区间内每一天须为<strong>周六、周日</strong>或<strong>公司假期与调休表</strong>中的放假/调休休息日（类型含「假」或「休」）；标记为<strong>补班</strong>（含「班」）的日期不可选。
@@ -334,7 +334,7 @@ const calcDays = computed(() => {
 
 const calcTickets = computed(() => {
   if (calcDays.value <= 0) return 0
-  return (calcDays.value / 8).toFixed(4).replace(/\.?0+$/, '') || '0'
+  return (calcDays.value / 4).toFixed(4).replace(/\.?0+$/, '') || '0'
 })
 
 /** 与后端 holiday_exchange 校验一致：周末或 holiday 表含「假」「休」且不含「班」 */

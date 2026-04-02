@@ -476,6 +476,15 @@ const rawFeatureGroups = [
         iconPath: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
       },
       {
+        id: 'tech-problem',
+        title: '工艺技术问题手册',
+        description: '工艺技术问题记录、原因分析与措施跟踪',
+        path: '/file/tech-problem',
+        color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
+        tag: '核心',
+        iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+      },
+      {
         id: 'db-manager',
         title: '数据库表管理',
         description: '系统管理员对数据库表进行增删改查',

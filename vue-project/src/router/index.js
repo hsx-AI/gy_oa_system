@@ -134,6 +134,24 @@ const routes = [
     meta: { title: '部门制度查询' }
   },
   {
+    path: '/file/tech-problem',
+    name: 'TechProblemList',
+    component: () => import('../views/file/TechProblemList.vue'),
+    meta: { title: '工艺技术问题手册' }
+  },
+  {
+    path: '/file/tech-problem/create',
+    name: 'TechProblemCreate',
+    component: () => import('../views/file/TechProblemForm.vue'),
+    meta: { title: '新建技术问题' }
+  },
+  {
+    path: '/file/tech-problem/edit/:id',
+    name: 'TechProblemEdit',
+    component: () => import('../views/file/TechProblemForm.vue'),
+    meta: { title: '编辑技术问题' }
+  },
+  {
     path: '/profile',
     name: 'EmployeeProfile',
     component: () => import('../views/EmployeeProfile.vue')
