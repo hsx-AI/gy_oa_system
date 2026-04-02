@@ -51,11 +51,17 @@
               <option :value="null">全年</option>
               <option v-for="m in 12" :key="'pm'+m" :value="m">{{ m }}月</option>
             </select>
-            <label class="filter-label">状态</label>
+            <label class="filter-label">审批状态</label>
             <select v-model="recordStatusFilter" class="filter-select">
               <option value="">全部</option>
               <option value="已通过">已通过</option>
               <option value="processing_rejected">审批中/已驳回</option>
+            </select>
+            <label class="filter-label">返回登记</label>
+            <select v-model="recordReturnFilter" class="filter-select">
+              <option value="">全部</option>
+              <option value="returned">已返回登记</option>
+              <option value="not_returned">未返回登记</option>
             </select>
             <input
               v-model.trim="recordKeyword"
@@ -88,6 +94,7 @@
                   <th>出发时间</th>
                   <th>实际返回时间</th>
                   <th>审批状态</th>
+                  <th>返回登记</th>
                   <th>当前审批人</th>
                   <th>驳回原因</th>
                   <th>操作</th>
@@ -104,6 +111,11 @@
                   <td>{{ r.startTime || '—' }}</td>
                   <td>{{ formatTripReturnCell(r) }}</td>
                   <td><span class="status-tag" :class="r.statusClass || 'status-processing'">{{ r.status || '审批中' }}</span></td>
+                  <td>
+                    <span v-if="Number(r.fhdjStatus) === 1" class="status-tag status-approved">已登记</span>
+                    <span v-else-if="r.status === '已通过'" class="status-tag status-processing">未登记</span>
+                    <span v-else>—</span>
+                  </td>
                   <td>{{ r.status === '审批中' && r.currentApprover ? r.currentApprover : '—' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
@@ -480,6 +492,7 @@ const recordPageSize = ref(10)
 // 本人记录筛选：年份 + 审批状态（全部/已通过/审批中/已驳回）
 const recordYear = ref(new Date().getFullYear())
 const recordStatusFilter = ref('')  // ''=全部 已通过 processing_rejected=审批中/已驳回
+const recordReturnFilter = ref('')  // ''=全部 returned=已返回登记 not_returned=未返回登记
 const recordYearOptions = computed(() => {
   const y = new Date().getFullYear()
   return Array.from({ length: 6 }, (_, i) => y - i)  // 当前年及前5年
@@ -506,6 +519,13 @@ const filteredRecordList = computed(() => {
       list = list.filter((r) => (r.status || '') === '审批中' || (r.status || '') === '已驳回')
     } else {
       list = list.filter((r) => (r.status || '') === recordStatusFilter.value)
+    }
+  }
+  if (recordReturnFilter.value) {
+    if (recordReturnFilter.value === 'returned') {
+      list = list.filter((r) => Number(r.fhdjStatus) === 1)
+    } else if (recordReturnFilter.value === 'not_returned') {
+      list = list.filter((r) => Number(r.fhdjStatus) !== 1 && (r.status || '') === '已通过')
     }
   }
   const kw = recordKeyword.value
@@ -567,6 +587,7 @@ const recordFilterLabel = computed(() => {
 // 每页条数或状态筛选变化时回到第一页
 watch(recordPageSize, () => { recordPage.value = 1 })
 watch(recordStatusFilter, () => { recordPage.value = 1 })
+watch(recordReturnFilter, () => { recordPage.value = 1 })
 watch([recordKeyword, recordSort], () => { recordPage.value = 1 })
 const tripRecordsFetchKey = computed(() =>
   [recordDataRange.value, recordYear.value, recordMonthPermission.value].join('|')

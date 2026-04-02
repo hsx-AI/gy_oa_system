@@ -176,10 +176,12 @@ async def business_trip_map():
         SELECT gcr, gcdw, gcdd, yjcfsj, yjfhsj, xmmc, gclx
         FROM gcsqb
         WHERE gclx != '市内公出'
+          AND bldzt = 2 AND szrzt = 2
+          AND yjfhsj >= %s
         ORDER BY yjfhsj DESC
         LIMIT 500
     """
-    rows = db.execute_query(sql)
+    rows = db.execute_query(sql, (today.strftime("%Y-%m-%d"),))
 
     china_map = defaultdict(list)      # province_or_city -> [person]
     china_city_map = defaultdict(list)  # city -> [person]  (仅有city信息的)
@@ -206,8 +208,8 @@ async def business_trip_map():
             "project": r.get("xmmc") or "",
             "location": gcdd_raw,
             "period": f"{start} ~ {end}",
-            "passed": days_between(start, today),
-            "remain": days_between(today, end)
+            "passed": max(0, days_between(start, today)),
+            "remain": max(0, days_between(today, end))
         }
 
         loc_parts = split_multi_locations(gcdd_raw)

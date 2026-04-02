@@ -67,6 +67,78 @@ def _next_id() -> str:
     return uuid.uuid4().hex
 
 
+def _parse_dt(s):
+    """将字符串或 datetime 解析为 datetime 对象"""
+    if s is None:
+        return None
+    if hasattr(s, "strftime"):
+        return s
+    s = str(s).strip()[:19]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s, fmt)
+        except (ValueError, TypeError):
+            pass
+    return None
+
+
+def _check_trip_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None) -> list:
+    """
+    检查公出人 gcr 的新时间段 [start_dt, end_dt] 是否与已有公出记录重叠。
+    排除已驳回(bldzt=22 或 szrzt=22)的记录。
+    返回重叠记录列表。
+    """
+    if not gcr or not start_dt or not end_dt:
+        return []
+    gcr = gcr.strip()
+    new_start = _parse_dt(start_dt)
+    new_end = _parse_dt(end_dt)
+    if not new_start or not new_end:
+        return []
+
+    sql = """
+        SELECT id, gcdd, gclx,
+               COALESCE(gcsj, yjcfsj) AS trip_start,
+               COALESCE(sjfhtime, yjfhsj) AS trip_end
+        FROM gcsqb
+        WHERE TRIM(gcr) = %s
+          AND NOT (COALESCE(bldzt,0) = 22 OR COALESCE(szrzt,0) = 22)
+    """
+    params: list = [gcr]
+    if exclude_id:
+        sql += " AND id != %s"
+        params.append(exclude_id)
+
+    rows = db.execute_query(sql, tuple(params))
+    if not rows:
+        return []
+
+    conflicts = []
+    for row in rows:
+        t_start = _parse_dt(row.get("trip_start"))
+        t_end = _parse_dt(row.get("trip_end"))
+        if not t_start or not t_end:
+            continue
+        if new_start < t_end and new_end > t_start:
+            conflicts.append({
+                "id": row.get("id"),
+                "location": row.get("gcdd") or "",
+                "type": row.get("gclx") or "",
+                "start": t_start.strftime("%Y-%m-%d %H:%M"),
+                "end": t_end.strftime("%Y-%m-%d %H:%M"),
+            })
+    return conflicts
+
+
+def _raise_if_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None):
+    """若有时间重叠，抛出 409 异常并列出冲突记录"""
+    conflicts = _check_trip_overlap(gcr, start_dt, end_dt, exclude_id)
+    if conflicts:
+        lines = [f"· {c['start']} ~ {c['end']}（{c['type']}，{c['location']}）" for c in conflicts]
+        msg = "公出时间段与以下已有记录重叠，请勿重复填报：\n" + "\n".join(lines) + "\n\n如需修改已有数据请联系黄圣轩7480"
+        raise HTTPException(status_code=409, detail=msg)
+
+
 @router.post("/apply")
 async def apply_business_trip(req: BusinessTripApplyRequest):
     """公出登记 - 插入 gcsqb 表"""
@@ -103,6 +175,9 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
                 pass
 
         szrzt_init = 2 if is_buban else 1
+
+        _raise_if_overlap(req.name, yjcfsj or req.startTime, yjfhsj or req.endTime)
+
         sql = """
             INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj, yjfhsj, yjcfsj, xmmc,
                 tzdbh, bcgczrs, gcdd, qkje, gcrw, szr, bld, gcsj, sjfhtime, bldzt, szrzt)
@@ -443,6 +518,11 @@ async def set_business_trip_return_time(item_id: str, body: ReturnTimeBody):
         if not sjfhtime:
             raise HTTPException(status_code=400, detail="实际返回时间不能为空")
 
+        rec = db.execute_query("SELECT gcr FROM gcsqb WHERE id = %s", (item_id,))
+        if not rec:
+            raise HTTPException(status_code=404, detail="记录不存在")
+        _raise_if_overlap((rec[0].get("gcr") or ""), gcsj, sjfhtime, exclude_id=item_id)
+
         sql = "UPDATE gcsqb SET gcsj = %s, sjfhtime = %s, yjcfsj = %s, yjfhsj = %s, fhdj_status = 1 WHERE id = %s"
         n = db.execute_update(sql, (gcsj, sjfhtime, gcsj, sjfhtime, item_id))
         if n <= 0:
@@ -486,7 +566,7 @@ async def extend_business_trip(item_id: str, req: ExtendTripRequest):
         raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可操作公出延长")
 
     rows = db.execute_query(
-        "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, gcrw FROM gcsqb WHERE id = %s",
+        "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, yjcfsj, gcsj, gcrw FROM gcsqb WHERE id = %s",
         (item_id,),
     )
     if not rows:
@@ -510,6 +590,10 @@ async def extend_business_trip(item_id: str, req: ExtendTripRequest):
     new_dt = _to_dt(req.new_return_time)
     if not new_dt:
         raise HTTPException(status_code=400, detail="新的预计返回时间格式不正确")
+
+    existing_start = r.get("gcsj") or r.get("yjcfsj")
+    if existing_start:
+        _raise_if_overlap(gcr, existing_start, new_dt, exclude_id=item_id)
 
     dept_leader = (req.dept_leader or "").strip()
     if not dept_leader:
@@ -626,6 +710,8 @@ async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
             except Exception:
                 pass
         szrzt_init = 2 if is_buban else 1
+
+        _raise_if_overlap(req.name, yjcfsj or req.startTime, yjfhsj or req.endTime, exclude_id=item_id)
 
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute_update(
