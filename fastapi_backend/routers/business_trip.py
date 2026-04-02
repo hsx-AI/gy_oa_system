@@ -589,8 +589,8 @@ async def get_extendable_business_trips(name: str = Query(..., description="当�
 
 
 @router.post("/{item_id}/resubmit")
-async def resubmit_business_trip(item_id: str, name: str = Query(...)):
-    """将已驳回的公出记录重新提交审批（szrzt/bldzt 22→0，清除驳回原因）"""
+async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
+    """修改并重新提交已驳回的公出记录（szrzt/bldzt重置，更新字段）"""
     try:
         rows = db.execute_query("SELECT id, bldzt, szrzt, gcr FROM gcsqb WHERE id = %s", (item_id,))
         if not rows:
@@ -600,20 +600,53 @@ async def resubmit_business_trip(item_id: str, name: str = Query(...)):
         szrzt = int(r.get("szrzt") or 0)
         if bldzt != 22 and szrzt != 22:
             raise HTTPException(status_code=400, detail="仅可重新提交已驳回的公出记录")
-        if (r.get("gcr") or "").strip() != (name or "").strip():
+        if (r.get("gcr") or "").strip() != (req.name or "").strip():
             raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+
+        yjfhsj = _to_dt(req.endTime)
+        yjcfsj = _to_dt(req.startTime) if req.startTime else None
+        wpsj = _to_dt(req.assignTime) if req.assignTime else None
+        qkje = str(req.amount) if req.amount else "无"
+        gclx = (req.tripScope or "").strip() or "境内公出"
+        if gclx not in ("市内公出", "境内公出", "境外公出"):
+            gclx = "境内公出"
+
+        is_buban = False
+        dept_str = (req.department or "").strip()
+        if dept_str == "部办":
+            is_buban = True
+        else:
+            try:
+                emp = db.execute_query(
+                    "SELECT lsys FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+                    ((req.name or "").strip(),),
+                )
+                if emp and (emp[0].get("lsys") or "").strip() == "部办":
+                    is_buban = True
+            except Exception:
+                pass
+        szrzt_init = 2 if is_buban else 1
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         db.execute_update(
-            "UPDATE gcsqb SET szrzt = 0, bldzt = 0, bhyy = NULL, szrpztime = NULL, bldpztime = NULL, sqsj = %s "
-            "WHERE id = %s AND gcr = %s AND (bldzt = 22 OR szrzt = 22)",
-            (now, item_id, name.strip())
+            """UPDATE gcsqb SET gclx=%s, wpdw=%s, gzh=%s, gcdw=%s, lxdh=%s, wpsj=%s,
+               yjfhsj=%s, yjcfsj=%s, xmmc=%s, tzdbh=%s, bcgczrs=%s, gcdd=%s, qkje=%s,
+               gcrw=%s, szr=%s, bld=%s, szrzt=%s, bldzt=1,
+               bhyy=NULL, szrpztime=NULL, bldpztime=NULL, sqsj=%s
+               WHERE id=%s AND gcr=%s AND (bldzt=22 OR szrzt=22)""",
+            (gclx, req.targetUnit or "", req.workNo or "无", req.department or "",
+             req.phone or "", wpsj, yjfhsj, yjcfsj, req.projectName or "无",
+             req.noticeNo or "", str(req.totalPeople), req.location or "",
+             qkje, req.task or "", req.responsiblePerson or "", req.deptLeader or "",
+             szrzt_init, now,
+             item_id, req.name.strip())
         )
         return {"success": True, "message": "已重新提交"}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"重新提交公出失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="重新提交失败")
+        raise HTTPException(status_code=500, detail=f"重新提交失败: {str(e)}")
 
 
 @router.delete("/{item_id}")

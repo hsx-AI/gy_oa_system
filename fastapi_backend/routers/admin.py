@@ -842,8 +842,8 @@ async def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
 
 
 @router.post("/hxp/approval/{approval_id}/resubmit")
-async def resubmit_hxp_approval(approval_id: str, applicant: str = Query(...)):
-    """将已驳回的换休票管理申请重新提交（status 22→0，清除驳回原因）"""
+async def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
+    """修改并重新提交已驳回的换休票管理申请（status 22→0，更新字段）"""
     rows = db.execute_query(
         "SELECT id, applicant, status FROM hxp_approval WHERE id = %s LIMIT 1",
         (approval_id,),
@@ -853,13 +853,32 @@ async def resubmit_hxp_approval(approval_id: str, applicant: str = Query(...)):
     r = rows[0]
     if r.get("status") != 22:
         raise HTTPException(status_code=400, detail="仅可重新提交已驳回的申请")
-    if (r.get("applicant") or "").strip() != applicant.strip():
+    applicant = (req.current_user or "").strip()
+    if (r.get("applicant") or "").strip() != applicant:
         raise HTTPException(status_code=403, detail="只能重新提交本人的申请")
+
+    names = [n.strip() for n in req.names if n.strip()]
+    if not names:
+        raise HTTPException(status_code=400, detail="姓名列表不能为空")
+    amount = round(req.amount, 3)
+    if amount <= 0:
+        raise HTTPException(status_code=400, detail="数量必须大于 0")
+    if req.action not in ("add", "subtract"):
+        raise HTTPException(status_code=400, detail="action 必须为 add 或 subtract")
+    ly = (req.ly or "").strip()
+    if not ly:
+        raise HTTPException(status_code=400, detail="原因不能为空")
+    approver = (req.approver or "").strip()
+    if not approver:
+        raise HTTPException(status_code=400, detail="审批人不能为空")
+
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     db.execute_update(
-        "UPDATE hxp_approval SET status = 0, reject_reason = NULL, approve_time = NULL, apply_time = %s "
-        "WHERE id = %s AND status = 22 AND applicant = %s",
-        (now_str, approval_id, applicant.strip()),
+        """UPDATE hxp_approval SET action=%s, amount=%s, ly=%s, names_json=%s,
+           approver=%s, status=0, reject_reason=NULL, approve_time=NULL, apply_time=%s
+           WHERE id=%s AND status=22 AND applicant=%s""",
+        (req.action, amount, ly, json.dumps(names, ensure_ascii=False),
+         approver, now_str, approval_id, applicant),
     )
     return {"success": True, "message": "已重新提交"}
 

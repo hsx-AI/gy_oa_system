@@ -479,8 +479,25 @@ async def get_leave_all_records(
 
 
 @router.post("/leave/{item_id}/resubmit")
-async def resubmit_leave(item_id: str, name: str = Query(...)):
-    """将已驳回的请假记录重新提交审批（qjzt 22→0，清除驳回原因）"""
+async def resubmit_leave(
+    item_id: str,
+    department: str = Form(...),
+    name: str = Form(...),
+    type: str = Form("事假"),
+    shift: str = Form("白班"),
+    contactMethod: str = Form(""),
+    startTime: str = Form(...),
+    endTime: str = Form(...),
+    duration: str = Form(...),
+    exchangeTicketNo: str = Form(""),
+    reason: str = Form(...),
+    material: str = Form(""),
+    approver1: str = Form(...),
+    needSecondApproval: str = Form("false"),
+    approver2: str = Form(""),
+    materialFile: Optional[UploadFile] = File(None),
+):
+    """修改并重新提交已驳回的请假记录（qjzt 22→1，清除驳回原因，更新字段）"""
     try:
         rows = db.execute_query("SELECT id, qjzt, xm FROM qj WHERE id = %s", (item_id,))
         if not rows:
@@ -490,17 +507,65 @@ async def resubmit_leave(item_id: str, name: str = Query(...)):
             raise HTTPException(status_code=400, detail="仅可重新提交已驳回的请假记录")
         if (r.get("xm") or "").strip() != (name or "").strip():
             raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+
+        need_2j_val = str(needSecondApproval).lower() in ("true", "1", "yes")
+        if need_2j_val and not (approver2 or "").strip():
+            raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
+
+        raw_dur = float(duration) if duration else 0
+        dur = normalize_qj_tian_days(raw_dur)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        db.execute_update(
-            "UPDATE qj SET qjzt = 0, bhyy = NULL, qjtime = %s WHERE id = %s AND qjzt = 22 AND xm = %s",
-            (now, item_id, name.strip())
-        )
+        xiaoshi = str(round(dur * 8, 2))
+        hxpxh = round(round(dur * 4) / 2, 2) if type in ("员工换休票", "换休") and dur > 0 else 0
+        need_2j = 1 if need_2j_val and approver2 else 0
+        spr2_val = (approver2 or "") if need_2j else ""
+        smcl_text = (material or "").strip() or "无"
+        start_time_norm = normalize_datetime_for_db(startTime)
+        end_time_norm = normalize_datetime_for_db(endTime)
+
+        smclwj = ""
+        if materialFile and materialFile.filename:
+            _ensure_upload_dir()
+            ext = Path(materialFile.filename).suffix or ""
+            safe_name = f"leave_{uuid.uuid4().hex[:12]}{ext}"
+            save_path = UPLOAD_LEAVE_MATERIALS / safe_name
+            content = await materialFile.read()
+            with open(save_path, "wb") as f:
+                f.write(content)
+            smclwj = safe_name
+
+        update_sql = """
+            UPDATE qj SET
+                bz=%s, qjfs=%s, bc=%s, gx=%s, jy=%s, smcl=%s,
+                timefrom=%s, timeto=%s, timefromdate=%s,
+                tian=%s, xiaoshi=%s, qjtime=%s,
+                qjzt=1, spr=%s, `2j`=%s, spr2=%s, content=%s,
+                hxpxh=%s, bhyy=NULL
+                {smclwj_clause}
+            WHERE id=%s AND qjzt=22 AND xm=%s
+        """
+        params = [
+            department or "", type or "事假", shift or "白班",
+            contactMethod or "电话", reason or "", smcl_text,
+            start_time_norm, end_time_norm,
+            start_time_norm[:10] if start_time_norm else "",
+            str(dur), xiaoshi, now,
+            approver1 or "", need_2j, spr2_val, reason or "",
+            hxpxh,
+        ]
+        if smclwj:
+            update_sql = update_sql.replace("{smclwj_clause}", ", smclwj=%s")
+            params.append(smclwj)
+        else:
+            update_sql = update_sql.replace("{smclwj_clause}", "")
+        params.extend([item_id, name.strip()])
+        db.execute_update(update_sql, tuple(params))
         return {"success": True, "message": "已重新提交"}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"重新提交请假失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="重新提交失败")
+        raise HTTPException(status_code=500, detail=f"重新提交失败: {str(e)}")
 
 
 @router.delete("/leave/{item_id}")
@@ -833,8 +898,8 @@ async def get_overtime_list(
 
 
 @router.post("/overtime/{item_id}/resubmit")
-async def resubmit_overtime(item_id: str, name: str = Query(...)):
-    """将已驳回的加班记录重新提交审批（jiabanzt 22→0，清除驳回原因）"""
+async def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
+    """修改并重新提交已驳回的加班记录（jiabanzt 22→0，更新字段）"""
     try:
         rows = db.execute_query("SELECT id, jiabanzt, xm FROM jiaban WHERE id = %s", (item_id,))
         if not rows:
@@ -842,19 +907,56 @@ async def resubmit_overtime(item_id: str, name: str = Query(...)):
         r = rows[0]
         if (r.get("jiabanzt") or 0) != 22:
             raise HTTPException(status_code=400, detail="仅可重新提交已驳回的加班记录")
-        if (r.get("xm") or "").strip() != (name or "").strip():
+        if (r.get("xm") or "").strip() != (req.name or "").strip():
             raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st = req.startTime if ":" in req.startTime else req.startTime + ":00"
+        et = req.endTime if ":" in req.endTime else req.endTime + ":00"
+        if st.count(":") == 1:
+            st += ":00"
+        if et.count(":") == 1:
+            et += ":00"
+        date_part = (req.date or "").strip()[:10]
+        if len(date_part) < 10:
+            date_part = datetime.now().strftime("%Y-%m-%d")
+        time_from = f"{date_part} {st}"
+        time_to = f"{date_part} {et}"
+        hours = _calc_hours(st, et, req.date)
+        hours = round_overtime_hours_down(hours)
+
+        bz = (req.department or "").strip()
+        if not bz and (req.name or "").strip():
+            try:
+                bz_rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (req.name.strip(),))
+                if bz_rows and (bz_rows[0].get("lsys") or "").strip():
+                    bz = (bz_rows[0].get("lsys") or "").strip()
+            except Exception:
+                pass
+        if not bz:
+            bz = "未知"
+        hx_raw = (req.needExchangeTicket or "是").strip()
+        need_exchange = str(hx_raw).lower() in ("是", "1", "true", "yes")
+        jbf_val = 0.0 if need_exchange else float(hours)
+        tian1_str = str(int(hours)) if hours == int(hours) else str(hours)
+
         db.execute_update(
-            "UPDATE jiaban SET jiabanzt = 0, bhyy = NULL, jiabantime = %s WHERE id = %s AND jiabanzt = 22 AND xm = %s",
-            (now, item_id, name.strip())
+            """UPDATE jiaban SET bz=%s, jb=%s, jiabanfs=%s, hx=%s, timedate=%s,
+               timefrom=%s, timeto=%s, content=%s, spr=%s, jiabantime=%s,
+               jiabanzt=0, tian1=%s, jbf=%s, bhyy=NULL
+               WHERE id=%s AND jiabanzt=22 AND xm=%s""",
+            (bz, req.level or "平时加班", req.registerMethod or "补报",
+             "是" if need_exchange else "否", req.date,
+             time_from, time_to, req.content or "", req.approver or "", now,
+             tian1_str, jbf_val,
+             item_id, req.name.strip())
         )
         return {"success": True, "message": "已重新提交"}
     except HTTPException:
         raise
     except Exception as e:
         logger.error(f"重新提交加班失败: {str(e)}")
-        raise HTTPException(status_code=500, detail="重新提交失败")
+        raise HTTPException(status_code=500, detail=f"重新提交失败: {str(e)}")
 
 
 @router.delete("/overtime/{item_id}")

@@ -108,7 +108,7 @@
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
                     <template v-if="r.status === '已驳回' && isOwnTripRow(r)">
-                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitBusinessTrip(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedTrip(r)" style="margin-right:6px">重新编辑</button>
                       <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedBusinessTrip(r)">删除</button>
                     </template>
                     <span v-else>—</span>
@@ -159,7 +159,7 @@
     <!-- 公出登记弹窗 -->
     <div v-if="showApplyModal" class="modal-overlay" @click.self="showApplyModal = false">
       <div class="modal-content">
-        <h2>公出登记</h2>
+        <h2>{{ editingRejectedId ? '重新编辑公出' : '公出登记' }}</h2>
         <form name="business-trip-form" @submit.prevent="submitApplication" class="application-form" autocomplete="on">
           <!-- 公出类型：市内 / 境内 / 境外 -->
           <div class="form-row">
@@ -437,6 +437,7 @@ function formatTripReturnCell(r) {
 }
 
 const showApplyModal = ref(false)
+const editingRejectedId = ref(null)
 const showReturnModal = ref(false)
 
 // 部领导、室主任选项（从 API 按 yggl 规则获取）
@@ -703,6 +704,7 @@ watch(tripScope, (scope) => {
 })
 // 打开登记弹窗时，若为市内公出则确保地点为市内
 watch(showApplyModal, (visible) => {
+  if (!visible) editingRejectedId.value = null
   if (visible && tripScope.value === '市内公出') form.location = '市内'
   if (visible && tripScope.value !== '市内公出' && !form.locations.length) form.locations = ['']
 })
@@ -816,16 +818,20 @@ const fetchTripRecords = async () => {
   }
 }
 
-async function resubmitBusinessTrip(r) {
+function editRejectedTrip(r) {
   if (!r?.id || r.status !== '已驳回') return
-  if (!confirm('确认将此公出记录重新提交审批？')) return
-  try {
-    await resubmitBusinessTripRecord(r.id, { name: form.name })
-    alert('已重新提交，等待审批')
-    fetchTripRecords()
-  } catch (e) {
-    alert(e.response?.data?.detail || e.message || '重新提交失败')
-  }
+  editingRejectedId.value = r.id
+  form.targetUnit = r.targetUnit || '项目管理部'
+  form.projectName = r.projectName || ''
+  form.location = r.location || ''
+  form.locations = r.location ? [r.location] : ['']
+  const toLocal = (s) => (s || '').replace(' ', 'T').slice(0, 16)
+  form.startTime = toLocal(r.expectedStartTime)
+  form.endTime = toLocal(r.expectedReturnTime)
+  form.assignTime = r.assignTime ? toLocal(r.assignTime) : ''
+  form.deptLeader = ''
+  form.responsiblePerson = ''
+  showApplyModal.value = true
 }
 
 async function deleteRejectedBusinessTrip(r) {
@@ -1025,10 +1031,14 @@ const submitApplication = async () => {
       deptLeader: form.deptLeader,
       responsiblePerson: form.responsiblePerson
     }
-    const res = await submitBusinessTripApply(payload)
+    const isResubmit = !!editingRejectedId.value
+    const res = isResubmit
+      ? await resubmitBusinessTripRecord(editingRejectedId.value, payload)
+      : await submitBusinessTripApply(payload)
     if (res.success) {
-      alert('登记已提交')
+      alert(isResubmit ? '已重新提交，等待审批' : '登记已提交')
       showApplyModal.value = false
+      editingRejectedId.value = null
       fetchTripRecords()
     } else {
       alert(res.message || '提交失败')

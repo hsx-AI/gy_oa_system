@@ -95,7 +95,7 @@
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
                     <template v-if="r.status === '已驳回' && isMyOvertimeRecord(r)">
-                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitOvertime(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedOvertime(r)" style="margin-right:6px">重新编辑</button>
                       <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedOvertime(r)">删除</button>
                     </template>
                     <span v-else>—</span>
@@ -130,7 +130,7 @@
     <!-- 加班登记弹窗 -->
     <div v-if="showRegisterModal" class="modal-overlay" @click.self="showRegisterModal = false">
       <div class="modal-content">
-        <h2>加班登记</h2>
+        <h2>{{ editingRejectedId ? '重新编辑加班' : '加班登记' }}</h2>
         <form @submit.prevent="submitRegister" class="application-form" autocomplete="on">
           <!-- 基础信息 -->
           <div class="form-row">
@@ -245,6 +245,7 @@ import TimePicker from '@/components/TimePicker.vue'
 const router = useRouter()
 const route = useRoute()
 const showRegisterModal = ref(false)
+const editingRejectedId = ref(null)
 const loadingList = ref(false)
 
 // 本人的加班记录（从 API 获取）
@@ -575,16 +576,17 @@ const fetchOvertimeList = async () => {
   }
 }
 
-async function resubmitOvertime(r) {
+function editRejectedOvertime(r) {
   if (!r?.id || r.status !== '已驳回') return
-  if (!confirm('确认将此加班记录重新提交审批？')) return
-  try {
-    await resubmitOvertimeRecord(r.id, { name: form.name })
-    alert('已重新提交，等待审批')
-    fetchOvertimeList()
-  } catch (e) {
-    alert(e.response?.data?.detail || e.message || '重新提交失败')
-  }
+  editingRejectedId.value = r.id
+  form.level = r.level || '平时加班'
+  form.date = r.date || new Date().toISOString().split('T')[0]
+  form.startTime = r.startTime || '08:00:00'
+  form.endTime = r.endTime || '17:00:00'
+  form.content = r.content || ''
+  form.needExchangeTicket = r.hx || '否'
+  form.approver = ''
+  showRegisterModal.value = true
 }
 
 async function deleteRejectedOvertime(r) {
@@ -662,6 +664,7 @@ onMounted(async () => {
 })
 
 watch(showRegisterModal, (visible) => {
+  if (!visible) editingRejectedId.value = null
   if (visible && form.name) fetchApprovers()
 })
 
@@ -692,10 +695,14 @@ const submitRegister = async () => {
       content: form.content,
       approver: form.approver
     }
-    const res = await submitOvertimeRegister(payload)
+    const isResubmit = !!editingRejectedId.value
+    const res = isResubmit
+      ? await resubmitOvertimeRecord(editingRejectedId.value, payload)
+      : await submitOvertimeRegister(payload)
     if (res.success) {
-      alert('登记已提交')
+      alert(isResubmit ? '已重新提交，等待审批' : '登记已提交')
       showRegisterModal.value = false
+      editingRejectedId.value = null
       fetchOvertimeList()
     } else {
       alert(res.message || '提交失败')

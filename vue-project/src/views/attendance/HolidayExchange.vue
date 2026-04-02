@@ -101,7 +101,7 @@
                   <td class="reject-reason-cell">{{ r.statusCode === 22 && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
                     <template v-if="r.statusCode === 22 && r.applicant === userName">
-                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitRecord(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedRecord(r)" style="margin-right:6px">重新编辑</button>
                       <button type="button" class="btn btn-sm btn-danger" @click="deleteRecord(r)">删除</button>
                     </template>
                     <span v-else>—</span>
@@ -135,7 +135,7 @@
     <!-- 申请弹窗 -->
     <div v-if="showApplyModal" class="modal-overlay" @click.self="showApplyModal = false">
       <div class="modal-content">
-        <h2>公出节假日领换休票</h2>
+        <h2>{{ editingRejectedId ? '重新编辑换休票申请' : '公出节假日领换休票' }}</h2>
         <form @submit.prevent="handleSubmit" class="application-form" autocomplete="on">
           <div class="form-row">
             <div class="form-group half">
@@ -248,6 +248,7 @@ import {
 } from '@/api/attendance'
 
 const showApplyModal = ref(false)
+const editingRejectedId = ref(null)
 const submitting = ref(false)
 
 const userInfo = (() => {
@@ -483,16 +484,17 @@ function getDownloadUrl(filename) {
   return getHolidayExchangeDownloadUrl(filename)
 }
 
-async function resubmitRecord(r) {
+function editRejectedRecord(r) {
   if (!r?.id || r.statusCode !== 22) return
-  if (!confirm('确认将此换休票申请重新提交审批？')) return
-  try {
-    await resubmitHolidayExchangeRecord(r.id, { name: userName })
-    alert('已重新提交，等待审批')
-    fetchList()
-  } catch (e) {
-    alert(e.response?.data?.detail || e.message || '重新提交失败')
+  editingRejectedId.value = r.id
+  if (r.dateRanges && Array.isArray(r.dateRanges) && r.dateRanges.length) {
+    form.ranges = r.dateRanges.map(seg => ({ from: seg.from || '', to: seg.to || '' }))
+  } else {
+    form.ranges = [{ from: r.dateFrom || '', to: r.dateTo || '' }]
   }
+  form.approver1 = ''
+  form.approver2 = ''
+  showApplyModal.value = true
 }
 
 async function deleteRecord(r) {
@@ -566,10 +568,17 @@ async function handleSubmit() {
       fd.append('files', f)
     }
 
-    const res = await submitHolidayExchange(fd)
+    const isResubmit = !!editingRejectedId.value
+    if (isResubmit) {
+      fd.append('keepExistingFiles', selectedFiles.value.length ? 'false' : 'true')
+    }
+    const res = isResubmit
+      ? await resubmitHolidayExchangeRecord(editingRejectedId.value, fd)
+      : await submitHolidayExchange(fd)
     if (res.success) {
-      alert(`申请已提交！加班 ${res.days} 天，换休票 ${res.hxp_count} 张`)
+      alert(isResubmit ? `已重新提交！加班 ${res.days} 天，换休票 ${res.hxp_count} 张` : `申请已提交！加班 ${res.days} 天，换休票 ${res.hxp_count} 张`)
       showApplyModal.value = false
+      editingRejectedId.value = null
       resetForm()
       fetchList()
     } else {
@@ -591,6 +600,7 @@ function resetForm() {
 }
 
 watch(showApplyModal, (v) => {
+  if (!v) editingRejectedId.value = null
   if (v) fetchApprovers()
 })
 

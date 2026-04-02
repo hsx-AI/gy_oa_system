@@ -170,9 +170,14 @@ export function deleteLeaveRecord(id, params) {
   return request({ url: `/leave/${id}`, method: 'delete', params })
 }
 
-/** 重新提交已驳回的请假记录 */
-export function resubmitLeaveRecord(id, params) {
-  return request({ url: `/leave/${id}/resubmit`, method: 'post', params })
+/** 重新提交已驳回的请假记录（FormData，同 apply） */
+export function resubmitLeaveRecord(id, data) {
+  const hasFile = data.materialFile && data.materialFile instanceof File
+  const fd = new FormData()
+  const keys = ['department', 'name', 'type', 'shift', 'contactMethod', 'startTime', 'endTime', 'duration', 'exchangeTicketNo', 'reason', 'material', 'approver1', 'needSecondApproval', 'approver2']
+  keys.forEach(k => fd.append(k, data[k] ?? ''))
+  if (hasFile) fd.append('materialFile', data.materialFile)
+  return request({ url: `/leave/${id}/resubmit`, method: 'post', data: fd })
 }
 
 /** 删除本人已驳回的加班记录 */
@@ -180,9 +185,9 @@ export function deleteOvertimeRecord(id, params) {
   return request({ url: `/overtime/${id}`, method: 'delete', params })
 }
 
-/** 重新提交已驳回的加班记录 */
-export function resubmitOvertimeRecord(id, params) {
-  return request({ url: `/overtime/${id}/resubmit`, method: 'post', params })
+/** 重新提交已驳回的加班记录（JSON body，同 register） */
+export function resubmitOvertimeRecord(id, data) {
+  return request({ url: `/overtime/${id}/resubmit`, method: 'post', data })
 }
 
 /**
@@ -247,9 +252,9 @@ export function deleteBusinessTripRecord(id, params) {
   return request({ url: `/business-trip/${id}`, method: 'delete', params })
 }
 
-/** 重新提交已驳回的公出记录 */
-export function resubmitBusinessTripRecord(id, params) {
-  return request({ url: `/business-trip/${id}/resubmit`, method: 'post', params })
+/** 重新提交已驳回的公出记录（JSON body，同 apply） */
+export function resubmitBusinessTripRecord(id, data) {
+  return request({ url: `/business-trip/${id}/resubmit`, method: 'post', data })
 }
 
 /** 公出返回登记：填写实际出发时间和实际返回时间 */
@@ -602,9 +607,9 @@ export function deleteHolidayExchangeRecord(id, params) {
   return request({ url: `/holiday-exchange/${id}`, method: 'delete', params })
 }
 
-/** 重新提交已驳回的公出节假日换休票 */
-export function resubmitHolidayExchangeRecord(id, params) {
-  return request({ url: `/holiday-exchange/${id}/resubmit`, method: 'post', params })
+/** 重新提交已驳回的公出节假日换休票（FormData，同 apply） */
+export function resubmitHolidayExchangeRecord(id, formData) {
+  return request({ url: `/holiday-exchange/${id}/resubmit`, method: 'post', data: formData })
 }
 
 /** 获取佐证材料下载地址 */

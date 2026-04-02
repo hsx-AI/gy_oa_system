@@ -125,7 +125,7 @@
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
                     <template v-if="r.status === '已驳回' && isMyLeaveRecord(r)">
-                      <button type="button" class="btn btn-sm btn-primary" @click="resubmitLeave(r)" style="margin-right:6px">重新提交</button>
+                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedLeave(r)" style="margin-right:6px">重新编辑</button>
                       <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedLeave(r)">删除</button>
                     </template>
                     <span v-else>—</span>
@@ -160,7 +160,7 @@
     <!-- 申请弹窗 -->
     <div v-if="showApplyModal" class="modal-overlay" @click.self="showApplyModal = false">
       <div class="modal-content">
-        <h2>申请请假</h2>
+        <h2>{{ editingRejectedId ? '重新编辑请假' : '申请请假' }}</h2>
         <form @submit.prevent="submitApplication" class="application-form" autocomplete="on">
           <!-- 基础信息 -->
           <div class="form-row">
@@ -296,6 +296,7 @@ import DateTimePicker from '@/components/DateTimePicker.vue'
 const router = useRouter()
 const route = useRoute()
 const showApplyModal = ref(false)
+const editingRejectedId = ref(null)
 const remainingTickets = ref(0) // 剩余换休票数，后续需从后端获取
 const paidLeaveRemaining = ref(null)
 const paidLeaveDetail = ref(null)
@@ -672,16 +673,20 @@ const fetchLeaveList = async () => {
   }
 }
 
-async function resubmitLeave(r) {
+function editRejectedLeave(r) {
   if (!r?.id || r.status !== '已驳回') return
-  if (!confirm('确认将此请假记录重新提交审批？')) return
-  try {
-    await resubmitLeaveRecord(r.id, { name: form.name })
-    alert('已重新提交，等待审批')
-    fetchLeaveList()
-  } catch (e) {
-    alert(e.response?.data?.detail || e.message || '重新提交失败')
-  }
+  editingRejectedId.value = r.id
+  form.type = r.type || ''
+  form.startTime = (r.startTime || '').replace(' ', 'T').slice(0, 16)
+  form.endTime = (r.endTime || '').replace(' ', 'T').slice(0, 16)
+  form.duration = Number(r.duration) || 0
+  form.reason = r.reason || ''
+  form.approver1 = ''
+  form.needSecondApproval = false
+  form.approver2 = ''
+  form.materialFile = null
+  form.materialFileName = ''
+  showApplyModal.value = true
 }
 
 async function deleteRejectedLeave(r) {
@@ -751,6 +756,9 @@ onMounted(async () => {
 })
 
 watch(showApplyModal, async (visible) => {
+  if (!visible) {
+    editingRejectedId.value = null
+  }
   if (visible && form.name) {
     fetchApprovers()
     try {
@@ -871,10 +879,14 @@ const submitApplication = async () => {
       approver2: form.approver2 || ''
     }
     if (form.materialFile) payload.materialFile = form.materialFile
-    const res = await submitLeaveApplication(payload)
+    const isResubmit = !!editingRejectedId.value
+    const res = isResubmit
+      ? await resubmitLeaveRecord(editingRejectedId.value, payload)
+      : await submitLeaveApplication(payload)
     if (res.success) {
-      alert('申请已提交')
+      alert(isResubmit ? '已重新提交，等待审批' : '申请已提交')
       showApplyModal.value = false
+      editingRejectedId.value = null
       fetchLeaveList()
     } else {
       alert(res.message || '提交失败')

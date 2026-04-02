@@ -20,6 +20,7 @@
 
       <template v-else>
         <div class="card form-section">
+          <div v-if="editingRejectedId" class="resubmit-banner">正在编辑已驳回的申请，修改后点击提交将重新提交审批 <button type="button" class="btn btn-sm btn-outline" @click="editingRejectedId = null; reset()">取消编辑</button></div>
           <form @submit.prevent="openApproverDialog" class="fill-form">
             <div class="form-row">
               <label class="form-label">操作类型</label>
@@ -136,7 +137,7 @@
                   <td>{{ r.applyTime }}</td>
                   <td>{{ r.rejectReason || '-' }}</td>
                   <td>
-                    <button v-if="r.status === 22" type="button" class="btn btn-sm btn-primary" @click="resubmitHxpRequest(r)">重新提交</button>
+                    <button v-if="r.status === 22" type="button" class="btn btn-sm btn-primary" @click="editRejectedHxp(r)">重新编辑</button>
                     <span v-else>—</span>
                   </td>
                 </tr>
@@ -254,6 +255,7 @@ const amount = ref(1)
 const ly = ref('')
 const namesText = ref('')
 const submitting = ref(false)
+const editingRejectedId = ref(null)
 
 const approverDialogVisible = ref(false)
 const approverList = ref([])
@@ -343,16 +345,14 @@ async function loadMyRequests() {
   }
 }
 
-async function resubmitHxpRequest(r) {
+function editRejectedHxp(r) {
   if (!r?.id || r.status !== 22) return
-  if (!confirm('确认将此换休票管理申请重新提交审批？')) return
-  try {
-    await resubmitHxpApproval(r.id, { applicant: currentUserName.value })
-    alert('已重新提交，等待审批')
-    loadMyRequests()
-  } catch (e) {
-    alert(e.response?.data?.detail || e.message || '重新提交失败')
-  }
+  editingRejectedId.value = r.id
+  action.value = r.action || 'add'
+  amount.value = r.amount || 1
+  ly.value = r.ly || ''
+  namesText.value = (r.names || []).join('\n')
+  window.scrollTo({ top: 0, behavior: 'smooth' })
 }
 
 async function openApproverDialog() {
@@ -379,16 +379,21 @@ async function submitApproval() {
   if (!selectedApprover.value || submitting.value) return
   submitting.value = true
   try {
-    const res = await submitHxpApproval({
+    const payload = {
       current_user: currentUserName.value,
       names: parsedNames.value,
       amount: amount.value,
       action: action.value,
       ly: ly.value.trim(),
       approver: selectedApprover.value,
-    })
-    alert(res.message || '已提交审批')
+    }
+    const isResubmit = !!editingRejectedId.value
+    const res = isResubmit
+      ? await resubmitHxpApproval(editingRejectedId.value, payload)
+      : await submitHxpApproval(payload)
+    alert(isResubmit ? '已重新提交，等待审批' : (res.message || '已提交审批'))
     approverDialogVisible.value = false
+    editingRejectedId.value = null
     reset()
     loadMyRequests()
   } catch (e) {
@@ -762,4 +767,15 @@ function reset() {
 .badge-active { background: #dcfce7; color: #16a34a; }
 .badge-expired { background: #fee2e2; color: #dc2626; }
 .badge-muted { background: #f1f5f9; color: #94a3b8; }
+.resubmit-banner {
+  padding: 10px 16px;
+  background: #fef3c7;
+  color: #92400e;
+  border-radius: var(--radius-sm);
+  margin-bottom: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
 </style>

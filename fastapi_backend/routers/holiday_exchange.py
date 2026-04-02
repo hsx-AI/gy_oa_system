@@ -648,11 +648,22 @@ async def get_holiday_exchange_list(
 
 
 @router.post("/holiday-exchange/{item_id}/resubmit")
-async def resubmit_holiday_exchange(item_id: str, name: str = Query(...)):
-    """将已驳回的换休票申请重新提交审批（status 22→0，清除驳回原因）"""
+async def resubmit_holiday_exchange(
+    item_id: str,
+    name: str = Form(...),
+    department: str = Form(""),
+    dateFrom: str = Form(...),
+    dateTo: str = Form(...),
+    approver1: str = Form(...),
+    approver2: str = Form(...),
+    files: List[UploadFile] = File(default=[]),
+    dateRanges: str = Form(""),
+    keepExistingFiles: str = Form("true"),
+):
+    """修改并重新提交已驳回的换休票申请（status 22→0，更新字段）"""
     try:
         rows = db.execute_query(
-            "SELECT id, xm, status FROM holiday_exchange WHERE id = %s", (item_id,)
+            "SELECT id, xm, status, material_files FROM holiday_exchange WHERE id = %s", (item_id,)
         )
         if not rows:
             raise HTTPException(status_code=404, detail="记录不存在")
@@ -661,17 +672,99 @@ async def resubmit_holiday_exchange(item_id: str, name: str = Query(...)):
             raise HTTPException(status_code=400, detail="仅可重新提交已驳回的记录")
         if (r.get("xm") or "").strip() != name.strip():
             raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
+
+        if not (approver1 or "").strip():
+            raise HTTPException(status_code=400, detail="请选择一级审批人")
+        if not (approver2 or "").strip():
+            raise HTTPException(status_code=400, detail="请选择二级审批人")
+
+        ranges: List[Tuple[date, date]] = []
+        date_ranges_json = (dateRanges or "").strip()
+        if date_ranges_json:
+            try:
+                parsed = json.loads(date_ranges_json)
+                if isinstance(parsed, list) and len(parsed) > 0:
+                    for seg in parsed:
+                        seg_from = str(seg.get("from", ""))[:10]
+                        seg_to = str(seg.get("to", ""))[:10]
+                        r_from = datetime.strptime(seg_from, "%Y-%m-%d").date()
+                        r_to = datetime.strptime(seg_to, "%Y-%m-%d").date()
+                        ranges.append((r_from, r_to))
+            except (json.JSONDecodeError, ValueError):
+                pass
+        if not ranges:
+            d_from = datetime.strptime(dateFrom[:10], "%Y-%m-%d").date()
+            d_to = datetime.strptime(dateTo[:10], "%Y-%m-%d").date()
+            ranges.append((d_from, d_to))
+            date_ranges_json = ""
+
+        name_clean = name.strip()
+        total_days = 0
+        for r_from, r_to in ranges:
+            _validate_holiday_exchange_range(r_from, r_to)
+            _validate_gcsqb_covers_range(name_clean, r_from, r_to)
+            total_days += (r_to - r_from).days + 1
+        if total_days <= 0:
+            raise HTTPException(status_code=400, detail="加班日期范围无效")
+        hxp_count = round(total_days / 4, 4)
+
+        overall_from = min(r_item[0] for r_item in ranges).strftime("%Y-%m-%d")
+        overall_to = max(r_item[1] for r_item in ranges).strftime("%Y-%m-%d")
+
+        has_new_files = files and any(f.filename for f in files)
+        if has_new_files:
+            _ensure_upload_dir()
+            saved_files = []
+            for f in files:
+                if not f.filename:
+                    continue
+                ext = Path(f.filename).suffix.lower()
+                if ext not in ALLOWED_EXTENSIONS:
+                    raise HTTPException(status_code=400, detail=f"不支持的文件格式: {ext}")
+                content = await f.read()
+                if len(content) > MAX_FILE_SIZE:
+                    raise HTTPException(status_code=400, detail=f"文件 {f.filename} 超过 20MB 限制")
+                safe_name = f"he_{uuid.uuid4().hex[:12]}{ext}"
+                save_path = UPLOAD_HE_MATERIALS / safe_name
+                with open(save_path, "wb") as fp:
+                    fp.write(content)
+                saved_files.append({"name": safe_name, "original": f.filename})
+            material_json = json.dumps(saved_files, ensure_ascii=False)
+        else:
+            material_json = r.get("material_files") or "[]"
+
+        bz = (department or "").strip()
+        lsys = ""
+        if name_clean:
+            emp_rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (name_clean,))
+            if emp_rows:
+                lsys = (emp_rows[0].get("lsys") or "").strip()
+                if not bz:
+                    bz = lsys
+
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        stored_ranges = json.dumps(
+            [{"from": rng[0].strftime("%Y-%m-%d"), "to": rng[1].strftime("%Y-%m-%d")} for rng in ranges],
+            ensure_ascii=False,
+        ) if len(ranges) > 1 or date_ranges_json else None
+
         db.execute_update(
-            "UPDATE holiday_exchange SET status = 0, bhyy = NULL, created_at = %s WHERE id = %s AND status = 22 AND xm = %s",
-            (now, item_id, name.strip())
+            """UPDATE holiday_exchange SET
+                bz=%s, date_from=%s, date_to=%s, days=%s, hxp_count=%s,
+                material_files=%s, spr=%s, spr2=%s, status=0, apply_time=%s,
+                lsys=%s, date_ranges=%s, bhyy=NULL
+               WHERE id=%s AND status=22 AND xm=%s""",
+            (bz, overall_from, overall_to, total_days, hxp_count,
+             material_json, approver1.strip(), approver2.strip(),
+             now, lsys, stored_ranges,
+             item_id, name_clean)
         )
-        return {"success": True, "message": "已重新提交"}
+        return {"success": True, "message": "已重新提交", "days": total_days, "hxp_count": hxp_count}
     except HTTPException:
         raise
     except Exception as e:
         logger.error("重新提交换休票失败: %s", e)
-        raise HTTPException(status_code=500, detail="重新提交失败")
+        raise HTTPException(status_code=500, detail=f"重新提交失败: {e}")
 
 
 @router.delete("/holiday-exchange/{item_id}")
