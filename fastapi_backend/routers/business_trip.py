@@ -421,6 +421,223 @@ async def get_business_trip_list(
         raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
 
 
+def _fmt_detail_val(v):
+    """
+    详情弹窗面向用户的时间/字段展示：
+    - None -> "—"
+    - "YYYY-MM-DD 00:00:00" -> "YYYY-MM-DD"（避免出现 00:00:00 这种信息噪音）
+    - 其他 datetime -> 截断到分钟 "YYYY-MM-DD HH:mm"
+    """
+    if v is None:
+        return "—"
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d %H:%M")
+    s = str(v).strip()
+    if not s:
+        return "—"
+    if len(s) >= 19 and s[10] == " ":
+        const_date = s[:10]
+        hh = s[11:13]
+        mm = s[14:16]
+        ss = s[17:19]
+        if hh == "00" and mm == "00" and ss == "00":
+            return const_date
+        return s[:16]
+    if len(s) >= 16:
+        return s[:16]
+    return s
+
+
+def _approval_status_text(bldzt, szrzt) -> str:
+    """
+    面向用户的简化审批状态文案：
+    - 已驳回
+    - 已通过
+    - 审批中
+    """
+    bldzt = bldzt if bldzt is not None else 0
+    szrzt = szrzt if szrzt is not None else 0
+    if bldzt == 22 or szrzt == 22:
+        return "已驳回"
+    if bldzt == 2 and szrzt == 2:
+        return "已通过"
+    return "审批中"
+
+
+def _row_to_detail_payload(row: dict) -> dict:
+    """将 gcsqb 一行展开为前端详情弹窗所需结构"""
+    bldzt = row.get("bldzt")
+    szrzt = row.get("szrzt")
+    is_rejected = (int(bldzt) if bldzt is not None else 0) == 22 or (int(szrzt) if szrzt is not None else 0) == 22
+    status_txt = _approval_status_text(
+        int(bldzt) if bldzt is not None else 0,
+        int(szrzt) if szrzt is not None else 0,
+    )
+    fhdj = row.get("fhdj_status")
+    fhdj_txt = "已返回登记" if fhdj == 1 else ("未登记" if fhdj == 0 or fhdj is None else str(fhdj))
+
+    # 当前审批人（仅当审批中才显示）
+    current_approver = "—"
+    if status_txt == "审批中":
+        try:
+            if int(szrzt) == 1:
+                current_approver = _fmt_detail_val(row.get("szr"))
+            elif int(bldzt) == 1:
+                current_approver = _fmt_detail_val(row.get("bld"))
+        except Exception:
+            current_approver = "—"
+
+    expected_start = row.get("yjcfsj")
+    expected_end = row.get("yjfhsj")
+    actual_start = row.get("gcsj")
+    actual_end = row.get("sjfhtime")
+
+    expected_range = "—"
+    if expected_start and expected_end:
+        expected_range = f"{_fmt_detail_val(expected_start)} ~ {_fmt_detail_val(expected_end)}"
+    elif expected_start:
+        expected_range = f"{_fmt_detail_val(expected_start)} ~ —"
+    elif expected_end:
+        expected_range = f"— ~ {_fmt_detail_val(expected_end)}"
+
+    actual_range = "—"
+    if actual_start and actual_end:
+        actual_range = f"{_fmt_detail_val(actual_start)} ~ {_fmt_detail_val(actual_end)}"
+    elif actual_start:
+        actual_range = f"{_fmt_detail_val(actual_start)} ~ —"
+    elif actual_end:
+        actual_range = f"— ~ {_fmt_detail_val(actual_end)}"
+
+    amount_val = row.get("qkje")
+    amount_txt = "—"
+    if amount_val not in (None, ""):
+        try:
+            amount_txt = f"{float(amount_val):.2f}"
+        except Exception:
+            amount_txt = _fmt_detail_val(amount_val)
+
+    items = [
+        ("公出类型", _fmt_detail_val(row.get("gclx"))),
+        ("公出人", _fmt_detail_val(row.get("gcr"))),
+        ("委派单位", _fmt_detail_val(row.get("wpdw"))),
+        ("委派时间", _fmt_detail_val(row.get("wpsj"))),
+        ("通知单编号", _fmt_detail_val(row.get("tzdbh"))),
+        ("工作号", _fmt_detail_val(row.get("gzh"))),
+        ("公出地点", _fmt_detail_val(row.get("gcdd"))),
+        ("项目名称", _fmt_detail_val(row.get("xmmc"))),
+        ("公出任务", _fmt_detail_val(row.get("gcrw"))),
+        ("联系电话", _fmt_detail_val(row.get("lxdh"))),
+        ("请款金额", amount_txt),
+        ("本次公出总人数", _fmt_detail_val(row.get("bcgczrs"))),
+        ("公出时间（预计）", expected_range),
+        ("公出时间（实际）", actual_range),
+        ("审批状态", status_txt),
+        ("返回登记", fhdj_txt),
+        ("室主任", _fmt_detail_val(row.get("szr"))),
+        ("室主任审批时间", _fmt_detail_val(row.get("szrpztime"))),
+        ("部领导", _fmt_detail_val(row.get("bld"))),
+        ("部领导审批时间", _fmt_detail_val(row.get("bldpztime"))),
+    ]
+
+    if status_txt == "审批中":
+        items.append(("当前审批人", current_approver))
+    if is_rejected and row.get("bhyy"):
+        items.append(("驳回原因", _fmt_detail_val(row.get("bhyy"))))
+
+    return {"items": [{"label": k, "value": v} for k, v in items]}
+
+
+def _all_records_visibility_clause(viewer_name: str) -> tuple:
+    """
+    与 GET /all-records 一致的「谁能看到哪些 gcr」；
+    返回 (sql_fragment, params)，用于 AND (fragment)。
+    """
+    viewer_name = (viewer_name or "").strip()
+    user = _get_user_info(viewer_name)
+    if not user:
+        return "0=1", tuple()
+    admin1 = _get_admin1()
+    name_stripped = viewer_name
+    try:
+        _dk_rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
+        _dakaman = (_dk_rows[0].get("dakaman") or "").strip() if _dk_rows else ""
+    except Exception:
+        _dakaman = ""
+    is_dk = bool(_dakaman and name_stripped == _dakaman)
+    if (admin1 and name_stripped == admin1) or is_dk:
+        return "1=1", tuple()
+    jb = (user.get("jb") or "").strip()
+    lsys = (user.get("lsys") or "").strip()
+    is_leader = (
+        _jb_match(jb, "部长")
+        or _jb_match(jb, "副部长")
+        or is_zonghe_tech_director(user)
+    )
+    if is_leader:
+        return "1=1", tuple()
+    if not lsys:
+        return "0=1", tuple()
+    clause = (
+        "g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "
+        "AND y.name IS NOT NULL AND TRIM(y.name) <> '')"
+    )
+    return clause, (lsys,)
+
+
+@router.get("/{item_id}/detail")
+async def get_business_trip_detail(
+    item_id: str,
+    name: str = Query(..., description="当前用户姓名"),
+    scope: str = Query(
+        "self",
+        description="与 /list 一致：self|lsys|all",
+    ),
+    filter_lsys: Optional[str] = Query(None),
+    list_source: str = Query(
+        "list",
+        description="list=按列表规则；all_records=与 /all-records 本科室视图一致",
+    ),
+):
+    """单条公出数据库详情（仅当前用户对记录可见时）。"""
+    try:
+        if list_source.strip().lower() == "all_records":
+            vis_sql, vis_params = _all_records_visibility_clause(name)
+        else:
+            vis_sql, vis_params, _meta = _business_trip_list_gcr_clause(name, scope, filter_lsys)
+
+        detail_select = (
+            "SELECT g.id, g.gclx, g.wpdw, g.gcr, g.gzh, g.gcdw, g.lxdh, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, "
+            "g.tzdbh, g.bcgczrs, g.gcdd, g.qkje, g.gcrw, g.szr, g.bld, g.gcsj, g.sjfhtime, "
+            "g.bldzt, g.szrzt, g.fhdj_status, g.bhyy, g.szrpztime, g.bldpztime FROM gcsqb g "
+            f"WHERE g.id = %s AND ({vis_sql})"
+        )
+        params = (item_id,) + tuple(vis_params)
+        try:
+            rows = db.execute_query(detail_select, params)
+        except Exception as e:
+            msg = str(e).lower()
+            if "unknown column" in msg:
+                detail_select = (
+                    "SELECT g.id, g.gclx, g.wpdw, g.gcr, g.gzh, g.gcdw, g.lxdh, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, "
+                    "g.gcdd, g.qkje, g.gcrw, g.szr, g.bld, g.gcsj, g.sjfhtime, g.bldzt, g.szrzt FROM gcsqb g "
+                    f"WHERE g.id = %s AND ({vis_sql})"
+                )
+                rows = db.execute_query(detail_select, params)
+            else:
+                raise
+
+        if not rows:
+            raise HTTPException(status_code=404, detail="记录不存在或无权查看")
+
+        payload = _row_to_detail_payload(rows[0])
+        return {"success": True, "detail": payload}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"查询公出详情失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"查询失败: {str(e)}")
+
+
 @router.get("/all-records")
 async def get_business_trip_all_records(
     name: str = Query(..., description="当前用户姓名"),

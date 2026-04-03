@@ -227,6 +227,19 @@ export function getBusinessTripList(params) {
 }
 
 /**
+ * 公出单条详情（数据库字段，受与列表相同的权限约束）
+ * @param {string} id - 记录 id
+ * @param {Object} params - { name, scope?, filter_lsys?, list_source?: 'list'|'all_records' }
+ */
+export function getBusinessTripDetail(id, params) {
+  return request({
+    url: `/business-trip/${id}/detail`,
+    method: 'get',
+    params
+  })
+}
+
+/**
  * 全部公出记录（按权限：部长/副部长看全员，其余看本科室）
  * @param {Object} params - { name, year? }
  */

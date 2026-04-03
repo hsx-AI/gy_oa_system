@@ -119,11 +119,17 @@
                   <td>{{ r.status === '审批中' && r.currentApprover ? r.currentApprover : '—' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
+                    <button
+                      v-if="r.id"
+                      type="button"
+                      class="btn btn-sm btn-outline trip-detail-btn"
+                      @click="openTripDetail(r)"
+                    >查看详细</button>
                     <template v-if="r.status === '已驳回' && isOwnTripRow(r)">
-                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedTrip(r)" style="margin-right:6px">重新编辑</button>
+                      <button type="button" class="btn btn-sm btn-primary" @click="editRejectedTrip(r)" style="margin-right:6px;margin-left:6px">重新编辑</button>
                       <button type="button" class="btn btn-sm btn-danger" @click="deleteRejectedBusinessTrip(r)">删除</button>
                     </template>
-                    <span v-else>—</span>
+                    <span v-if="!r.id && !(r.status === '已驳回' && isOwnTripRow(r))">—</span>
                   </td>
                 </tr>
               </tbody>
@@ -424,13 +430,36 @@
         </form>
       </div>
     </div>
+
+    <!-- 公出记录数据库详情 -->
+    <div v-if="showTripDetailModal" class="modal-overlay" @click.self="showTripDetailModal = false">
+      <div class="modal-content trip-detail-modal">
+        <button type="button" class="modal-close-btn" @click="showTripDetailModal = false">&times;</button>
+        <h2>公出详情</h2>
+        <p v-if="tripDetailLoading" class="trip-detail-hint">加载中…</p>
+        <p v-else-if="tripDetailError" class="trip-detail-error">{{ tripDetailError }}</p>
+        <div v-else class="trip-detail-table-wrap">
+          <table class="trip-detail-table">
+            <tbody>
+              <tr v-for="(it, i) in tripDetailItems" :key="i">
+                <th>{{ it.label }}</th>
+                <td>{{ it.value }}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="form-actions" style="margin-top:16px">
+          <button type="button" @click="showTripDetailModal = false">关闭</button>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, watch, onMounted, nextTick } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusinessTripAllRecords, getDeptLsysList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord, resubmitBusinessTripRecord, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
+import { getApprovers, submitBusinessTripApply, getBusinessTripList, getBusinessTripAllRecords, getBusinessTripDetail, getDeptLsysList, updateBusinessTripReturnTime, checkCanApprove, deleteBusinessTripRecord, resubmitBusinessTripRecord, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
@@ -651,6 +680,10 @@ const extendForm = reactive({
   deptLeader: '',
   remark: ''
 })
+const showTripDetailModal = ref(false)
+const tripDetailLoading = ref(false)
+const tripDetailError = ref('')
+const tripDetailItems = ref([])
 // 公出类型：市内公出 / 境内公出 / 境外公出
 const tripScope = ref('市内公出')
 const isCityTrip = computed(() => tripScope.value === '市内公出')
@@ -836,6 +869,48 @@ const fetchTripRecords = async () => {
     myRecordList.value = []
   } finally {
     loadingList.value = false
+  }
+}
+
+function _detailApiParams() {
+  const dr = recordDataRange.value
+  const pm = tripListMeta.value
+  const params = { name: form.name }
+  if (dr === 'major' && !pm.canViewLsys) {
+    params.list_source = 'all_records'
+    return params
+  }
+  if (dr === 'self') params.scope = 'self'
+  else if (dr === 'major') params.scope = 'lsys'
+  else if (dr === 'all') params.scope = 'all'
+  else if (typeof dr === 'string' && dr.startsWith('lsys:')) {
+    params.scope = 'all'
+    const room = dr.slice(5).trim()
+    if (room) params.filter_lsys = room
+  } else {
+    params.scope = 'self'
+  }
+  return params
+}
+
+async function openTripDetail(r) {
+  if (!r?.id) return
+  showTripDetailModal.value = true
+  tripDetailLoading.value = true
+  tripDetailError.value = ''
+  tripDetailItems.value = []
+  try {
+    const res = await getBusinessTripDetail(String(r.id), _detailApiParams())
+    if (res?.success && res.detail?.items?.length) {
+      tripDetailItems.value = res.detail.items
+    } else {
+      tripDetailError.value = '未获取到详情数据'
+    }
+  } catch (e) {
+    const d = e?.response?.data?.detail
+    tripDetailError.value = typeof d === 'string' ? d : (d ? JSON.stringify(d) : (e?.message || '加载失败'))
+  } finally {
+    tripDetailLoading.value = false
   }
 }
 
@@ -1496,6 +1571,43 @@ watch(showApplyModal, async (visible) => {
   max-width: 95%;
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.trip-detail-modal {
+  width: 720px;
+}
+.trip-detail-table-wrap {
+  max-height: min(60vh, 520px);
+  overflow-y: auto;
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+}
+.trip-detail-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.trip-detail-table th {
+  text-align: left;
+  padding: 8px 12px;
+  width: 38%;
+  vertical-align: top;
+  border-bottom: 1px solid var(--color-border-lighter);
+  background: var(--color-bg-spotlight, #f8f9fa);
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.trip-detail-table td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--color-border-lighter);
+  word-break: break-word;
+  color: var(--color-text-secondary);
+}
+.trip-detail-hint {
+  color: var(--color-text-secondary);
+}
+.trip-detail-error {
+  color: var(--color-danger, #c53f3f);
 }
 
 .application-form {
