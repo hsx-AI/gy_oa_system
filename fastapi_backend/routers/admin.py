@@ -335,7 +335,9 @@ async def admin_dept_list(
         # 排除末尾为「1」的科室（视为已撤销/历史），与统计等逻辑一致
         rows = db.execute_query(
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
-            "AND RIGHT(TRIM(lsys), 1) != '1' ORDER BY lsys"
+            "AND RIGHT(TRIM(lsys), 1) != '1' "
+            "AND TRIM(lsys) != '其他部门员工' "
+            "ORDER BY lsys"
         )
         list_data = [r["lsys"].strip() for r in rows if r.get("lsys")]
         return {"success": True, "list": list_data}

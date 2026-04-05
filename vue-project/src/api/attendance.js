@@ -414,6 +414,11 @@ export function getLeaderFullAttendanceByMonth(params) {
   return request({ url: '/leader/full-attendance-by-month', method: 'get', params })
 }
 
+/** 个人满勤查询：指定员工某月是否满勤 */
+export function getPersonFullAttendance(params) {
+  return request({ url: '/person/full-attendance', method: 'get', params })
+}
+
 /** 满勤名单导出（与领导人看板满勤统计同一逻辑，返回各科室 fullNames） */
 export function getFullAttendanceExport(params) {
   return request({ url: '/leader/full-attendance-export', method: 'get', params })
@@ -742,6 +747,16 @@ export function dakamanProcessException(data) {
     method: 'post',
     data,
   })
+}
+
+/** 打卡纪律大数据检测：踩点上班/踩点下班统计 */
+export function getClockInDisciplineStats(params) {
+  return request({ url: '/discipline/clock-in-stats', method: 'get', params })
+}
+
+/** 个人打卡散点图数据：逐日上班/下班时间 */
+export function getPersonScatterData(params) {
+  return request({ url: '/discipline/person-scatter', method: 'get', params })
 }
 
 

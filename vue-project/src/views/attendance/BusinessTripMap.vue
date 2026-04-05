@@ -266,9 +266,9 @@ async function loadData() {
 }
 
 watch([chinaTree, chinaCityList], ([tree, cityList]) => {
-  if (worldApp && tree) {
-    worldApp.setTripData(tree, cityList)
-  }
+  // World 内部的 gqGroup 等分组尚未就绪时，提前返回，避免 setTripData 过程中访问 undefined
+  if (!worldApp || !tree || !worldApp.gqGroup) return
+  worldApp.setTripData(tree, cityList)
 }, { deep: true })
 
 const DARK_CLS = 'trip-map-dark-mode'

@@ -213,6 +213,12 @@ const routes = [
     path: '/attendance/business-trip/map',
     name: 'BusinessTripMap',
     component: () => import('@/views/attendance/BusinessTripMap.vue')
+  },
+  {
+    path: '/attendance/discipline',
+    name: 'AttendanceDiscipline',
+    component: () => import('@/views/attendance/AttendanceDiscipline.vue'),
+    meta: { title: '考勤纪律审查' }
   }
   // 未来可以添加更多路由：
   // {
@@ -279,7 +285,7 @@ router.beforeEach(async (to, _from, next) => {
   } catch { /* ignore */ }
 
   // 以下为各页面单独权限校验
-  if (to.path === '/leader-dashboard') {
+  if (to.path === '/leader-dashboard' || to.path === '/attendance/discipline') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

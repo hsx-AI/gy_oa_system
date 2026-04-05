@@ -173,7 +173,7 @@
 
         <!-- 提交 -->
         <div class="form-submit-bar">
-          <button type="button" class="btn btn-default" @click="goBack">取消</button>
+          <button type="button" class="btn btn-default btn-lg" @click="goBack">取消</button>
           <button type="submit" class="btn btn-primary btn-lg" :disabled="submitting">
             {{ submitting ? '提交中...' : (isEdit ? '保存修改' : '提交') }}
           </button>
@@ -584,13 +584,15 @@ onMounted(() => {
   background: var(--color-error);
 }
 .image-add-btn {
-  width: 110px;
-  height: 88px;
+  width: 130px;
+  height: 96px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
   gap: 4px;
+  padding: 10px 12px;
+  box-sizing: border-box;
   border: 2px dashed var(--color-border-base);
   border-radius: var(--radius-sm);
   cursor: pointer;

@@ -6,6 +6,12 @@
           <h1 class="header-title">领导人看板</h1>
           <p class="header-subtitle">本科室请假、加班、公出汇总，按人查看</p>
         </div>
+        <router-link to="/attendance/discipline" class="btn btn-discipline">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+          </svg>
+          考勤纪律审查
+        </router-link>
       </div>
     </div>
 
@@ -378,6 +384,12 @@ const compareChartTypes = [
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
 
+const EXCLUDED_LSYS = '其他部门员工'
+
+function isAllowedLsys(v) {
+  return (v || '').trim() !== EXCLUDED_LSYS
+}
+
 const maxCompareOvertime = computed(() => {
   const list = deptComparison.value?.list || []
   if (!list.length) return 1
@@ -433,12 +445,12 @@ const compareChartBarClass = computed(() => {
 })
 /** 科室横向对比：按当前展示类型（加班/请假/公出）数值从高到低排序，柱状图从左到右由高到低 */
 const deptComparisonSorted = computed(() => {
-  const list = deptComparison.value?.list || []
+  const list = (deptComparison.value?.list || []).filter(r => isAllowedLsys(r?.lsys))
   if (!list.length) return []
   return [...list].sort((a, b) => (compareChartTotalValue(b) - compareChartTotalValue(a)))
 })
 const deptComparisonSortedPc = computed(() => {
-  const list = deptComparison.value?.list || []
+  const list = (deptComparison.value?.list || []).filter(r => isAllowedLsys(r?.lsys))
   if (!list.length) return []
   return [...list].sort((a, b) => (compareChartPerCapitaValue(b) - compareChartPerCapitaValue(a)))
 })
@@ -585,7 +597,7 @@ function deptFullNames(d) {
 }
 
 const byDeptSortedByRate = computed(() => {
-  const list = fullAttendance.value?.byDept
+  const list = (fullAttendance.value?.byDept || []).filter(d => isAllowedLsys(d?.lsys))
   if (!list?.length) return []
   return [...list].sort((a, b) => (b.rate || 0) - (a.rate || 0))
 })
@@ -619,7 +631,7 @@ const loadPermission = async () => {
       } else if (permLevel.value === 3) {
         const listRes = await getDeptLsysList()
         if (listRes.success && listRes.list?.length) {
-          lsysList.value = listRes.list
+          lsysList.value = listRes.list.filter(isAllowedLsys)
           selectedLsys.value = '' // 默认全员
         }
       }
@@ -729,6 +741,23 @@ onMounted(async () => {
 }
 
 .header-info { flex: 1; min-width: 200px; }
+
+.btn-discipline {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 20px;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: white;
+  border-radius: var(--radius-base);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  text-decoration: none;
+  transition: filter 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+}
+.btn-discipline:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); }
+.btn-discipline .btn-icon { width: 18px; height: 18px; }
 
 .leader-dashboard-page .container {
   width: 100%;

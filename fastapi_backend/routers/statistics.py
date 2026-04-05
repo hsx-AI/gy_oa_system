@@ -51,9 +51,9 @@ def _aggregate_overtime_with_incentive(
 ):
     """
     对原始加班记录按「人+日期」聚合，并按节日激励规则计算：
-    - 春节/国庆节/高温防暑休假 这三类节日当天：若当日加班时长(已扣午休) >= 8 小时，则这天其他绩效激励固定 200 元；
-      超过 8 小时不再额外计算；这些小时不再计入普通 15 元/小时部分。
-    - 其他日期或不足 8 小时的节日，其他绩效激励按 15 元/小时计算。
+    - 春节/国庆节/高温防暑休假 这三类节日当天：若当日加班时长(已扣午休) >= 8 小时，则固定奖励 200 元；
+      超过 8 小时的部分按 zhibanfei 元/小时额外计算。
+    - 其他日期或不足 8 小时的节日，其他绩效激励按 zhibanfei 元/小时计算。
     返回:
     - per_month: { "YYYY-MM": {"hours": 总小时数, "pay": 总金额} }
     - per_employee: { name: {"hours": 总小时数, "pay": 总金额} }
@@ -90,11 +90,9 @@ def _aggregate_overtime_with_incentive(
         normal_hours = 0.0
 
         if is_incentive and day_hours >= 8.0:
-            # 激励日且当日加班满 8 小时：固定 200 元，不再按小时计费
             incentive_pay = 200.0
-            normal_hours = 0.0
+            normal_hours = day_hours - 8.0
         else:
-            # 非激励日或不足 8 小时：全部按普通时薪计算
             normal_hours = day_hours
 
         day_pay = incentive_pay + normal_hours * zhibanfei
@@ -283,7 +281,11 @@ async def get_dept_lsys_list():
     """
     try:
         rows = db.execute_query(
-            "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0) ORDER BY lsys",
+            "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
+            "AND RIGHT(TRIM(lsys), 1) != '1' "
+            "AND TRIM(lsys) != %s "
+            "AND TRIM(lsys) != '其他部门员工' "
+            "AND (COALESCE(zaizhi,0)=0) ORDER BY lsys",
             (LEADER_EXCLUDE_LSYS,)
         )
         list_data = [r["lsys"].strip() for r in rows if r.get("lsys")]
@@ -593,8 +595,8 @@ async def get_dept_overtime_pay_by_month(
     """
     其他绩效激励按月份统计。仅统计 jiaban 审核完成(jiabanzt=4)、换休票为否(hx 非「是」)，
     激励规则：
-    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天加班时长(已扣午休) >= 8 小时，则该天其他绩效激励固定 200 元；
-      超出 8 小时部分不再额外计算；
+    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天加班时长(已扣午休) >= 8 小时，则固定奖励 200 元，
+      超出 8 小时部分按 zhibanfei 元/小时额外计算；
     - 其他日期或不足 8 小时部分，按 webconfig.zhibanfei（默认 15 元/小时）计算；
     支持 name=某人 仅查本人；month=1~12 仅查该月。
     当传入 current_user+scope 时按权限强制过滤：self 仅本人，lsys 仅本室，all 不限制。
@@ -1093,6 +1095,30 @@ def _compute_abnormal_set(names: List[str], year: int, month: Optional[int] = No
     return abnormal
 
 
+# ==================== 个人满勤查询 ====================
+
+@router.get("/person/full-attendance")
+async def get_person_full_attendance(
+    name: str = Query(..., description="员工姓名"),
+    year: int = Query(..., description="年份"),
+    month: int = Query(..., ge=1, le=12, description="月份"),
+):
+    """
+    查询指定员工某月是否满勤。
+    满勤 = 当月 status=1 的考勤异常全部由已通过公出覆盖（或无异常）。
+    返回: { success, isFull: bool }
+    """
+    try:
+        name = (name or "").strip()
+        if not name:
+            return {"success": False, "isFull": False}
+        abnormal = _compute_abnormal_set([name], year, month)
+        return {"success": True, "isFull": name not in abnormal}
+    except Exception as e:
+        logger.error(f"个人满勤查询失败: {str(e)}")
+        return {"success": False, "isFull": False}
+
+
 # ==================== 领导人看板扩展 API ====================
 
 @router.get("/leader/full-attendance")
@@ -1104,7 +1130,8 @@ async def get_leader_full_attendance(
     """
     满勤率：指定月份全员或指定科室的满勤率。
     满勤 = 当月 status=1 的考勤异常全部由已通过公出覆盖（或无异常）；有请假覆盖或未处理则不满勤。
-    返回: workdays(当月应出勤工作日，仅作参考), totalPeople, fullCount, rate, byDept(仅当未传lsys时)
+    返回: workdays(当月应出勤工作日，仅作参考), totalPeople, fullCount, rate, fullNames(满勤人员姓名),
+    byDept(仅当未传lsys时，各科室明细)
     """
     try:
         workdays = _count_workdays_in_month(year, month)
@@ -1130,6 +1157,7 @@ async def get_leader_full_attendance(
                 "totalPeople": 0,
                 "fullCount": 0,
                 "rate": 0,
+                "fullNames": [],
                 "byDept": []
             }
 
@@ -1137,6 +1165,7 @@ async def get_leader_full_attendance(
         full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
+        full_names_all = sorted(n for n in names if n not in abnormal_set)
 
         result = {
             "success": True,
@@ -1144,6 +1173,7 @@ async def get_leader_full_attendance(
             "totalPeople": total,
             "fullCount": full_count,
             "rate": rate,
+            "fullNames": full_names_all,
             "byDept": []
         }
 
@@ -1272,7 +1302,7 @@ async def get_leader_full_attendance_year(
     """
     满勤率（全年）：指定年份全员或指定科室的全年满勤率。
     全年满勤 = 该年度内 status=1 异常全部由已通过公出覆盖（或无异常）。
-    返回: totalPeople, fullCount, rate, byDept(仅当未传lsys时)，无 workdays。
+    返回: totalPeople, fullCount, rate, fullNames(满勤人员姓名), byDept(仅当未传lsys时)，无 workdays。
     """
     try:
         year_prefix = f"{year}-"
@@ -1295,6 +1325,7 @@ async def get_leader_full_attendance_year(
                 "totalPeople": 0,
                 "fullCount": 0,
                 "rate": 0,
+                "fullNames": [],
                 "byDept": []
             }
 
@@ -1302,12 +1333,14 @@ async def get_leader_full_attendance_year(
         full_count = sum(1 for n in names if n not in abnormal_set)
         total = len(names)
         rate = round(full_count / total, 4) if total else 0
+        full_names_all = sorted(n for n in names if n not in abnormal_set)
 
         result = {
             "success": True,
             "totalPeople": total,
             "fullCount": full_count,
             "rate": rate,
+            "fullNames": full_names_all,
             "byDept": []
         }
 
@@ -1697,4 +1730,268 @@ async def get_leader_rankings(
         raise
     except Exception as e:
         logger.error(f"全员排序查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ==================== 考勤纪律审查 ====================
+
+def _parse_time_str(val) -> Optional[str]:
+    """将 DB 返回的时间字段转为 HH:MM:SS 字符串，兼容 timedelta / datetime / str。"""
+    if val is None:
+        return None
+    if hasattr(val, "total_seconds"):
+        total = int(val.total_seconds())
+        h, rem = divmod(total, 3600)
+        m, s = divmod(rem, 60)
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    s = str(val).strip()
+    if not s:
+        return None
+    parts = s.split(":")
+    if len(parts) >= 3:
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
+    if len(parts) == 2:
+        return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:00"
+    return None
+
+
+def _time_in_range(t_str: str, lo: str, hi: str) -> bool:
+    """判断 HH:MM:SS 格式的时间是否在 [lo, hi] 闭区间内。lo/hi 可以是 HH:MM 会自动补 :00/:59。"""
+    if len(lo) == 5:
+        lo = lo + ":00"
+    if len(hi) == 5:
+        hi = hi + ":59"
+    return lo <= t_str <= hi
+
+
+def _get_last_time(row: dict) -> Optional[str]:
+    """取一行考勤记录中最后一个有效打卡时间（time_10 → time_1 倒序查找）。"""
+    for i in range(10, 0, -1):
+        val = row.get(f"time_{i}")
+        t = _parse_time_str(val)
+        if t:
+            return t
+    return None
+
+
+def _load_non_workday_set(start_date: str, end_date: str) -> set:
+    """
+    返回 start_date ~ end_date 之间所有非工作日的日期字符串集合。
+    非工作日 = 周末（周六日）+ 法定假日（holiday 表 type 含'假'或'休'），
+    但 holiday 表 type 含'班'的调休上班日排除在外（视为工作日）。
+    """
+    from utils.holiday_loader import load_holidays_dict
+    import calendar as _cal
+
+    years = set()
+    try:
+        years.add(int(start_date[:4]))
+        years.add(int(end_date[:4]))
+    except (ValueError, IndexError):
+        pass
+
+    holidays: dict = {}
+    for y in years:
+        holidays.update(load_holidays_dict(str(y)))
+
+    non_work = set()
+    try:
+        from datetime import timedelta
+        cur = datetime.strptime(start_date, "%Y-%m-%d")
+        end = datetime.strptime(end_date, "%Y-%m-%d")
+        while cur <= end:
+            ds = cur.strftime("%Y-%m-%d")
+            is_weekend = cur.weekday() in (5, 6)
+            ht = holidays.get(ds, "")
+            is_holiday_off = ("假" in ht or "休" in ht)
+            is_makeup_work = ("班" in ht)
+            if is_makeup_work:
+                pass
+            elif is_weekend or is_holiday_off:
+                non_work.add(ds)
+            cur += timedelta(days=1)
+    except Exception as e:
+        logger.warning(f"构建非工作日集合失败: {e}")
+    return non_work
+
+
+@router.get("/discipline/clock-in-stats")
+async def get_clock_in_discipline_stats(
+    year: int = Query(...),
+    month: Optional[int] = Query(None),
+    lsys: Optional[str] = Query(None),
+    dimension: str = Query("person", description="聚合维度: person / month / dept"),
+    clock_in_minutes: int = Query(2, description="踩点上班阈值：8:00 前 N 分钟，2-5"),
+    clock_out_minutes: int = Query(2, description="踩点下班阈值：17:00 后 N 分钟，2-5"),
+    exclude_holidays: bool = Query(False, description="是否排除节假日（周末+法定假日）"),
+):
+    """
+    打卡纪律大数据检测。
+    统计 attendance_records 中踩点上班与踩点下班的情况。
+    clock_in_minutes: 8:00前N分钟为踩点上班区间，默认2（即7:58-8:00）
+    clock_out_minutes: 17:00后N分钟为踩点下班区间，默认2（即17:00-17:02）
+    """
+    try:
+        ci_min = max(2, min(5, clock_in_minutes))
+        co_min = max(2, min(5, clock_out_minutes))
+
+        ci_start_hour, ci_start_min = divmod(60 * 8 - ci_min, 60)
+        ci_lo = f"{ci_start_hour:02d}:{ci_start_min:02d}"
+        ci_hi = "08:00"
+        co_lo = "17:00"
+        co_end_hour, co_end_min = divmod(60 * 17 + co_min, 60)
+        co_hi = f"{co_end_hour:02d}:{co_end_min:02d}"
+
+        date_lo = f"{year}-01-01"
+        date_hi = f"{year}-12-31"
+        if month:
+            date_lo = f"{year}-{month:02d}-01"
+            if month == 12:
+                date_hi = f"{year}-12-31"
+            else:
+                date_hi = f"{year}-{month + 1:02d}-01"
+
+        sql = (
+            "SELECT a.employee_name, a.department, a.attendance_date, "
+            "a.time_1, a.time_2, a.time_3, a.time_4, a.time_5, "
+            "a.time_6, a.time_7, a.time_8, a.time_9, a.time_10 "
+            "FROM attendance_records a "
+            "WHERE a.attendance_date >= %s AND a.attendance_date < %s "
+        )
+        params: list = [date_lo, date_hi]
+        if lsys:
+            sql += "AND a.department = %s "
+            params.append(lsys)
+        sql += "ORDER BY a.attendance_date, a.employee_name"
+
+        rows = db.execute_query(sql, tuple(params))
+
+        valid_names_rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
+            "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+            "AND TRIM(lsys) != %s AND TRIM(lsys) != '其他部门员工' AND (COALESCE(zaizhi,0)=0)",
+            (LEADER_EXCLUDE_LSYS,),
+        )
+        valid_names = {r["name"].strip() for r in valid_names_rows if r.get("name")}
+        name_dept_map = {}
+        for r in valid_names_rows:
+            n = (r.get("name") or "").strip()
+            if n:
+                name_dept_map[n] = (r.get("lsys") or "").strip()
+
+        non_workdays = _load_non_workday_set(date_lo, date_hi) if exclude_holidays else set()
+
+        clock_in_data = []
+        clock_out_data = []
+
+        for row in rows or []:
+            name = (row.get("employee_name") or "").strip()
+            if not name or name not in valid_names:
+                continue
+            dept = name_dept_map.get(name, (row.get("department") or "").strip())
+            date_str = str(row.get("attendance_date") or "")[:10]
+            if date_str in non_workdays:
+                continue
+            month_key = date_str[:7]
+
+            first_time = _parse_time_str(row.get("time_1"))
+            last_time = _get_last_time(row)
+
+            if first_time and _time_in_range(first_time, ci_lo, ci_hi):
+                clock_in_data.append({"name": name, "dept": dept, "date": date_str, "month": month_key, "time": first_time})
+
+            if last_time and _time_in_range(last_time, co_lo, co_hi):
+                clock_out_data.append({"name": name, "dept": dept, "date": date_str, "month": month_key, "time": last_time})
+
+        def _aggregate(data_list, dim):
+            agg = defaultdict(lambda: {"count": 0, "dates": []})
+            for item in data_list:
+                if dim == "person":
+                    key = item["name"]
+                elif dim == "month":
+                    key = item["month"]
+                else:
+                    key = item["dept"]
+                agg[key]["count"] += 1
+                if len(agg[key]["dates"]) < 50:
+                    agg[key]["dates"].append({"date": item["date"], "name": item["name"], "time": item["time"]})
+            result = []
+            for k, v in agg.items():
+                entry = {"key": k, "count": v["count"], "dates": v["dates"]}
+                if dim == "person":
+                    entry["dept"] = name_dept_map.get(k, "")
+                result.append(entry)
+            result.sort(key=lambda x: -x["count"])
+            return result
+
+        return {
+            "success": True,
+            "clockIn": _aggregate(clock_in_data, dimension),
+            "clockOut": _aggregate(clock_out_data, dimension),
+            "clockInTotal": len(clock_in_data),
+            "clockOutTotal": len(clock_out_data),
+            "clockInRange": f"{ci_lo}-{ci_hi}",
+            "clockOutRange": f"{co_lo}-{co_hi}",
+        }
+    except Exception as e:
+        logger.error(f"打卡纪律统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/discipline/person-scatter")
+async def get_person_scatter(
+    name: str = Query(..., description="员工姓名"),
+    start_date: str = Query(..., description="起始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    exclude_holidays: bool = Query(False, description="是否排除节假日"),
+):
+    """
+    获取某员工在日期区间内的逐日上班/下班打卡时间，用于散点图展示。
+    返回 { success, name, data: [{ date, clockIn, clockOut }] }
+    clockIn / clockOut 为小时浮点数（如 7.97 = 7:58:12），null 表示当天无记录。
+    """
+    try:
+        sql = (
+            "SELECT attendance_date, "
+            "time_1, time_2, time_3, time_4, time_5, "
+            "time_6, time_7, time_8, time_9, time_10 "
+            "FROM attendance_records "
+            "WHERE employee_name = %s AND attendance_date >= %s AND attendance_date <= %s "
+            "ORDER BY attendance_date"
+        )
+        rows = db.execute_query(sql, (name, start_date, end_date))
+        non_workdays = _load_non_workday_set(start_date, end_date) if exclude_holidays else set()
+
+        def _to_hours(val):
+            t = _parse_time_str(val)
+            if not t:
+                return None
+            parts = t.split(":")
+            h = int(parts[0])
+            m = int(parts[1])
+            s = int(parts[2]) if len(parts) > 2 else 0
+            return round(h + m / 60 + s / 3600, 4)
+
+        data = []
+        for row in rows or []:
+            d = str(row.get("attendance_date") or "")[:10]
+            if len(d) < 10:
+                continue
+            if d in non_workdays:
+                continue
+            ci = _to_hours(row.get("time_1"))
+            last_raw = None
+            for i in range(10, 0, -1):
+                v = row.get(f"time_{i}")
+                if v is not None and _parse_time_str(v):
+                    last_raw = v
+                    break
+            co = _to_hours(last_raw)
+            if ci is None and co is None:
+                continue
+            data.append({"date": d, "clockIn": ci, "clockOut": co})
+
+        return {"success": True, "name": name, "data": data}
+    except Exception as e:
+        logger.error(f"个人散点图数据查询失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

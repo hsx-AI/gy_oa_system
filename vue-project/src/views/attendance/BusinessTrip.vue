@@ -220,8 +220,16 @@
 
           <div class="form-row">
             <div class="form-group half" v-if="!isCityTrip">
-              <label>通知单编号 <span class="label-optional">（选填）</span></label>
-              <input id="bt-noticeNo" type="text" v-model="form.noticeNo" name="noticeNo" autocomplete="on" placeholder="选填">
+              <label>通知单编号 <span class="label-required">*</span></label>
+              <input
+                id="bt-noticeNo"
+                type="text"
+                v-model="form.noticeNo"
+                name="noticeNo"
+                autocomplete="on"
+                placeholder="境内/境外公出必填"
+                required
+              >
             </div>
             <div class="form-group half" :class="{ full: isCityTrip }">
               <label>填报单位</label>
@@ -1095,6 +1103,7 @@ const submitApplication = async () => {
   }
   const tips = []
   if (!(form.location || '').trim()) tips.push('公出地点')
+  if (!isCityTrip.value && !(form.noticeNo || '').trim()) tips.push('通知单编号')
   if (!(form.task || '').trim()) tips.push('公出任务')
   if (!(form.phone || '').trim()) tips.push('联系电话')
   if (!(form.startTime || '').trim()) tips.push('出发时间')

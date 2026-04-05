@@ -862,6 +862,7 @@ async def get_departments():
     rows = db.execute_query(
         "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
         "AND RIGHT(TRIM(lsys),1) != '1' AND TRIM(lsys) != '部办' "
+        "AND TRIM(lsys) != '其他部门员工' "
         "AND COALESCE(zaizhi,0) = 0 ORDER BY lsys"
     )
     depts = [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]

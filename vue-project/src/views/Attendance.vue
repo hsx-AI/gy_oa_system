@@ -45,6 +45,15 @@
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
             <h3 class="section-title">智能建议 ({{ suggestions.length }})</h3>
+            <span v-if="isFullAttendance != null" class="fa-badge" :class="isFullAttendance ? 'fa-badge-yes' : 'fa-badge-no'" :title="isFullAttendance ? '本月满勤' : '本月未满勤'">
+              <svg v-if="isFullAttendance" class="fa-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+                <path d="M20 6L9 17l-5-5"/>
+              </svg>
+              <svg v-else class="fa-badge-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="3" width="18" height="18" rx="2"/>
+              </svg>
+              {{ isFullAttendance ? '满勤' : '未满勤' }}
+            </span>
           </div>
           <span class="suggestions-hint text-tertiary text-sm">基于当前数据分析</span>
         </div>
@@ -282,8 +291,16 @@
 
           <div class="form-row">
             <div class="form-group half" v-if="!btIsCityTrip">
-              <label>通知单编号 <span class="label-optional">（选填）</span></label>
-              <input id="bt-noticeNo" type="text" v-model="btForm.noticeNo" name="noticeNo" autocomplete="on" placeholder="选填">
+              <label>通知单编号 <span class="label-required">*</span></label>
+              <input
+                id="bt-noticeNo"
+                type="text"
+                v-model="btForm.noticeNo"
+                name="noticeNo"
+                autocomplete="on"
+                placeholder="境内/境外公出必填"
+                required
+              >
             </div>
             <div class="form-group half" :class="{ full: btIsCityTrip }">
               <label>填报单位</label>
@@ -391,7 +408,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers } from '@/api/attendance'
+import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers, getPersonFullAttendance } from '@/api/attendance'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
@@ -433,6 +450,12 @@ const btForm = reactive({
 const btDeptLeaders = ref([])
 const btRoomDirectors = ref([])
 const btLoadingApprovers = ref(false)
+
+watch(btTripScope, (scope) => {
+  if (scope === '市内公出') {
+    btForm.noticeNo = ''
+  }
+})
 const isBuban = computed(() => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const dept = (userInfo.dept || userInfo.department || '').trim()
@@ -564,11 +587,19 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   businessTripModalVisible.value = true
 }
 
+const toBtDateTime = (s) => {
+  if (!s) return ''
+  const t = String(s).replace('T', ' ').trim()
+  if (t.length === 10 && /^\d{4}-\d{2}-\d{2}$/.test(t)) return `${t} 00:00:00`
+  return t.length <= 16 ? `${t}:00` : t.slice(0, 19)
+}
+
 // 公出申请弹窗提交
 const handleBusinessTripSubmit = async () => {
   const tips = []
   if (btIsCityTrip.value) btForm.location = '市内'
   if (!(btForm.location || '').trim()) tips.push('公出地点')
+  if (!btIsCityTrip.value && !(btForm.noticeNo || '').trim()) tips.push('通知单编号')
   if (!(btForm.task || '').trim()) tips.push('公出任务')
   if (!(btForm.phone || '').trim()) tips.push('联系电话')
   if (!(btForm.startTime || '').trim()) tips.push('出发时间')
@@ -587,17 +618,17 @@ const handleBusinessTripSubmit = async () => {
     const payload = {
       tripScope: btTripScope.value,
       targetUnit: btIsCityTrip.value ? '' : btForm.targetUnit,
-      assignTime: '',
-      noticeNo: '',
+      assignTime: btIsCityTrip.value ? '' : toBtDateTime(btForm.assignTime),
+      noticeNo: btIsCityTrip.value ? '' : (btForm.noticeNo || ''),
       department: btForm.department,
       name: btForm.name,
       totalPeople: Number(btForm.totalPeople) || 1,
-      workNo: '',
-      projectName: '',
+      workNo: btIsCityTrip.value ? '' : (btForm.workNo || ''),
+      projectName: btIsCityTrip.value ? '' : (btForm.projectName || ''),
       location: btForm.location,
-      startTime,
-      endTime,
-      amount: 0,
+      startTime: toBtDateTime(startTime),
+      endTime: toBtDateTime(endTime),
+      amount: btIsCityTrip.value ? 0 : (Number(btForm.amount) || 0),
       phone: btForm.phone,
       task: btForm.task,
       deptLeader: btForm.deptLeader,
@@ -653,6 +684,20 @@ const initMonthWithLatestData = async () => {
   } catch {
     initCurrentMonth()
   }
+}
+
+// 当月是否满勤
+const isFullAttendance = ref(null) // null=未查询, true=满勤, false=不满勤
+
+const loadFullAttendance = async () => {
+  try {
+    const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    if (!userInfo.name) { isFullAttendance.value = null; return }
+    const [year, month] = selectedMonth.value.split('-')
+    if (!year || !month) { isFullAttendance.value = null; return }
+    const res = await getPersonFullAttendance({ name: userInfo.name, year: parseInt(year, 10), month: parseInt(month, 10) })
+    isFullAttendance.value = res?.success ? !!res.isFull : null
+  } catch { isFullAttendance.value = null }
 }
 
 // 智能建议
@@ -766,6 +811,7 @@ const handleMonthChange = () => {
   console.log('选择的月份:', selectedMonth.value)
   loadSuggestions()
   loadAttendanceRecords()
+  loadFullAttendance()
 }
 
 // 监听月份变化，确保切换月份或打开界面时都会重新拉取智能建议（含“是否已处理”校验）
@@ -773,6 +819,7 @@ watch(selectedMonth, () => {
   if (selectedMonth.value && selectedMonth.value.includes('-')) {
     loadSuggestions()
     loadAttendanceRecords()
+    loadFullAttendance()
   }
 }, { immediate: false })
 </script>
@@ -1048,6 +1095,33 @@ watch(selectedMonth, () => {
   display: flex;
   justify-content: space-between;
   align-items: center;
+}
+
+.fa-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 12px;
+  padding: 2px 10px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.6;
+  white-space: nowrap;
+  user-select: none;
+}
+.fa-badge-icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.fa-badge-yes {
+  background: #d1fae5;
+  color: #059669;
+}
+.fa-badge-no {
+  background: #fee2e2;
+  color: #dc2626;
 }
 
 .icon-md {

@@ -157,6 +157,8 @@ async def apply_business_trip(req: BusinessTripApplyRequest):
         gclx = (req.tripScope or "").strip() or "境内公出"
         if gclx not in ("市内公出", "境内公出", "境外公出"):
             gclx = "境内公出"
+        if gclx in ("境内公出", "境外公出") and not (req.noticeNo or "").strip():
+            raise HTTPException(status_code=400, detail="境内公出、境外公出须填写通知单编号")
 
         # 部办用户无室主任，szrzt 直接设为 2（已通过），仅需部领导审批
         is_buban = False
@@ -911,6 +913,8 @@ async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
         gclx = (req.tripScope or "").strip() or "境内公出"
         if gclx not in ("市内公出", "境内公出", "境外公出"):
             gclx = "境内公出"
+        if gclx in ("境内公出", "境外公出") and not (req.noticeNo or "").strip():
+            raise HTTPException(status_code=400, detail="境内公出、境外公出须填写通知单编号")
 
         is_buban = False
         dept_str = (req.department or "").strip()

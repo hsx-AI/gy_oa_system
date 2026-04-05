@@ -38,7 +38,7 @@
             </svg>
             <span>公出管理</span>
           </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser && !canSeeLeaderDashboard" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="20" x2="18" y2="10" />
               <line x1="12" y1="20" x2="12" y2="4" />

@@ -19,6 +19,10 @@
           <option value="">全部分类</option>
           <option v-for="c in categories" :key="c" :value="c">{{ c }}</option>
         </select>
+        <select v-model="filterDepartment" class="search-select">
+          <option value="">全部专业</option>
+          <option v-for="d in departments" :key="d" :value="d">{{ d }}</option>
+        </select>
         <input
           v-model="searchKeyword"
           type="text"
@@ -171,7 +175,7 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getTechProblemList, getTechProblemDetail, deleteTechProblem, getTechProblemCategories, getTechProblemImageUrl } from '@/api/techProblem'
+import { getTechProblemList, getTechProblemDetail, deleteTechProblem, getTechProblemCategories, getTechProblemDepartments, getTechProblemImageUrl } from '@/api/techProblem'
 
 const router = useRouter()
 
@@ -183,6 +187,8 @@ const loading = ref(false)
 const searchKeyword = ref('')
 const filterCategory = ref('')
 const categories = ref([])
+const filterDepartment = ref('')
+const departments = ref([])
 
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
 
@@ -204,6 +210,7 @@ async function loadList() {
     const params = { page: page.value, page_size: pageSize.value }
     if (searchKeyword.value.trim()) params.keyword = searchKeyword.value.trim()
     if (filterCategory.value) params.category = filterCategory.value
+    if (filterDepartment.value) params.department = filterDepartment.value
     const res = await getTechProblemList(params)
     list.value = res.list || []
     total.value = res.total ?? 0
@@ -222,6 +229,13 @@ async function loadCategories() {
   } catch { /* ignore */ }
 }
 
+async function loadDepartments() {
+  try {
+    const res = await getTechProblemDepartments()
+    departments.value = res.departments || []
+  } catch { /* ignore */ }
+}
+
 function doSearch() {
   page.value = 1
   loadList()
@@ -230,6 +244,7 @@ function doSearch() {
 function resetSearch() {
   searchKeyword.value = ''
   filterCategory.value = ''
+  filterDepartment.value = ''
   page.value = 1
   loadList()
 }
@@ -272,6 +287,7 @@ async function doDelete(row) {
 onMounted(() => {
   loadList()
   loadCategories()
+  loadDepartments()
 })
 </script>
 

@@ -143,6 +143,67 @@
         </div>
       </div>
 
+      <!-- 满勤统计卡片 -->
+      <div v-if="fullAttendance && fullAttendance.totalPeople != null" class="full-attendance-section card">
+        <h2 class="section-title">
+          <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M22 11.08V12a10 10 0 11-5.93-9.14"/>
+            <polyline points="22 4 12 14.01 9 11.01"/>
+          </svg>
+          满勤统计
+          <span class="section-sub">{{ queryParams.year }}年{{ queryParams.month ? queryParams.month + '月' : '全年' }}</span>
+        </h2>
+        <div class="fa-summary-wrap" tabindex="0" @click="e => e.currentTarget.focus()">
+          <div class="full-attendance-summary">
+            <div v-if="fullAttendance.workdays != null" class="fa-item">
+              <span class="fa-label">应出勤工作日</span>
+              <span class="fa-value">{{ fullAttendance.workdays }} <span class="fa-unit">天</span></span>
+            </div>
+            <div class="fa-item">
+              <span class="fa-label">全员满勤率</span>
+              <span class="fa-value">{{ ((fullAttendance.rate ?? 0) * 100).toFixed(1) }}<span class="fa-unit">%</span></span>
+            </div>
+            <div class="fa-item">
+              <span class="fa-label">满勤人数</span>
+              <span class="fa-value">{{ fullAttendance.fullCount ?? 0 }} <span class="fa-unit">/ {{ fullAttendance.totalPeople ?? 0 }} 人</span></span>
+            </div>
+          </div>
+          <div class="fa-summary-tooltip" role="tooltip">
+            <div class="fa-tooltip-title">满勤 {{ fullAttendanceSummaryNames.length }} 人</div>
+            <ul v-if="fullAttendanceSummaryNames.length" class="fa-tooltip-names">
+              <li v-for="nm in fullAttendanceSummaryNames" :key="nm">{{ nm }}</li>
+            </ul>
+            <p v-else class="fa-tooltip-empty">暂无满勤人员</p>
+          </div>
+        </div>
+        <div v-if="fullAttendance.byDept && fullAttendance.byDept.length" class="fa-dept-list">
+          <div class="fa-dept-title">各科室满勤率（悬停或聚焦卡片查看满勤名单）</div>
+          <div class="fa-dept-grid">
+            <div
+              v-for="d in fullAttendanceDeptsSorted"
+              :key="d.lsys"
+              class="fa-dept-card-wrap"
+              tabindex="0"
+              @click="e => e.currentTarget.focus()"
+            >
+              <div class="fa-dept-card">
+                <span class="fa-dept-name">{{ d.lsys }}</span>
+                <span class="fa-dept-rate">{{ (d.rate * 100).toFixed(1) }}%</span>
+                <span class="fa-dept-meta">{{ d.fullCount }}/{{ d.totalPeople }} 人</span>
+              </div>
+              <div class="fa-dept-tooltip" role="tooltip">
+                <div class="fa-tooltip-title">{{ d.lsys }} · 满勤 {{ d.fullCount }} 人</div>
+                <ul v-if="deptFullAttendanceNames(d).length" class="fa-tooltip-names">
+                  <li v-for="nm in deptFullAttendanceNames(d)" :key="nm">{{ nm }}</li>
+                </ul>
+                <p v-else-if="d.fullCount > 0" class="fa-tooltip-empty">满勤名单未加载，请重新查询</p>
+                <p v-else class="fa-tooltip-empty">本科室暂无满勤人员</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- 月度趋势图表：与领导人看板科室横向对比同形式，按类型筛选展示 -->
       <div v-if="monthlyData.length > 0" class="chart-section card">
         <h2 class="section-title">
@@ -430,7 +491,7 @@
 
 <script setup>
 import { ref, computed, onMounted } from 'vue'
-import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats } from '@/api/attendance'
+import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear } from '@/api/attendance'
 
 // 权限：1=仅自己 2=科室下拉 3=全部输入
 const permLevel = ref(1)
@@ -454,6 +515,8 @@ const businessTripRecords = ref([])
 const selectedOvertimeMonth = ref('')
 const selectedLeaveMonth = ref('')
 const selectedBusinessTripMonth = ref('')
+// 满勤统计
+const fullAttendance = ref(null)
 // 科室成员横向对比（班组长/主任/副主任可见）：按人合并加班/请假/公出
 const deptMemberLeave = ref([])
 const deptMemberOvertime = ref([])
@@ -712,6 +775,31 @@ onMounted(() => {
   loadPermission()
 })
 
+// 满勤统计：按满勤率降序排列
+const fullAttendanceDeptsSorted = computed(() => {
+  const list = fullAttendance.value?.byDept || []
+  if (!list.length) return []
+  return [...list].sort((a, b) => (b.rate || 0) - (a.rate || 0))
+})
+
+/** 汇总行满勤名单：优先接口 fullNames，否则从各科室合并（兼容旧接口） */
+const fullAttendanceSummaryNames = computed(() => {
+  const fa = fullAttendance.value
+  if (!fa) return []
+  if (Array.isArray(fa.fullNames) && fa.fullNames.length) return fa.fullNames
+  const set = new Set()
+  for (const d of fa.byDept || []) {
+    for (const n of d.fullNames || []) {
+      if (n) set.add(n)
+    }
+  }
+  return Array.from(set).sort()
+})
+
+function deptFullAttendanceNames(d) {
+  return Array.isArray(d?.fullNames) ? d.fullNames : []
+}
+
 // 是否当前为「全员」汇总（2级且未选具体员工）
 const isAllStaffQuery = computed(() => permLevel.value === 2 && !(queryParams.value.name || '').trim())
 
@@ -784,6 +872,18 @@ const fetchData = async () => {
       deptMemberOvertime.value = []
       deptMemberNetOvertime.value = []
       deptMemberTrip.value = []
+    }
+
+    // 满勤统计：2级传科室，3级不传(全员)，1级传科室(如有)
+    try {
+      const faParams = { year }
+      if (permLevel.value <= 2 && permLsys.value) faParams.lsys = permLsys.value
+      const faRes = month
+        ? await getLeaderFullAttendance({ ...faParams, month })
+        : await getLeaderFullAttendanceYear(faParams)
+      fullAttendance.value = faRes?.success ? faRes : null
+    } catch (e) {
+      fullAttendance.value = null
     }
     selectedOvertimeMonth.value = month || ''
     selectedLeaveMonth.value = month || ''
@@ -1036,6 +1136,210 @@ const fetchData = async () => {
 .summary-net {
   font-size: 0.8rem;
   opacity: 0.7;
+}
+
+/* 满勤统计 */
+.full-attendance-section {
+  padding: var(--spacing-xl);
+  margin-bottom: var(--spacing-xl);
+  overflow: visible;
+}
+
+.full-attendance-section .section-title {
+  margin-bottom: var(--spacing-lg);
+}
+
+.section-sub {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  font-weight: normal;
+}
+
+.fa-summary-wrap {
+  position: relative;
+  z-index: 1;
+  outline: none;
+  margin-bottom: var(--spacing-lg);
+  border-radius: var(--radius-base);
+  transition: background 0.15s;
+}
+
+.fa-summary-wrap:hover,
+.fa-summary-wrap:focus-within {
+  z-index: 25;
+  background: var(--color-bg-spotlight);
+}
+
+.full-attendance-summary {
+  display: flex;
+  gap: var(--spacing-xxl);
+  flex-wrap: wrap;
+}
+
+.fa-summary-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  min-width: min(280px, 90vw);
+  max-width: min(360px, 92vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--spacing-md);
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-card);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.fa-summary-wrap:hover .fa-summary-tooltip,
+.fa-summary-wrap:focus-within .fa-summary-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.fa-tooltip-title {
+  font-weight: var(--font-weight-semibold);
+  margin-bottom: var(--spacing-sm);
+  padding-bottom: var(--spacing-xs);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+
+.fa-tooltip-names {
+  margin: 0;
+  padding-left: 1.1em;
+  list-style: disc;
+}
+
+.fa-tooltip-names li {
+  margin-bottom: 2px;
+}
+
+.fa-tooltip-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.fa-item {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+}
+
+.fa-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.fa-value {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-primary);
+}
+
+.fa-unit {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.fa-dept-list {
+  padding-top: var(--spacing-lg);
+  border-top: 1px solid var(--color-border-lighter);
+  overflow: visible;
+}
+
+.fa-dept-title {
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+  margin-bottom: var(--spacing-md);
+}
+
+.fa-dept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
+  gap: var(--spacing-md);
+  overflow: visible;
+}
+
+.fa-dept-card-wrap {
+  position: relative;
+  z-index: 1;
+  outline: none;
+}
+
+.fa-dept-card-wrap:hover,
+.fa-dept-card-wrap:focus-within {
+  z-index: 30;
+}
+
+.fa-dept-card {
+  padding: var(--spacing-md);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-base);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-xs);
+  cursor: default;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.fa-dept-card-wrap:hover .fa-dept-card,
+.fa-dept-card-wrap:focus-within .fa-dept-card {
+  border-color: var(--color-primary);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+}
+
+.fa-dept-tooltip {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  bottom: calc(100% + 10px);
+  min-width: min(280px, 90vw);
+  max-width: min(320px, 92vw);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: var(--spacing-md);
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-card);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.fa-dept-card-wrap:hover .fa-dept-tooltip,
+.fa-dept-card-wrap:focus-within .fa-dept-tooltip {
+  opacity: 1;
+  visibility: visible;
+  pointer-events: auto;
+}
+
+.fa-dept-name {
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-primary);
+}
+
+.fa-dept-rate {
+  font-size: var(--font-size-lg);
+  color: var(--color-primary);
+}
+
+.fa-dept-meta {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
 }
 
 /* 图表区域 */

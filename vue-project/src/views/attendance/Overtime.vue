@@ -189,7 +189,10 @@
               获得换休票：{{ overtimeExchangeTickets }} 张（1天=8小时=2张，以0.25为单位，不足0.25张舍弃）
             </p>
             <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
-              <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8">
+              <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8 && overtimePayBillableHours > 8">
+                本次其他绩效激励：{{ specialHolidayName }}固定奖励{{ SPECIAL_DAY_PAY }}元 + 超出部分{{ overtimePayBillableHours - 8 }}×{{ zhibanfei }}={{ overtimePay }} 元
+              </template>
+              <template v-else-if="isSpecialHoliday && overtimePayBillableHours >= 8">
                 本次其他绩效激励：{{ specialHolidayName }}严格按照上下班打卡满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
               </template>
               <template v-else-if="isSpecialHoliday">
@@ -514,7 +517,8 @@ const overtimePayBillableHours = computed(() => {
 const overtimePay = computed(() => {
   if (form.needExchangeTicket !== '否') return '0.00'
   if (isSpecialHoliday.value && overtimePayBillableHours.value >= 8) {
-    return SPECIAL_DAY_PAY.toFixed(2)
+    const extraHours = overtimePayBillableHours.value - 8
+    return (SPECIAL_DAY_PAY + extraHours * zhibanfei.value).toFixed(2)
   }
   return (overtimePayBillableHours.value * zhibanfei.value).toFixed(2)
 })

@@ -108,14 +108,19 @@ async def list_problems(
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
+    department: Optional[str] = Query(None),
 ):
-    """问题列表，支持分类筛选和关键词模糊搜索"""
+    """问题列表，支持分类 / 专业筛选和关键词模糊搜索"""
     where_parts = []
     params = []
 
     if category:
         where_parts.append("category = %s")
         params.append(category)
+
+    if department:
+        where_parts.append("department = %s")
+        params.append(department)
 
     if keyword:
         kw = f"%{keyword}%"
@@ -315,6 +320,7 @@ async def get_departments():
     rows = db.execute_query(
         "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
         "WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
+        "AND TRIM(lsys) != '其他部门员工' "
         "AND COALESCE(zaizhi, 0) = 0 "
         "ORDER BY lsys"
     )
