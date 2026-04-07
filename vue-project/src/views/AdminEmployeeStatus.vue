@@ -204,10 +204,20 @@
                   <option value="">请选择</option>
                   <option value="员工">员工</option>
                   <option value="组长">组长</option>
+                  <option value="班组长">班组长</option>
                   <option value="主任">主任</option>
                   <option value="副主任">副主任</option>
                   <option value="副部长">副部长</option>
                   <option value="部长">部长</option>
+                  <option value="经理">经理</option>
+                  <option value="副经理">副经理</option>
+                  <option value="经理助理">经理助理</option>
+                  <option value="返聘">返聘</option>
+                  <option value="副总专业师">副总专业师</option>
+                  <option value="总专业师">总专业师</option>
+                  <option value="责任师">责任师</option>
+                  <option value="主任责">主任责</option>
+                  <option value="专员">专员</option>
                 </select>
               </div>
             </div>
@@ -279,7 +289,7 @@ const page = ref(1)
 const pageSize = 50
 
 /** 级别下拉选项（与添丁弹窗一致） */
-const jbOptions = ['员工', '组长', '主任', '副部长', '部长']
+const jbOptions = ['员工', '组长', '班组长', '主任', '副主任', '副部长', '部长', '经理', '副经理', '经理助理', '返聘', '副总专业师', '总专业师', '责任师', '主任责', '专员']
 const updateDeptLevelLoading = ref('') // 正在保存的员工 name
 
 function getCurrentUser() {

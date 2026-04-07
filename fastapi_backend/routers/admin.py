@@ -45,9 +45,9 @@ def _get_admin2() -> Optional[str]:
 
 
 def _jb_is_minister_or_deputy(jb: str) -> bool:
-    """yggl.jb 是否为部长/副部长（含 部长1 等变体）。"""
-    j = (jb or "").strip()
-    return j == "部长" or j.startswith("部长") or j == "副部长" or j.startswith("副部长")
+    """yggl.jb 是否为部长/副部长权限（含新职务名称映射）。"""
+    from routers.approvers import _jb_match
+    return _jb_match(jb, "部长") or _jb_match(jb, "副部长")
 
 
 def _can_manage_hxp_batch(name: str) -> bool:
@@ -92,10 +92,10 @@ def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
         return None
     jb = (rows[0].get("jb") or "").strip()
     lsys = (rows[0].get("lsys") or "").strip()
-    if jb == "部长" or jb.startswith("部长") or jb == "副部长" or jb.startswith("副部长"):
+    if _jb_is_minister_or_deputy(jb):
         return {"role": "full", "lsys": None}
-    # 主任与副主任权限一致：仅可管本室
-    if jb == "主任" or (jb and jb.startswith("主任")):
+    from routers.approvers import _jb_match
+    if _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
         return {"role": "dept", "lsys": lsys}
     if jb == "副主任" or (jb and ("副主任" in jb or jb.startswith("副主任"))):
         return {"role": "dept", "lsys": lsys}

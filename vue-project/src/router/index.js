@@ -8,6 +8,7 @@ import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -299,11 +300,8 @@ router.beforeEach(async (to, _from, next) => {
       const res = await getUploadConfig()
       const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
       const allowedByAdmin1 = admin1 && name === admin1
-      const allowedByJb = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-      const allowedByZhjsDirector = lsys === '综合技术室' && (
-        jb === '主任' || (jb && jb.startsWith('主任')) ||
-        jb === '副主任' || (jb && jb.includes('副主任'))
-      )
+      const allowedByJb = isMinisterLevel(jb)
+      const allowedByZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
       if (allowedByAdmin1 || allowedByJb || allowedByZhjsDirector) next()
       else next('/')
     } catch {
@@ -348,10 +346,8 @@ router.beforeEach(async (to, _from, next) => {
       const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
       const isDakaman = dakaman && name === dakaman
       const isAdmin1 = admin1 && name === admin1
-      const isMinister = jb === '部长' || (jb && jb.startsWith('部长')) || jb === '副部长' || (jb && jb.startsWith('副部长'))
-      const isDeptLeader = jb === '组长' || (jb && jb.startsWith('组长')) ||
-        jb === '主任' || (jb && jb.startsWith('主任')) ||
-        jb === '副主任' || (jb && jb.includes('副主任'))
+      const isMinister = isMinisterLevel(jb)
+      const isDeptLeader = isMinisterOrDeptLeader(jb) && !isMinister
       if (isAdmin1 || isDakaman || isMinister || isDeptLeader) {
         next()
       } else {
@@ -378,9 +374,7 @@ router.beforeEach(async (to, _from, next) => {
         next()
         return
       }
-      const isLeaderOrDept = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
-        jb === '主任' || (jb && jb.startsWith('主任')) ||
-        jb === '副主任' || (jb && jb.includes('副主任'))
+      const isLeaderOrDept = isMinisterOrDeptLeader(jb)
       if (isLeaderOrDept) {
         next()
         return
@@ -404,10 +398,10 @@ router.beforeEach(async (to, _from, next) => {
       const name = (user.name || user.userName || '').trim()
       if (!name) { next('/'); return }
       const jb = (user.jb || '').trim()
-      const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      const minister = isMinisterLevel(jb)
       const res = await getUploadConfig()
       const a2 = (res?.admin2 || '').trim()
-      if (isMinister || (a2 && name === a2)) {
+      if (minister || (a2 && name === a2)) {
         next()
       } else {
         next('/')
@@ -423,11 +417,11 @@ router.beforeEach(async (to, _from, next) => {
       const name = (user.name || user.userName || '').trim()
       if (!name) { next('/'); return }
       const jb = (user.jb || '').trim()
-      const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+      const minister = isMinisterLevel(jb)
       const res = await getUploadConfig()
       const a1 = (res?.admin1 || '').trim()
       const a2 = (res?.admin2 || '').trim()
-      if ((a1 && name === a1) || (a2 && name === a2) || isMinister) {
+      if ((a1 && name === a1) || (a2 && name === a2) || minister) {
         next()
       } else {
         next('/')

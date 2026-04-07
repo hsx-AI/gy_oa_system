@@ -472,6 +472,7 @@ import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import DateTimePicker from '@/components/DateTimePicker.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
+import { isDeptLeader } from '@/utils/roleMatch'
 
 const router = useRouter()
 const route = useRoute()
@@ -959,9 +960,8 @@ onMounted(async () => {
     } catch (_) {
       canApprove.value = false
     }
-    // 班组长/主任/副主任检查延长权限
     const jb = (userInfo.jb || '').trim()
-    canExtend.value = ['组长', '主任', '副主任'].some(kw => jb.includes(kw)) || canApprove.value
+    canExtend.value = isDeptLeader(jb) || canApprove.value
   }
   await refreshTripListMeta()
 

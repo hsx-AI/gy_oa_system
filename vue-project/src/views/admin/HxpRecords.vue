@@ -179,6 +179,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getHolidayExchangeList, getDeptLsysList, getUploadConfig, getHolidayExchangeDownloadUrl } from '@/api/attendance'
+import { isMinisterLevel } from '@/utils/roleMatch'
 
 const route = useRoute()
 const now = new Date()
@@ -192,10 +193,7 @@ const userName = ref(userInfo.name || userInfo.userName || '')
 const userJb = ref((userInfo.jb || '').trim())
 const canAccess = ref(false)
 
-const isMinister = computed(() => {
-  const jb = userJb.value
-  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-})
+const isMinister = computed(() => isMinisterLevel(userJb.value))
 
 const canViewAll = computed(() => isMinister.value)
 

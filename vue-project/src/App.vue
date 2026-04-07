@@ -364,6 +364,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
 const route = useRoute()
 const router = useRouter()
@@ -419,9 +420,7 @@ const canShowEmployeeAdmin = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   const a1 = (admin1.value || '').trim()
   if (a1 && name === a1) return true
-  const isLeaderOrDept = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
-    jb === '主任' || (jb && jb.startsWith('主任')) ||
-    jb === '副主任' || (jb && jb.includes('副主任'))
+  const isLeaderOrDept = isMinisterOrDeptLeader(jb)
   const isAdmin2 = (admin2.value || '').trim() && name === (admin2.value || '').trim()
   return isLeaderOrDept || isAdmin2
 })
@@ -432,7 +431,7 @@ const canManageHxp = computed(() => {
   const a2 = (admin2.value || '').trim()
   if ((a1 && name === a1) || (a2 && name === a2)) return true
   const jb = (currentUser.value?.jb || '').trim()
-  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
+  return isMinisterLevel(jb)
 })
 
 // 是否显示领导人看板（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）
@@ -442,12 +441,9 @@ const canSeeLeaderDashboard = computed(() => {
   if (a1 && name === a1) return true
   const jb = (currentUser.value?.jb || '').trim()
   const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
-  const isMinister = jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-  const isZhjsDirector = lsys === '综合技术室' && (
-    jb === '主任' || (jb && jb.startsWith('主任')) ||
-    jb === '副主任' || (jb && jb.includes('副主任'))
-  )
-  return isMinister || isZhjsDirector
+  const minister = isMinisterLevel(jb)
+  const isZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
+  return minister || isZhjsDirector
 })
 
 // 其他绩效激励统计：全员可访问，页面内按权限显示本人/本室/全部门
@@ -471,11 +467,7 @@ const canShowAttendanceExceptions = computed(() => {
   const d = (dakaman.value || '').trim()
   if (a1 && name === a1) return true
   if (d && name === d) return true
-  const isMinister = jb === '部长' || (jb && jb.startsWith('部长')) || jb === '副部长' || (jb && jb.startsWith('副部长'))
-  if (isMinister) return true
-  return jb === '组长' || (jb && jb.startsWith('组长')) ||
-    jb === '主任' || (jb && jb.startsWith('主任')) ||
-    jb === '副主任' || (jb && jb.includes('副主任'))
+  return isMinisterOrDeptLeader(jb)
 })
 
 // "其他部门成员"：仅可使用文件编号功能，隐藏其余所有侧边栏入口

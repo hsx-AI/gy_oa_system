@@ -196,6 +196,7 @@ import { getLeaderBriefing } from '@/api/admin'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
 const router = useRouter()
 
 const {
@@ -313,18 +314,16 @@ function canShowFeature(permission) {
     case 'holidaySettings':
       return isAdmin1 || (!!d && name === d)
     case 'leaderDashboard':
-      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
-        (lsys === '综合技术室' && (jb === '主任' || (jb && jb.startsWith('主任')) || jb === '副主任' || (jb && jb.includes('副主任'))))
+      return isAdmin1 || isMinisterLevel(jb) ||
+        (lsys === '综合技术室' && isDirectorLevel(jb))
     case 'overtimePay':
       return true
     case 'exceptions':
-      return isAdmin1 || (!!d && name === d) ||
-        jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') ||
-        jb === '组长' || jb.startsWith('组长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任')
+      return isAdmin1 || (!!d && name === d) || isMinisterOrDeptLeader(jb)
     case 'hxpRecords':
-      return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || (!!a2 && name === a2)
+      return isMinisterLevel(jb) || (!!a2 && name === a2)
     case 'employeeAdmin':
-      return isAdmin1 || jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长') || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.includes('副主任') || (!!a2 && name === a2)
+      return isAdmin1 || isMinisterOrDeptLeader(jb) || (!!a2 && name === a2)
     case 'dbManager':
     case 'ygglFill':
       return canAccessDbManager.value
@@ -672,7 +671,7 @@ onMounted(() => {
   userJb.value = info.jb || ''
   userLsys.value = (info.dept || info.lsys || '').trim()
   const jb = (info.jb || '').trim()
-  isBuzhang.value = jb === '部长' || jb.startsWith('部长')
+  isBuzhang.value = jbMatch(jb, '部长')
   refreshWorkplaceTodos()
   fetchRequestList()
   if (isBuzhang.value) fetchBriefing()

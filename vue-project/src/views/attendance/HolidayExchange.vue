@@ -246,6 +246,7 @@ import {
   getDeptLsysList,
   getUploadConfig
 } from '@/api/attendance'
+import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
 
 const showApplyModal = ref(false)
 const editingRejectedId = ref(null)
@@ -267,10 +268,7 @@ const recordScope = ref('self')
 const deptOptions = ref([])
 
 const isLeaderRole = computed(() => {
-  const jb = userInfo.jb
-  return jb === '部长' || jb.startsWith('部长') || jb === '副部长' || jb.startsWith('副部长')
-    || jb === '主任' || jb.startsWith('主任') || jb === '副主任' || jb.startsWith('副主任')
-    || jb === '班组长' || jb.startsWith('班组长')
+  return isMinisterOrDeptLeader(userInfo.jb)
 })
 
 const form = reactive({

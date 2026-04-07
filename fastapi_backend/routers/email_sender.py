@@ -372,27 +372,34 @@ def _get_dept_leader_emails_for_reminder(depts_with_exceptions: List[str], email
     规则：部办→部长/副部长；其他→主任/副主任（若无则组长）。
     返回 { dept: [{"name":..,"jb":..,"email":..}] }
     """
+    from routers.approvers import _jb_sql_conditions
+    bz_c, bz_p = _jb_sql_conditions("部长")
+    fbz_c, fbz_p = _jb_sql_conditions("副部长")
+    zr_c, zr_p = _jb_sql_conditions("主任")
+    fzr_c, fzr_p = _jb_sql_conditions("副主任")
+    zz_c, zz_p = _jb_sql_conditions("组长")
+    bz_fbz = f"({bz_c[1:-1]} OR {fbz_c[1:-1]})"
+    zr_fzr = f"({zr_c[1:-1]} OR {fzr_c[1:-1]})"
+
     result: dict = {}
     for dept in depts_with_exceptions:
         if dept in ("部办", "（未填写科室）"):
             rows = db.execute_query(
-                "SELECT name, jb FROM yggl WHERE "
-                "(jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) "
+                f"SELECT name, jb FROM yggl WHERE {bz_fbz} "
                 "AND name IS NOT NULL AND TRIM(name) != '' AND (COALESCE(zaizhi,0)=0)",
-                ("部长", "部长%", "副部长", "副部长%"),
+                bz_p + fbz_p,
             )
         else:
             rows = db.execute_query(
-                "SELECT name, jb FROM yggl WHERE lsys = %s AND "
-                "((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) "
+                f"SELECT name, jb FROM yggl WHERE lsys = %s AND {zr_fzr} "
                 "AND name IS NOT NULL AND TRIM(name) != '' AND (COALESCE(zaizhi,0)=0)",
-                (dept, "主任", "主任%", "副主任", "副主任%"),
+                (dept,) + zr_p + fzr_p,
             )
             if not rows:
                 rows = db.execute_query(
-                    "SELECT name, jb FROM yggl WHERE lsys = %s AND (jb = %s OR jb LIKE %s) "
+                    f"SELECT name, jb FROM yggl WHERE lsys = %s AND {zz_c} "
                     "AND name IS NOT NULL AND TRIM(name) != '' AND (COALESCE(zaizhi,0)=0)",
-                    (dept, "组长", "组长%"),
+                    (dept,) + zz_p,
                 )
         leaders = []
         for r in rows:

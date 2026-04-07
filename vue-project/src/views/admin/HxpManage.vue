@@ -240,6 +240,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { getHxpSummary, getHxpDetail, submitHxpApproval, getMyHxpRequests, resubmitHxpApproval } from '@/api/admin'
 import { getUploadConfig, getApprovers } from '@/api/attendance'
+import { isMinisterLevel } from '@/utils/roleMatch'
 
 const canAccess = ref(false)
 const canAccessRecords = ref(false)
@@ -247,8 +248,7 @@ const currentUserName = ref('')
 const currentUserJb = ref('')
 
 function isDeptLeaderJb(jb) {
-  const j = (jb || '').trim()
-  return j === '部长' || j.startsWith('部长') || j === '副部长' || j.startsWith('副部长')
+  return isMinisterLevel(jb)
 }
 const action = ref('add')
 const amount = ref(1)

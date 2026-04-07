@@ -326,6 +326,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, nextTick } from 'vue'
 import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks } from '@/api/shift'
+import { isDeptLeader } from '@/utils/roleMatch'
 
 const PERIOD_DAYS = 14
 
@@ -529,9 +530,7 @@ const isManager = computed(() => {
     const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const jb = (info.jb || '').trim()
     const myDept = (info.dept || info.lsys || '').trim()
-    const mgr = jb === '组长' || jb.startsWith('组长')
-      || jb === '主任' || jb.startsWith('主任')
-      || jb === '副主任' || jb.includes('副主任')
+    const mgr = isDeptLeader(jb)
     return mgr && !!selectedDept.value && selectedDept.value === myDept
   } catch { return false }
 })

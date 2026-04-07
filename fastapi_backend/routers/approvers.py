@@ -19,26 +19,53 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/approvers", tags=["审批人"])
 
 
+_ROLE_MAP = {
+    "部长": {"部长", "经理"},
+    "副部长": {"副部长", "副经理", "经理助理"},
+    "主任": {"主任"},
+    "副主任": {"副主任"},
+    "组长": {"组长", "班组长"},
+}
+
+
 def _jb_match(jb_val: str, target: str) -> bool:
-    """匹配级别，支持 组长/组长1 等变体"""
+    """
+    匹配级别，支持新旧职务名称映射。
+    target 为权限级别关键字（部长/副部长/主任/副主任/组长/员工/责任工艺师）。
+    jb_val 为数据库实际 jb 值，支持 "组长1" 等变体（startsWith）。
+    """
     if not jb_val:
         return False
     j = (jb_val or "").strip()
-    if target == "组长":
-        return j == "组长" or j.startswith("组长")
-    if target == "副主任":
-        return j == "副主任" or j.startswith("副主任") or "副主任" in j
-    if target == "主任":
-        return j == "主任" or j.startswith("主任")
-    if target == "部长":
-        return j == "部长" or j.startswith("部长")
-    if target == "副部长":
-        return j == "副部长" or j.startswith("副部长")
     if target == "员工":
         return j == "员工" or j.startswith("员工")
     if target == "责任工艺师":
         return "责任工艺师" in j or j == "责任工艺师"
+    titles = _ROLE_MAP.get(target)
+    if titles:
+        for t in titles:
+            if j == t or j.startswith(t):
+                return True
+        if target == "副主任" and "副主任" in j:
+            return True
+        return False
     return j == target
+
+
+def _jb_sql_conditions(target: str):
+    """
+    返回 SQL WHERE 片段和对应参数，用于按角色查询 yggl.jb。
+    例如 _jb_sql_conditions("部长") 返回 ("(jb=%s OR jb LIKE %s OR jb=%s OR jb LIKE %s)", ("部长","部长%","经理","经理%"))
+    """
+    titles = _ROLE_MAP.get(target)
+    if not titles:
+        return "(jb = %s OR jb LIKE %s)", (target, f"{target}%")
+    parts = []
+    params = []
+    for t in sorted(titles):
+        parts.append("jb = %s OR jb LIKE %s")
+        params.extend([t, f"{t}%"])
+    return "(" + " OR ".join(parts) + ")", tuple(params)
 
 
 def _get_user_info(name: str) -> Optional[dict]:
@@ -70,25 +97,33 @@ def _get_approvers_first(name: str) -> List[dict]:
     jb = (user.get("jb") or "").strip()
     lsys = (user.get("lsys") or "").strip()
 
+    bz_cond, bz_p = _jb_sql_conditions("部长")
+    fbz_cond, fbz_p = _jb_sql_conditions("副部长")
+    bz_fbz_cond = f"({bz_cond[1:-1]} OR {fbz_cond[1:-1]})"
+    bz_fbz_p = bz_p + fbz_p
+    zr_cond, zr_p = _jb_sql_conditions("主任")
+    fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+    zr_fzr_cond = f"({zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
+    zr_fzr_p = zr_p + fzr_p
+    zz_cond, zz_p = _jb_sql_conditions("组长")
+    zz_zr_fzr_cond = f"({zz_cond[1:-1]} OR {zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
+    zz_zr_fzr_p = zz_p + zr_p + fzr_p
+
+    tail = " AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name"
+
     # 规则5: lsys(部办) 所有人员 -> jb(部长)
     if "部办" in lsys or lsys == "部办":
-        rows = db.execute_query(
-            "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-            ("部长", "部长%")
-        )
+        rows = db.execute_query(f"SELECT name, jb, lsys FROM yggl WHERE {bz_cond}{tail}", bz_p)
         return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
     # 规则4: jb(主任/副主任) -> jb(部长/副部长) + 同室主任/副主任（同级审批，排除本人）
     if _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
-        rows_bu = db.execute_query(
-            "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-            ("部长", "部长%", "副部长", "副部长%")
-        )
+        rows_bu = db.execute_query(f"SELECT name, jb, lsys FROM yggl WHERE {bz_fbz_cond}{tail}", bz_fbz_p)
         result = [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows_bu]
         if lsys:
             rows_room = db.execute_query(
-                "SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND ((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-                (lsys, "主任", "主任%", "副主任", "副主任%", name)
+                f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {zr_fzr_cond} AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
+                (lsys,) + zr_fzr_p + (name,)
             )
             for r in rows_room:
                 result.append({"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")})
@@ -99,56 +134,58 @@ def _get_approvers_first(name: str) -> List[dict]:
         if not lsys:
             return []
         rows = db.execute_query(
-            "SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND ((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-            (lsys, "主任", "主任%", "副主任", "副主任%")
+            f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {zr_fzr_cond}{tail}",
+            (lsys,) + zr_fzr_p
         )
         return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
     # 规则1: jb(员工) -> lsys(同词条) jb(组长/主任/副主任)
     if _jb_match(jb, "员工") or not jb:
         if not lsys:
-            # 无 lsys 时降级：查所有 组长/主任/副主任
             rows = db.execute_query(
-                "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY lsys, jb, name",
-                ("组长", "组长%", "主任", "主任%", "副主任", "副主任%")
+                f"SELECT name, jb, lsys FROM yggl WHERE {zz_zr_fzr_cond} AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY lsys, jb, name",
+                zz_zr_fzr_p
             )
         else:
             rows = db.execute_query(
-                "SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND ((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-                (lsys, "组长", "组长%", "主任", "主任%", "副主任", "副主任%")
+                f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {zz_zr_fzr_cond}{tail}",
+                (lsys,) + zz_zr_fzr_p
             )
         return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
     # 其他级别默认：同室 组长/主任/副主任，若无则 部长/副部长
     if lsys:
         rows = db.execute_query(
-            "SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND ((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-            (lsys, "组长", "组长%", "主任", "主任%", "副主任", "副主任%")
+            f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {zz_zr_fzr_cond}{tail}",
+            (lsys,) + zz_zr_fzr_p
         )
         if rows:
             return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
-    rows = db.execute_query(
-        "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-        ("部长", "部长%", "副部长", "副部长%")
-    )
+    rows = db.execute_query(f"SELECT name, jb, lsys FROM yggl WHERE {bz_fbz_cond}{tail}", bz_fbz_p)
     return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
 
 def _get_approvers_second(name: str) -> List[dict]:
     """第二审批人（二级审批）-> jb(部长/副部长)"""
+    bz_cond, bz_p = _jb_sql_conditions("部长")
+    fbz_cond, fbz_p = _jb_sql_conditions("副部长")
+    cond = f"({bz_cond[1:-1]} OR {fbz_cond[1:-1]})"
     rows = db.execute_query(
-        "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-        ("部长", "部长%", "副部长", "副部长%")
+        f"SELECT name, jb, lsys FROM yggl WHERE {cond} AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
+        bz_p + fbz_p
     )
     return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
 
 def _get_dept_leaders() -> List[dict]:
     """部领导 -> jb(部长/副部长)"""
+    bz_cond, bz_p = _jb_sql_conditions("部长")
+    fbz_cond, fbz_p = _jb_sql_conditions("副部长")
+    cond = f"({bz_cond[1:-1]} OR {fbz_cond[1:-1]})"
     rows = db.execute_query(
-        "SELECT name, jb, lsys FROM yggl WHERE (jb = %s OR jb LIKE %s OR jb = %s OR jb LIKE %s) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-        ("部长", "部长%", "副部长", "副部长%")
+        f"SELECT name, jb, lsys FROM yggl WHERE {cond} AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
+        bz_p + fbz_p
     )
     return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
@@ -161,9 +198,12 @@ def _get_room_directors(name: str) -> List[dict]:
     lsys = (user.get("lsys") or "").strip()
     if not lsys:
         return []
+    zr_cond, zr_p = _jb_sql_conditions("主任")
+    fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+    cond = f"({zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
     rows = db.execute_query(
-        "SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND ((jb = %s OR jb LIKE %s) OR (jb = %s OR jb LIKE %s)) AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-        (lsys, "主任", "主任%", "副主任", "副主任%")
+        f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {cond} AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
+        (lsys,) + zr_p + fzr_p
     )
     return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
