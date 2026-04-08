@@ -89,6 +89,13 @@
               </svg>
               {{ loading ? '检测中...' : '查询' }}
             </button>
+            <button class="btn btn-outline-scatter" type="button" @click="openCustomScatter">
+              <svg class="btn-icon-sm" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="7.5" cy="7.5" r="2" /><circle cx="16" cy="16" r="2" /><circle cx="17" cy="8" r="2" /><circle cx="8" cy="17" r="2" />
+                <rect x="2" y="2" width="20" height="20" rx="3" />
+              </svg>
+              查看任意员工散点
+            </button>
           </div>
         </div>
 
@@ -154,10 +161,10 @@
                         ></div>
                       </div>
                       <span class="rank-count">{{ item.count }}次</span>
-                      <svg v-if="item.dates?.length" class="expand-icon" :class="{ expanded: expandedClockIn === idx }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                      <svg v-if="item.dates?.length" class="expand-icon" :class="{ expanded: expandedClockIn === idx }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" @click.stop="toggleExpand('clockIn', idx)"><polyline points="6 9 12 15 18 9"/></svg>
                     </div>
                     <transition name="slide">
-                      <div v-if="expandedClockIn === idx && item.dates?.length" class="rank-detail">
+                      <div v-if="expandedClockIn === idx && item.dates?.length" class="rank-detail" @click.stop>
                         <table class="detail-table">
                           <thead><tr><th>日期</th><th v-if="filterDimension !== 'person'">姓名</th><th>打卡时间</th></tr></thead>
                           <tbody>
@@ -197,10 +204,10 @@
                         ></div>
                       </div>
                       <span class="rank-count">{{ item.count }}次</span>
-                      <svg v-if="item.dates?.length" class="expand-icon" :class="{ expanded: expandedClockOut === idx }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
+                      <svg v-if="item.dates?.length" class="expand-icon" :class="{ expanded: expandedClockOut === idx }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" @click.stop="toggleExpand('clockOut', idx)"><polyline points="6 9 12 15 18 9"/></svg>
                     </div>
                     <transition name="slide">
-                      <div v-if="expandedClockOut === idx && item.dates?.length" class="rank-detail">
+                      <div v-if="expandedClockOut === idx && item.dates?.length" class="rank-detail" @click.stop>
                         <table class="detail-table">
                           <thead><tr><th>日期</th><th v-if="filterDimension !== 'person'">姓名</th><th>打卡时间</th></tr></thead>
                           <tbody>
@@ -273,6 +280,57 @@
         </div>
       </transition>
     </teleport>
+
+    <!-- ====== 自定义员工散点图弹窗 ====== -->
+    <teleport to="body">
+      <transition name="modal-fade">
+        <div v-if="customScatterVisible" class="scatter-overlay" @click.self="customScatterVisible = false">
+          <div class="scatter-modal">
+            <div class="scatter-header">
+              <div class="custom-scatter-picker">
+                <input
+                  ref="customNameInputRef"
+                  v-model.trim="customScatterInput"
+                  type="text"
+                  class="custom-scatter-input"
+                  placeholder="输入姓名搜索…"
+                  @input="onCustomNameInput"
+                  @keydown.enter.prevent="confirmCustomName"
+                  @focus="customDropdownOpen = customNameMatches.length > 0"
+                />
+                <div v-if="customDropdownOpen && customNameMatches.length" class="custom-scatter-dropdown">
+                  <div
+                    v-for="m in customNameMatches"
+                    :key="m.name"
+                    class="custom-scatter-dropdown-item"
+                    @mousedown.prevent="selectCustomName(m)"
+                  >
+                    <span class="dropdown-name">{{ m.name }}</span>
+                    <span class="dropdown-dept">{{ m.lsys }}</span>
+                  </div>
+                </div>
+              </div>
+              <div class="scatter-controls">
+                <button
+                  v-for="r in scatterRanges"
+                  :key="'cs-' + r.value"
+                  :class="['tab-btn', { active: customScatterRange === r.value }]"
+                  @click="changeCustomScatterRange(r.value)"
+                >{{ r.label }}</button>
+              </div>
+              <button class="scatter-close" @click="customScatterVisible = false">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+              </button>
+            </div>
+            <div class="scatter-body">
+              <div v-if="customScatterLoading" class="scatter-loading">加载中...</div>
+              <v-chart v-else-if="customScatterOption" class="scatter-chart" :option="customScatterOption" :autoresize="true" />
+              <div v-else class="scatter-empty">{{ customScatterName ? '暂无打卡数据' : '请输入姓名查询' }}</div>
+            </div>
+          </div>
+        </div>
+      </transition>
+    </teleport>
   </div>
 </template>
 
@@ -284,6 +342,7 @@ import {
   getDeptLsysList,
   getClockInDisciplineStats,
   getPersonScatterData,
+  getStatisticsEmployees,
 } from '@/api/attendance'
 
 const filterYear = ref(new Date().getFullYear())
@@ -410,6 +469,14 @@ function formatHour(h) {
   return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}`
 }
 
+function formatHourWithSecond(h) {
+  const totalSeconds = Math.max(0, Math.round(h * 3600))
+  const hh = Math.floor(totalSeconds / 3600)
+  const mm = Math.floor((totalSeconds % 3600) / 60)
+  const ss = totalSeconds % 60
+  return `${String(hh).padStart(2, '0')}:${String(mm).padStart(2, '0')}:${String(ss).padStart(2, '0')}`
+}
+
 function buildScatterOption(data, range) {
   const dates = data.map(d => d.date)
   const ciData = data.filter(d => d.clockIn != null).map(d => [d.date, d.clockIn])
@@ -446,7 +513,7 @@ function buildScatterOption(data, range) {
     tooltip: {
       trigger: 'item',
       formatter(p) {
-        return `${p.seriesName}<br/>${p.data[0]}<br/>${formatHour(p.data[1])}`
+        return `${p.seriesName}<br/>${p.data[0]}<br/>${formatHourWithSecond(p.data[1])}`
       }
     },
     legend: {
@@ -580,6 +647,90 @@ function onRankClick(type, idx, item) {
     openScatter(item.key)
   } else {
     toggleExpand(type, idx)
+  }
+}
+
+// ====== 自定义员工散点图 ======
+const customScatterVisible = ref(false)
+const customScatterName = ref('')
+const customScatterInput = ref('')
+const customScatterRange = ref('month')
+const customScatterLoading = ref(false)
+const customScatterOption = ref(null)
+const customNameInputRef = ref(null)
+const customDropdownOpen = ref(false)
+const customNameMatches = ref([])
+const allEmployees = ref([])
+
+async function loadAllEmployees() {
+  if (allEmployees.value.length) return
+  try {
+    const rows = []
+    for (const dept of lsysList.value) {
+      const res = await getStatisticsEmployees({ current_user: '_admin_', lsys: dept, limit: 500 })
+      if (res.success && res.list) {
+        for (const n of res.list) rows.push({ name: n, lsys: dept })
+      }
+    }
+    allEmployees.value = rows
+  } catch { /* ignore */ }
+}
+
+function onCustomNameInput() {
+  const q = customScatterInput.value.trim().toLowerCase()
+  if (!q) {
+    customNameMatches.value = []
+    customDropdownOpen.value = false
+    return
+  }
+  customNameMatches.value = allEmployees.value
+    .filter(e => e.name.toLowerCase().includes(q))
+    .slice(0, 15)
+  customDropdownOpen.value = customNameMatches.value.length > 0
+}
+
+function selectCustomName(emp) {
+  customScatterInput.value = emp.name
+  customScatterName.value = emp.name
+  customDropdownOpen.value = false
+  loadCustomScatterData()
+}
+
+function confirmCustomName() {
+  const name = customScatterInput.value.trim()
+  if (!name) return
+  customScatterName.value = name
+  customDropdownOpen.value = false
+  loadCustomScatterData()
+}
+
+function openCustomScatter() {
+  customScatterVisible.value = true
+  customScatterOption.value = null
+  customScatterRange.value = 'month'
+  loadAllEmployees()
+  setTimeout(() => customNameInputRef.value?.focus(), 100)
+}
+
+async function changeCustomScatterRange(range) {
+  customScatterRange.value = range
+  if (customScatterName.value) await loadCustomScatterData()
+}
+
+async function loadCustomScatterData() {
+  if (!customScatterName.value) return
+  customScatterLoading.value = true
+  customScatterOption.value = null
+  try {
+    const { start_date, end_date } = getDateRange(customScatterRange.value)
+    const res = await getPersonScatterData({ name: customScatterName.value, start_date, end_date, exclude_holidays: excludeHolidays.value })
+    if (res.success && res.data?.length) {
+      customScatterOption.value = buildScatterOption(res.data, customScatterRange.value)
+    }
+  } catch (e) {
+    console.error('散点图数据加载失败:', e)
+  } finally {
+    customScatterLoading.value = false
   }
 }
 </script>
@@ -1066,6 +1217,81 @@ function onRankClick(type, idx, item) {
 .scatter-loading,
 .scatter-empty {
   font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+/* 自定义散点图 - 按钮 & 搜索 */
+.btn-outline-scatter {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 14px;
+  font-size: var(--font-size-sm);
+  font-weight: 500;
+  color: var(--color-primary);
+  background: #fff;
+  border: 1px solid var(--color-primary);
+  border-radius: var(--radius-base, 6px);
+  cursor: pointer;
+  transition: all .15s ease;
+  white-space: nowrap;
+}
+.btn-outline-scatter:hover {
+  background: var(--color-primary-lightest, #eef2ff);
+}
+.btn-icon-sm {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.custom-scatter-picker {
+  position: relative;
+  min-width: 200px;
+}
+.custom-scatter-input {
+  width: 100%;
+  padding: 6px 12px;
+  font-size: 14px;
+  border: 1px solid var(--color-border-base, #d1d5db);
+  border-radius: var(--radius-base, 6px);
+  outline: none;
+  transition: border-color .15s;
+}
+.custom-scatter-input:focus {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 2px rgba(99, 102, 241, .15);
+}
+.custom-scatter-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--color-border-lighter, #e5e7eb);
+  border-radius: var(--radius-base, 6px);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+  z-index: 10;
+}
+.custom-scatter-dropdown-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  transition: background .1s;
+}
+.custom-scatter-dropdown-item:hover {
+  background: var(--color-bg-hover, #f3f4f6);
+}
+.dropdown-name {
+  font-weight: 500;
+  color: var(--color-text-primary);
+}
+.dropdown-dept {
+  font-size: 12px;
   color: var(--color-text-tertiary);
 }
 

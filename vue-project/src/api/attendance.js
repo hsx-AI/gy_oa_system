@@ -656,6 +656,11 @@ export function holidayExchangeBatchApprove(data) {
   return request({ url: '/approval/holiday-exchange/batch', method: 'post', data })
 }
 
+/** 换休票汇总明细（公出 + 值班） */
+export function getHolidayExchangeSummary(params) {
+  return request({ url: '/holiday-exchange/summary', method: 'get', params })
+}
+
 // ==================== 换休票未读通知 API ====================
 
 /** 获取指定员工的未读换休票记录 */

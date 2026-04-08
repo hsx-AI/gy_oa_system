@@ -190,26 +190,26 @@ class ApproveRequest(BaseModel):
     approver: Optional[str] = None  # 当前审批人姓名，用于加班最终环(jiabanzt=5)仅 dakaman 可操作时校验
 
 
-def _add_exchange_tickets(name: str, tickets: float, ly: str = ""):
-    """向 hxp 表增加换休票。tickets 为张数，ly 为来源说明。"""
+def _add_exchange_tickets(name: str, tickets: float, ly: str = "", sj: str = ""):
+    """向 hxp 表增加换休票。tickets 为张数，ly 为来源说明，sj 为自定义时间（空则取当前时间）。"""
     if not name or tickets <= 0:
         return
     try:
         tickets = round(float(tickets), 2)
         if tickets <= 0:
             return
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sj_val = (sj or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ly_val = (ly or "").strip()
         try:
             hxp_id = uuid.uuid4().hex
             n = db.execute_update(
                 "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
-                (hxp_id, name.strip(), tickets, now, ly_val),
+                (hxp_id, name.strip(), tickets, sj_val, ly_val),
             )
         except Exception:
             n = db.execute_update(
                 "INSERT INTO hxp (name, sl, sj, ly) VALUES (%s, %s, %s, %s)",
-                (name.strip(), tickets, now, ly_val),
+                (name.strip(), tickets, sj_val, ly_val),
             )
         if n <= 0:
             logger.warning("换休票入账未生效（INSERT 影响行数为0）")
@@ -545,7 +545,7 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
     """加班单条审批。item_id 为 jiaban 表 id（UUID 字符串）。"""
     item_id = str(item_id).strip()
     rows = db.execute_query(
-        "SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf FROM jiaban WHERE id = %s",
+        "SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate FROM jiaban WHERE id = %s",
         (item_id,)
     )
     if not rows:
@@ -612,8 +612,9 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
         if need_exchange and hours > 0 and xm:
             # 1天=8小时=2张，即 1小时=0.25张；向下取整到 0.25 张
             tickets = math.floor(hours) / 4  # 1小时=0.25张，向下取整到整小时后折算
+            overtime_sj = str(row.get("timedate") or "")[:10]
             if tickets > 0:
-                _add_exchange_tickets(xm, tickets, ly="加班换休")
+                _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
                 db.execute_update(
                     "UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s",
                     (tickets, item_id),
@@ -647,7 +648,7 @@ async def overtime_batch_approve(req: BatchApproveRequest):
 
     ph = ",".join(["%s"] * len(ids))
     rows = db.execute_query(
-        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf FROM jiaban WHERE id IN ({ph})",
+        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate FROM jiaban WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
@@ -717,9 +718,10 @@ async def overtime_batch_approve(req: BatchApproveRequest):
 
         if need_exchange and hours > 0 and xm:
             tickets = math.floor(hours) / 4
+            overtime_sj = str(r.get("timedate") or "")[:10]
             if tickets > 0:
                 try:
-                    _add_exchange_tickets(xm, tickets, ly="加班换休")
+                    _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
                 except Exception as e:
                     logger.warning(f"加班批量审批添加换休票失败 xm={xm}: {e}")
                 db.execute_update("UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s", (tickets, rid))

@@ -367,26 +367,37 @@ def _calc_days(date_from: str, date_to: str) -> int:
         return 0
 
 
-def _add_exchange_tickets(name: str, tickets: float, ly: str = "公出节假日换休"):
-    """向 hxp 表增加换休票"""
+def _calc_midpoint_date(date_from, date_to) -> str:
+    """取 date_from 与 date_to 的中间日期，返回 YYYY-MM-DD 格式；失败时返回空串。"""
+    try:
+        d1 = date_from if isinstance(date_from, date) else datetime.strptime(str(date_from)[:10], "%Y-%m-%d").date()
+        d2 = date_to if isinstance(date_to, date) else datetime.strptime(str(date_to)[:10], "%Y-%m-%d").date()
+        mid = d1 + timedelta(days=(d2 - d1).days // 2)
+        return mid.strftime("%Y-%m-%d")
+    except Exception:
+        return ""
+
+
+def _add_exchange_tickets(name: str, tickets: float, ly: str = "公出节假日换休", sj: str = ""):
+    """向 hxp 表增加换休票。sj 为自定义时间（空则取当前时间）。"""
     if not name or tickets <= 0:
         return
     try:
         tickets = round(float(tickets), 2)
         if tickets <= 0:
             return
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        sj_val = (sj or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         ly_val = (ly or "").strip()
         try:
             hxp_id = uuid.uuid4().hex
             db.execute_update(
                 "INSERT INTO hxp (id, name, sl, sj, ly) VALUES (%s, %s, %s, %s, %s)",
-                (hxp_id, name.strip(), tickets, now, ly_val),
+                (hxp_id, name.strip(), tickets, sj_val, ly_val),
             )
         except Exception:
             db.execute_update(
                 "INSERT INTO hxp (name, sl, sj, ly) VALUES (%s, %s, %s, %s)",
-                (name.strip(), tickets, now, ly_val),
+                (name.strip(), tickets, sj_val, ly_val),
             )
     except Exception as e:
         logger.warning("公出节假日换休票入账失败: %s", e)
@@ -907,7 +918,7 @@ class _ApproveReq(BaseModel):
 async def holiday_exchange_approve(item_id: str, req: _ApproveReq):
     """单条审批"""
     rows = db.execute_query(
-        "SELECT id, status, xm, hxp_count FROM holiday_exchange WHERE id = %s",
+        "SELECT id, status, xm, hxp_count, date_from, date_to FROM holiday_exchange WHERE id = %s",
         (item_id,),
     )
     if not rows:
@@ -938,7 +949,8 @@ async def holiday_exchange_approve(item_id: str, req: _ApproveReq):
         xm = (row.get("xm") or "").strip()
         hxp = float(row.get("hxp_count") or 0)
         if xm and hxp > 0:
-            _add_exchange_tickets(xm, hxp)
+            mid_sj = _calc_midpoint_date(row.get("date_from"), row.get("date_to"))
+            _add_exchange_tickets(xm, hxp, sj=mid_sj)
         return {"success": True, "message": "审批已通过"}
     else:
         raise HTTPException(status_code=400, detail="当前状态无法审批")
@@ -970,3 +982,202 @@ async def holiday_exchange_batch(req: _BatchReq):
         "failed": fail,
         "message": f"成功{ok}条，失败{fail}条",
     }
+
+
+# ==================== 换休票汇总明细（公出 + 值班） ====================
+
+@router.get("/holiday-exchange/summary")
+async def get_holiday_exchange_summary(
+    name: str = Query(...),
+    year: Optional[int] = None,
+    month: Optional[int] = Query(None, description="月份筛选 1-12，不传则全年"),
+    scope: str = Query("self"),
+    filter_lsys: Optional[str] = Query(None),
+    source: str = Query("all", description="all|trip|duty|reward"),
+):
+    """
+    换休票获取汇总明细：合并「公出节假日换休票」「加班值班换休票」「集体奖励/手工调整」三种来源。
+    source: all=全部, trip=仅公出, duty=仅值班, reward=仅集体奖励/手工
+    """
+    try:
+        # ── 构建人员筛选 ──
+        name_clean = (name or "").strip()
+        person_cond_he = "1=1"
+        person_cond_jb = "1=1"
+        person_cond_hxp = "1=1"
+        person_params_he: list = []
+        person_params_jb: list = []
+        person_params_hxp: list = []
+
+        if scope == "self":
+            person_cond_he = "h.xm = %s"
+            person_params_he = [name_clean]
+            person_cond_jb = "j.xm = %s"
+            person_params_jb = [name_clean]
+            person_cond_hxp = "p.name = %s"
+            person_params_hxp = [name_clean]
+        elif scope == "all" and filter_lsys:
+            person_cond_he = "h.lsys = %s"
+            person_params_he = [filter_lsys.strip()]
+            person_cond_jb = "y.lsys = %s"
+            person_params_jb = [filter_lsys.strip()]
+            person_cond_hxp = "yg.lsys = %s"
+            person_params_hxp = [filter_lsys.strip()]
+        elif scope == "lsys":
+            rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (name_clean,))
+            lsys_val = (rows[0].get("lsys") or "").strip() if rows else ""
+            if lsys_val:
+                person_cond_he = "h.lsys = %s"
+                person_params_he = [lsys_val]
+                person_cond_jb = "y.lsys = %s"
+                person_params_jb = [lsys_val]
+                person_cond_hxp = "yg.lsys = %s"
+                person_params_hxp = [lsys_val]
+            else:
+                person_cond_he = "h.xm = %s"
+                person_params_he = [name_clean]
+                person_cond_jb = "j.xm = %s"
+                person_params_jb = [name_clean]
+                person_cond_hxp = "p.name = %s"
+                person_params_hxp = [name_clean]
+
+        data = []
+
+        # ── 来源1: 公出节假日换休票（holiday_exchange） ──
+        if source in ("all", "trip"):
+            he_year_cond = "AND YEAR(h.apply_time) = %s" if year else ""
+            he_month_cond = "AND MONTH(h.apply_time) = %s" if month else ""
+            he_year_params = ([year] if year else []) + ([month] if month else [])
+            he_sql = f"""
+                SELECT h.id, h.xm, h.bz, h.lsys, h.date_from, h.date_to, h.date_ranges,
+                       h.days, h.hxp_count, h.status, h.spr, h.spr2, h.bhyy, h.apply_time,
+                       h.material_files
+                FROM holiday_exchange h
+                WHERE {person_cond_he} AND h.status = 4 {he_year_cond} {he_month_cond}
+                ORDER BY h.apply_time DESC
+            """
+            he_rows = db.execute_query(he_sql, tuple(person_params_he + he_year_params))
+
+            STATUS_TEXT = {0: "待一级审批", 1: "待二级审批", 4: "已通过", 22: "已驳回"}
+            for r in (he_rows or []):
+                df, dt = r.get("date_from"), r.get("date_to")
+                dr_raw = r.get("date_ranges")
+                _, smy = holiday_exchange_rest_day_info(df, dt, dr_raw)
+                dr_list = None
+                if dr_raw:
+                    try:
+                        dr_list = json.loads(dr_raw) if isinstance(dr_raw, str) else dr_raw
+                    except Exception:
+                        pass
+                mf_raw = r.get("material_files") or ""
+                mf_list = []
+                if mf_raw:
+                    try:
+                        mf_list = json.loads(mf_raw) if isinstance(mf_raw, str) else mf_raw
+                    except Exception:
+                        pass
+                data.append({
+                    "id": r.get("id"),
+                    "source": "公出节假日",
+                    "applicant": r.get("xm") or "",
+                    "department": r.get("bz") or r.get("lsys") or "",
+                    "dateFrom": str(df or ""),
+                    "dateTo": str(dt or ""),
+                    "dateRanges": dr_list,
+                    "days": r.get("days") or 0,
+                    "hxpCount": float(r.get("hxp_count") or 0),
+                    "restDaySummary": smy,
+                    "applyTime": str(r.get("apply_time") or "")[:19],
+                    "status": STATUS_TEXT.get(r.get("status"), "未知"),
+                    "materialFiles": mf_list if isinstance(mf_list, list) else [],
+                })
+
+        # ── 来源2: 加班值班换休票（jiaban 表 hx='是' 且已通过） ──
+        if source in ("all", "duty"):
+            jb_year_cond = "AND YEAR(j.timedate) = %s" if year else ""
+            jb_month_cond = "AND MONTH(j.timedate) = %s" if month else ""
+            jb_year_params = ([year] if year else []) + ([month] if month else [])
+            jb_sql = f"""
+                SELECT j.id, j.xm, j.bz, j.timedate, j.timefrom, j.timeto,
+                       j.tian1, j.hxp, j.jiabanfs, j.content,
+                       j.spr, j.spr2, j.jiabanzt
+                FROM jiaban j
+                LEFT JOIN yggl y ON j.xm = y.name AND COALESCE(y.zaizhi, 0) = 0
+                WHERE j.jiabanzt = 4 AND TRIM(COALESCE(j.hx, '')) = '是'
+                  AND {person_cond_jb} {jb_year_cond} {jb_month_cond}
+                ORDER BY j.timedate DESC
+            """
+            jb_rows = db.execute_query(jb_sql, tuple(person_params_jb + jb_year_params))
+
+            for r in (jb_rows or []):
+                td = r.get("timedate")
+                date_str = str(td)[:10] if td else ""
+                hxp_val = float(r.get("hxp") or 0)
+                if hxp_val <= 0:
+                    continue
+                tf = r.get("timefrom") or ""
+                tt = r.get("timeto") or ""
+                time_desc = f"{tf}~{tt}" if tf and tt else ""
+                fs = (r.get("jiabanfs") or "").strip()
+                data.append({
+                    "id": r.get("id"),
+                    "source": "值班申请",
+                    "applicant": r.get("xm") or "",
+                    "department": r.get("bz") or "",
+                    "dateFrom": date_str,
+                    "dateTo": date_str,
+                    "dateRanges": None,
+                    "days": None,
+                    "hxpCount": hxp_val,
+                    "restDaySummary": time_desc,
+                    "applyTime": date_str,
+                    "status": "已通过",
+                })
+
+        # ── 来源3: 集体奖励/手工调整（hxp 表中非"加班换休""公出节假日换休"的正数记录） ──
+        if source in ("all", "reward"):
+            hxp_year_cond = "AND YEAR(p.sj) = %s" if year else ""
+            hxp_month_cond = "AND MONTH(p.sj) = %s" if month else ""
+            hxp_year_params = ([year] if year else []) + ([month] if month else [])
+            hxp_sql = f"""
+                SELECT p.id, p.name, p.sl, p.sj, p.ly
+                FROM hxp p
+                LEFT JOIN yggl yg ON p.name = yg.name AND COALESCE(yg.zaizhi, 0) = 0
+                WHERE {person_cond_hxp} AND p.sl > 0
+                  AND TRIM(COALESCE(p.ly, '')) NOT IN ('加班换休', '公出节假日换休', '')
+                  {hxp_year_cond} {hxp_month_cond}
+                ORDER BY p.sj DESC
+            """
+            hxp_rows = db.execute_query(hxp_sql, tuple(person_params_hxp + hxp_year_params))
+
+            for r in (hxp_rows or []):
+                sj_raw = r.get("sj")
+                sj_str = str(sj_raw or "")[:19] if sj_raw else ""
+                date_str = sj_str[:10]
+                sl = float(r.get("sl") or 0)
+                if sl <= 0:
+                    continue
+                ly_val = (r.get("ly") or "").strip()
+                data.append({
+                    "id": r.get("id"),
+                    "source": ly_val or "集体奖励",
+                    "applicant": r.get("name") or "",
+                    "department": "",
+                    "dateFrom": date_str,
+                    "dateTo": date_str,
+                    "dateRanges": None,
+                    "days": None,
+                    "hxpCount": sl,
+                    "restDaySummary": ly_val,
+                    "applyTime": sj_str,
+                    "status": "已入账",
+                    "materialFiles": [],
+                })
+
+        data.sort(key=lambda x: x.get("applyTime") or "", reverse=True)
+        total_hxp = sum(x.get("hxpCount") or 0 for x in data)
+
+        return {"success": True, "data": data, "totalHxp": round(total_hxp, 4)}
+    except Exception as e:
+        logger.error("换休票汇总查询失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"查询失败: {e}")

@@ -4,7 +4,7 @@
       <div class="header-content">
         <div class="header-info">
           <h1 class="header-title">换休票明细查询</h1>
-          <p class="header-subtitle">汇总查看所有人的公出节假日换休票申请记录</p>
+          <p class="header-subtitle">汇总查看换休票获取记录（含公出节假日 + 加班值班两种来源）</p>
         </div>
         <div class="header-actions">
           <router-link to="/" class="btn btn-outline">← 返回首页</router-link>
@@ -42,12 +42,17 @@
             <select v-model.number="yearVal" class="filter-select">
               <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}年</option>
             </select>
-            <label class="filter-label">状态</label>
-            <select v-model="statusVal" class="filter-select">
-              <option value="all">全部</option>
-              <option value="approved">已通过</option>
-              <option value="processing">审批中</option>
-              <option value="rejected">已驳回</option>
+            <label class="filter-label">月份</label>
+            <select v-model.number="monthVal" class="filter-select">
+              <option :value="0">全年</option>
+              <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+            </select>
+            <label class="filter-label">来源</label>
+            <select v-model="sourceVal" class="filter-select">
+              <option value="all">全部来源</option>
+              <option value="trip">公出节假日</option>
+              <option value="duty">值班申请</option>
+              <option value="reward">集体奖励</option>
             </select>
             <input
               v-model.trim="nameFilter"
@@ -67,22 +72,20 @@
                 <tr>
                   <th>姓名</th>
                   <th>科室</th>
-                  <th>加班日期</th>
-                  <th>日期性质</th>
+                  <th>来源</th>
+                  <th>日期</th>
+                  <th>说明</th>
                   <th>天数</th>
-                  <th>换休票</th>
+                  <th>换休票(张)</th>
                   <th>佐证材料</th>
-                  <th>状态</th>
-                  <th>一级审批</th>
-                  <th>二级审批</th>
-                  <th>申请时间</th>
-                  <th>驳回原因</th>
+                  <th>时间</th>
                 </tr>
               </thead>
               <tbody>
                 <tr v-for="r in filteredRecords" :key="r.id" @click="openDetail(r)" class="clickable-row">
                   <td class="td-name">{{ r.applicant }}</td>
                   <td>{{ r.department }}</td>
+                  <td><span class="source-tag" :class="sourceTagClass(r.source)">{{ r.source }}</span></td>
                   <td>
                     <template v-if="r.dateRanges && r.dateRanges.length > 1">
                       <div v-for="(seg, si) in r.dateRanges" :key="si" class="cell-range-seg">{{ seg.from }} ~ {{ seg.to }}</div>
@@ -90,27 +93,22 @@
                     <template v-else>{{ r.dateFrom === r.dateTo ? r.dateFrom : r.dateFrom + ' ~ ' + r.dateTo }}</template>
                   </td>
                   <td class="cell-rest-summary" :title="r.restDaySummary">{{ r.restDaySummary || '—' }}</td>
-                  <td class="td-num">{{ r.days }}</td>
+                  <td class="td-num">{{ r.days != null ? r.days : '—' }}</td>
                   <td class="td-num td-hxp">{{ formatHxp(r.hxpCount) }}</td>
-                  <td>
+                  <td class="td-materials">
                     <template v-if="r.materialFiles && r.materialFiles.length">
                       <a
                         v-for="(f, fi) in r.materialFiles"
                         :key="fi"
-                        :href="getDownloadUrl(f.name)"
+                        :href="'/api/holiday-exchange/download/' + f.name"
                         target="_blank"
-                        rel="noopener"
                         class="file-link"
                         @click.stop
                       >{{ f.original || f.name }}</a>
                     </template>
                     <span v-else class="td-muted">—</span>
                   </td>
-                  <td><span class="status-tag" :class="r.statusClass">{{ r.status }}</span></td>
-                  <td>{{ r.spr }}</td>
-                  <td>{{ r.spr2 }}</td>
                   <td>{{ r.applyTime }}</td>
-                  <td class="reject-reason-cell">{{ r.statusCode === 22 && r.rejectReason ? r.rejectReason : '—' }}</td>
                 </tr>
               </tbody>
             </table>
@@ -133,8 +131,9 @@
         <div class="detail-modal__body">
           <p><strong>申请人：</strong>{{ detailRecord.applicant }}</p>
           <p><strong>科室：</strong>{{ detailRecord.department || '—' }}</p>
+          <p><strong>来源：</strong><span class="source-tag" :class="sourceTagClass(detailRecord.source)">{{ detailRecord.source }}</span></p>
           <template v-if="detailRecord.dateRanges && detailRecord.dateRanges.length > 1">
-            <p><strong>加班时间段：</strong>共 {{ detailRecord.dateRanges.length }} 段</p>
+            <p><strong>时间段：</strong>共 {{ detailRecord.dateRanges.length }} 段</p>
             <div class="detail-ranges">
               <div v-for="(seg, si) in detailRecord.dateRanges" :key="si" class="detail-range-line">
                 {{ si + 1 }}. {{ seg.from }} 至 {{ seg.to }}
@@ -142,33 +141,21 @@
             </div>
           </template>
           <template v-else>
-            <p><strong>加班开始日期：</strong>{{ detailRecord.dateFrom }}</p>
-            <p><strong>加班截止日期：</strong>{{ detailRecord.dateTo }}</p>
+            <p><strong>日期：</strong>{{ detailRecord.dateFrom === detailRecord.dateTo ? detailRecord.dateFrom : detailRecord.dateFrom + ' ~ ' + detailRecord.dateTo }}</p>
           </template>
-          <p><strong>日期性质：</strong>{{ detailRecord.restDaySummary || '—' }}</p>
-          <div v-if="detailRecord.restDayBreakdown && detailRecord.restDayBreakdown.length" class="detail-breakdown">
-            <p><strong>逐日说明：</strong></p>
-            <ul class="detail-breakdown-list">
-              <li v-for="(line, li) in detailRecord.restDayBreakdown" :key="li"
-                  :class="{ 'breakdown-sep': line.startsWith('---') }">{{ line }}</li>
-            </ul>
-          </div>
-          <p><strong>加班天数：</strong>{{ detailRecord.days }} 天</p>
+          <p v-if="detailRecord.restDaySummary"><strong>说明：</strong>{{ detailRecord.restDaySummary }}</p>
+          <p v-if="detailRecord.days != null"><strong>天数：</strong>{{ detailRecord.days }} 天</p>
           <p><strong>换休票数量：</strong>{{ formatHxp(detailRecord.hxpCount) }} 张</p>
-          <div>
+          <p><strong>状态：</strong>{{ detailRecord.status }}</p>
+          <p><strong>时间：</strong>{{ detailRecord.applyTime }}</p>
+          <div v-if="detailRecord.materialFiles && detailRecord.materialFiles.length" class="detail-materials">
             <p><strong>佐证材料：</strong></p>
-            <ul v-if="detailRecord.materialFiles && detailRecord.materialFiles.length" class="detail-file-list">
+            <ul class="detail-file-list">
               <li v-for="(f, fi) in detailRecord.materialFiles" :key="fi">
-                <a :href="getDownloadUrl(f.name)" target="_blank" rel="noopener">{{ f.original || f.name }}</a>
+                <a :href="'/api/holiday-exchange/download/' + f.name" target="_blank">{{ f.original || f.name }}</a>
               </li>
             </ul>
-            <p v-else class="td-muted">无</p>
           </div>
-          <p><strong>一级审批人：</strong>{{ detailRecord.spr }}</p>
-          <p><strong>二级审批人：</strong>{{ detailRecord.spr2 }}</p>
-          <p><strong>申请时间：</strong>{{ detailRecord.applyTime }}</p>
-          <p><strong>审批状态：</strong><span class="status-tag" :class="detailRecord.statusClass">{{ detailRecord.status }}</span></p>
-          <p v-if="detailRecord.statusCode === 22 && detailRecord.rejectReason"><strong>驳回原因：</strong>{{ detailRecord.rejectReason }}</p>
         </div>
       </div>
     </div>
@@ -178,7 +165,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import { getHolidayExchangeList, getDeptLsysList, getUploadConfig, getHolidayExchangeDownloadUrl } from '@/api/attendance'
+import { getHolidayExchangeSummary, getDeptLsysList, getUploadConfig } from '@/api/attendance'
 import { isMinisterLevel } from '@/utils/roleMatch'
 
 const route = useRoute()
@@ -194,13 +181,13 @@ const userJb = ref((userInfo.jb || '').trim())
 const canAccess = ref(false)
 
 const isMinister = computed(() => isMinisterLevel(userJb.value))
-
 const canViewAll = computed(() => isMinister.value)
 
 const deptOptions = ref([])
 const scopeVal = ref('self')
 const yearVal = ref(now.getFullYear())
-const statusVal = ref('all')
+const monthVal = ref(0)
+const sourceVal = ref('all')
 const nameFilter = ref('')
 const records = ref([])
 const loading = ref(false)
@@ -223,9 +210,9 @@ const totalHxp = computed(() => {
 
 const filterLabel = computed(() => {
   const parts = []
-  parts.push(`${yearVal.value}年`)
-  const st = { all: '全部', approved: '已通过', processing: '审批中', rejected: '已驳回' }
-  parts.push(st[statusVal.value] || '全部')
+  parts.push(monthVal.value ? `${yearVal.value}年${monthVal.value}月` : `${yearVal.value}年`)
+  const srcLabels = { all: '全部来源', trip: '公出节假日', duty: '值班申请', reward: '集体奖励' }
+  parts.push(srcLabels[sourceVal.value] || '全部来源')
   if (scopeVal.value === 'self') parts.push('本人')
   else if (scopeVal.value === 'lsys') parts.push('本专业')
   else if (scopeVal.value === 'all') parts.push('全部科室')
@@ -240,8 +227,11 @@ function openDetail(r) {
   detailRecord.value = r
 }
 
-function getDownloadUrl(filename) {
-  return getHolidayExchangeDownloadUrl(filename)
+function sourceTagClass(source) {
+  if (!source) return ''
+  if (source.includes('公出')) return 'source-trip'
+  if (source.includes('值班')) return 'source-duty'
+  return 'source-reward'
 }
 
 function formatHxp(v) {
@@ -253,7 +243,8 @@ function formatHxp(v) {
 async function fetchRecords() {
   loading.value = true
   try {
-    const params = { name: userName.value, year: yearVal.value, status: statusVal.value }
+    const params = { name: userName.value, year: yearVal.value, source: sourceVal.value }
+    if (monthVal.value) params.month = monthVal.value
     if (scopeVal.value === 'all') {
       params.scope = 'all'
     } else if (scopeVal.value.startsWith('lsys:')) {
@@ -262,7 +253,7 @@ async function fetchRecords() {
     } else {
       params.scope = scopeVal.value
     }
-    const res = await getHolidayExchangeList(params)
+    const res = await getHolidayExchangeSummary(params)
     records.value = (res && res.data) || []
   } catch {
     records.value = []
@@ -271,7 +262,7 @@ async function fetchRecords() {
   }
 }
 
-watch([scopeVal, yearVal, statusVal], () => { fetchRecords() })
+watch([scopeVal, yearVal, monthVal, sourceVal], () => { fetchRecords() })
 
 onMounted(async () => {
   let isAdmin2 = false
@@ -286,7 +277,8 @@ onMounted(async () => {
   const q = route.query
   if (q.scope) scopeVal.value = q.scope
   if (q.year) yearVal.value = parseInt(q.year) || yearVal.value
-  if (q.status) statusVal.value = q.status
+  if (q.month) monthVal.value = parseInt(q.month) || 0
+  if (q.source) sourceVal.value = q.source
   if (q.focusName) nameFilter.value = q.focusName
 
   if (canViewAll.value) {
@@ -431,6 +423,18 @@ onMounted(async () => {
 .td-name { font-weight: 500; }
 .td-num { text-align: center; }
 .td-hxp { color: var(--color-primary); font-weight: 600; }
+
+.source-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-xs);
+  font-weight: 500;
+  white-space: nowrap;
+}
+.source-trip { color: #0369a1; background: #e0f2fe; }
+.source-duty { color: #7c3aed; background: #ede9fe; }
+.source-reward { color: #b45309; background: #fef3c7; }
 
 .record-card__body .status-tag {
   display: inline-block;

@@ -1450,7 +1450,7 @@ async def get_leader_dept_comparison(
         leave_ov = _leave_overlap_sql_bounds()
 
         person_rows = db.execute_query(
-            "SELECT lsys, COUNT(*) AS cnt FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0) GROUP BY lsys ORDER BY lsys",
+            "SELECT lsys, COUNT(*) AS cnt FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) != '其他部门员工' AND (COALESCE(zaizhi,0)=0) GROUP BY lsys ORDER BY lsys",
             (LEADER_EXCLUDE_LSYS,)
         )
         person_by_lsys = {r["lsys"].strip(): int(r.get("cnt") or 0) for r in person_rows if r.get("lsys")}
@@ -1756,11 +1756,11 @@ def _parse_time_str(val) -> Optional[str]:
 
 
 def _time_in_range(t_str: str, lo: str, hi: str) -> bool:
-    """判断 HH:MM:SS 格式的时间是否在 [lo, hi] 闭区间内。lo/hi 可以是 HH:MM 会自动补 :00/:59。"""
+    """判断 HH:MM:SS 格式的时间是否在 [lo, hi] 闭区间内（进一原则：超过整分钟的秒数归入下一分钟）。"""
     if len(lo) == 5:
         lo = lo + ":00"
     if len(hi) == 5:
-        hi = hi + ":59"
+        hi = hi + ":00"
     return lo <= t_str <= hi
 
 
