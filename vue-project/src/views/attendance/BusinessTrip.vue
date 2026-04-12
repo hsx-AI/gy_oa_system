@@ -772,6 +772,37 @@ watch(showApplyModal, (visible) => {
   if (visible && tripScope.value !== '市内公出' && !form.locations.length) form.locations = ['']
 })
 
+function normalizeLsysList(list) {
+  return Array.from(new Set((list || []).map(v => String(v || '').trim()).filter(Boolean)))
+}
+
+async function ensureDeptLsysOptions(meta = {}) {
+  const metaList = normalizeLsysList(meta.lsysList)
+  if (metaList.length) {
+    deptLsysOptions.value = metaList
+    return
+  }
+  if (deptLsysOptions.value.length) return
+  try {
+    const lr = await getDeptLsysList()
+    deptLsysOptions.value = normalizeLsysList(lr?.list || lr?.data)
+  } catch (_) {}
+}
+
+async function applyTripListMeta(meta) {
+  if (!meta) return
+  tripListMeta.value = {
+    canViewLsys: !!meta.canViewLsys,
+    canViewAll: !!meta.canViewAll,
+    lsysLabel: (meta.lsysLabel || '').trim()
+  }
+  if (tripListMeta.value.canViewAll) {
+    await ensureDeptLsysOptions(meta)
+  } else {
+    deptLsysOptions.value = []
+  }
+}
+
 async function refreshTripListMeta() {
   try {
     const res = await getBusinessTripList({
@@ -779,17 +810,7 @@ async function refreshTripListMeta() {
       year: recordYear.value,
       scope: 'self'
     })
-    if (res?.meta) {
-      tripListMeta.value = {
-        canViewLsys: !!res.meta.canViewLsys,
-        canViewAll: !!res.meta.canViewAll,
-        lsysLabel: (res.meta.lsysLabel || '').trim()
-      }
-      if (tripListMeta.value.canViewAll && deptLsysOptions.value.length === 0) {
-        const lr = await getDeptLsysList()
-        if (lr.success && lr.list?.length) deptLsysOptions.value = lr.list
-      }
-    }
+    await applyTripListMeta(res?.meta)
   } catch (_) {
     /* 忽略，列表请求仍会带 meta */
   }
@@ -842,15 +863,7 @@ const fetchTripRecords = async () => {
         actualReturnTime: r.actualReturnTime ? r.actualReturnTime.replace(' ', 'T').slice(0, 16) : ''
       }))
       if (res.meta) {
-        tripListMeta.value = {
-          canViewLsys: !!res.meta.canViewLsys,
-          canViewAll: !!res.meta.canViewAll,
-          lsysLabel: (res.meta.lsysLabel || '').trim()
-        }
-        if (tripListMeta.value.canViewAll && deptLsysOptions.value.length === 0) {
-          const lr = await getDeptLsysList()
-          if (lr.success && lr.list?.length) deptLsysOptions.value = lr.list
-        }
+        await applyTripListMeta(res.meta)
       }
       if ((dr === 'all' || dr.startsWith('lsys:')) && !tripListMeta.value.canViewAll) {
         recordDataRange.value = 'self'

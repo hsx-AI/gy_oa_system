@@ -217,8 +217,12 @@ async def get_upload_config():
     }
 
 
+_EXCLUDED_LSYS_FOR_ATTENDANCE = {"其他部门员工", "其他部门成员"}
+
+
 def _yggl_employees_for_suggestions() -> List[tuple]:
-    """在职、有姓名与隶属科室的员工，与打卡入库时 department=lsys 一致。"""
+    """在职、有姓名与隶属科室的员工，与打卡入库时 department=lsys 一致。
+    排除"其他部门员工/成员"——不参与考勤统计。"""
     try:
         rows = db.execute_query(
             """
@@ -235,7 +239,7 @@ def _yggl_employees_for_suggestions() -> List[tuple]:
     for r in rows or []:
         n = (r.get("name") or "").strip()
         d = (r.get("lsys") or "").strip()
-        if n and d:
+        if n and d and d not in _EXCLUDED_LSYS_FOR_ATTENDANCE:
             out.append((n, d))
     return out
 

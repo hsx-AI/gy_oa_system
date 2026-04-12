@@ -34,7 +34,6 @@
               <option value="self">本人</option>
               <option value="lsys">本专业</option>
               <template v-if="canViewAll">
-                <option value="all">全部科室</option>
                 <option v-for="d in deptOptions" :key="d" :value="'lsys:' + d">{{ d }}</option>
               </template>
             </select>
@@ -52,7 +51,7 @@
               <option value="all">全部来源</option>
               <option value="trip">公出节假日</option>
               <option value="duty">值班申请</option>
-              <option value="reward">集体奖励</option>
+              <option value="reward">系统自动派发</option>
             </select>
             <input
               v-model.trim="nameFilter"
@@ -211,11 +210,10 @@ const totalHxp = computed(() => {
 const filterLabel = computed(() => {
   const parts = []
   parts.push(monthVal.value ? `${yearVal.value}年${monthVal.value}月` : `${yearVal.value}年`)
-  const srcLabels = { all: '全部来源', trip: '公出节假日', duty: '值班申请', reward: '集体奖励' }
+  const srcLabels = { all: '全部来源', trip: '公出节假日', duty: '值班申请', reward: '系统自动派发' }
   parts.push(srcLabels[sourceVal.value] || '全部来源')
   if (scopeVal.value === 'self') parts.push('本人')
   else if (scopeVal.value === 'lsys') parts.push('本专业')
-  else if (scopeVal.value === 'all') parts.push('全部科室')
   else if (scopeVal.value.startsWith('lsys:')) parts.push(scopeVal.value.slice(5))
   if (nameFilter.value.trim()) parts.push(`搜索: ${nameFilter.value.trim()}`)
   return parts.join('，')
@@ -245,9 +243,7 @@ async function fetchRecords() {
   try {
     const params = { name: userName.value, year: yearVal.value, source: sourceVal.value }
     if (monthVal.value) params.month = monthVal.value
-    if (scopeVal.value === 'all') {
-      params.scope = 'all'
-    } else if (scopeVal.value.startsWith('lsys:')) {
+    if (scopeVal.value.startsWith('lsys:')) {
       params.scope = 'all'
       params.filter_lsys = scopeVal.value.slice(5)
     } else {
@@ -276,19 +272,34 @@ onMounted(async () => {
 
   const q = route.query
   if (q.scope) scopeVal.value = q.scope
+  if (!canViewAll.value && (scopeVal.value === 'all' || scopeVal.value.startsWith('lsys:'))) {
+    scopeVal.value = 'self'
+  }
   if (q.year) yearVal.value = parseInt(q.year) || yearVal.value
   if (q.month) monthVal.value = parseInt(q.month) || 0
   if (q.source) sourceVal.value = q.source
   if (q.focusName) nameFilter.value = q.focusName
 
+  let scopeMigratedFromAll = false
   if (canViewAll.value) {
     try {
       const res = await getDeptLsysList()
-      deptOptions.value = (res && res.data) || []
+      deptOptions.value = (res && res.success && Array.isArray(res.list)) ? res.list : []
+      const wasAll = route.query.scope === 'all' || scopeVal.value === 'all'
+      if (wasAll) {
+        if (deptOptions.value.length) {
+          scopeVal.value = `lsys:${deptOptions.value[0]}`
+          scopeMigratedFromAll = true
+        } else {
+          scopeVal.value = 'self'
+        }
+      }
     } catch {}
   }
 
-  await fetchRecords()
+  if (!scopeMigratedFromAll) {
+    await fetchRecords()
+  }
 })
 </script>
 
@@ -352,8 +363,8 @@ onMounted(async () => {
 }
 
 .record-card__filters .filter-select--scope {
-  min-width: 10rem;
-  max-width: 20rem;
+  min-width: 13rem;
+  max-width: 22rem;
 }
 
 .record-card__filters .filter-select {

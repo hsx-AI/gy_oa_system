@@ -270,44 +270,12 @@
                   </div>
                 </div>
               </div>
-              <div ref="changelogWrapRef" class="changelog-wrap">
-                <button
-                  type="button"
-                  class="header-action-btn"
-                  aria-label="更新日志"
-                  @click.stop="toggleChangelog"
-                >
-                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-                    <polyline points="14 2 14 8 20 8" />
-                    <line x1="16" y1="13" x2="8" y2="13" />
-                    <line x1="16" y1="17" x2="8" y2="17" />
-                    <polyline points="10 9 9 9 8 9" />
-                  </svg>
-                </button>
-                <div
-                  v-show="changelogOpen"
-                  class="changelog-popover"
-                  role="dialog"
-                  aria-label="更新日志"
-                  @click.stop
-                >
-                  <div class="changelog-popover__header">
-                    <span class="changelog-popover__title">更新日志</span>
-                    <span class="changelog-popover__count">{{ changelogList.length }}</span>
-                  </div>
-                  <div class="changelog-popover__body">
-                    <div v-if="changelogLoading" class="changelog-popover__empty">加载中…</div>
-                    <div v-else-if="!changelogList.length" class="changelog-popover__empty">暂无更新日志</div>
-                    <div v-else class="changelog-list">
-                      <div v-for="n in changelogList" :key="n.id" class="changelog-item">
-                        <div class="changelog-item__time">{{ n.time }}</div>
-                        <div class="changelog-item__content" v-html="escapeHtml(n.content)"></div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
+              <button type="button" class="header-action-btn" aria-label="系统设置">
+                <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <circle cx="12" cy="12" r="3" />
+                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                </svg>
+              </button>
               <div class="user-info" ref="userInfoRef" @click="toggleUserMenu">
                 <div class="user-avatar">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -464,24 +432,6 @@ async function switchToNotifyTab() {
   finally { todoNotifyLoading.value = false }
 }
 
-// 更新日志弹窗
-const changelogWrapRef = ref(null)
-const changelogOpen = ref(false)
-const changelogList = ref([])
-const changelogLoading = ref(false)
-
-async function toggleChangelog() {
-  changelogOpen.value = !changelogOpen.value
-  if (changelogOpen.value && !changelogList.value.length) {
-    changelogLoading.value = true
-    try {
-      const res = await listNotifications()
-      changelogList.value = (res && res.items) || []
-    } catch { changelogList.value = [] }
-    finally { changelogLoading.value = false }
-  }
-}
-
 // 当前用户信息
 const currentUser = ref({
   name: '',
@@ -575,9 +525,6 @@ const onDocumentClick = (e) => {
   if (todoBellWrapRef.value && !todoBellWrapRef.value.contains(e.target)) {
     todoPopoverOpen.value = false
     todoActiveTab.value = 'todo'
-  }
-  if (changelogWrapRef.value && !changelogWrapRef.value.contains(e.target)) {
-    changelogOpen.value = false
   }
 }
 

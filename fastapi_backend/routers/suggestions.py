@@ -353,6 +353,27 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
 
         names = list({n for n, _ in emp_list})
 
+        # 排除 yggl.lsys 为"其他部门员工/成员"的人员（不参与考勤统计）
+        exclude_names = set()
+        try:
+            ph = ",".join(["%s"] * len(names))
+            exc_rows = db.execute_query(
+                f"SELECT name FROM yggl WHERE name IN ({ph}) "
+                f"AND TRIM(lsys) IN ('其他部门员工', '其他部门成员')",
+                tuple(names),
+            )
+            for r in (exc_rows or []):
+                n = (r.get("name") or "").strip()
+                if n:
+                    exclude_names.add(n)
+        except Exception:
+            pass
+        if exclude_names:
+            emp_list = [(n, d) for n, d in emp_list if n not in exclude_names]
+            names = [n for n in names if n not in exclude_names]
+        if not emp_list:
+            return []
+
         # ---------- 批量查询性别 ----------
         female_set = set()
         try:

@@ -284,7 +284,7 @@ async def get_dept_lsys_list():
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
             "AND RIGHT(TRIM(lsys), 1) != '1' "
             "AND TRIM(lsys) != %s "
-            "AND TRIM(lsys) != '其他部门员工' "
+            "AND TRIM(lsys) NOT IN ('其他部门员工', '其他部门成员') "
             "AND (COALESCE(zaizhi,0)=0) ORDER BY lsys",
             (LEADER_EXCLUDE_LSYS,)
         )

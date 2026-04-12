@@ -996,8 +996,8 @@ async def get_holiday_exchange_summary(
     source: str = Query("all", description="all|trip|duty|reward"),
 ):
     """
-    换休票获取汇总明细：合并「公出节假日换休票」「加班值班换休票」「集体奖励/手工调整」三种来源。
-    source: all=全部, trip=仅公出, duty=仅值班, reward=仅集体奖励/手工
+    换休票获取汇总明细：合并「公出节假日换休票」「加班值班换休票」「系统自动派发/手工调整」三种来源。
+    source: all=全部, trip=仅公出, duty=仅值班, reward=仅 hxp 手工/系统派发类（非加班换休、非公出节假日换休）
     """
     try:
         # ── 构建人员筛选 ──
@@ -1134,7 +1134,7 @@ async def get_holiday_exchange_summary(
                     "status": "已通过",
                 })
 
-        # ── 来源3: 集体奖励/手工调整（hxp 表中非"加班换休""公出节假日换休"的正数记录） ──
+        # ── 来源3: 系统自动派发/手工调整（hxp 表中非"加班换休""公出节假日换休"的正数记录） ──
         if source in ("all", "reward"):
             hxp_year_cond = "AND YEAR(p.sj) = %s" if year else ""
             hxp_month_cond = "AND MONTH(p.sj) = %s" if month else ""
@@ -1158,9 +1158,14 @@ async def get_holiday_exchange_summary(
                 if sl <= 0:
                     continue
                 ly_val = (r.get("ly") or "").strip()
+                # 历史用词「集体奖励」与空 ly 统一展示为「系统自动派发」
+                src_display = ly_val or "系统自动派发"
+                summary_display = ly_val or "系统自动派发"
+                if src_display == "集体奖励":
+                    src_display = summary_display = "系统自动派发"
                 data.append({
                     "id": r.get("id"),
-                    "source": ly_val or "集体奖励",
+                    "source": src_display,
                     "applicant": r.get("name") or "",
                     "department": "",
                     "dateFrom": date_str,
@@ -1168,7 +1173,7 @@ async def get_holiday_exchange_summary(
                     "dateRanges": None,
                     "days": None,
                     "hxpCount": sl,
-                    "restDaySummary": ly_val,
+                    "restDaySummary": summary_display,
                     "applyTime": sj_str,
                     "status": "已入账",
                     "materialFiles": [],
