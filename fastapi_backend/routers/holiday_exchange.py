@@ -1090,6 +1090,8 @@ async def get_holiday_exchange_summary(
                     "applyTime": str(r.get("apply_time") or "")[:19],
                     "status": STATUS_TEXT.get(r.get("status"), "未知"),
                     "materialFiles": mf_list if isinstance(mf_list, list) else [],
+                    "approver1": (r.get("spr") or "").strip(),
+                    "approver2": (r.get("spr2") or "").strip(),
                 })
 
         # ── 来源2: 加班值班换休票（jiaban 表 hx='是' 且已通过） ──
@@ -1132,6 +1134,8 @@ async def get_holiday_exchange_summary(
                     "restDaySummary": time_desc,
                     "applyTime": date_str,
                     "status": "已通过",
+                    "approver1": (r.get("spr") or "").strip(),
+                    "approver2": (r.get("spr2") or "").strip(),
                 })
 
         # ── 来源3: 系统自动派发/手工调整（hxp 表中非"加班换休""公出节假日换休"的正数记录） ──
@@ -1177,6 +1181,8 @@ async def get_holiday_exchange_summary(
                     "applyTime": sj_str,
                     "status": "已入账",
                     "materialFiles": [],
+                    "approver1": "",
+                    "approver2": "",
                 })
 
         data.sort(key=lambda x: x.get("applyTime") or "", reverse=True)

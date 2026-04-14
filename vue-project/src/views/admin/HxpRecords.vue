@@ -71,6 +71,7 @@
                 <tr>
                   <th>姓名</th>
                   <th>科室</th>
+                  <th>审批人</th>
                   <th>来源</th>
                   <th>日期</th>
                   <th>说明</th>
@@ -84,6 +85,9 @@
                 <tr v-for="r in filteredRecords" :key="r.id" @click="openDetail(r)" class="clickable-row">
                   <td class="td-name">{{ r.applicant }}</td>
                   <td>{{ r.department }}</td>
+                  <td class="cell-approvers" :title="formatApproverText(r)">
+                    {{ formatApproverText(r) }}
+                  </td>
                   <td><span class="source-tag" :class="sourceTagClass(r.source)">{{ r.source }}</span></td>
                   <td>
                     <template v-if="r.dateRanges && r.dateRanges.length > 1">
@@ -146,6 +150,8 @@
           <p v-if="detailRecord.days != null"><strong>天数：</strong>{{ detailRecord.days }} 天</p>
           <p><strong>换休票数量：</strong>{{ formatHxp(detailRecord.hxpCount) }} 张</p>
           <p><strong>状态：</strong>{{ detailRecord.status }}</p>
+          <p><strong>一级审批人：</strong>{{ detailRecord.approver1 || '—' }}</p>
+          <p><strong>二级审批人：</strong>{{ detailRecord.approver2 || '—' }}</p>
           <p><strong>时间：</strong>{{ detailRecord.applyTime }}</p>
           <div v-if="detailRecord.materialFiles && detailRecord.materialFiles.length" class="detail-materials">
             <p><strong>佐证材料：</strong></p>
@@ -236,6 +242,15 @@ function formatHxp(v) {
   if (v == null) return '—'
   const f = parseFloat(v)
   return f === Math.floor(f) ? f : parseFloat(f.toFixed(4))
+}
+
+function formatApproverText(record) {
+  const a1 = (record?.approver1 || '').trim()
+  const a2 = (record?.approver2 || '').trim()
+  if (a1 && a2) return `${a1} / ${a2}`
+  if (a1) return `一级:${a1}`
+  if (a2) return `二级:${a2}`
+  return '—'
 }
 
 async function fetchRecords() {
@@ -497,6 +512,15 @@ onMounted(async () => {
   word-break: break-word;
 }
 .cell-range-seg { font-size: var(--font-size-xs); line-height: 1.6; }
+
+.cell-approvers {
+  max-width: 180px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .file-link {
   display: inline-block;
