@@ -103,19 +103,18 @@ class ExcelProcessor:
         有字面量则用字面量；否则：前一条是进则本条为出，前一条是出则本条为进；
         当日第一条仍无法识别时，视为进(0)。
 
-        中立刷卡去重：相邻两条均为中立（无字面量）且时间差 ≤ neutral_threshold_sec
-        时，后一条沿用前一条标记（不交替），避免补刷设备重复刷卡被错误标为一进一出。
+        中立刷卡沿用：当前记录无字面量且与上一条时间差 ≤ neutral_threshold_sec
+        时，沿用上一条标记（不交替），无论上一条是明确标记还是中立推断。
+        避免门口刷脸进 + 几分钟后内部补刷被错标为一进一出。
         """
         THRESHOLD = neutral_threshold_sec
         out: List[int] = []
         prev: Optional[int] = None
-        prev_neutral = False
         prev_time: Optional[str] = None
 
         for record in group:
             raw = record.get("inout_mark")
             cur_time = record.get("attendance_time", "")
-            cur_neutral = raw is None
 
             if raw is not None:
                 resolved = int(raw)
@@ -123,7 +122,7 @@ class ExcelProcessor:
                     resolved = 0 if prev is None else (1 if prev == 0 else 0)
             else:
                 same_as_prev = False
-                if prev is not None and prev_neutral and prev_time and cur_time:
+                if prev is not None and prev_time and cur_time:
                     try:
                         t_p = datetime.strptime(prev_time, "%H:%M:%S")
                         t_c = datetime.strptime(cur_time, "%H:%M:%S")
@@ -140,7 +139,6 @@ class ExcelProcessor:
 
             out.append(resolved)
             prev = resolved
-            prev_neutral = cur_neutral
             prev_time = cur_time
         return out
 
