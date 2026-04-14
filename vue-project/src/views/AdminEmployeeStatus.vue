@@ -363,7 +363,16 @@ async function setStatus(empName, zaizhi) {
   const name = getCurrentUser()
   if (!name) return
   const action = zaizhi === 1 ? '设为离职' : '设为在职'
-  if (!confirm(`确定将「${empName}」${action}？`)) return
+  if (zaizhi === 1) {
+    const ok = confirm(
+      `确认将「${empName}」设为离职？\n` +
+      '离职后该员工将无法登录系统，且不参与统计。\n' +
+      '如需恢复可再操作设为在职。'
+    )
+    if (!ok) return
+  } else if (!confirm(`确定将「${empName}」${action}？`)) {
+    return
+  }
   actionLoading.value = empName
   try {
     const res = await setEmployeeStatus({

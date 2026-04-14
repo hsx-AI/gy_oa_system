@@ -34,6 +34,7 @@
               <option value="self">本人</option>
               <option value="lsys">本专业</option>
               <template v-if="canViewAll">
+                <option value="all">全员</option>
                 <option v-for="d in deptOptions" :key="d" :value="'lsys:' + d">{{ d }}</option>
               </template>
             </select>
@@ -220,6 +221,7 @@ const filterLabel = computed(() => {
   parts.push(srcLabels[sourceVal.value] || '全部来源')
   if (scopeVal.value === 'self') parts.push('本人')
   else if (scopeVal.value === 'lsys') parts.push('本专业')
+  else if (scopeVal.value === 'all') parts.push('全员')
   else if (scopeVal.value.startsWith('lsys:')) parts.push(scopeVal.value.slice(5))
   if (nameFilter.value.trim()) parts.push(`搜索: ${nameFilter.value.trim()}`)
   return parts.join('，')
@@ -248,8 +250,8 @@ function formatApproverText(record) {
   const a1 = (record?.approver1 || '').trim()
   const a2 = (record?.approver2 || '').trim()
   if (a1 && a2) return `${a1} / ${a2}`
-  if (a1) return `一级:${a1}`
-  if (a2) return `二级:${a2}`
+  if (a1) return a1
+  if (a2) return a2
   return '—'
 }
 
@@ -300,15 +302,7 @@ onMounted(async () => {
     try {
       const res = await getDeptLsysList()
       deptOptions.value = (res && res.success && Array.isArray(res.list)) ? res.list : []
-      const wasAll = route.query.scope === 'all' || scopeVal.value === 'all'
-      if (wasAll) {
-        if (deptOptions.value.length) {
-          scopeVal.value = `lsys:${deptOptions.value[0]}`
-          scopeMigratedFromAll = true
-        } else {
-          scopeVal.value = 'self'
-        }
-      }
+      // 保留 all=全员 语义，不再自动迁移为具体科室
     } catch {}
   }
 

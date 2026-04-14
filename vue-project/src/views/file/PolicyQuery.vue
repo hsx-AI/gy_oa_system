@@ -33,7 +33,8 @@
                 <tr>
                   <th>标题</th>
                   <th>发行时间</th>
-                  <th>文件名</th>
+                  <th>制度下载</th>
+                  <th>附件下载</th>
                   <th>上传人</th>
                   <th>上传时间</th>
                   <th>操作</th>
@@ -43,12 +44,33 @@
                 <tr v-for="row in list" :key="row.id">
                   <td>{{ row.title || '—' }}</td>
                   <td>{{ row.issue_time || '—' }}</td>
-                  <td>{{ row.file_name || '—' }}</td>
+                  <td>
+                    <a
+                      v-if="row.file_name"
+                      :href="getPolicyFileUrl(row.id, 1)"
+                      target="_blank"
+                      class="att-link"
+                      :title="row.file_name"
+                    >{{ formatAttachmentName(row.file_name) }}</a>
+                    <span v-else>—</span>
+                  </td>
+                  <td class="td-attachments">
+                    <template v-if="row.attachment_files && row.attachment_files.length">
+                      <a
+                        v-for="(att, ai) in row.attachment_files"
+                        :key="ai"
+                        :href="getAttachmentUrl(att.name)"
+                        target="_blank"
+                        class="att-link"
+                        :title="att.original || att.name"
+                      >{{ formatAttachmentName(att.original || att.name) }}</a>
+                    </template>
+                    <span v-else class="td-muted">—</span>
+                  </td>
                   <td>{{ row.uploader || '—' }}</td>
                   <td>{{ row.upload_time ? row.upload_time.slice(0, 16) : '—' }}</td>
                   <td class="file-actions">
                     <button type="button" class="btn-copy-small btn-preview" @click="openFile(row.id, 0)">预览</button>
-                    <button type="button" class="btn-copy-small btn-download" @click="openFile(row.id, 1)">下载</button>
                     <button v-if="canUpload" type="button" class="btn-copy-small btn-delete" @click="doDelete(row.id)">删除</button>
                   </td>
                 </tr>
@@ -185,6 +207,20 @@
             <p class="form-hint">支持 PDF、Word(.doc/.docx)、Excel(.xls/.xlsx)</p>
             <p v-if="selectedFile" class="selected-file">{{ selectedFile.name }}</p>
           </div>
+          <div class="form-group">
+            <label>附件（可选）</label>
+            <input
+              ref="attachmentInputRef"
+              type="file"
+              multiple
+              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png,.gif,.bmp,.zip,.rar,.7z"
+              @change="onAttachmentsSelected"
+            >
+            <p class="form-hint">可多选，支持 Office、PDF、图片、压缩包等常用格式</p>
+            <ul v-if="selectedAttachments.length" class="att-file-list">
+              <li v-for="(f, i) in selectedAttachments" :key="i">{{ f.name }}</li>
+            </ul>
+          </div>
           <div class="form-actions">
             <button type="button" @click="closeUploadModal">取消</button>
             <button type="submit" class="btn-primary" :disabled="uploadLoading || !selectedFile">
@@ -199,7 +235,7 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import { getPolicyList, getPolicyUploadPermission, uploadPolicy, deletePolicy, getPolicyFileUrl, vectorSearchPolicy } from '@/api/departmentPolicy'
+import { getPolicyList, getPolicyUploadPermission, uploadPolicy, deletePolicy, getPolicyFileUrl, getPolicyAttachmentUrl, vectorSearchPolicy } from '@/api/departmentPolicy'
 
 const list = ref([])
 const canUpload = ref(false)
@@ -209,7 +245,9 @@ const searchKeyword = ref('')
 const showUploadModal = ref(false)
 const uploadLoading = ref(false)
 const selectedFile = ref(null)
+const selectedAttachments = ref([])
 const fileInputRef = ref(null)
+const attachmentInputRef = ref(null)
 const showPreviewModal = ref(false)
 const previewLoading = ref(false)
 const previewUrl = ref('')
@@ -264,11 +302,38 @@ function onFileSelected(e) {
   }
 }
 
+function onAttachmentsSelected(e) {
+  const picked = e.target.files ? Array.from(e.target.files) : []
+  if (!picked.length) return
+  const existing = selectedAttachments.value || []
+  const merged = [...existing]
+  for (const f of picked) {
+    const dup = merged.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)
+    if (!dup) merged.push(f)
+  }
+  selectedAttachments.value = merged
+  // 清空 input，允许再次选择同一个文件时也触发 change
+  if (attachmentInputRef.value) attachmentInputRef.value.value = ''
+}
+
+function getAttachmentUrl(name) {
+  return getPolicyAttachmentUrl(name)
+}
+
+function formatAttachmentName(name) {
+  const n = (name || '').trim()
+  if (!n) return '附件'
+  const max = 18
+  return n.length > max ? `${n.slice(0, max)}...` : n
+}
+
 function closeUploadModal() {
   showUploadModal.value = false
   uploadForm.value = { title: '', issue_time: '', remark: '' }
   selectedFile.value = null
+  selectedAttachments.value = []
   fileInputRef.value && (fileInputRef.value.value = '')
+  attachmentInputRef.value && (attachmentInputRef.value.value = '')
 }
 
 async function submitUpload() {
@@ -297,7 +362,8 @@ async function submitUpload() {
       issue_time: uploadForm.value.issue_time.trim(),
       remark: (uploadForm.value.remark || '').trim(),
       uploader: getCurrentUser(),
-      file: selectedFile.value
+      file: selectedFile.value,
+      attachments: selectedAttachments.value
     })
     alert('上传成功')
     closeUploadModal()
@@ -792,4 +858,31 @@ button {
   border: none;
   display: block;
 }
+
+.td-attachments {
+  max-width: 200px;
+}
+.att-link {
+  display: inline-block;
+  margin-right: 6px;
+  margin-bottom: 2px;
+  color: var(--color-primary);
+  text-decoration: none;
+  font-size: 0.8rem;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.att-link:hover { text-decoration: underline; }
+.td-muted { color: var(--color-text-tertiary); }
+
+.att-file-list {
+  margin: var(--spacing-xs) 0 0;
+  padding-left: 1.25rem;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.att-file-list li { margin-bottom: 2px; }
 </style>

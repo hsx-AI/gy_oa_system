@@ -5,6 +5,7 @@
 预览时通过 LibreOffice 将 Word/Excel 转为 PDF
 """
 import os
+import json
 import uuid
 import subprocess
 import shutil
@@ -36,6 +37,12 @@ def _get_libreoffice_cmd():
     return shutil.which("libreoffice") or shutil.which("soffice") or "libreoffice"
 
 ALLOWED_EXTENSIONS = {".pdf", ".doc", ".docx", ".xls", ".xlsx"}
+ATTACHMENT_ALLOWED_EXTENSIONS = {
+    ".pdf", ".doc", ".docx", ".xls", ".xlsx",
+    ".ppt", ".pptx", ".txt", ".csv",
+    ".jpg", ".jpeg", ".png", ".gif", ".bmp",
+    ".zip", ".rar", ".7z",
+}
 CONVERTIBLE_TYPES = {"doc", "docx", "xls", "xlsx"}
 MIME_MAP = {
     ".pdf": "application/pdf",
@@ -43,12 +50,26 @@ MIME_MAP = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
     ".xls": "application/vnd.ms-excel",
     ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".ppt": "application/vnd.ms-powerpoint",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".txt": "text/plain",
+    ".csv": "text/csv",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".zip": "application/zip",
+    ".rar": "application/x-rar-compressed",
+    ".7z": "application/x-7z-compressed",
 }
+ATTACHMENT_DIR = os.path.join(POLICY_DIR, "attachments")
 
 
 def _ensure_policy_dir():
     os.makedirs(POLICY_DIR, exist_ok=True)
     os.makedirs(PDF_CACHE_DIR, exist_ok=True)
+    os.makedirs(ATTACHMENT_DIR, exist_ok=True)
 
 
 def _convert_to_pdf_sync(source_path: str) -> Optional[str]:
@@ -137,8 +158,9 @@ async def upload_policy(
     remark: Optional[str] = Query("", description="备注"),
     uploader: Optional[str] = Query("", description="上传人"),
     file: UploadFile = File(...),
+    attachments: List[UploadFile] = File(default=[]),
 ):
-    """上传制度文件，支持 PDF、Word、Excel。仅综合技术室主任/副主任可上传"""
+    """上传制度文件，支持 PDF、Word、Excel。可选附带附件。仅综合技术室主任/副主任可上传"""
     uploader_name = (uploader or "").strip()
     if not _can_upload_policy(uploader_name):
         raise HTTPException(status_code=403, detail="仅综合技术室主任/副主任可上传制度")
@@ -149,7 +171,7 @@ async def upload_policy(
     if ext not in ALLOWED_EXTENSIONS:
         raise HTTPException(
             status_code=400,
-            detail=f"仅支持 PDF、Word(.doc/.docx)、Excel(.xls/.xlsx) 格式",
+            detail="仅支持 PDF、Word(.doc/.docx)、Excel(.xls/.xlsx) 格式",
         )
     file_type = ext.lstrip(".")
     content = await file.read()
@@ -169,12 +191,33 @@ async def upload_policy(
         logger.error(f"写入文件失败: {e}")
         raise HTTPException(status_code=500, detail="保存文件失败")
 
+    att_meta: list = []
+    real_attachments = [a for a in attachments if (a.filename or "").strip()]
+    for att in real_attachments:
+        att_fn = (att.filename or "").strip()
+        att_ext = os.path.splitext(att_fn)[1].lower()
+        if att_ext not in ATTACHMENT_ALLOWED_EXTENSIONS:
+            continue
+        att_content = await att.read()
+        if not att_content:
+            continue
+        att_id = uuid.uuid4().hex
+        att_safe = f"{att_id}{att_ext}"
+        att_path = os.path.join(ATTACHMENT_DIR, att_safe)
+        try:
+            with open(att_path, "wb") as af:
+                af.write(att_content)
+            att_meta.append({"name": att_safe, "original": att_fn})
+        except Exception as e:
+            logger.error(f"写入附件失败: {e}")
+
     uploader = uploader_name
     issue_time_val = (issue_time or "").strip()
     if not issue_time_val:
         raise HTTPException(status_code=400, detail="发行时间为必填项")
-    sql = """INSERT INTO dept_policy (id, title, keywords, file_name, file_path, file_type, uploader, issue_time, remark)
-             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
+    att_json = json.dumps(att_meta, ensure_ascii=False) if att_meta else None
+    sql = """INSERT INTO dept_policy (id, title, keywords, file_name, file_path, file_type, uploader, issue_time, remark, attachment_files)
+             VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)"""
     db.execute_update(
         sql,
         (
@@ -187,6 +230,7 @@ async def upload_policy(
             uploader,
             issue_time_val,
             (remark or "").strip(),
+            att_json,
         ),
     )
     # 向量化入库（异步，不阻塞返回）
@@ -224,6 +268,14 @@ async def get_policy_list(
             (*params, page_size, offset),
         )
 
+        def _parse_att(raw):
+            if not raw:
+                return []
+            try:
+                return json.loads(raw) if isinstance(raw, str) else raw
+            except Exception:
+                return []
+
         def _fmt(r):
             return {
                 "id": _row_id(r),
@@ -236,6 +288,7 @@ async def get_policy_list(
                 "upload_time": str(r.get("upload_time") or "")[:19] if r.get("upload_time") else "",
                 "issue_time": (r.get("issue_time") or "").strip(),
                 "remark": (r.get("remark") or "").strip(),
+                "attachment_files": _parse_att(r.get("attachment_files")),
             }
 
         return {
@@ -364,6 +417,22 @@ async def get_policy_file(
     )
 
 
+@router.get("/attachment")
+async def get_policy_attachment(
+    name: str = Query(..., description="附件存储文件名"),
+):
+    """下载制度附件"""
+    safe = os.path.basename((name or "").strip())
+    if not safe:
+        raise HTTPException(status_code=400, detail="缺少附件文件名")
+    full_path = os.path.join(ATTACHMENT_DIR, safe)
+    if not os.path.isfile(full_path):
+        raise HTTPException(status_code=404, detail="附件不存在")
+    ext = os.path.splitext(safe)[1].lower()
+    media_type = MIME_MAP.get(ext, "application/octet-stream")
+    return FileResponse(full_path, media_type=media_type, filename=safe, content_disposition_type="attachment")
+
+
 @router.delete("/delete")
 async def delete_policy(
     id: str = Query(..., description="记录ID"),
@@ -375,7 +444,7 @@ async def delete_policy(
     rid = (id or "").strip()
     if not rid:
         raise HTTPException(status_code=400, detail="缺少记录ID")
-    rows = db.execute_query("SELECT file_path FROM dept_policy WHERE id=%s", (rid,))
+    rows = db.execute_query("SELECT file_path, attachment_files FROM dept_policy WHERE id=%s", (rid,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     rel_path = (rows[0].get("file_path") or "").strip()
@@ -385,7 +454,6 @@ async def delete_policy(
             os.remove(full_path)
         except Exception as e:
             logger.error(f"删除文件失败: {e}")
-        # 删除对应的 PDF 缓存
         base_name = Path(full_path).stem
         pdf_cache = os.path.join(PDF_CACHE_DIR, f"{base_name}.pdf")
         if os.path.isfile(pdf_cache):
@@ -393,6 +461,20 @@ async def delete_policy(
                 os.remove(pdf_cache)
             except Exception:
                 pass
+    att_raw = rows[0].get("attachment_files") or ""
+    try:
+        att_list = json.loads(att_raw) if isinstance(att_raw, str) and att_raw else (att_raw if isinstance(att_raw, list) else [])
+    except Exception:
+        att_list = []
+    for att in att_list:
+        att_name = (att.get("name") or "").strip() if isinstance(att, dict) else ""
+        if att_name:
+            att_path = os.path.join(ATTACHMENT_DIR, att_name)
+            if os.path.isfile(att_path):
+                try:
+                    os.remove(att_path)
+                except Exception:
+                    pass
     try:
         from services.policy_vector import remove_from_index
         remove_from_index(rid)
