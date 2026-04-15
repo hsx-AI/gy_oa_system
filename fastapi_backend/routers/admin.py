@@ -1032,6 +1032,45 @@ async def get_leader_briefing(
         logger.warning(f"leader-briefing 查换休票批量审批失败: {e}")
 
     try:
+        ot_hx_rows = db.execute_query(
+            """SELECT j.xm, j.timedate, j.tian1, j.hxp, j.spr, j.spr2, j.jiabantime
+               FROM jiaban j
+               WHERE j.jiabanzt = 4
+                 AND TRIM(j.hx) IN ('是', '1', 'true', 'yes')
+                 AND COALESCE(j.hxp, 0) > 0
+                 AND j.jiabantime >= DATE_SUB(NOW(), INTERVAL %s DAY)
+               ORDER BY j.jiabantime DESC""",
+            (days,),
+        )
+        for r in (ot_hx_rows or []):
+            xm = (r.get("xm") or "").strip()
+            timedate = str(r.get("timedate") or "")[:10]
+            hours = r.get("tian1") or 0
+            tickets = r.get("hxp") or 0
+            hours_f = float(hours)
+            tickets_f = float(tickets)
+            hours_display = int(hours_f) if hours_f == int(hours_f) else f"{hours_f:g}"
+            tickets_display = int(tickets_f) if tickets_f == int(tickets_f) else f"{tickets_f:g}"
+            spr = (r.get("spr") or "").strip()
+            spr2 = (r.get("spr2") or "").strip()
+            approvers = "、".join(filter(None, [spr, spr2]))
+            at = r.get("jiabantime")
+            if hasattr(at, "strftime"):
+                at = at.strftime("%Y-%m-%d")
+            else:
+                at = str(at or "")[:10]
+            at_year = at[:4] if len(at) >= 4 else ""
+            items.append({
+                "type": "hxp_overtime",
+                "time": at,
+                "name": xm,
+                "year": at_year,
+                "text": f"{timedate}，{xm}加班{hours_display}小时获换休票{tickets_display}张（{approvers}审批）",
+            })
+    except Exception as e:
+        logger.warning(f"leader-briefing 查加班换休票失败: {e}")
+
+    try:
         trip_rows = db.execute_query(
             """SELECT g.gcr, g.gcdd, g.gcrw, g.bld, g.szr,
                       g.bldpztime, g.wpsj, g.yjcfsj

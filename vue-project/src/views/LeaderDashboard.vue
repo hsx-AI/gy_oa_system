@@ -434,15 +434,25 @@
             <table class="wi-person-table">
               <thead>
                 <tr>
-                  <th>姓名</th>
+                  <th class="th-rank">序号</th>
+                  <th class="wi-th-sort" @click="toggleWiSort('name')">
+                    姓名 <span class="wi-sort-ind">{{ wiSortIndicator('name') }}</span>
+                  </th>
                   <th>科室</th>
-                  <th>加班(h)</th>
-                  <th>实际在岗(h)</th>
-                  <th>工作强度</th>
+                  <th class="wi-th-sort" @click="toggleWiSort('overtimeHours')">
+                    加班(h) <span class="wi-sort-ind">{{ wiSortIndicator('overtimeHours') }}</span>
+                  </th>
+                  <th class="wi-th-sort" @click="toggleWiSort('actualHours')">
+                    实际在岗(h) <span class="wi-sort-ind">{{ wiSortIndicator('actualHours') }}</span>
+                  </th>
+                  <th class="wi-th-sort" @click="toggleWiSort('intensity')">
+                    工作强度 <span class="wi-sort-ind">{{ wiSortIndicator('intensity') }}</span>
+                  </th>
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="p in workIntensity.byPerson" :key="p.name">
+                <tr v-for="(p, idx) in wiByPersonSorted" :key="p.name">
+                  <td class="td-rank">{{ idx + 1 }}</td>
                   <td>{{ p.name }}</td>
                   <td>{{ p.lsys }}</td>
                   <td class="td-num">{{ p.overtimeHours }}</td>
@@ -558,6 +568,8 @@ const trendTrip = computed(() => _buildTrendChart(monthlyTrip.value, '天'))
 const workIntensity = ref({})
 const wiViewMode = ref('dept')
 const wiMonthly = ref([])
+const wiSortKey = ref('intensity')
+const wiSortOrder = ref('desc')
 const WI_SPARK_W = 280
 const WI_SPARK_H = 68
 const WI_SPARK_LEFT = 16
@@ -596,6 +608,39 @@ const wiSparklineDots = computed(() => {
     return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月: ${v.toFixed(1)}%` }
   })
 })
+
+const wiByPersonSorted = computed(() => {
+  const list = [...(workIntensity.value?.byPerson || [])]
+  const key = wiSortKey.value
+  const desc = wiSortOrder.value === 'desc'
+  list.sort((a, b) => {
+    const av = a?.[key]
+    const bv = b?.[key]
+    if (key === 'name') {
+      return desc
+        ? String(bv || '').localeCompare(String(av || ''), 'zh-CN')
+        : String(av || '').localeCompare(String(bv || ''), 'zh-CN')
+    }
+    const na = Number(av || 0)
+    const nb = Number(bv || 0)
+    return desc ? nb - na : na - nb
+  })
+  return list
+})
+
+function toggleWiSort(key) {
+  if (wiSortKey.value === key) {
+    wiSortOrder.value = wiSortOrder.value === 'desc' ? 'asc' : 'desc'
+    return
+  }
+  wiSortKey.value = key
+  wiSortOrder.value = key === 'name' ? 'asc' : 'desc'
+}
+
+function wiSortIndicator(key) {
+  if (wiSortKey.value !== key) return '↕'
+  return wiSortOrder.value === 'desc' ? '↓' : '↑'
+}
 
 const EXCLUDED_LSYS_SET = new Set(['其他部门员工', '其他部门成员'])
 
@@ -1556,6 +1601,25 @@ onMounted(async () => {
   background: var(--color-bg-spotlight);
   font-weight: 600;
   color: var(--color-text-secondary);
+}
+.wi-person-table .th-rank,
+.wi-person-table .td-rank {
+  width: 56px;
+  text-align: center;
+}
+.wi-th-sort {
+  cursor: pointer;
+  user-select: none;
+  transition: color .15s, background .15s;
+}
+.wi-th-sort:hover {
+  color: var(--color-primary);
+  background: #eef4ff;
+}
+.wi-sort-ind {
+  margin-left: 4px;
+  font-size: 11px;
+  color: #94a3b8;
 }
 .wi-person-table .td-num { text-align: center; }
 .wi-person-table .td-intensity { color: #c2410c; font-weight: 600; }

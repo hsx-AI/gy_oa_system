@@ -93,9 +93,19 @@
               </svg>
             </span>
             <span class="dashboard-card__title-text">重要信息审阅</span>
-            <span class="dashboard-card__badge">{{ briefingItems.length }}</span>
+            <span class="dashboard-card__badge">{{ briefingFilteredItems.length }}</span>
           </h2>
           <div class="briefing-header-right">
+            <div class="briefing-filter-tabs">
+              <button
+                v-for="f in briefingFilterOptions"
+                :key="f.value"
+                type="button"
+                class="briefing-filter-tab"
+                :class="{ active: briefingFilter === f.value }"
+                @click="briefingFilter = f.value"
+              >{{ f.label }}</button>
+            </div>
             <select v-model="briefingDays" class="briefing-days-select" @change="fetchBriefing">
               <option :value="3">最近3天</option>
               <option :value="7">最近7天</option>
@@ -119,10 +129,11 @@
               :class="'briefing-item--' + item.type"
               @click="goBriefingDetail(item)"
             >
-              <span class="briefing-tag">{{ item.type === 'hxp' || item.type === 'hxp_batch' ? '换休票' : '公出' }}</span>
+              <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
               <span class="briefing-text">{{ item.text }}</span>
               <span class="briefing-arrow">→</span>
             </div>
+            <div v-if="!briefingItemsDup.length" class="briefing-empty-inline">当前筛选下暂无信息</div>
           </div>
         </div>
       </article>
@@ -132,22 +143,22 @@
     <div v-if="showBriefingModal" class="modal-overlay" @click.self="showBriefingModal = false">
       <div class="briefing-modal">
         <div class="briefing-modal__header">
-          <h2>重要信息审阅（最近{{ briefingDays }}天，共{{ briefingItems.length }}条）</h2>
+          <h2>重要信息审阅（最近{{ briefingDays }}天，共{{ briefingFilteredItems.length }}条）</h2>
           <button type="button" class="briefing-modal__close" @click="showBriefingModal = false">&times;</button>
         </div>
         <div class="briefing-modal__body">
           <div
-            v-for="(item, idx) in briefingItems"
+            v-for="(item, idx) in briefingFilteredItems"
             :key="idx"
             class="briefing-modal__item"
             :class="'briefing-modal__item--' + item.type"
             @click="goBriefingDetail(item); showBriefingModal = false"
           >
             <span class="briefing-modal__idx">{{ idx + 1 }}</span>
-            <span class="briefing-tag">{{ item.type === 'hxp' || item.type === 'hxp_batch' ? '换休票' : '公出' }}</span>
+            <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
             <span class="briefing-modal__text">{{ item.text }}</span>
           </div>
-          <p v-if="!briefingItems.length" class="briefing-modal__empty">暂无信息</p>
+          <p v-if="!briefingFilteredItems.length" class="briefing-modal__empty">当前筛选下暂无信息</p>
         </div>
       </div>
     </div>
@@ -184,7 +195,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getLeaveList,
@@ -219,13 +230,21 @@ const briefingTrackRef = ref(null)
 const briefingDays = ref(7)
 const briefingHover = ref(false)
 const showBriefingModal = ref(false)
+const briefingFilter = ref('all')
+const briefingFilterOptions = [
+  { value: 'all', label: '全部' },
+  { value: 'trip_city', label: '市内公出' },
+  { value: 'trip_domestic', label: '境内公出' },
+  { value: 'trip_abroad', label: '境外公出' },
+  { value: 'hxp_all', label: '换休票' },
+]
 let marqueeTimer = null
 let marqueeOffset = 0
 let marqueePaused = false
 
 function startMarquee() {
   stopMarquee()
-  if (briefingItems.value.length <= 4) return
+  if (briefingFilteredItems.value.length <= 4) return
   marqueeOffset = 0
   const step = () => {
     if (marqueePaused) { marqueeTimer = requestAnimationFrame(step); return }
@@ -262,9 +281,46 @@ function onMarqueeWheel(e) {
 }
 
 const briefingItemsDup = computed(() => {
-  const arr = briefingItems.value
+  const arr = briefingFilteredItems.value
   return arr.length > 4 ? [...arr, ...arr] : arr
 })
+
+function getTripScopeFromItem(item) {
+  if ((item?.type || '') !== 'trip') return ''
+  const txt = `${item?.text || ''} ${item?.gcdd || ''}`
+  const abroadRe = /(境外|国外|海外|香港|澳门|台湾|日本|韩国|美国|加拿大|英国|德国|法国|意大利|俄罗斯|澳大利亚|新加坡|马来西亚|泰国|越南|菲律宾|印尼|阿联酋|迪拜|欧洲|非洲|美洲)/i
+  if (abroadRe.test(txt)) return 'trip_abroad'
+  const cityRe = /(市内|本市|宁波|鄞州|海曙|江北|北仑|镇海|奉化|余姚|慈溪|宁海|象山)/i
+  if (cityRe.test(txt)) return 'trip_city'
+  return 'trip_domestic'
+}
+
+const briefingFilteredItems = computed(() => {
+  const mode = briefingFilter.value
+  const arr = briefingItems.value || []
+  if (mode === 'all') return arr
+  if (mode === 'hxp_all') {
+    return arr.filter(i => ['hxp', 'hxp_batch', 'hxp_overtime'].includes(i?.type))
+  }
+  if (mode === 'trip_city' || mode === 'trip_domestic' || mode === 'trip_abroad') {
+    return arr.filter(i => getTripScopeFromItem(i) === mode)
+  }
+  return arr
+})
+
+watch([briefingFilter, briefingItems], async () => {
+  marqueeOffset = 0
+  if (briefingTrackRef.value) briefingTrackRef.value.style.transform = 'translateY(0)'
+  await nextTick()
+  startMarquee()
+})
+
+function briefingTagLabel(type) {
+  if (type === 'hxp_overtime') return '加班换休'
+  if (type === 'hxp' || type === 'hxp_batch') return '换休票'
+  if (type === 'trip') return '公出'
+  return '消息'
+}
 
 function goBriefingDetail(item) {
   if (item.type === 'trip') {
@@ -275,6 +331,10 @@ function goBriefingDetail(item) {
     const q = { focusName: item.name || '', scope: 'all', status: 'approved' }
     if (item.year) q.year = item.year
     router.push({ path: '/admin/hxp-records', query: q })
+  } else if (item.type === 'hxp_overtime') {
+    const q = { tab: 'overtime', from: 'leader', focusName: item.name || '' }
+    if (item.year) q.year = item.year
+    router.push({ path: '/attendance/manual', query: q })
   } else if (item.type === 'hxp_batch') {
     router.push('/admin/hxp-manage')
   }
@@ -1170,6 +1230,35 @@ async function navigateTo(feature) {
   display: flex;
   align-items: center;
   gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.briefing-filter-tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.briefing-filter-tab {
+  padding: 3px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--color-text-secondary);
+  background: #fff;
+  cursor: pointer;
+  transition: all .15s;
+}
+.briefing-filter-tab:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.briefing-filter-tab.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
 }
 
 .briefing-days-select {
@@ -1211,6 +1300,13 @@ async function navigateTo(feature) {
 
 .briefing-track {
   will-change: transform;
+}
+
+.briefing-empty-inline {
+  padding: 22px 0;
+  text-align: center;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
 }
 
 .briefing-item {
@@ -1268,6 +1364,15 @@ async function navigateTo(feature) {
 .briefing-item--hxp_batch .briefing-tag {
   color: #7c3aed;
   background: #ede9fe;
+}
+
+.briefing-item--hxp_overtime .briefing-tag {
+  color: #059669;
+  background: #d1fae5;
+}
+.briefing-modal__item--hxp_overtime .briefing-tag {
+  color: #059669;
+  background: #d1fae5;
 }
 
 .briefing-text {
@@ -1329,6 +1434,7 @@ async function navigateTo(feature) {
   border-bottom: 1px solid var(--color-border-lighter);
   cursor: pointer;
   transition: background 0.15s;
+  border-left: 4px solid transparent;
 }
 .briefing-modal__item:hover {
   background: var(--color-bg-spotlight, #f8f9fa);
@@ -1350,6 +1456,47 @@ async function navigateTo(feature) {
   font-size: var(--font-size-sm);
   color: var(--color-text-primary);
   line-height: 1.5;
+}
+.briefing-modal__item--hxp {
+  background: #fffaf0;
+  border-left-color: #d97706;
+}
+.briefing-modal__item--hxp:hover {
+  background: #fef3c7;
+}
+.briefing-modal__item--hxp_batch {
+  background: #faf5ff;
+  border-left-color: #7c3aed;
+}
+.briefing-modal__item--hxp_batch:hover {
+  background: #ede9fe;
+}
+.briefing-modal__item--hxp_overtime {
+  background: #ecfdf5;
+  border-left-color: #059669;
+}
+.briefing-modal__item--hxp_overtime:hover {
+  background: #d1fae5;
+}
+.briefing-modal__item--trip {
+  background: #f0f9ff;
+  border-left-color: #0284c7;
+}
+.briefing-modal__item--trip:hover {
+  background: #e0f2fe;
+}
+
+.briefing-modal__item--hxp .briefing-tag {
+  color: #b45309;
+  background: #fef3c7;
+}
+.briefing-modal__item--hxp_batch .briefing-tag {
+  color: #7c3aed;
+  background: #ede9fe;
+}
+.briefing-modal__item--trip .briefing-tag {
+  color: #0369a1;
+  background: #e0f2fe;
 }
 .briefing-modal__empty {
   text-align: center;
