@@ -1129,7 +1129,7 @@ onMounted(async () => {
 }
 
 .dashboard-card {
-  overflow: hidden;
+  overflow: visible;
   border-radius: var(--radius-base);
   border: 1px solid var(--color-border-lighter);
 }
@@ -1185,6 +1185,14 @@ onMounted(async () => {
 .trip-card .dashboard-card-header h3 { color: white; }
 
 .dashboard-card-body { padding: var(--spacing-xl); }
+.dashboard-card-header {
+  border-top-left-radius: var(--radius-base);
+  border-top-right-radius: var(--radius-base);
+}
+.dashboard-card-body {
+  border-bottom-left-radius: var(--radius-base);
+  border-bottom-right-radius: var(--radius-base);
+}
 
 .dashboard-total {
   display: flex;
