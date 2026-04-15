@@ -105,9 +105,23 @@
                 </button>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total clickable" @click="goLeave()" title="点击查看全部请假记录">
+                <div class="dashboard-total clickable trend-anchor" @click="goLeave()" title="点击查看全部请假记录">
                   <span class="total-value">{{ leaveStats.totalDays ?? '-' }}</span>
                   <span class="total-unit">天</span>
+                  <div v-if="isFullYear && trendLeave" class="trend-popover trend-popover-leave">
+                    <div class="trend-pop-title">{{ filterYear }}年月度{{ showHxLeaveOnly ? '换休请假' : '请假' }}趋势（天）</div>
+                    <svg class="trend-svg" :viewBox="`0 0 ${TREND_W} ${TREND_H}`" preserveAspectRatio="xMidYMid meet">
+                      <line v-for="(t, i) in trendLeave.yTicks" :key="'yl-' + i" :x1="TREND_PAD.l" :x2="TREND_W - TREND_PAD.r" :y1="t.y" :y2="t.y" class="trend-grid"/>
+                      <text v-for="(t, i) in trendLeave.yTicks" :key="'yt-' + i" :x="TREND_PAD.l - 4" :y="t.y + 3" class="trend-y-label">{{ t.label }}</text>
+                      <path :d="trendLeave.areaD" class="trend-area trend-area-leave"/>
+                      <path :d="trendLeave.pathD" class="trend-line trend-line-leave"/>
+                      <template v-for="p in trendLeave.points" :key="'lp-' + p.month">
+                        <circle :cx="p.x" :cy="p.y" r="3.5" class="trend-dot trend-dot-leave"/>
+                        <text :x="p.x" :y="p.y - 8" text-anchor="middle" class="trend-dot-val">{{ p.v }}</text>
+                      </template>
+                      <text v-for="p in trendLeave.points" :key="'lm-' + p.month" :x="p.x" :y="TREND_H - 4" text-anchor="middle" class="trend-x-label">{{ p.month }}月</text>
+                    </svg>
+                  </div>
                 </div>
                 <div class="dashboard-meta">共 {{ leaveStats.personCount ?? 0 }} 人</div>
                 <div v-if="showHxLeaveOnly" class="ot-net-hint">仅统计类型为「换休」「员工换休票」的已通过请假（按天）</div>
@@ -136,9 +150,23 @@
                 </button>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total clickable" @click="goOvertime()" title="点击查看全部加班记录">
+                <div class="dashboard-total clickable trend-anchor" @click="goOvertime()" title="点击查看全部加班记录">
                   <span class="total-value">{{ overtimeStats.totalHours ?? '-' }}</span>
                   <span class="total-unit">小时</span>
+                  <div v-if="isFullYear && trendOvertime" class="trend-popover trend-popover-overtime">
+                    <div class="trend-pop-title">{{ filterYear }}年月度{{ showNetOvertime ? '净加班' : '加班' }}趋势（小时）</div>
+                    <svg class="trend-svg" :viewBox="`0 0 ${TREND_W} ${TREND_H}`" preserveAspectRatio="xMidYMid meet">
+                      <line v-for="(t, i) in trendOvertime.yTicks" :key="'yl-' + i" :x1="TREND_PAD.l" :x2="TREND_W - TREND_PAD.r" :y1="t.y" :y2="t.y" class="trend-grid"/>
+                      <text v-for="(t, i) in trendOvertime.yTicks" :key="'yt-' + i" :x="TREND_PAD.l - 4" :y="t.y + 3" class="trend-y-label">{{ t.label }}</text>
+                      <path :d="trendOvertime.areaD" class="trend-area trend-area-overtime"/>
+                      <path :d="trendOvertime.pathD" class="trend-line trend-line-overtime"/>
+                      <template v-for="p in trendOvertime.points" :key="'op-' + p.month">
+                        <circle :cx="p.x" :cy="p.y" r="3.5" class="trend-dot trend-dot-overtime"/>
+                        <text :x="p.x" :y="p.y - 8" text-anchor="middle" class="trend-dot-val">{{ p.v }}</text>
+                      </template>
+                      <text v-for="p in trendOvertime.points" :key="'om-' + p.month" :x="p.x" :y="TREND_H - 4" text-anchor="middle" class="trend-x-label">{{ p.month }}月</text>
+                    </svg>
+                  </div>
                 </div>
                 <div class="dashboard-meta">共 {{ overtimeStats.personCount ?? 0 }} 人</div>
                 <div v-if="showNetOvertime" class="ot-net-hint">加班时长 − 换休请假时长</div>
@@ -163,9 +191,23 @@
                 <h3>公出汇总</h3>
               </div>
               <div class="dashboard-card-body">
-                <div class="dashboard-total clickable" @click="goTrip()" title="点击查看全部公出记录">
+                <div class="dashboard-total clickable trend-anchor" @click="goTrip()" title="点击查看全部公出记录">
                   <span class="total-value">{{ tripStats.totalDays ?? '-' }}</span>
                   <span class="total-unit">天</span>
+                  <div v-if="isFullYear && trendTrip" class="trend-popover trend-popover-trip">
+                    <div class="trend-pop-title">{{ filterYear }}年月度公出趋势（天）</div>
+                    <svg class="trend-svg" :viewBox="`0 0 ${TREND_W} ${TREND_H}`" preserveAspectRatio="xMidYMid meet">
+                      <line v-for="(t, i) in trendTrip.yTicks" :key="'yl-' + i" :x1="TREND_PAD.l" :x2="TREND_W - TREND_PAD.r" :y1="t.y" :y2="t.y" class="trend-grid"/>
+                      <text v-for="(t, i) in trendTrip.yTicks" :key="'yt-' + i" :x="TREND_PAD.l - 4" :y="t.y + 3" class="trend-y-label">{{ t.label }}</text>
+                      <path :d="trendTrip.areaD" class="trend-area trend-area-trip"/>
+                      <path :d="trendTrip.pathD" class="trend-line trend-line-trip"/>
+                      <template v-for="p in trendTrip.points" :key="'tp-' + p.month">
+                        <circle :cx="p.x" :cy="p.y" r="3.5" class="trend-dot trend-dot-trip"/>
+                        <text :x="p.x" :y="p.y - 8" text-anchor="middle" class="trend-dot-val">{{ p.v }}</text>
+                      </template>
+                      <text v-for="p in trendTrip.points" :key="'tm-' + p.month" :x="p.x" :y="TREND_H - 4" text-anchor="middle" class="trend-x-label">{{ p.month }}月</text>
+                    </svg>
+                  </div>
                 </div>
                 <div class="dashboard-meta">共 {{ tripStats.personCount ?? 0 }} 人</div>
                 <div v-if="tripStats.list?.length" class="dashboard-list">
@@ -333,7 +375,7 @@
             <span>工作强度统计</span>
             <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
           </h2>
-          <p class="section-desc">工作强度 A = 加班时长 ÷ (应出勤时长 − 公出时长)，反映实际在岗期间的加班负荷。</p>
+          <p class="section-desc">工作强度 A = 加班时长 ÷ 实际在岗时长；实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。</p>
 
           <div class="wi-summary">
             <div class="wi-summary-item">
@@ -395,7 +437,6 @@
                   <th>姓名</th>
                   <th>科室</th>
                   <th>加班(h)</th>
-                  <th>公出(天)</th>
                   <th>实际在岗(h)</th>
                   <th>工作强度</th>
                 </tr>
@@ -405,7 +446,6 @@
                   <td>{{ p.name }}</td>
                   <td>{{ p.lsys }}</td>
                   <td class="td-num">{{ p.overtimeHours }}</td>
-                  <td class="td-num">{{ p.tripDays }}</td>
                   <td class="td-num">{{ p.actualHours }}</td>
                   <td class="td-num td-intensity">{{ (p.intensity * 100).toFixed(1) }}%</td>
                 </tr>
@@ -471,6 +511,49 @@ const compareChartTypes = [
   { type: 'leave', label: '请假', unit: '(天)' },
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
+
+const monthlyLeave = ref([])
+const monthlyOvertime = ref([])
+const monthlyTrip = ref([])
+
+const isFullYear = computed(() => !filterMonth.value)
+
+const TREND_W = 340
+const TREND_H = 120
+const TREND_PAD = { l: 40, r: 16, t: 18, b: 22 }
+
+function _buildTrendChart(data, unit) {
+  if (!data.length) return null
+  const vals = data.map(d => d.value)
+  const max = Math.max(...vals, 0.01)
+  const min = Math.min(...vals, 0)
+  const range = max - min || 1
+  const usableW = TREND_W - TREND_PAD.l - TREND_PAD.r
+  const usableH = TREND_H - TREND_PAD.t - TREND_PAD.b
+
+  const points = vals.map((v, i) => {
+    const x = TREND_PAD.l + (data.length > 1 ? (i / (data.length - 1)) * usableW : usableW / 2)
+    const y = TREND_PAD.t + (1 - (v - min) / range) * usableH
+    return { x, y, v, month: data[i].month }
+  })
+
+  const pathD = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ')
+  const areaD = pathD + ` L${points[points.length - 1].x.toFixed(1)},${TREND_H - TREND_PAD.b} L${points[0].x.toFixed(1)},${TREND_H - TREND_PAD.b} Z`
+
+  const yTicks = []
+  const steps = 4
+  for (let i = 0; i <= steps; i++) {
+    const val = min + (range * i) / steps
+    const y = TREND_PAD.t + (1 - i / steps) * usableH
+    yTicks.push({ y, label: val >= 1000 ? (val / 1000).toFixed(1) + 'k' : Number.isInteger(val) ? String(val) : val.toFixed(1) })
+  }
+
+  return { points, pathD, areaD, yTicks, unit }
+}
+
+const trendLeave = computed(() => _buildTrendChart(monthlyLeave.value, '天'))
+const trendOvertime = computed(() => _buildTrendChart(monthlyOvertime.value, '小时'))
+const trendTrip = computed(() => _buildTrendChart(monthlyTrip.value, '天'))
 
 const workIntensity = ref({})
 const wiViewMode = ref('dept')
@@ -805,6 +888,28 @@ const fetchData = async () => {
     if (fullAttRes?.success) fullAttendance.value = fullAttRes
     if (deptCompRes?.success) deptComparison.value = deptCompRes
     await fetchFullAttendanceChart()
+
+    if (!month) {
+      const today = new Date()
+      const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
+      const leaveP = [], otP = [], tripP = []
+      for (let m = 1; m <= maxM; m++) {
+        const mp = { year, month: m }
+        if (lsysToUse) mp.lsys = lsysToUse
+        leaveP.push(getDeptLeaveStats(showHxLeaveOnly.value ? { ...mp, hx_only: true } : mp).then(r => ({ month: m, value: r?.totalDays ?? 0 })).catch(() => ({ month: m, value: 0 })))
+        otP.push(getDeptOvertimeStats(showNetOvertime.value ? { ...mp, net: true } : mp).then(r => ({ month: m, value: r?.totalHours ?? 0 })).catch(() => ({ month: m, value: 0 })))
+        tripP.push(getDeptBusinessTripStats(mp).then(r => ({ month: m, value: r?.totalDays ?? 0 })).catch(() => ({ month: m, value: 0 })))
+      }
+      const [lv, ot, tr] = await Promise.all([Promise.all(leaveP), Promise.all(otP), Promise.all(tripP)])
+      monthlyLeave.value = lv
+      monthlyOvertime.value = ot
+      monthlyTrip.value = tr
+    } else {
+      monthlyLeave.value = []
+      monthlyOvertime.value = []
+      monthlyTrip.value = []
+    }
+
     try {
       const wiParams = { year }
       if (month) wiParams.month = month
@@ -1473,6 +1578,55 @@ onMounted(async () => {
   color: var(--color-text-tertiary);
 }
 .wi-sparkline circle { cursor: default; }
+
+/* ---- 月度趋势折线图悬浮弹窗 ---- */
+.trend-anchor { position: relative; }
+.trend-popover {
+  display: none;
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 50;
+  width: 380px;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 12px 36px rgba(15, 23, 42, 0.18);
+  border: 1px solid #e2e8f0;
+  padding: 12px 14px 8px;
+  pointer-events: none;
+}
+.trend-anchor:hover .trend-popover { display: block; }
+
+.trend-pop-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #334155;
+  margin-bottom: 6px;
+}
+.trend-svg {
+  width: 100%;
+  height: auto;
+}
+.trend-grid { stroke: #e2e8f0; stroke-width: 0.5; stroke-dasharray: 3 2; }
+.trend-y-label { font-size: 8px; fill: #94a3b8; text-anchor: end; }
+.trend-x-label { font-size: 8px; fill: #94a3b8; }
+.trend-dot-val { font-size: 8px; fill: #334155; font-weight: 600; }
+
+.trend-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.trend-area { opacity: 0.12; }
+.trend-dot { stroke: #fff; stroke-width: 1.5; }
+
+.trend-line-leave { stroke: #ec4899; }
+.trend-area-leave { fill: #ec4899; }
+.trend-dot-leave { fill: #ec4899; }
+
+.trend-line-overtime { stroke: #7c3aed; }
+.trend-area-overtime { fill: #7c3aed; }
+.trend-dot-overtime { fill: #7c3aed; }
+
+.trend-line-trip { stroke: #0ea5e9; }
+.trend-area-trip { fill: #0ea5e9; }
+.trend-dot-trip { fill: #0ea5e9; }
 
 @media (max-width: 960px) {
   .dashboard-cards { grid-template-columns: 1fr; }

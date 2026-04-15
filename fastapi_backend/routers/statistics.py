@@ -128,16 +128,13 @@ def _parse_date(v) -> Optional[date]:
     return None
 
 
-def _merge_intervals_days(intervals: List[Tuple[date, date]]) -> float:
-    """
-    将多个 [start, end] 区间做并集后计算总天数（去重）。
-    区间为闭区间，同一天算 1 天。
-    """
+def _merge_intervals(intervals: List[Tuple[date, date]]) -> List[Tuple[date, date]]:
+    """将多个 [start, end] 闭区间做并集去重，返回合并后的区间列表"""
     if not intervals:
-        return 0.0
+        return []
     sorted_list = sorted([(s, e) for s, e in intervals if s and e])
     if not sorted_list:
-        return 0.0
+        return []
     merged = []
     cur_s, cur_e = sorted_list[0]
     for s, e in sorted_list[1:]:
@@ -147,7 +144,56 @@ def _merge_intervals_days(intervals: List[Tuple[date, date]]) -> float:
             merged.append((cur_s, cur_e))
             cur_s, cur_e = s, e
     merged.append((cur_s, cur_e))
-    return sum((e - s).days + 1 for s, e in merged)
+    return merged
+
+
+def _merge_intervals_days(intervals: List[Tuple[date, date]]) -> float:
+    """将多个 [start, end] 区间做并集后计算总天数（去重）。"""
+    return sum((e - s).days + 1 for s, e in _merge_intervals(intervals))
+
+
+def _merge_intervals_split_workdays(intervals: List[Tuple[date, date]], year: int) -> Tuple[float, float]:
+    """
+    将公出区间合并后，分别统计其中的工作日天数和非工作日（节假日+周末）天数。
+    返回 (total_days, holiday_days)，其中 holiday_days 是公出期间的非工作日天数。
+    """
+    merged = _merge_intervals(intervals)
+    if not merged:
+        return 0.0, 0.0
+
+    try:
+        from utils.holiday_loader import load_holidays_dict
+        holidays = load_holidays_dict(str(year))
+    except Exception:
+        holidays = {}
+
+    total = 0
+    holiday_count = 0
+    from datetime import timedelta
+    for s, e in merged:
+        d = s
+        while d <= e:
+            total += 1
+            date_str = d.strftime("%Y-%m-%d")
+            is_weekend = d.weekday() in [5, 6]
+            is_holiday = False
+            is_workday_override = False
+
+            if date_str in holidays:
+                t = holidays[date_str] or ""
+                if "假" in t or "休" in t:
+                    is_holiday = True
+                if "班" in t:
+                    is_workday_override = True
+
+            if is_workday_override:
+                pass  # 调休上班日，算工作日
+            elif is_weekend or is_holiday:
+                holiday_count += 1
+
+            d += timedelta(days=1)
+
+    return float(total), float(holiday_count)
 
 
 def _qj_leave_date_bounds(row: Dict) -> Tuple[Optional[date], Optional[date]]:
@@ -259,6 +305,39 @@ def _count_workdays_in_month(year: int, month: int) -> int:
         import calendar
         _, last = calendar.monthrange(year, month)
         count = min(last, 22)
+    return count
+
+
+def _count_workdays_in_month_until(year: int, month: int, end_day: int) -> int:
+    """计算某月从 1 号到 end_day 的应出勤工作日数（含调休）"""
+    try:
+        import calendar
+        _, last = calendar.monthrange(year, month)
+        end_day = max(1, min(end_day, last))
+    except Exception:
+        end_day = max(1, end_day)
+    try:
+        from utils.holiday_loader import load_holidays_dict
+        holidays = load_holidays_dict(str(year))
+    except Exception:
+        holidays = {}
+
+    count = 0
+    for day in range(1, end_day + 1):
+        d = datetime(year, month, day)
+        date_str = d.strftime("%Y-%m-%d")
+        weekday = d.weekday()
+        is_weekend = weekday in [5, 6]
+        is_holiday = False
+        if date_str in holidays:
+            t = holidays[date_str] or ""
+            if "假" in t or "休" in t:
+                is_holiday = True
+        if date_str in holidays and "班" in holidays[date_str]:
+            is_weekend = False
+            is_holiday = False
+        if not is_weekend and not is_holiday:
+            count += 1
     return count
 
 
@@ -2052,7 +2131,7 @@ def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]
 
 
 def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
-    """按人汇总公出天数 {name: days}，区间并集去重，仅已批准"""
+    """按人汇总公出天数与节假日公出天数 {name: {tripDays, holidayTripDays}}，区间并集去重，仅已批准"""
     import calendar as _cal
     all_staff = not (lsys and lsys.strip())
     if all_staff:
@@ -2101,9 +2180,12 @@ def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str
 
     result = {}
     for gcr, intervals in by_person.items():
-        d = _merge_intervals_days(intervals)
-        if d > 0:
-            result[gcr] = round(d, 2)
+        total_days, holiday_days = _merge_intervals_split_workdays(intervals, year)
+        if total_days > 0:
+            result[gcr] = {
+                "tripDays": round(total_days, 2),
+                "holidayTripDays": round(holiday_days, 2),
+            }
     return result
 
 
@@ -2134,18 +2216,28 @@ async def get_work_intensity(
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
 ):
     """
-    工作强度统计 A = 加班时长 / (应出勤时长 - 公出时长)
-    时长单位统一为小时（应出勤天数×8，公出天数×8）。
+    工作强度统计 A = 加班时长 / 实际在岗时长
+    实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
+    时长单位统一为小时（天数×8）。
     返回：全部门A、各科室A、每个人的A。
     """
     try:
         HOURS_PER_DAY = 8
 
+        today = date.today()
         if month:
-            workdays = _count_workdays_in_month(year, month)
+            # 当统计“当前年月”时，应出勤只统计到今天，避免按整月放大分母
+            if year == today.year and month == today.month:
+                workdays = _count_workdays_in_month_until(year, month, today.day)
+            else:
+                workdays = _count_workdays_in_month(year, month)
         else:
-            import calendar as _cal2
-            workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
+            # 统计全年时：当年仅统计到今天，历史年份统计整年
+            if year == today.year:
+                workdays = sum(_count_workdays_in_month(year, m) for m in range(1, today.month))
+                workdays += _count_workdays_in_month_until(year, today.month, today.day)
+            else:
+                workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
 
         expected_hours = workdays * HOURS_PER_DAY
         staff = _get_staff_with_dept(lsys)
@@ -2153,22 +2245,25 @@ async def get_work_intensity(
         trip_map = _get_trip_days_by_person(year, month, lsys)
 
         person_list = []
-        dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "count": 0})
+        dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0})
 
         for s in staff:
             name = s["name"]
             dept = s["lsys"]
             ot = ot_map.get(name, 0)
-            trip_d = trip_map.get(name, 0)
+            trip_d = float((trip_map.get(name) or {}).get("tripDays", 0))
+            trip_holiday_d = float((trip_map.get(name) or {}).get("holidayTripDays", 0))
             trip_h = trip_d * HOURS_PER_DAY
-            actual_h = expected_hours - trip_h
+            trip_holiday_h = trip_holiday_d * HOURS_PER_DAY
+            actual_h = expected_hours - trip_h + trip_holiday_h
             intensity = round(ot / actual_h, 4) if actual_h > 0 else 0
 
             person_list.append({
                 "name": name,
                 "lsys": dept,
                 "overtimeHours": round(ot, 2),
-                "tripDays": trip_d,
+                "tripDays": round(trip_d, 2),
+                "tripHolidayDays": round(trip_holiday_d, 2),
                 "actualHours": round(actual_h, 2),
                 "intensity": intensity,
             })
@@ -2176,25 +2271,29 @@ async def get_work_intensity(
             da = dept_agg[dept]
             da["ot"] += ot
             da["trip_days"] += trip_d
+            da["trip_holiday_days"] += trip_holiday_d
             da["count"] += 1
 
         person_list.sort(key=lambda x: -x["intensity"])
 
         total_ot = sum(p["overtimeHours"] for p in person_list)
         total_trip_d = sum(p["tripDays"] for p in person_list)
+        total_trip_holiday_d = sum(p.get("tripHolidayDays", 0) for p in person_list)
         total_trip_h = total_trip_d * HOURS_PER_DAY
-        total_actual = expected_hours * len(staff) - total_trip_h
+        total_trip_holiday_h = total_trip_holiday_d * HOURS_PER_DAY
+        total_actual = expected_hours * len(staff) - total_trip_h + total_trip_holiday_h
         overall_intensity = round(total_ot / total_actual, 4) if total_actual > 0 else 0
 
         dept_list = []
         for dept_name, da in dept_agg.items():
-            dept_actual = expected_hours * da["count"] - da["trip_days"] * HOURS_PER_DAY
+            dept_actual = expected_hours * da["count"] - da["trip_days"] * HOURS_PER_DAY + da["trip_holiday_days"] * HOURS_PER_DAY
             dept_i = round(da["ot"] / dept_actual, 4) if dept_actual > 0 else 0
             dept_list.append({
                 "lsys": dept_name,
                 "personCount": da["count"],
                 "overtimeHours": round(da["ot"], 2),
                 "tripDays": round(da["trip_days"], 2),
+                "tripHolidayDays": round(da["trip_holiday_days"], 2),
                 "intensity": dept_i,
             })
         dept_list.sort(key=lambda x: -x["intensity"])

@@ -344,6 +344,7 @@
               <div class="cal-day-num">
                 <span>{{ parseInt(d.date.slice(8)) }}</span>
                 <span v-if="d.holidayMark" class="cal-holiday-tag" :class="holidayThClass(d)">{{ d.holidayMark }}</span>
+                <span v-if="moDayPlans[d.date]" class="cal-plan-chip" title="鼠标悬浮查看值班计划">计划</span>
               </div>
               <div class="cal-day-people">
                 <template v-if="calDayData[d.date]?.day?.length">
@@ -359,6 +360,10 @@
                   </div>
                 </template>
                 <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length" class="cal-shift-empty">无排班</div>
+              </div>
+              <div v-if="moDayPlans[d.date]" class="cal-plan-popover">
+                <div class="cal-plan-title">值班计划</div>
+                <div class="cal-plan-text">{{ moDayPlans[d.date] }}</div>
               </div>
             </div>
           </div>
@@ -463,7 +468,8 @@ const monthOverviewMonth = ref(new Date().getMonth() + 1)
 const monthOverviewEmployees = ref([])
 const monthOverviewDates = ref([])
 const moSchedule = reactive({})
-const moViewMode = ref('table')
+const moDayPlans = reactive({})
+const moViewMode = ref('calendar')
 
 const monthOverviewTitle = computed(() => `${monthOverviewYear.value}年${monthOverviewMonth.value}月`)
 
@@ -523,6 +529,7 @@ function openMonthOverview() {
   const x = parseYMD(rangeStartStr.value)
   monthOverviewYear.value = x.getFullYear()
   monthOverviewMonth.value = x.getMonth() + 1
+  moViewMode.value = 'calendar'
   monthOverviewVisible.value = true
   loadMonthOverview()
 }
@@ -539,9 +546,14 @@ async function loadMonthOverview() {
     monthOverviewEmployees.value = res?.employees || []
     monthOverviewDates.value = res?.dates || []
     Object.keys(moSchedule).forEach((k) => delete moSchedule[k])
+    Object.keys(moDayPlans).forEach((k) => delete moDayPlans[k])
     const sch = res?.schedule || {}
+    const dp = res?.dayPlans || {}
     for (const [emp, dayMap] of Object.entries(sch)) {
       moSchedule[emp] = { ...dayMap }
+    }
+    for (const d of monthOverviewDates.value) {
+      moDayPlans[d.date] = dp[d.date] ?? ''
     }
   } catch (e) {
     console.error('月览加载失败:', e)
@@ -1681,6 +1693,17 @@ thead .sticky-col2 {
   font-weight: 500;
   white-space: nowrap;
 }
+.cal-plan-chip {
+  margin-left: auto;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: #dbeafe;
+  color: #1d4ed8;
+  font-weight: 600;
+  border: 1px solid #93c5fd;
+}
 
 .cal-day-people { flex: 1; overflow-y: auto; }
 
@@ -1716,6 +1739,36 @@ thead .sticky-col2 {
   color: #cbd5e1;
   text-align: center;
   padding-top: 6px;
+}
+
+.cal-plan-popover {
+  display: none;
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: calc(100% - 2px);
+  z-index: 20;
+  background: rgba(15, 23, 42, 0.97);
+  color: #f8fafc;
+  border-radius: 8px;
+  padding: 8px 10px;
+  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.35);
+  border: 1px solid rgba(148, 163, 184, 0.35);
+}
+.cal-day-cell:hover .cal-plan-popover { display: block; }
+.cal-plan-title {
+  font-size: 11px;
+  font-weight: 700;
+  color: #93c5fd;
+  margin-bottom: 4px;
+}
+.cal-plan-text {
+  font-size: 11px;
+  line-height: 1.45;
+  max-height: 140px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 @media (max-width: 768px) {
