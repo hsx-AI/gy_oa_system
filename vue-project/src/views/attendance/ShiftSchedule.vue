@@ -261,6 +261,10 @@
             <h2 class="mo-title">整月排班总览</h2>
             <span class="mo-dept">{{ selectedDept }}</span>
             <span class="mo-badge">仅查看</span>
+            <div class="mo-view-toggle">
+              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'table' }" @click="moViewMode = 'table'">表格</button>
+              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'calendar' }" @click="moViewMode = 'calendar'">日历</button>
+            </div>
           </div>
           <div class="mo-header-nav">
             <button type="button" class="btn btn-sm" @click="shiftOverviewMonth(-1)" :disabled="monthOverviewLoading" title="上一月">&lt;</button>
@@ -272,7 +276,9 @@
         <p class="mo-hint">与下方双周编辑区无关；在此仅浏览，修改请关闭后回到主表操作。</p>
         <div v-if="monthOverviewLoading" class="mo-loading">加载中…</div>
         <div v-else-if="!monthOverviewEmployees.length" class="mo-empty">该科室当月无在职人员数据</div>
-        <div v-else class="mo-scroll-wrap">
+
+        <!-- 表格视图 -->
+        <div v-else-if="moViewMode === 'table'" class="mo-scroll-wrap">
           <table class="mo-table">
             <thead>
               <tr>
@@ -317,6 +323,45 @@
               </tr>
             </tfoot>
           </table>
+        </div>
+
+        <!-- 日历视图 -->
+        <div v-else class="mo-scroll-wrap cal-wrap">
+          <div class="cal-legend">
+            <span class="cal-legend-item"><span class="cal-dot cal-dot-day"></span>白班</span>
+            <span class="cal-legend-item"><span class="cal-dot cal-dot-night"></span>夜班</span>
+            <span class="cal-legend-item"><span class="cal-dot cal-dot-off"></span>不值班</span>
+          </div>
+          <div class="cal-grid">
+            <div class="cal-weekday-header" v-for="wd in ['一','二','三','四','五','六','日']" :key="wd">{{ wd }}</div>
+            <div v-for="blank in calLeadingBlanks" :key="'blank-' + blank" class="cal-day-cell cal-blank"></div>
+            <div
+              v-for="d in monthOverviewDates"
+              :key="'cal-' + d.date"
+              class="cal-day-cell"
+              :class="{ 'cal-today': d.date === todayStr, 'cal-weekend': !d.isWorkday }"
+            >
+              <div class="cal-day-num">
+                <span>{{ parseInt(d.date.slice(8)) }}</span>
+                <span v-if="d.holidayMark" class="cal-holiday-tag" :class="holidayThClass(d)">{{ d.holidayMark }}</span>
+              </div>
+              <div class="cal-day-people">
+                <template v-if="calDayData[d.date]?.day?.length">
+                  <div class="cal-shift-row cal-shift-day">
+                    <span class="cal-shift-label">白</span>
+                    <span class="cal-shift-names">{{ calDayData[d.date].day.join('、') }}</span>
+                  </div>
+                </template>
+                <template v-if="calDayData[d.date]?.night?.length">
+                  <div class="cal-shift-row cal-shift-night">
+                    <span class="cal-shift-label">夜</span>
+                    <span class="cal-shift-names">{{ calDayData[d.date].night.join('、') }}</span>
+                  </div>
+                </template>
+                <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length" class="cal-shift-empty">无排班</div>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
@@ -418,8 +463,31 @@ const monthOverviewMonth = ref(new Date().getMonth() + 1)
 const monthOverviewEmployees = ref([])
 const monthOverviewDates = ref([])
 const moSchedule = reactive({})
+const moViewMode = ref('table')
 
 const monthOverviewTitle = computed(() => `${monthOverviewYear.value}年${monthOverviewMonth.value}月`)
+
+const calLeadingBlanks = computed(() => {
+  if (!monthOverviewDates.value.length) return 0
+  const first = new Date(monthOverviewDates.value[0].date)
+  const dow = first.getDay()
+  return dow === 0 ? 6 : dow - 1
+})
+
+const calDayData = computed(() => {
+  const result = {}
+  for (const d of monthOverviewDates.value) {
+    const dayList = []
+    const nightList = []
+    for (const emp of monthOverviewEmployees.value) {
+      const v = moSchedule[emp]?.[d.date] || ''
+      if (v === '白班') dayList.push(emp)
+      else if (v === '夜班') nightList.push(emp)
+    }
+    result[d.date] = { day: dayList, night: nightList }
+  }
+  return result
+})
 
 const moEmpStats = computed(() => {
   const stats = {}
@@ -1513,8 +1581,147 @@ thead .sticky-col2 {
 .mo-summary-cell { padding: 2px 0; }
 .mo-slash { color: #9ca3af; margin: 0 1px; }
 
+/* 视图切换按钮组 */
+.mo-view-toggle {
+  display: inline-flex;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-left: 6px;
+}
+.mo-toggle-btn {
+  border: none;
+  background: #fff;
+  color: #475569;
+  font-size: 12px;
+  padding: 3px 14px;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all .15s;
+}
+.mo-toggle-btn + .mo-toggle-btn { border-left: 1px solid #cbd5e1; }
+.mo-toggle-btn.active {
+  background: var(--color-primary, #3b82f6);
+  color: #fff;
+  font-weight: 600;
+}
+.mo-toggle-btn:hover:not(.active) { background: #f1f5f9; }
+
+/* ---- 日历视图 ---- */
+.cal-wrap { padding: 12px 16px 16px !important; }
+
+.cal-legend {
+  display: flex;
+  gap: 16px;
+  margin-bottom: 10px;
+  font-size: 12px;
+  color: #475569;
+}
+.cal-legend-item { display: flex; align-items: center; gap: 5px; }
+.cal-dot {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+.cal-dot-day { background: #3b82f6; }
+.cal-dot-night { background: #f59e0b; }
+.cal-dot-off { background: #e5e7eb; }
+
+.cal-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  gap: 1px;
+  background: #e2e8f0;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.cal-weekday-header {
+  background: #f1f5f9;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  padding: 8px 0;
+}
+
+.cal-day-cell {
+  background: #fff;
+  min-height: 90px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px 5px;
+  position: relative;
+  transition: background .15s;
+}
+.cal-day-cell:hover:not(.cal-blank) { background: #f8fafc; }
+.cal-blank { background: #fafafa; min-height: 0; }
+.cal-weekend { background: #fefce8; }
+.cal-weekend:hover { background: #fef9c3; }
+.cal-today {
+  box-shadow: inset 0 0 0 2px var(--color-primary, #3b82f6);
+  z-index: 1;
+}
+
+.cal-day-num {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 3px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.cal-holiday-tag {
+  font-size: 9px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  font-weight: 500;
+  white-space: nowrap;
+}
+
+.cal-day-people { flex: 1; overflow-y: auto; }
+
+.cal-shift-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 4px;
+  margin-bottom: 2px;
+  line-height: 1.35;
+}
+.cal-shift-label {
+  flex-shrink: 0;
+  display: inline-block;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  text-align: center;
+  border-radius: 3px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+}
+.cal-shift-day .cal-shift-label { background: #3b82f6; }
+.cal-shift-night .cal-shift-label { background: #f59e0b; }
+.cal-shift-names {
+  font-size: 11px;
+  color: #334155;
+  line-height: 18px;
+  word-break: break-all;
+}
+.cal-shift-empty {
+  font-size: 10px;
+  color: #cbd5e1;
+  text-align: center;
+  padding-top: 6px;
+}
+
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: flex-start; }
   .schedule-scroll { max-height: calc(100vh - 360px); }
+  .cal-day-cell { min-height: 70px; padding: 3px; }
+  .cal-shift-names { font-size: 10px; }
 }
 </style>

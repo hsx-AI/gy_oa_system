@@ -337,6 +337,7 @@ def _business_trip_list_gcr_clause(
             "g.gcr IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
             "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
             "AND TRIM(y.lsys) <> '部办' "
+            "AND TRIM(y.lsys) NOT IN ('其他部门员工','其他部门成员') "
             "AND RIGHT(TRIM(y.name), 1) <> '1' "
             "AND RIGHT(TRIM(y.lsys), 1) <> '1')"
         )

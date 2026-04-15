@@ -434,7 +434,7 @@ onMounted(async () => {
     if (res.success && res.level === 3) {
       const listRes = await getDeptLsysList()
       if (listRes.success && listRes.list?.length) {
-        lsysList.value = listRes.list.filter(v => v && v.trim() !== '其他部门员工')
+        lsysList.value = listRes.list.filter(v => v && !['其他部门员工','其他部门成员'].includes(v.trim()))
       }
     }
   } catch { /* ignore */ }

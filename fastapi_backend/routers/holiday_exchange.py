@@ -1002,9 +1002,10 @@ async def get_holiday_exchange_summary(
     try:
         # ── 构建人员筛选 ──
         name_clean = (name or "").strip()
-        person_cond_he = "1=1"
-        person_cond_jb = "1=1"
-        person_cond_hxp = "1=1"
+        _EXCL_SUB = "NOT IN (SELECT name FROM yggl WHERE TRIM(lsys) IN ('其他部门员工','其他部门成员'))"
+        person_cond_he = f"h.xm {_EXCL_SUB}"
+        person_cond_jb = f"j.xm {_EXCL_SUB}"
+        person_cond_hxp = f"p.name {_EXCL_SUB}"
         person_params_he: list = []
         person_params_jb: list = []
         person_params_hxp: list = []

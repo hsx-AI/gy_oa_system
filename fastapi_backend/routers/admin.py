@@ -336,7 +336,7 @@ async def admin_dept_list(
         rows = db.execute_query(
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
             "AND RIGHT(TRIM(lsys), 1) != '1' "
-            "AND TRIM(lsys) != '其他部门员工' "
+            "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
             "ORDER BY lsys"
         )
         list_data = [r["lsys"].strip() for r in rows if r.get("lsys")]
@@ -526,7 +526,9 @@ async def hxp_summary(
     today_str = date.today().strftime("%Y-%m-%d")
 
     emp_rows = db.execute_query(
-        "SELECT name, lsys FROM yggl WHERE COALESCE(zaizhi,0) = 0 ORDER BY lsys, name"
+        "SELECT name, lsys FROM yggl WHERE COALESCE(zaizhi,0) = 0 "
+        "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
+        "ORDER BY lsys, name"
     )
     if not emp_rows:
         return {"success": True, "data": [], "lsys_list": []}

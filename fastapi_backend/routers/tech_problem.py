@@ -320,7 +320,7 @@ async def get_departments():
     rows = db.execute_query(
         "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
         "WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
-        "AND TRIM(lsys) != '其他部门员工' "
+        "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
         "AND COALESCE(zaizhi, 0) = 0 "
         "ORDER BY lsys"
     )

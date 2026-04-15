@@ -798,6 +798,7 @@ async def export_leave_handler_table(
             LEFT JOIN yggl ON qj.xm = yggl.name
             WHERE qj.qjzt IN (0, 1, 3, 4)
               AND (qj.timefrom LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)
+              AND qj.xm NOT IN (SELECT name FROM yggl WHERE TRIM(lsys) IN ('其他部门员工','其他部门成员'))
             ORDER BY qj.timefrom ASC
         """
         rows = db.execute_query(sql, (f"{month_str}%", month_str)) or []
@@ -815,6 +816,7 @@ async def export_leave_handler_table(
                     (g.yjcfsj IS NOT NULL AND DATE(g.yjcfsj) >= %s AND DATE(g.yjcfsj) <= %s)
                     OR (g.yjfhsj IS NOT NULL AND DATE(g.yjfhsj) >= %s AND DATE(g.yjfhsj) <= %s)
                   )
+                  AND g.gcr NOT IN (SELECT name FROM yggl WHERE TRIM(lsys) IN ('其他部门员工','其他部门成员'))
                 ORDER BY g.yjcfsj ASC
             """
             gcsqb_rows = db.execute_query(gcsqb_sql, (start_date, end_date, start_date, end_date)) or []
@@ -856,7 +858,9 @@ async def export_leave_handler_table(
                     "SELECT TRIM(gh) AS gh, name AS xm FROM yggl "
                     "WHERE (xbie LIKE %s OR xbie = %s) AND name IS NOT NULL AND TRIM(name) != '' "
                     "AND RIGHT(TRIM(name), 1) != '1' AND (lsys IS NULL OR RIGHT(TRIM(lsys), 1) != '1') "
-                    "AND (TRIM(lsys) != %s OR lsys IS NULL) AND (COALESCE(zaizhi, 0) = 0)",
+                    "AND (TRIM(lsys) != %s OR lsys IS NULL) "
+                    "AND TRIM(COALESCE(lsys,'')) NOT IN ('其他部门员工','其他部门成员') "
+                    "AND (COALESCE(zaizhi, 0) = 0)",
                     ("%女%", "女", "部办"),
                 ) or []
                 march8_start = datetime(year, 3, 8, 13, 0, 0)

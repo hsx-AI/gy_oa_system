@@ -327,6 +327,93 @@
         </div>
 
 
+        <!-- ====== 工作强度统计 ====== -->
+        <div v-if="hasFetched && workIntensity.totalPeople" class="section card wi-section">
+          <h2 class="section-title">
+            <span>工作强度统计</span>
+            <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
+          </h2>
+          <p class="section-desc">工作强度 A = 加班时长 ÷ (应出勤时长 − 公出时长)，反映实际在岗期间的加班负荷。</p>
+
+          <div class="wi-summary">
+            <div class="wi-summary-item">
+              <span class="wi-label">应出勤工作日</span>
+              <span class="wi-value">{{ workIntensity.workdays }} 天</span>
+            </div>
+            <div class="wi-summary-item">
+              <span class="wi-label">统计人数</span>
+              <span class="wi-value">{{ workIntensity.totalPeople }} 人</span>
+            </div>
+            <div class="wi-summary-item wi-summary-highlight">
+              <span class="wi-label">全员工作强度</span>
+              <span class="wi-value">{{ (workIntensity.overallIntensity * 100).toFixed(1) }}%</span>
+            </div>
+            <div v-if="!filterMonth && wiMonthly.length >= 2" class="wi-sparkline-wrap">
+              <span class="wi-label">月度趋势</span>
+              <svg class="wi-sparkline" viewBox="0 0 280 68" preserveAspectRatio="none">
+                <path :d="wiSparklinePoints" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+                <template v-for="(dot, di) in wiSparklineDots" :key="di">
+                  <circle :cx="dot.x" :cy="dot.y" r="3" fill="#c2410c" stroke="white" stroke-width="1.5"/>
+                  <text :x="dot.x" :y="dot.y - 6" :text-anchor="dot.anchor" class="sparkline-val">{{ dot.pct }}</text>
+                </template>
+              </svg>
+              <div class="wi-sparkline-labels">
+                <span v-for="d in wiMonthly" :key="d.month" class="wi-sparkline-m">{{ d.month }}月</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="wi-tabs">
+            <button
+              type="button"
+              class="wi-tab"
+              :class="{ active: wiViewMode === 'dept' }"
+              @click="wiViewMode = 'dept'"
+            >按科室</button>
+            <button
+              type="button"
+              class="wi-tab"
+              :class="{ active: wiViewMode === 'person' }"
+              @click="wiViewMode = 'person'"
+            >按个人</button>
+          </div>
+
+          <div v-if="wiViewMode === 'dept' && workIntensity.byDept?.length" class="wi-dept-grid">
+            <div v-for="d in workIntensity.byDept" :key="d.lsys" class="wi-dept-card">
+              <div class="wi-dept-name">{{ d.lsys }}</div>
+              <div class="wi-dept-intensity">{{ (d.intensity * 100).toFixed(1) }}%</div>
+              <div class="wi-dept-meta">
+                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h · 公出{{ d.tripDays }}天
+              </div>
+            </div>
+          </div>
+
+          <div v-if="wiViewMode === 'person' && workIntensity.byPerson?.length" class="wi-person-table-wrap">
+            <table class="wi-person-table">
+              <thead>
+                <tr>
+                  <th>姓名</th>
+                  <th>科室</th>
+                  <th>加班(h)</th>
+                  <th>公出(天)</th>
+                  <th>实际在岗(h)</th>
+                  <th>工作强度</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="p in workIntensity.byPerson" :key="p.name">
+                  <td>{{ p.name }}</td>
+                  <td>{{ p.lsys }}</td>
+                  <td class="td-num">{{ p.overtimeHours }}</td>
+                  <td class="td-num">{{ p.tripDays }}</td>
+                  <td class="td-num">{{ p.actualHours }}</td>
+                  <td class="td-num td-intensity">{{ (p.intensity * 100).toFixed(1) }}%</td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
         <!-- 未查询时的提示 -->
         <div v-if="!hasFetched && !loading" class="init-hint card">
           <p>选择年份（可选月份）后点击「查询」查看本科室汇总、满勤率、科室对比与全员排序。</p>
@@ -349,6 +436,7 @@ import {
   getLeaderFullAttendanceYear,
   getLeaderFullAttendanceByMonth,
   getLeaderDeptComparison,
+  getLeaderWorkIntensity,
 } from '@/api/attendance'
 
 const router = useRouter()
@@ -384,10 +472,52 @@ const compareChartTypes = [
   { type: 'trip', label: '公出', unit: '(天)' }
 ]
 
-const EXCLUDED_LSYS = '其他部门员工'
+const workIntensity = ref({})
+const wiViewMode = ref('dept')
+const wiMonthly = ref([])
+const WI_SPARK_W = 280
+const WI_SPARK_H = 68
+const WI_SPARK_LEFT = 16
+const WI_SPARK_RIGHT = 16
+const WI_SPARK_TOP = 14
+const WI_SPARK_BOT = 4
+
+function _wiSparkCalc() {
+  const data = wiMonthly.value
+  if (!data || data.length < 2) return null
+  const vals = data.map(d => d.intensity * 100)
+  const max = Math.max(...vals, 1)
+  const min = Math.min(...vals, 0)
+  const range = max - min || 1
+  return { vals, max, min, range }
+}
+
+const wiSparklinePoints = computed(() => {
+  const c = _wiSparkCalc()
+  if (!c) return ''
+  return c.vals.map((v, i) => {
+    const x = WI_SPARK_LEFT + (i / (c.vals.length - 1)) * (WI_SPARK_W - WI_SPARK_LEFT - WI_SPARK_RIGHT)
+    const y = WI_SPARK_TOP + (1 - (v - c.min) / c.range) * (WI_SPARK_H - WI_SPARK_TOP - WI_SPARK_BOT)
+    return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+  }).join(' ')
+})
+
+const wiSparklineDots = computed(() => {
+  const c = _wiSparkCalc()
+  if (!c) return []
+  const data = wiMonthly.value
+  return c.vals.map((v, i) => {
+    const x = WI_SPARK_LEFT + (i / (c.vals.length - 1)) * (WI_SPARK_W - WI_SPARK_LEFT - WI_SPARK_RIGHT)
+    const y = WI_SPARK_TOP + (1 - (v - c.min) / c.range) * (WI_SPARK_H - WI_SPARK_TOP - WI_SPARK_BOT)
+    const anchor = i === 0 ? 'start' : (i === c.vals.length - 1 ? 'end' : 'middle')
+    return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月: ${v.toFixed(1)}%` }
+  })
+})
+
+const EXCLUDED_LSYS_SET = new Set(['其他部门员工', '其他部门成员'])
 
 function isAllowedLsys(v) {
-  return (v || '').trim() !== EXCLUDED_LSYS
+  return !EXCLUDED_LSYS_SET.has((v || '').trim())
 }
 
 const maxCompareOvertime = computed(() => {
@@ -675,6 +805,29 @@ const fetchData = async () => {
     if (fullAttRes?.success) fullAttendance.value = fullAttRes
     if (deptCompRes?.success) deptComparison.value = deptCompRes
     await fetchFullAttendanceChart()
+    try {
+      const wiParams = { year }
+      if (month) wiParams.month = month
+      if (lsysToUse) wiParams.lsys = lsysToUse
+      const wiRes = await getLeaderWorkIntensity(wiParams)
+      if (wiRes?.success) workIntensity.value = wiRes
+
+      if (!month) {
+        const today = new Date()
+        const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
+        const monthPromises = []
+        for (let m = 1; m <= maxM; m++) {
+          const mp = { year, month: m }
+          if (lsysToUse) mp.lsys = lsysToUse
+          monthPromises.push(getLeaderWorkIntensity(mp).then(r => ({ month: m, intensity: r?.overallIntensity ?? 0 })).catch(() => ({ month: m, intensity: 0 })))
+        }
+        wiMonthly.value = await Promise.all(monthPromises)
+      } else {
+        wiMonthly.value = []
+      }
+    } catch (e) {
+      console.error('工作强度加载失败:', e)
+    }
   } catch (error) {
     console.error('领导人看板数据加载失败:', error)
   } finally {
@@ -1222,6 +1375,105 @@ onMounted(async () => {
   margin-top: var(--spacing-sm);
   flex-shrink: 0;
 }
+/* ====== 工作强度统计 ====== */
+.wi-section { overflow: visible; }
+
+.wi-summary {
+  display: flex;
+  gap: var(--spacing-xl);
+  flex-wrap: wrap;
+  margin-bottom: var(--spacing-lg);
+}
+.wi-summary-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.wi-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
+.wi-value { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); color: var(--color-primary); }
+.wi-summary-highlight .wi-value { color: #c2410c; }
+
+.wi-tabs {
+  display: flex;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-lg);
+}
+.wi-tab {
+  padding: 6px 18px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-container);
+  font-size: var(--font-size-sm);
+  cursor: pointer;
+}
+.wi-tab.active {
+  background: var(--color-primary);
+  color: white;
+  border-color: var(--color-primary);
+}
+
+.wi-dept-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: var(--spacing-md);
+}
+.wi-dept-card {
+  padding: var(--spacing-md) var(--spacing-lg);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-md);
+  background: var(--color-bg-spotlight);
+}
+.wi-dept-name { font-weight: var(--font-weight-semibold); margin-bottom: 4px; }
+.wi-dept-intensity { font-size: var(--font-size-xl); font-weight: var(--font-weight-bold); color: #c2410c; }
+.wi-dept-meta { font-size: var(--font-size-xs); color: var(--color-text-tertiary); margin-top: 4px; }
+
+.wi-person-table-wrap { overflow-x: auto; }
+.wi-person-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+.wi-person-table th,
+.wi-person-table td {
+  padding: 8px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+.wi-person-table th {
+  background: var(--color-bg-spotlight);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+.wi-person-table .td-num { text-align: center; }
+.wi-person-table .td-intensity { color: #c2410c; font-weight: 600; }
+
+.wi-sparkline-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 300px;
+  flex: 1;
+  max-width: 460px;
+}
+.wi-sparkline {
+  width: 100%;
+  height: 68px;
+}
+.wi-sparkline .sparkline-val {
+  font-size: 8px;
+  fill: #c2410c;
+  font-weight: 600;
+}
+.wi-sparkline-labels {
+  display: flex;
+  justify-content: space-between;
+}
+.wi-sparkline-m {
+  font-size: 10px;
+  color: var(--color-text-tertiary);
+}
+.wi-sparkline circle { cursor: default; }
+
 @media (max-width: 960px) {
   .dashboard-cards { grid-template-columns: 1fr; }
 }
@@ -1230,5 +1482,6 @@ onMounted(async () => {
   .form-actions { margin-left: 0; }
   .bar-chart-total { min-width: 400px; }
   .fa-dept-grid { grid-template-columns: repeat(2, 1fr); }
+  .wi-dept-grid { grid-template-columns: repeat(2, 1fr); }
 }
 </style>

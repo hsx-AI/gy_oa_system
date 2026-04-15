@@ -267,6 +267,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
                 "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
                 "WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
                 "AND RIGHT(TRIM(lsys),1) != '1' AND TRIM(lsys) != %s "
+                "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
                 "AND COALESCE(zaizhi,0)=0 ORDER BY lsys",
                 ("部办",),
             )
@@ -298,6 +299,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
             "xm IN (SELECT y.name FROM yggl AS y WHERE COALESCE(y.zaizhi,0)=0 "
             "AND y.name IS NOT NULL AND TRIM(y.name) <> '' "
             "AND TRIM(y.lsys) <> '部办' "
+            "AND TRIM(y.lsys) NOT IN ('其他部门员工','其他部门成员') "
             "AND RIGHT(TRIM(y.name), 1) <> '1' "
             "AND RIGHT(TRIM(y.lsys), 1) <> '1')"
         )

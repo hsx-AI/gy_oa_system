@@ -434,6 +434,11 @@ export function getLeaderRankings(params) {
   return request({ url: '/leader/rankings', method: 'get', params })
 }
 
+/** 领导人看板：工作强度统计 */
+export function getLeaderWorkIntensity(params) {
+  return request({ url: '/leader/work-intensity', method: 'get', params })
+}
+
 /** 统计汇总权限（1=仅自己 2=科室下拉 3=全部搜索） */
 export function getStatisticsPermission(params) {
   return request({ url: '/report/statistics-permission', method: 'get', params })

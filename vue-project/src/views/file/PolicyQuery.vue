@@ -198,24 +198,42 @@
           </div>
           <div class="form-group">
             <label>选择文件 <span class="required">*</span></label>
-            <input
-              ref="fileInputRef"
-              type="file"
-              accept=".pdf,.doc,.docx,.xls,.xlsx"
-              @change="onFileSelected"
+            <div
+              class="drop-zone"
+              :class="{ 'is-dragover': isMainDragover }"
+              @dragover.prevent="onMainDragOver"
+              @dragleave.prevent="onMainDragLeave"
+              @drop.prevent="onMainDrop"
             >
+              <input
+                ref="fileInputRef"
+                type="file"
+                accept=".pdf,.doc,.docx,.xls,.xlsx"
+                @change="onFileSelected"
+              >
+              <p class="drop-tip">可拖拽文件到此处，或点击选择文件</p>
+            </div>
             <p class="form-hint">支持 PDF、Word(.doc/.docx)、Excel(.xls/.xlsx)</p>
             <p v-if="selectedFile" class="selected-file">{{ selectedFile.name }}</p>
           </div>
           <div class="form-group">
             <label>附件（可选）</label>
-            <input
-              ref="attachmentInputRef"
-              type="file"
-              multiple
-              accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png,.gif,.bmp,.zip,.rar,.7z"
-              @change="onAttachmentsSelected"
+            <div
+              class="drop-zone"
+              :class="{ 'is-dragover': isAttachmentDragover }"
+              @dragover.prevent="onAttachmentDragOver"
+              @dragleave.prevent="onAttachmentDragLeave"
+              @drop.prevent="onAttachmentDrop"
             >
+              <input
+                ref="attachmentInputRef"
+                type="file"
+                multiple
+                accept=".pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.jpg,.jpeg,.png,.gif,.bmp,.zip,.rar,.7z"
+                @change="onAttachmentsSelected"
+              >
+              <p class="drop-tip">可拖拽一个或多个附件到此处，或点击选择文件</p>
+            </div>
             <p class="form-hint">可多选，支持 Office、PDF、图片、压缩包等常用格式</p>
             <ul v-if="selectedAttachments.length" class="att-file-list">
               <li v-for="(f, i) in selectedAttachments" :key="i">{{ f.name }}</li>
@@ -246,6 +264,8 @@ const showUploadModal = ref(false)
 const uploadLoading = ref(false)
 const selectedFile = ref(null)
 const selectedAttachments = ref([])
+const isMainDragover = ref(false)
+const isAttachmentDragover = ref(false)
 const fileInputRef = ref(null)
 const attachmentInputRef = ref(null)
 const showPreviewModal = ref(false)
@@ -302,18 +322,55 @@ function onFileSelected(e) {
   }
 }
 
-function onAttachmentsSelected(e) {
-  const picked = e.target.files ? Array.from(e.target.files) : []
-  if (!picked.length) return
+function mergeAttachments(files) {
+  if (!files?.length) return
   const existing = selectedAttachments.value || []
   const merged = [...existing]
-  for (const f of picked) {
+  for (const f of files) {
     const dup = merged.some(x => x.name === f.name && x.size === f.size && x.lastModified === f.lastModified)
     if (!dup) merged.push(f)
   }
   selectedAttachments.value = merged
+}
+
+function onAttachmentsSelected(e) {
+  const picked = e.target.files ? Array.from(e.target.files) : []
+  if (!picked.length) return
+  mergeAttachments(picked)
   // 清空 input，允许再次选择同一个文件时也触发 change
   if (attachmentInputRef.value) attachmentInputRef.value.value = ''
+}
+
+function onMainDragOver() {
+  isMainDragover.value = true
+}
+
+function onMainDragLeave() {
+  isMainDragover.value = false
+}
+
+function onMainDrop(e) {
+  isMainDragover.value = false
+  const file = e.dataTransfer?.files?.[0]
+  if (!file) return
+  selectedFile.value = file
+  const base = file.name.replace(/\.[^/.]+$/, '')
+  uploadForm.value.title = base
+}
+
+function onAttachmentDragOver() {
+  isAttachmentDragover.value = true
+}
+
+function onAttachmentDragLeave() {
+  isAttachmentDragover.value = false
+}
+
+function onAttachmentDrop(e) {
+  isAttachmentDragover.value = false
+  const files = e.dataTransfer?.files ? Array.from(e.dataTransfer.files) : []
+  if (!files.length) return
+  mergeAttachments(files)
 }
 
 function getAttachmentUrl(name) {
@@ -617,6 +674,29 @@ onMounted(() => {
   padding: 8px;
   border: 1px solid var(--color-border-base);
   border-radius: var(--radius-sm);
+}
+
+.drop-zone {
+  border: 2px dashed #9aa8bd;
+  border-radius: var(--radius-sm);
+  padding: 12px;
+  min-height: 88px;
+  background: #f8fbff;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+}
+.drop-zone.is-dragover {
+  border-color: var(--color-primary);
+  background: #eaf3ff;
+  box-shadow: 0 0 0 3px rgba(24, 144, 255, 0.12);
+}
+.drop-tip {
+  margin: 8px 0 0;
+  font-size: 0.86rem;
+  color: #4c5f7d;
+  text-align: center;
+  font-weight: 500;
 }
 
 .form-hint,

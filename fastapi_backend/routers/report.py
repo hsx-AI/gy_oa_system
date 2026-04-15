@@ -138,7 +138,7 @@ async def get_statistics_employees(
     try:
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND (COALESCE(zaizhi,0)=0) ORDER BY name",
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) ORDER BY name",
                 (lsys,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
@@ -146,7 +146,7 @@ async def get_statistics_employees(
         if q and q.strip():
             kw = f"%{q.strip()}%"
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE name LIKE %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0) ORDER BY name LIMIT %s",
+                "SELECT name FROM yggl WHERE name LIKE %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) ORDER BY name LIMIT %s",
                 (kw, limit)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
@@ -511,7 +511,7 @@ async def get_monthly_summary(
             names = [name.strip()]
         else:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND (COALESCE(zaizhi,0)=0) ORDER BY name",
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) ORDER BY name",
                 (lsys.strip(),)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]

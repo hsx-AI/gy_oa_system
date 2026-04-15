@@ -12,6 +12,11 @@ from fastapi import APIRouter, HTTPException, Query
 
 # 领导人看板中不参与统计的科室（不计算人数、不参与排序与横向对比）
 LEADER_EXCLUDE_LSYS = "部办"
+# 不参与任何考勤/统计的虚拟科室
+OTHER_DEPT_NAMES = ("其他部门员工", "其他部门成员")
+# SQL 片段：用于 WHERE 条件中排除虚拟科室（拼接在已有 != 部办 之后）
+_EXCL_OTHER = "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
+_EXCL_OTHER_YGGL = "AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') "
 from typing import Optional, List, Tuple, Dict
 from datetime import datetime, date
 from database import db
@@ -426,7 +431,7 @@ def _query_hx_hours_all(
                 CAST(qj.tian AS DECIMAL(10,2)) AS tian, qj.xiaoshi
             FROM qj INNER JOIN yggl ON qj.xm = yggl.name
                 AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1'
-                AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
+                AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
             WHERE qj.qjzt = 4 AND TRIM(qj.qjfs) IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1'
             {ov}
         """
@@ -483,7 +488,7 @@ async def get_dept_overtime_stats(
         all_staff = not (lsys and lsys.strip())
 
         if all_staff:
-            join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)"
+            join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)"
             join_param = (LEADER_EXCLUDE_LSYS,)
         else:
             join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
@@ -627,7 +632,7 @@ async def get_dept_overtime_pay_by_month(
         else:
             all_staff = not (lsys and lsys.strip())
             if all_staff:
-                join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)"
+                join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)"
                 join_param = (LEADER_EXCLUDE_LSYS,)
             else:
                 join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
@@ -776,6 +781,7 @@ async def get_overtime_pay_export(
               AND (YEAR(jiaban.timedate) = %s AND (MONTH(jiaban.timedate) = %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s))
               AND RIGHT(TRIM(yggl.name), 1) != '1'
               AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
               AND (COALESCE(yggl.zaizhi,0)=0)
         """
         month_key = f"{year}-{month:02d}"
@@ -787,7 +793,7 @@ async def get_overtime_pay_export(
         # 先准备全员名单（排除部办），再按 per_employee 中的 pay 填值，保证人全
         yggl_rows = db.execute_query(
             "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
-            "AND TRIM(lsys) != %s AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
+            "AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
             (LEADER_EXCLUDE_LSYS,),
         )
 
@@ -856,7 +862,7 @@ async def get_dept_business_trip_stats(
         if all_staff:
             join_cond = """
                 gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name
-                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
+                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
             """
             join_param: tuple = (LEADER_EXCLUDE_LSYS,)
         else:
@@ -1139,13 +1145,13 @@ async def get_leader_full_attendance(
 
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (lsys, LEADER_EXCLUDE_LSYS)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (LEADER_EXCLUDE_LSYS,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
@@ -1223,13 +1229,13 @@ async def get_leader_full_attendance_export(
 
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (lsys, LEADER_EXCLUDE_LSYS)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (LEADER_EXCLUDE_LSYS,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
@@ -1308,13 +1314,13 @@ async def get_leader_full_attendance_year(
         year_prefix = f"{year}-"
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (lsys, LEADER_EXCLUDE_LSYS)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                 (LEADER_EXCLUDE_LSYS,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
@@ -1388,13 +1394,13 @@ async def get_leader_full_attendance_by_month(
             month_str = f"{year}-{month:02d}"
             if lsys:
                 rows = db.execute_query(
-                    "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                    "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                     (lsys, LEADER_EXCLUDE_LSYS)
                 )
                 names = [r["name"].strip() for r in rows if r.get("name")]
             else:
                 rows = db.execute_query(
-                    "SELECT name FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND (COALESCE(zaizhi,0)=0)",
+                    "SELECT name FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
                     (LEADER_EXCLUDE_LSYS,)
                 )
                 names = [r["name"].strip() for r in rows if r.get("name")]
@@ -1450,14 +1456,14 @@ async def get_leader_dept_comparison(
         leave_ov = _leave_overlap_sql_bounds()
 
         person_rows = db.execute_query(
-            "SELECT lsys, COUNT(*) AS cnt FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) != '其他部门员工' AND (COALESCE(zaizhi,0)=0) GROUP BY lsys ORDER BY lsys",
+            "SELECT lsys, COUNT(*) AS cnt FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' AND RIGHT(TRIM(name), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) GROUP BY lsys ORDER BY lsys",
             (LEADER_EXCLUDE_LSYS,)
         )
         person_by_lsys = {r["lsys"].strip(): int(r.get("cnt") or 0) for r in person_rows if r.get("lsys")}
 
         leave_raw = f"""
             SELECT lsys, timefrom, timeto, timefromdate, CAST(tian AS DECIMAL(10,2)) AS tian
-            FROM qj WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s
+            FROM qj WHERE qjzt = 4 AND RIGHT(TRIM(xm), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员')
             {leave_ov}
         """
         leave_rows = db.execute_query(leave_raw, (LEADER_EXCLUDE_LSYS, leave_pe_str, leave_ps_str))
@@ -1480,7 +1486,7 @@ async def get_leader_dept_comparison(
 
         overtime_query = f"""
             SELECT yggl.lsys, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS total
-            FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != '' AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+            FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != '' AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
             WHERE jiaban.jiabanzt = 4 {month_cond_overtime}
             GROUP BY yggl.lsys
         """
@@ -1495,7 +1501,7 @@ async def get_leader_dept_comparison(
         if month:
             trip_raw_query = """
                 SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
-                FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
+                FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
                   AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
             """
@@ -1503,7 +1509,7 @@ async def get_leader_dept_comparison(
         else:
             trip_raw_query = """
                 SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
-                FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND (COALESCE(yggl.zaizhi,0)=0)
+                FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
                   AND YEAR(COALESCE(gcsqb.gcsj, gcsqb.yjcfsj)) = %s
             """
@@ -1538,7 +1544,7 @@ async def get_leader_dept_comparison(
         hx_raw = f"""
             SELECT yggl.lsys, qj.timefrom, qj.timeto, qj.timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian, qj.xiaoshi
             FROM qj INNER JOIN yggl ON qj.xm = yggl.name AND yggl.lsys IS NOT NULL AND yggl.lsys != ''
-                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+                AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
             WHERE qj.qjzt = 4 AND TRIM(qj.qjfs) IN ('换休','员工换休票') AND RIGHT(TRIM(qj.xm), 1) != '1'
                 AND TRIM(yggl.lsys) != %s
             {leave_ov}
@@ -1620,7 +1626,7 @@ async def get_leader_rankings(
             query = """
                 SELECT jiaban.xm AS name, yggl.lsys,
                     SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS value
-                FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+                FROM jiaban INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
                 WHERE jiaban.jiabanzt = 4 AND RIGHT(TRIM(jiaban.xm), 1) != '1' AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)
                 GROUP BY jiaban.xm, yggl.lsys ORDER BY value DESC
             """
@@ -1638,7 +1644,7 @@ async def get_leader_rankings(
             lov = _leave_overlap_sql_bounds()
             leave_raw = f"""
                 SELECT qj.xm AS name, qj.lsys, timefrom, timeto, timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian
-                FROM qj WHERE qj.qjzt = 4 AND RIGHT(TRIM(qj.xm), 1) != '1' AND RIGHT(TRIM(qj.lsys), 1) != '1'
+                FROM qj WHERE qj.qjzt = 4 AND RIGHT(TRIM(qj.xm), 1) != '1' AND RIGHT(TRIM(qj.lsys), 1) != '1' AND TRIM(qj.lsys) NOT IN ('其他部门员工','其他部门成员')
                 {lov}
             """
             lrows = db.execute_query(leave_raw, (pe_str, ps_str))
@@ -1671,7 +1677,7 @@ async def get_leader_rankings(
             if month:
                 trip_raw_query = """
                     SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
-                    FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+                    FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
                     WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
                       AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj) <= %s AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj) >= %s
                 """
@@ -1679,7 +1685,7 @@ async def get_leader_rankings(
             else:
                 trip_raw_query = """
                     SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj, yggl.lsys
-                    FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)
+                    FROM gcsqb INNER JOIN yggl ON gcsqb.gcr = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)
                     WHERE RIGHT(TRIM(gcsqb.gcr), 1) != '1' AND (gcsqb.bldzt = 2 AND gcsqb.szrzt = 2)
                       AND YEAR(COALESCE(gcsqb.gcsj, gcsqb.yjcfsj)) = %s
                 """
@@ -1869,7 +1875,7 @@ async def get_clock_in_discipline_stats(
         valid_names_rows = db.execute_query(
             "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
             "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
-            "AND TRIM(lsys) != %s AND TRIM(lsys) != '其他部门员工' AND (COALESCE(zaizhi,0)=0)",
+            "AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
             (LEADER_EXCLUDE_LSYS,),
         )
         valid_names = {r["name"].strip() for r in valid_names_rows if r.get("name")}
@@ -1994,4 +2000,214 @@ async def get_person_scatter(
         return {"success": True, "name": name, "data": data}
     except Exception as e:
         logger.error(f"个人散点图数据查询失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+#  工作强度统计  A = 加班时长 / (应出勤时长 - 公出时长)
+# ============================================================
+
+def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
+    """按人汇总加班小时 {name: hours}，仅已通过(jiabanzt=4)"""
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        join_cond = ("INNER JOIN yggl ON jiaban.xm = yggl.name "
+                     "AND RIGHT(TRIM(yggl.name),1)!='1' AND RIGHT(TRIM(yggl.lsys),1)!='1' "
+                     f"AND TRIM(yggl.lsys)!=%s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)")
+        join_param = (LEADER_EXCLUDE_LSYS,)
+    else:
+        join_cond = ("INNER JOIN yggl ON jiaban.xm = yggl.name "
+                     "AND yggl.lsys=%s AND RIGHT(TRIM(yggl.name),1)!='1' "
+                     "AND RIGHT(TRIM(yggl.lsys),1)!='1' AND (COALESCE(yggl.zaizhi,0)=0)")
+        join_param = (lsys,)
+
+    if month:
+        ms = f"{year}-{month:02d}"
+        sql = f"""
+            SELECT TRIM(jiaban.xm) AS name,
+                   SUM(CAST(COALESCE(jiaban.tian1,0) AS DECIMAL(10,2))) AS hours
+            FROM jiaban {join_cond}
+            WHERE jiaban.jiabanzt=4
+              AND (jiaban.timedate LIKE %s OR SUBSTRING(jiaban.timedate,1,7)=%s)
+            GROUP BY TRIM(jiaban.xm)
+        """
+        rows = db.execute_query(sql, join_param + (f"{ms}%", ms))
+    else:
+        sql = f"""
+            SELECT TRIM(jiaban.xm) AS name,
+                   SUM(CAST(COALESCE(jiaban.tian1,0) AS DECIMAL(10,2))) AS hours
+            FROM jiaban {join_cond}
+            WHERE jiaban.jiabanzt=4
+              AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate)=%s)
+            GROUP BY TRIM(jiaban.xm)
+        """
+        rows = db.execute_query(sql, join_param + (f"{year}%", year))
+
+    result = {}
+    for r in (rows or []):
+        n = (r.get("name") or "").strip()
+        if n:
+            result[n] = float(r.get("hours") or 0)
+    return result
+
+
+def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
+    """按人汇总公出天数 {name: days}，区间并集去重，仅已批准"""
+    import calendar as _cal
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        jc = ("gcsqb INNER JOIN yggl ON gcsqb.gcr=yggl.name "
+              "AND RIGHT(TRIM(yggl.name),1)!='1' AND RIGHT(TRIM(yggl.lsys),1)!='1' "
+              "AND TRIM(yggl.lsys)!=%s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)")
+        jp = (LEADER_EXCLUDE_LSYS,)
+    else:
+        jc = ("gcsqb INNER JOIN yggl ON gcsqb.gcr=yggl.name "
+              "AND yggl.lsys=%s AND RIGHT(TRIM(yggl.name),1)!='1' "
+              "AND RIGHT(TRIM(yggl.lsys),1)!='1' AND (COALESCE(yggl.zaizhi,0)=0)")
+        jp = (lsys,)
+
+    if month:
+        ms = date(year, month, 1)
+        me = date(year, month, _cal.monthrange(year, month)[1])
+        sql = f"""
+            SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
+            FROM {jc}
+            WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
+              AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+              AND COALESCE(gcsqb.gcsj,gcsqb.yjcfsj)<=%s
+              AND COALESCE(gcsqb.sjfhtime,gcsqb.yjfhsj)>=%s
+        """
+        rows = db.execute_query(sql, jp + (me.strftime("%Y-%m-%d"), ms.strftime("%Y-%m-%d")))
+        clip_start, clip_end = ms, min(me, date.today())
+    else:
+        sql = f"""
+            SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
+            FROM {jc}
+            WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
+              AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+              AND YEAR(COALESCE(gcsqb.gcsj,gcsqb.yjcfsj))=%s
+        """
+        rows = db.execute_query(sql, jp + (year,))
+        clip_start = date(year, 1, 1)
+        clip_end = min(date(year, 12, 31), date.today())
+
+    by_person: dict = defaultdict(list)
+    for row in (rows or []):
+        gcr = (row.get("gcr") or "").strip()
+        s = _parse_date(row.get("gcsj") or row.get("yjcfsj"))
+        e = _parse_date(row.get("sjfhtime") or row.get("yjfhsj"))
+        if s and e and e >= s:
+            by_person[gcr].append((max(s, clip_start), min(e, clip_end)))
+
+    result = {}
+    for gcr, intervals in by_person.items():
+        d = _merge_intervals_days(intervals)
+        if d > 0:
+            result[gcr] = round(d, 2)
+    return result
+
+
+def _get_staff_with_dept(lsys: Optional[str]) -> list:
+    """返回 [{name, lsys}]，在职员工，排除 '部办' 及测试账号"""
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name!='' "
+            "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
+            "AND TRIM(lsys)!=%s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
+            (LEADER_EXCLUDE_LSYS,),
+        )
+    else:
+        rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE lsys=%s AND name IS NOT NULL AND name!='' "
+            "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
+            "AND TRIM(lsys)!=%s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
+            (lsys, LEADER_EXCLUDE_LSYS),
+        )
+    return [{"name": (r["name"] or "").strip(), "lsys": (r.get("lsys") or "").strip()} for r in (rows or []) if (r.get("name") or "").strip()]
+
+
+@router.get("/leader/work-intensity")
+async def get_work_intensity(
+    year: int = Query(..., description="年份"),
+    month: Optional[int] = Query(None, description="月份，不传则全年"),
+    lsys: Optional[str] = Query(None, description="科室，不传则全员"),
+):
+    """
+    工作强度统计 A = 加班时长 / (应出勤时长 - 公出时长)
+    时长单位统一为小时（应出勤天数×8，公出天数×8）。
+    返回：全部门A、各科室A、每个人的A。
+    """
+    try:
+        HOURS_PER_DAY = 8
+
+        if month:
+            workdays = _count_workdays_in_month(year, month)
+        else:
+            import calendar as _cal2
+            workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
+
+        expected_hours = workdays * HOURS_PER_DAY
+        staff = _get_staff_with_dept(lsys)
+        ot_map = _get_overtime_by_person(year, month, lsys)
+        trip_map = _get_trip_days_by_person(year, month, lsys)
+
+        person_list = []
+        dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "count": 0})
+
+        for s in staff:
+            name = s["name"]
+            dept = s["lsys"]
+            ot = ot_map.get(name, 0)
+            trip_d = trip_map.get(name, 0)
+            trip_h = trip_d * HOURS_PER_DAY
+            actual_h = expected_hours - trip_h
+            intensity = round(ot / actual_h, 4) if actual_h > 0 else 0
+
+            person_list.append({
+                "name": name,
+                "lsys": dept,
+                "overtimeHours": round(ot, 2),
+                "tripDays": trip_d,
+                "actualHours": round(actual_h, 2),
+                "intensity": intensity,
+            })
+
+            da = dept_agg[dept]
+            da["ot"] += ot
+            da["trip_days"] += trip_d
+            da["count"] += 1
+
+        person_list.sort(key=lambda x: -x["intensity"])
+
+        total_ot = sum(p["overtimeHours"] for p in person_list)
+        total_trip_d = sum(p["tripDays"] for p in person_list)
+        total_trip_h = total_trip_d * HOURS_PER_DAY
+        total_actual = expected_hours * len(staff) - total_trip_h
+        overall_intensity = round(total_ot / total_actual, 4) if total_actual > 0 else 0
+
+        dept_list = []
+        for dept_name, da in dept_agg.items():
+            dept_actual = expected_hours * da["count"] - da["trip_days"] * HOURS_PER_DAY
+            dept_i = round(da["ot"] / dept_actual, 4) if dept_actual > 0 else 0
+            dept_list.append({
+                "lsys": dept_name,
+                "personCount": da["count"],
+                "overtimeHours": round(da["ot"], 2),
+                "tripDays": round(da["trip_days"], 2),
+                "intensity": dept_i,
+            })
+        dept_list.sort(key=lambda x: -x["intensity"])
+
+        return {
+            "success": True,
+            "workdays": workdays,
+            "expectedHoursPerPerson": expected_hours,
+            "totalPeople": len(staff),
+            "overallIntensity": overall_intensity,
+            "byDept": dept_list,
+            "byPerson": person_list,
+        }
+    except Exception as e:
+        logger.error(f"工作强度统计失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
