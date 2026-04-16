@@ -89,7 +89,35 @@
         >
           {{ saving ? '保存中…' : '保存排班' }}
         </button>
+        <button
+          v-if="selectedDept"
+          type="button"
+          class="btn btn-outline btn-sm"
+          @click="showExportPanel = !showExportPanel"
+          title="导出排班表为 Excel（按月）"
+        >导出 Excel</button>
       </div>
+    </div>
+
+    <!-- 导出面板 -->
+    <div v-if="showExportPanel && selectedDept" class="export-panel card">
+      <h3>导出排班表 <span class="config-dept">{{ selectedDept }}</span></h3>
+      <div class="config-form">
+        <div class="config-item">
+          <label>年份</label>
+          <input type="number" v-model.number="exportYear" min="2020" max="2099" style="width:80px">
+        </div>
+        <div class="config-item">
+          <label>月份</label>
+          <select v-model.number="exportMonth" style="width:72px">
+            <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+          </select>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm" @click="handleExportExcel" :disabled="exporting">
+          {{ exporting ? '导出中…' : '下载' }}
+        </button>
+      </div>
+      <p class="config-hint">导出该科室所选月份的排班表 Excel，含表格与日历两个 Sheet；值班计划、休息日着色均已包含。</p>
     </div>
 
     <!-- 配置面板 -->
@@ -135,21 +163,42 @@
 
     <!-- 排班网格 -->
     <div class="schedule-wrap card" v-if="employees.length">
-      <div class="schedule-scroll">
+      <div class="schedule-scroll" @mouseleave="scheduleClearHover">
         <table class="schedule-table">
           <thead>
             <tr>
-              <th class="col-name sticky-col">姓名</th>
-              <th class="col-total sticky-col2">
-                <div>统计</div>
+              <th
+                class="col-name sticky-col th-sortable"
+                :class="scheduleHlClass(0, 0)"
+                title="按姓名排序，点击切换升序 / 降序"
+                @mouseenter="scheduleSetHover(0, 0)"
+                @click.stop="toggleSortByName"
+              >姓名<span
+                class="th-sort-ico"
+                :class="{ 'is-active': employeeSortKey === 'name' }"
+                aria-hidden="true"
+              >{{ employeeSortGlyph('name') }}</span></th>
+              <th
+                class="col-total sticky-col2 th-sortable"
+                :class="scheduleHlClass(1, 0)"
+                title="按本屏白班+夜班合计排序，点击切换升序 / 降序"
+                @mouseenter="scheduleSetHover(1, 0)"
+                @click.stop="toggleSortByStats"
+              >
+                <div>统计<span
+                  class="th-sort-ico"
+                  :class="{ 'is-active': employeeSortKey === 'stats' }"
+                  aria-hidden="true"
+                >{{ employeeSortGlyph('stats') }}</span></div>
                 <div class="th-sub">白/夜</div>
               </th>
               <th
-                v-for="d in dates"
+                v-for="(d, di) in dates"
                 :key="d.date"
                 class="col-day th-date-head"
-                :class="{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'col-open': openDates[d.date] }"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'col-open': openDates[d.date] }, scheduleHlClass(2 + di, 0)]"
                 :title="dateHeaderTitle(d)"
+                @mouseenter="scheduleSetHover(2 + di, 0)"
               >
                 <div class="th-day">{{ d.date.slice(8) }}</div>
                 <div class="th-weekday">{{ d.label }}</div>
@@ -175,51 +224,83 @@
               </th>
             </tr>
             <tr class="plan-row">
-              <th class="col-name sticky-col plan-row-label" title="解锁日：本科室成员均可协同编辑当日计划；未解锁仅管理人员可改">计划</th>
-              <th class="col-total sticky-col2 plan-row-stat">—</th>
               <th
-                v-for="d in dates"
+                class="col-name sticky-col plan-row-label"
+                title="解锁日：本科室成员均可协同编辑当日计划；未解锁仅管理人员可改"
+                :class="scheduleHlClass(0, 1)"
+                @mouseenter="scheduleSetHover(0, 1)"
+              >计划</th>
+              <th
+                class="col-total sticky-col2 plan-row-stat"
+                :class="scheduleHlClass(1, 1)"
+                @mouseenter="scheduleSetHover(1, 1)"
+              >—</th>
+              <th
+                v-for="(d, di) in dates"
                 :key="'plan-' + d.date"
                 class="col-day plan-cell"
-                :class="{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date], 'col-open': openDates[d.date] && isSameDept && !isManager }"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date], 'col-open': openDates[d.date] && isSameDept && !isManager }, scheduleHlClass(2 + di, 1)]"
                 :title="planCellTitle(d)"
+                @mouseenter="scheduleSetHover(2 + di, 1)"
                 @click="openPlanEditor(d)"
               >
                 <span v-if="dayPlans[d.date]" class="plan-preview">{{ planPreview(d.date) }}</span>
                 <span v-else class="plan-empty-dot">+</span>
               </th>
             </tr>
+            <tr class="summary-head-row">
+              <th
+                class="col-name sticky-col summary-head-label"
+                :class="scheduleHlClass(0, 2)"
+                @mouseenter="scheduleSetHover(0, 2)"
+              ><strong>当日合计</strong></th>
+              <th
+                class="col-total sticky-col2 summary-head-stat"
+                :class="scheduleHlClass(1, 2)"
+                @mouseenter="scheduleSetHover(1, 2)"
+              >—</th>
+              <th
+                v-for="(d, di) in dates"
+                :key="'sum-' + d.date"
+                class="col-day summary-head-day"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr }, scheduleHlClass(2 + di, 2)]"
+                @mouseenter="scheduleSetHover(2 + di, 2)"
+              >
+                <div class="summary-cell" :title="daySummaryTooltip(d)">
+                  <span class="stat-day">{{ daySummary[d.date]?.day ?? 0 }}</span>
+                  <span class="summary-slash">/</span>
+                  <span class="stat-night">{{ daySummary[d.date]?.night ?? 0 }}</span>
+                </div>
+              </th>
+            </tr>
           </thead>
           <tbody>
-            <tr v-for="emp in employees" :key="emp">
-              <td class="col-name sticky-col" :title="emp">{{ emp }}</td>
-              <td class="col-total sticky-col2">
+            <tr v-for="(emp, ei) in sortedEmployees" :key="emp">
+              <td
+                class="col-name sticky-col"
+                :title="emp"
+                :class="scheduleHlClass(0, 3 + ei)"
+                @mouseenter="scheduleSetHover(0, 3 + ei)"
+              >{{ emp }}</td>
+              <td
+                class="col-total sticky-col2"
+                :class="scheduleHlClass(1, 3 + ei)"
+                @mouseenter="scheduleSetHover(1, 3 + ei)"
+              >
                 <span class="stat-day">{{ empStats[emp]?.day || 0 }}</span>/<span class="stat-night">{{ empStats[emp]?.night || 0 }}</span>
               </td>
               <td
-                v-for="d in dates"
+                v-for="(d, di) in dates"
                 :key="d.date"
                 class="col-day cell"
-                :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }]"
+                :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }, scheduleHlClass(2 + di, 3 + ei)]"
+                @mouseenter="scheduleSetHover(2 + di, 3 + ei)"
                 @click="cycleShift(emp, d.date)"
               >
                 <span class="cell-text">{{ cellLabel(emp, d.date) }}</span>
               </td>
             </tr>
           </tbody>
-          <tfoot>
-            <tr class="summary-row">
-              <td class="col-name sticky-col"><strong>当日合计</strong></td>
-              <td class="col-total sticky-col2">—</td>
-              <td v-for="d in dates" :key="d.date" class="col-day">
-                <div class="summary-cell" :title="daySummaryTooltip(d)">
-                  <span class="stat-day">{{ daySummary[d.date]?.day ?? 0 }}</span>
-                  <span class="summary-slash">/</span>
-                  <span class="stat-night">{{ daySummary[d.date]?.night ?? 0 }}</span>
-                </div>
-              </td>
-            </tr>
-          </tfoot>
         </table>
       </div>
     </div>
@@ -370,11 +451,14 @@
         </div>
       </div>
     </div>
+    <Transition name="shift-cap-toast-fade">
+      <div v-if="shiftCapToast" class="shift-cap-toast" role="status">{{ shiftCapToast }}</div>
+    </Transition>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, nextTick } from 'vue'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
 import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks } from '@/api/shift'
 import { isDeptLeader } from '@/utils/roleMatch'
 
@@ -435,6 +519,27 @@ const planEditing = ref(false)
 const planEditDate = ref('')
 const planEditText = ref('')
 const planTextareaRef = ref(null)
+
+/** 排班表 Excel 式行列十字高亮（当前悬浮列 / 行索引） */
+const scheduleHoverCol = ref(null)
+const scheduleHoverRow = ref(null)
+function scheduleSetHover(col, row) {
+  scheduleHoverCol.value = col
+  scheduleHoverRow.value = row
+}
+function scheduleClearHover() {
+  scheduleHoverCol.value = null
+  scheduleHoverRow.value = null
+}
+function scheduleHlClass(col, row) {
+  const c = scheduleHoverCol.value
+  const r = scheduleHoverRow.value
+  if (c === null || r === null) return {}
+  return {
+    'sched-hl-row': r === row,
+    'sched-hl-col': c === col,
+  }
+}
 
 function planPreview(dateStr) {
   const txt = (dayPlans[dateStr] || '').trim()
@@ -672,7 +777,12 @@ onMounted(async () => {
 })
 
 async function loadSchedule() {
-  if (!selectedDept.value) { employees.value = []; dates.value = []; return }
+  if (!selectedDept.value) {
+    employees.value = []
+    employeeSortKey.value = null
+    dates.value = []
+    return
+  }
   loading.value = true
   dirty.value = false
   plansDirty.value = false
@@ -686,6 +796,7 @@ async function loadSchedule() {
       getShiftConfig({ department: selectedDept.value }),
     ])
     employees.value = schRes?.employees || []
+    employeeSortKey.value = null
     dates.value = schRes?.dates || []
     Object.keys(scheduleData).forEach(k => delete scheduleData[k])
     const sch = schRes?.schedule || {}
@@ -731,14 +842,71 @@ function goThisWeek() {
 }
 
 const SHIFT_CYCLE = ['白班', '夜班', '']
+const shiftCapToast = ref('')
+let shiftCapToastTimer = null
+function showShiftCapToast(message) {
+  shiftCapToast.value = message
+  if (shiftCapToastTimer) clearTimeout(shiftCapToastTimer)
+  shiftCapToastTimer = setTimeout(() => {
+    shiftCapToast.value = ''
+    shiftCapToastTimer = null
+  }, 2600)
+}
+onUnmounted(() => {
+  if (shiftCapToastTimer) clearTimeout(shiftCapToastTimer)
+})
+
+/** 与自动排班一致：工作日用 workday_*，周末/节假日用 weekend_* */
+function shiftCapsForDateStr(dateStr) {
+  const d = dates.value.find((x) => x.date === dateStr)
+  if (!d) return { day: 999, night: 999, kindLabel: '' }
+  if (d.isWorkday) {
+    return {
+      day: Math.max(0, Number(config.workday_day) || 0),
+      night: Math.max(0, Number(config.workday_night) || 0),
+      kindLabel: '工作日',
+    }
+  }
+  return {
+    day: Math.max(0, Number(config.weekend_day) || 0),
+    night: Math.max(0, Number(config.weekend_night) || 0),
+    kindLabel: '周末/节假日',
+  }
+}
+
+function countShiftOnDate(dateStr, shift) {
+  let n = 0
+  for (const e of employees.value) {
+    if ((scheduleData[e]?.[dateStr] || '') === shift) n++
+  }
+  return n
+}
+
 function cycleShift(emp, dateStr) {
   if (!canEditShiftCell(emp, dateStr)) return
   if (!scheduleData[emp]) scheduleData[emp] = {}
   const cur = scheduleData[emp][dateStr] || ''
-  const idx = SHIFT_CYCLE.indexOf(cur)
+  const idxRaw = SHIFT_CYCLE.indexOf(cur)
+  const idx = idxRaw >= 0 ? idxRaw : 2
   const next = SHIFT_CYCLE[(idx + 1) % SHIFT_CYCLE.length]
+  const caps = shiftCapsForDateStr(dateStr)
   scheduleData[emp][dateStr] = next
   dirty.value = true
+  if (next === '白班') {
+    const cnt = countShiftOnDate(dateStr, '白班')
+    if (cnt > caps.day) {
+      showShiftCapToast(
+        `提示：${caps.kindLabel}白班已超过配置（配置 ${caps.day} 人，当前 ${cnt} 人），已保留您的排班`,
+      )
+    }
+  } else if (next === '夜班') {
+    const cnt = countShiftOnDate(dateStr, '夜班')
+    if (cnt > caps.night) {
+      showShiftCapToast(
+        `提示：${caps.kindLabel}夜班已超过配置（配置 ${caps.night} 人，当前 ${cnt} 人），已保留您的排班`,
+      )
+    }
+  }
 }
 
 function cellLabel(emp, dateStr) {
@@ -771,6 +939,55 @@ const empStats = computed(() => {
     stats[emp] = { day, night }
   }
   return stats
+})
+
+/** null：与后台返回顺序一致；name / stats：点击表头排序 */
+const employeeSortKey = ref(null)
+const employeeSortDir = ref('asc')
+
+function toggleSortByName() {
+  if (employeeSortKey.value !== 'name') {
+    employeeSortKey.value = 'name'
+    employeeSortDir.value = 'asc'
+  } else {
+    employeeSortDir.value = employeeSortDir.value === 'asc' ? 'desc' : 'asc'
+  }
+}
+
+function toggleSortByStats() {
+  if (employeeSortKey.value !== 'stats') {
+    employeeSortKey.value = 'stats'
+    employeeSortDir.value = 'asc'
+  } else {
+    employeeSortDir.value = employeeSortDir.value === 'asc' ? 'desc' : 'asc'
+  }
+}
+
+/** 未选中列显示 ↕ 提示可排序；选中后显示 ↑ / ↓ */
+function employeeSortGlyph(which) {
+  if (employeeSortKey.value !== which) return '↕'
+  return employeeSortDir.value === 'asc' ? '↑' : '↓'
+}
+
+const sortedEmployees = computed(() => {
+  const list = [...employees.value]
+  const key = employeeSortKey.value
+  if (!key) return list
+  const dir = employeeSortDir.value === 'asc' ? 1 : -1
+  if (key === 'name') {
+    list.sort((a, b) => dir * String(a).localeCompare(String(b), 'zh-Hans-CN', { numeric: true }))
+    return list
+  }
+  if (key === 'stats') {
+    list.sort((a, b) => {
+      const sa = (empStats.value[a]?.day || 0) + (empStats.value[a]?.night || 0)
+      const sb = (empStats.value[b]?.day || 0) + (empStats.value[b]?.night || 0)
+      if (sa !== sb) return dir * (sa - sb)
+      return String(a).localeCompare(String(b), 'zh-Hans-CN', { numeric: true })
+    })
+    return list
+  }
+  return list
 })
 
 const daySummary = computed(() => {
@@ -984,6 +1201,46 @@ async function handleBatchLock(open) {
     alert(e?.response?.data?.detail || '操作失败')
   }
 }
+
+// ==================== 导出 Excel ====================
+const showExportPanel = ref(false)
+const exportYear = ref(new Date().getFullYear())
+const exportMonth = ref(new Date().getMonth() + 1)
+const exporting = ref(false)
+
+async function handleExportExcel() {
+  if (!selectedDept.value) return
+  exporting.value = true
+  try {
+    const params = new URLSearchParams({
+      department: selectedDept.value,
+      year: String(exportYear.value),
+      month: String(exportMonth.value),
+    })
+    const url = `/api/shift/export-excel?${params.toString()}`
+    const resp = await fetch(url, { credentials: 'include' })
+    if (!resp.ok) {
+      const errText = await resp.text().catch(() => '')
+      let detail = '导出失败'
+      try { detail = JSON.parse(errText).detail || detail } catch {}
+      alert(detail)
+      return
+    }
+    const blob = await resp.blob()
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `${selectedDept.value}_${exportYear.value}年${exportMonth.value}月_排班表.xlsx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    URL.revokeObjectURL(a.href)
+    showExportPanel.value = false
+  } catch (e) {
+    alert(e?.message || '导出失败')
+  } finally {
+    exporting.value = false
+  }
+}
 </script>
 
 <style scoped>
@@ -991,6 +1248,31 @@ async function handleBatchLock(open) {
   width: 100%;
   max-width: none;
   padding: 0 0 var(--spacing-xl);
+}
+.shift-cap-toast {
+  position: fixed;
+  left: 50%;
+  bottom: 28%;
+  transform: translateX(-50%);
+  z-index: 120;
+  max-width: min(420px, 92vw);
+  padding: 10px 16px;
+  font-size: 13px;
+  line-height: 1.45;
+  color: #f8fafc;
+  background: rgba(15, 23, 42, 0.92);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  pointer-events: none;
+  text-align: center;
+}
+.shift-cap-toast-fade-enter-active,
+.shift-cap-toast-fade-leave-active {
+  transition: opacity 0.2s ease;
+}
+.shift-cap-toast-fade-enter-from,
+.shift-cap-toast-fade-leave-to {
+  opacity: 0;
 }
 .page-header { margin-bottom: var(--spacing-lg); text-align: left; }
 /* 覆盖 global.css 中 .page-header .header-content 的 space-between，避免标题与规则块左右分列 */
@@ -1092,10 +1374,11 @@ async function handleBatchLock(open) {
 .btn-danger-outline:hover { background: #fef2f2; }
 .btn-sm { padding: 4px 10px; font-size: 13px; }
 
-/* 配置面板 */
-.config-panel h3 { margin: 0 0 12px; font-size: var(--font-size-base); }
+/* 配置面板 & 导出面板 */
+.config-panel h3, .export-panel h3 { margin: 0 0 12px; font-size: var(--font-size-base); }
 .config-dept { color: var(--color-primary); margin-left: 8px; }
 .config-form { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.export-panel select { padding: 4px 8px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); }
 .config-item { display: flex; flex-direction: column; gap: 4px; }
 .config-item label { font-size: 12px; color: var(--color-text-secondary); }
 .config-item input { width: 80px; padding: 4px 8px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); text-align: center; }
@@ -1118,8 +1401,27 @@ async function handleBatchLock(open) {
   width: max-content;
   min-width: 100%;
   font-size: 13px;
-  --shift-col-name: 58px;
-  --shift-col-total: 36px;
+  --shift-col-name: 72px;
+  --shift-col-total: 44px;
+  /* 表头三行纵向冻结：与首行/计划行/合计行实际高度对齐 */
+  --schedule-head-r1: 63px;
+  --schedule-head-r2: 56px;
+  --sched-hl-row: rgba(191, 219, 254, 0.42);
+  --sched-hl-col: rgba(191, 219, 254, 0.42);
+  --sched-hl-cross: rgba(96, 165, 250, 0.38);
+}
+/* 鼠标悬浮：整行 + 整列淡蓝高亮，交叉格略深（类似 Excel） */
+.schedule-table th.sched-hl-row,
+.schedule-table td.sched-hl-row {
+  background: var(--sched-hl-row) !important;
+}
+.schedule-table th.sched-hl-col,
+.schedule-table td.sched-hl-col {
+  background: var(--sched-hl-col) !important;
+}
+.schedule-table th.sched-hl-row.sched-hl-col,
+.schedule-table td.sched-hl-row.sched-hl-col {
+  background: var(--sched-hl-cross) !important;
 }
 .schedule-table th,
 .schedule-table td { border: 1px solid #e5e7eb; text-align: center; white-space: nowrap; }
@@ -1131,12 +1433,17 @@ async function handleBatchLock(open) {
   padding: 4px 2px;
   font-weight: 500;
 }
+/* 日期表头行：顶边冻结（高度与 --schedule-head-r1 一致，避免与下方 sticky 错位） */
 .schedule-table thead tr:first-child th {
+  top: 0;
   z-index: 5;
+  min-height: var(--schedule-head-r1);
+  box-sizing: border-box;
 }
+/* 计划行：紧贴在首行之下冻结 */
 .schedule-table thead tr.plan-row th {
-  position: relative;
-  top: auto;
+  position: sticky;
+  top: var(--schedule-head-r1);
   vertical-align: middle;
   padding: 6px 2px;
   background: #f0f9ff;
@@ -1145,13 +1452,38 @@ async function handleBatchLock(open) {
   font-weight: 500;
   min-height: 56px;
   height: 56px;
+  z-index: 4;
 }
 .schedule-table thead tr.plan-row .sticky-col,
 .schedule-table thead tr.plan-row .sticky-col2 {
   position: sticky;
+  top: var(--schedule-head-r1);
   background: #eff6ff;
-  z-index: 6;
+  z-index: 8;
 }
+/* 当日合计（表头第三行）：贴在计划行之下冻结 */
+.schedule-table thead tr.summary-head-row th {
+  position: sticky;
+  top: calc(var(--schedule-head-r1) + var(--schedule-head-r2));
+  z-index: 4;
+  padding: 5px 2px;
+  background: #f8fafc;
+  font-weight: 500;
+  vertical-align: middle;
+  border-bottom: 1px solid #e5e7eb;
+}
+.schedule-table thead tr.summary-head-row .summary-head-day {
+  white-space: normal;
+}
+.schedule-table thead tr.summary-head-row .sticky-col,
+.schedule-table thead tr.summary-head-row .sticky-col2 {
+  position: sticky;
+  top: calc(var(--schedule-head-r1) + var(--schedule-head-r2));
+  background: #f8fafc;
+  z-index: 9;
+}
+.summary-head-label { font-size: 12px; text-align: left; }
+.summary-head-stat { color: #cbd5e1; font-size: 11px; }
 .plan-row-label {
   font-size: 11px;
   line-height: 1.2;
@@ -1188,6 +1520,14 @@ async function handleBatchLock(open) {
 }
 .plan-cell:hover {
   background: #dbeafe !important;
+}
+/* 计划行：避免 hover / plan-has 盖住十字高亮 */
+.schedule-table thead tr.plan-row th.plan-cell.sched-hl-row,
+.schedule-table thead tr.plan-row th.plan-cell.sched-hl-col {
+  background: var(--sched-hl-row) !important;
+}
+.schedule-table thead tr.plan-row th.plan-cell.sched-hl-row.sched-hl-col {
+  background: var(--sched-hl-cross) !important;
 }
 
 /* 浮层编辑器 */
@@ -1350,6 +1690,42 @@ async function handleBatchLock(open) {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+.schedule-table thead .th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.schedule-table thead .th-sortable:hover {
+  background: #eef2f7 !important;
+}
+.schedule-table thead .th-sort-ico {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-left: 4px;
+  min-width: 22px;
+  height: 20px;
+  padding: 0 5px;
+  border-radius: 5px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1;
+  color: #475569;
+  background: linear-gradient(180deg, #e8eef5 0%, #dbe4f0 100%);
+  border: 1px solid #cbd5e1;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.75);
+  vertical-align: middle;
+  flex-shrink: 0;
+}
+.schedule-table thead .th-sort-ico.is-active {
+  color: #fff;
+  background: linear-gradient(180deg, var(--color-primary, #3b82f6) 0%, #2563eb 100%);
+  border-color: #1d4ed8;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.35);
+}
+.schedule-table thead .th-sortable:hover .th-sort-ico:not(.is-active) {
+  border-color: #94a3b8;
+  color: #334155;
+}
 .col-total {
   width: var(--shift-col-total);
   min-width: var(--shift-col-total);
@@ -1375,9 +1751,9 @@ async function handleBatchLock(open) {
   z-index: 4;
   background: white;
 }
-thead .sticky-col,
-thead .sticky-col2 {
-  z-index: 5;
+thead tr:first-child .sticky-col,
+thead tr:first-child .sticky-col2 {
+  z-index: 7;
   background: #f8fafc;
 }
 
@@ -1394,8 +1770,8 @@ thead .sticky-col2 {
 .stat-day { color: #2563eb; font-weight: 600; }
 .stat-night { color: #d97706; font-weight: 600; }
 
-/* 合计行 */
-.summary-row td { background: #f8fafc; font-size: 12px; padding: 4px 2px; }
+/* 表头内「当日合计」行（原 tfoot 上移） */
+.summary-head-row .summary-cell { min-height: 28px; }
 .summary-cell {
   display: flex;
   flex-direction: row;

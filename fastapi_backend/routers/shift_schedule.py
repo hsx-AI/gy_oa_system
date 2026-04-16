@@ -5,8 +5,12 @@
 import calendar
 import logging
 from datetime import datetime, date, timedelta
+from io import BytesIO
 from typing import Optional, List, Set
+from urllib.parse import quote
+
 from fastapi import APIRouter, Query, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 from database import db
 from utils.holiday_loader import load_holidays_for_year
@@ -867,3 +871,316 @@ async def get_departments():
     )
     depts = [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]
     return {"success": True, "departments": depts}
+
+
+# ==================== 导出排班 Excel ====================
+
+@router.get("/export-excel")
+async def export_schedule_excel(
+    department: str = Query(...),
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+):
+    """导出科室月排班表 Excel（两个 Sheet：表格 + 日历）"""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
+
+    _ensure_tables()
+    employees = _get_dept_employees(department)
+    dates = _month_dates(year, month)
+    if not dates:
+        raise HTTPException(status_code=400, detail="无效月份")
+
+    years_set = {year}
+    holiday_by_date = _holiday_map_for_years(years_set)
+    holidays = {k: v["type"] for k, v in holiday_by_date.items()}
+
+    date_info = []
+    for d in dates:
+        ds = d.strftime("%Y-%m-%d")
+        wd = _is_workday(d, holidays)
+        h = holiday_by_date.get(ds)
+        ht = h["type"] if h else ""
+        fest = h["festival"] if h else ""
+        mark = _holiday_header_mark(ht, fest) if h else ""
+        date_info.append({
+            "date": ds, "weekday": d.weekday(), "isWorkday": wd,
+            "label": ["一", "二", "三", "四", "五", "六", "日"][d.weekday()],
+            "holidayType": ht, "holidayFestival": fest, "holidayMark": mark,
+        })
+
+    ds_lo, ds_hi = dates[0].strftime("%Y-%m-%d"), dates[-1].strftime("%Y-%m-%d")
+    schedule = {}
+    if employees:
+        ph = ",".join(["%s"] * len(employees))
+        rows = db.execute_query(
+            f"SELECT employee_name, shift_date, shift_type FROM shift_schedule "
+            f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s AND employee_name IN ({ph})",
+            (department, ds_lo, ds_hi) + tuple(employees),
+        )
+        for r in rows:
+            name = (r.get("employee_name") or "").strip()
+            sd = r.get("shift_date")
+            sd = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
+            st = (r.get("shift_type") or "").strip()
+            if name and sd:
+                schedule.setdefault(name, {})[sd] = st
+
+    day_plans = {}
+    try:
+        plan_rows = db.execute_query(
+            "SELECT plan_date, content FROM shift_day_plan WHERE department = %s AND plan_date >= %s AND plan_date <= %s",
+            (department, ds_lo, ds_hi),
+        )
+        for pr in plan_rows or []:
+            pd = pr.get("plan_date")
+            pds = pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10]
+            if pds:
+                day_plans[pds] = (pr.get("content") or "").strip()
+    except Exception:
+        pass
+
+    # ---- 公用样式 ----
+    thin_side = Side(style="thin", color="B0B0B0")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    font_title = Font(name="微软雅黑", size=14, bold=True, color="1E293B")
+    font_header = Font(name="微软雅黑", size=10, bold=True, color="1E293B")
+    font_body = Font(name="微软雅黑", size=10)
+    font_plan_label = Font(name="微软雅黑", size=9, italic=True, color="0369A1")
+    font_plan = Font(name="微软雅黑", size=8, color="334155")
+    font_stat_label = Font(name="微软雅黑", size=9, bold=True, color="64748B")
+    font_holiday_mark = Font(name="微软雅黑", size=8, bold=True, color="9333EA")
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    align_left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    fill_header = PatternFill("solid", fgColor="F1F5F9")
+    fill_weekend = PatternFill("solid", fgColor="FEF9C3")
+    fill_holiday_rest = PatternFill("solid", fgColor="FDE68A")
+    fill_day_shift = PatternFill("solid", fgColor="DBEAFE")
+    fill_night_shift = PatternFill("solid", fgColor="FEF3C7")
+    fill_summary = PatternFill("solid", fgColor="F1F5F9")
+    fill_plan_row = PatternFill("solid", fgColor="EFF6FF")
+
+    def _apply_border(ws, min_row, max_row, min_col, max_col):
+        for row in ws.iter_rows(min_row=min_row, max_row=max_row, min_col=min_col, max_col=max_col):
+            for c in row:
+                c.border = thin_border
+
+    def _cell_fill_for_date(di):
+        """根据日期信息返回背景填充色"""
+        if not di["isWorkday"]:
+            ht = di.get("holidayType", "")
+            if "假" in ht or "休" in ht or di.get("holidayFestival"):
+                return fill_holiday_rest
+            return fill_weekend
+        return None
+
+    wb = Workbook()
+
+    # ============== Sheet 1: 表格形式 ==============
+    ws1 = wb.active
+    ws1.title = "排班表（表格）"
+    ws1.sheet_properties.tabColor = "3B82F6"
+
+    n_emp = len(employees)
+    n_days = len(date_info)
+
+    # -- 标题行 --
+    ws1.merge_cells(start_row=1, start_column=1, end_row=1, end_column=2 + n_days)
+    title_cell = ws1.cell(row=1, column=1, value=f"{department}  {year}年{month}月 排班表")
+    title_cell.font = font_title
+    title_cell.alignment = Alignment(horizontal="center", vertical="center")
+    ws1.row_dimensions[1].height = 30
+
+    # -- 表头行1: 日期 --
+    header_row = 2
+    ws1.cell(row=header_row, column=1, value="姓名").font = font_header
+    ws1.cell(row=header_row, column=1).fill = fill_header
+    ws1.cell(row=header_row, column=1).alignment = align_center
+    ws1.cell(row=header_row, column=2, value="统计\n白/夜").font = font_header
+    ws1.cell(row=header_row, column=2).fill = fill_header
+    ws1.cell(row=header_row, column=2).alignment = align_center
+    ws1.column_dimensions[get_column_letter(1)].width = 10
+    ws1.column_dimensions[get_column_letter(2)].width = 8
+
+    for ci, di in enumerate(date_info):
+        col = 3 + ci
+        header_text = f"{int(di['date'][8:])}\n{di['label']}"
+        if di["holidayMark"]:
+            header_text += f"\n{di['holidayMark']}"
+        cell = ws1.cell(row=header_row, column=col, value=header_text)
+        cell.font = font_header
+        cell.alignment = align_center
+        cell.fill = fill_header
+        cfill = _cell_fill_for_date(di)
+        if cfill:
+            cell.fill = cfill
+        ws1.column_dimensions[get_column_letter(col)].width = 6.5
+    ws1.row_dimensions[header_row].height = 48
+
+    # -- 员工行 --
+    for ri, emp in enumerate(employees):
+        row = header_row + 1 + ri
+        ws1.cell(row=row, column=1, value=emp).font = font_body
+        ws1.cell(row=row, column=1).alignment = align_left
+        day_cnt, night_cnt = 0, 0
+        for ci, di in enumerate(date_info):
+            col = 3 + ci
+            v = schedule.get(emp, {}).get(di["date"], "")
+            label = ""
+            if v == "白班":
+                label = "白"
+                day_cnt += 1
+            elif v == "夜班":
+                label = "夜"
+                night_cnt += 1
+            cell = ws1.cell(row=row, column=col, value=label)
+            cell.font = font_body
+            cell.alignment = align_center
+            if v == "白班":
+                cell.fill = fill_day_shift
+            elif v == "夜班":
+                cell.fill = fill_night_shift
+            else:
+                cfill = _cell_fill_for_date(di)
+                if cfill:
+                    cell.fill = cfill
+        stat_cell = ws1.cell(row=row, column=2, value=f"{day_cnt}/{night_cnt}")
+        stat_cell.font = font_body
+        stat_cell.alignment = align_center
+
+    # -- 合计行 --
+    summary_row = header_row + 1 + n_emp
+    ws1.cell(row=summary_row, column=1, value="当日合计").font = font_stat_label
+    ws1.cell(row=summary_row, column=1).fill = fill_summary
+    ws1.cell(row=summary_row, column=1).alignment = align_center
+    ws1.cell(row=summary_row, column=2, value="—").font = font_stat_label
+    ws1.cell(row=summary_row, column=2).fill = fill_summary
+    ws1.cell(row=summary_row, column=2).alignment = align_center
+    for ci, di in enumerate(date_info):
+        col = 3 + ci
+        day_cnt = sum(1 for e in employees if schedule.get(e, {}).get(di["date"]) == "白班")
+        night_cnt = sum(1 for e in employees if schedule.get(e, {}).get(di["date"]) == "夜班")
+        cell = ws1.cell(row=summary_row, column=col, value=f"{day_cnt}/{night_cnt}")
+        cell.font = font_stat_label
+        cell.alignment = align_center
+        cell.fill = fill_summary
+
+    # -- 值班计划行 --
+    plan_row = summary_row + 1
+    ws1.cell(row=plan_row, column=1, value="值班计划").font = font_plan_label
+    ws1.cell(row=plan_row, column=1).fill = fill_plan_row
+    ws1.cell(row=plan_row, column=1).alignment = align_center
+    ws1.cell(row=plan_row, column=2, value="").fill = fill_plan_row
+    for ci, di in enumerate(date_info):
+        col = 3 + ci
+        plan = day_plans.get(di["date"], "")
+        cell = ws1.cell(row=plan_row, column=col, value=plan)
+        cell.font = font_plan
+        cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        cell.fill = fill_plan_row
+    ws1.row_dimensions[plan_row].height = 60
+
+    # 边框
+    _apply_border(ws1, header_row, plan_row, 1, 2 + n_days)
+
+    # 冻结首列+表头
+    ws1.freeze_panes = "C3"
+
+    # ============== Sheet 2: 日历形式 ==============
+    ws2 = wb.create_sheet(title="排班表（日历）")
+    ws2.sheet_properties.tabColor = "10B981"
+
+    ws2.merge_cells(start_row=1, start_column=1, end_row=1, end_column=7)
+    t2 = ws2.cell(row=1, column=1, value=f"{department}  {year}年{month}月 排班日历")
+    t2.font = font_title
+    t2.alignment = Alignment(horizontal="center", vertical="center")
+    ws2.row_dimensions[1].height = 30
+
+    weekday_names = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    for ci, wn in enumerate(weekday_names):
+        cell = ws2.cell(row=2, column=1 + ci, value=wn)
+        cell.font = font_header
+        cell.alignment = align_center
+        cell.fill = fill_header
+        if ci >= 5:
+            cell.fill = fill_weekend
+        ws2.column_dimensions[cell.column_letter].width = 22
+    ws2.row_dimensions[2].height = 22
+
+    first_weekday = dates[0].weekday()
+    cal_row = 3
+    cal_col = first_weekday
+
+    for idx, di in enumerate(date_info):
+        ds = di["date"]
+        day_num = int(ds[8:])
+
+        lines = [f"{day_num}日  星期{di['label']}"]
+        if di["holidayMark"]:
+            lines[0] += f"  [{di['holidayMark']}]"
+
+        day_emps = []
+        night_emps = []
+        for emp in employees:
+            v = schedule.get(emp, {}).get(ds, "")
+            if v == "白班":
+                day_emps.append(emp)
+            elif v == "夜班":
+                night_emps.append(emp)
+        if day_emps:
+            lines.append(f"白班({len(day_emps)})：{'、'.join(day_emps)}")
+        if night_emps:
+            lines.append(f"夜班({len(night_emps)})：{'、'.join(night_emps)}")
+        if not day_emps and not night_emps:
+            lines.append("无排班")
+
+        plan = day_plans.get(ds, "").strip()
+        if plan:
+            plan_display = plan if len(plan) <= 60 else plan[:57] + "…"
+            lines.append(f"[计划] {plan_display}")
+
+        cell = ws2.cell(row=cal_row, column=1 + cal_col, value="\n".join(lines))
+        cell.font = font_body
+        cell.alignment = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        cell.border = thin_border
+
+        cfill = _cell_fill_for_date(di)
+        if cfill:
+            cell.fill = cfill
+
+        if plan:
+            cell.font = Font(name="微软雅黑", size=9, color="1E293B")
+
+        cal_col += 1
+        if cal_col >= 7:
+            ws2.row_dimensions[cal_row].height = 90
+            cal_col = 0
+            cal_row += 1
+
+    if cal_col != 0:
+        ws2.row_dimensions[cal_row].height = 90
+        for empty_col in range(cal_col, 7):
+            ws2.cell(row=cal_row, column=1 + empty_col).border = thin_border
+    _apply_border(ws2, 2, 2, 1, 7)
+
+    # -- 图例 --
+    legend_row = cal_row + (1 if cal_col == 0 else 2)
+    ws2.merge_cells(start_row=legend_row, start_column=1, end_row=legend_row, end_column=7)
+    legend_cell = ws2.cell(row=legend_row, column=1, value="图例：  ■ 黄色底 = 休息日/节假日    ■ 蓝色底 = 白班    ■ 橙色底 = 夜班    [计划] = 当日值班工作计划")
+    legend_cell.font = Font(name="微软雅黑", size=9, color="64748B")
+    legend_cell.alignment = Alignment(horizontal="left", vertical="center")
+
+    # -- 输出 --
+    bio = BytesIO()
+    wb.save(bio)
+    data = bio.getvalue()
+    fname = f"{department}_{year}年{month}月_排班表.xlsx"
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
