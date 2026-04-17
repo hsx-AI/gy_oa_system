@@ -24,3 +24,13 @@ export function getInboxEmailDetail(params) {
 export function syncInboxEmails(currentUser) {
   return request({ url: '/inbox-email/sync', method: 'post', params: { current_user: currentUser } })
 }
+
+/** 列出已被大模型识别为“含任务”的邮件（用于看板滚动展示） */
+export function listInboxTasks(params) {
+  return request({ url: '/inbox-email/tasks', method: 'get', params })
+}
+
+/** 手动触发大模型任务抽取（不传 id 则批量处理 pending/failed） */
+export function analyzeInboxEmails(params) {
+  return request({ url: '/inbox-email/analyze', method: 'post', params })
+}

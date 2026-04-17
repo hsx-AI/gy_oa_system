@@ -118,8 +118,10 @@ async def startup_event():
     from routers.email_sender import auto_reminder_background_loop
     _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
     # 共用邮箱自动拉取后台任务
-    from routers.inbox_email import inbox_email_background_loop
+    from routers.inbox_email import inbox_email_background_loop, inbox_email_analysis_background_loop
     _asyncio.get_event_loop().create_task(inbox_email_background_loop())
+    # 共用邮箱任务抽取后台任务
+    _asyncio.get_event_loop().create_task(inbox_email_analysis_background_loop())
 
 
 @app.get("/")

@@ -7,6 +7,7 @@
 import asyncio
 import email
 import imaplib
+import json
 import logging
 import re
 from datetime import datetime
@@ -31,6 +32,15 @@ POLL_INTERVAL_SECONDS = 120
 # 单次拉取的最多邮件数（避免首次拉取过多）
 MAX_FETCH_PER_POLL = 50
 
+# LLM 任务抽取相关
+ANALYZE_INTERVAL_SECONDS = 60            # 后台分析轮询间隔
+ANALYZE_BATCH_SIZE = 5                   # 每轮最多分析多少封
+ANALYZE_BODY_MAX_CHARS = 4000            # 送入模型的正文最大字符数
+ANALYSIS_STATUS_PENDING = "pending"
+ANALYSIS_STATUS_SUCCESS = "success"
+ANALYSIS_STATUS_NO_TASK = "no_task"
+ANALYSIS_STATUS_FAILED = "failed"
+
 
 # ==================== 建表 / 字段保障 ====================
 
@@ -42,6 +52,22 @@ def _ensure_inbox_columns():
     ]:
         try:
             db.execute_update(f"ALTER TABLE webconfig ADD COLUMN {col} {typedef}", ())
+        except Exception:
+            pass
+
+
+def _ensure_inbox_task_columns():
+    """确保 inbox_emails 表拥有大模型任务抽取相关字段。"""
+    for col, typedef in [
+        ("has_task", "TINYINT(1) DEFAULT 0 COMMENT '是否包含待办任务'"),
+        ("task_summary", "TEXT COMMENT '任务摘要（大模型抽取）'"),
+        ("task_deadline", "VARCHAR(50) DEFAULT '' COMMENT '任务截止时间（文本）'"),
+        ("task_analysis_status", "VARCHAR(20) DEFAULT 'pending' COMMENT '分析状态：pending/success/no_task/failed'"),
+        ("task_analyzed_at", "DATETIME DEFAULT NULL COMMENT '最近一次分析时间'"),
+        ("task_analysis_error", "TEXT COMMENT '最近一次分析的错误信息（若失败）'"),
+    ]:
+        try:
+            db.execute_update(f"ALTER TABLE inbox_emails ADD COLUMN {col} {typedef}", ())
         except Exception:
             pass
 
@@ -74,6 +100,7 @@ def _ensure_inbox_table():
 
 _ensure_inbox_columns()
 _ensure_inbox_table()
+_ensure_inbox_task_columns()
 
 
 # ==================== 辅助函数 ====================
@@ -374,6 +401,216 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL) -> dict:
     return result
 
 
+# ==================== LLM 任务抽取 ====================
+
+def _build_task_prompts(row: dict) -> tuple:
+    """基于邮件内容构建任务抽取的 system/user prompt（已关闭 Qwen3 思考模式）。"""
+    subject = (row.get("subject") or "").strip() or "（无主题）"
+    from_addr = (row.get("from_addr") or "").strip() or "（未知发件人）"
+    email_date = row.get("email_date")
+    date_str = email_date.strftime("%Y-%m-%d %H:%M:%S") if isinstance(email_date, datetime) else "（未知）"
+
+    body = (row.get("body_text") or "").strip()
+    if not body:
+        body = _html_to_text(row.get("body_html") or "")
+    if len(body) > ANALYZE_BODY_MAX_CHARS:
+        body = body[:ANALYZE_BODY_MAX_CHARS] + "\n……（正文过长已截断）"
+
+    system_prompt = (
+        "你是一名企业助理，负责从一封邮件中判断是否存在需要收件人处理的任务或待办事项，"
+        "并提取出任务的简要描述和截止时间。\n"
+        "判断规则：\n"
+        "1. 通知、广告、系统提醒、安全提醒、验证码、订阅推送、聊天寒暄等，均视为无任务；\n"
+        "2. 要求收件人完成某项工作、上报资料、回复确认、参加会议、提交审批、在特定时间前完成的，视为有任务；\n"
+        "3. 任务摘要尽量简短（不超过 50 个汉字），用一句话说明“谁/什么事”，不要照抄全文。\n"
+        "4. 截止时间只输出一个，格式优先 YYYY-MM-DD 或 YYYY-MM-DD HH:mm；若邮件没有明确截止时间，请留空字符串。\n"
+        "5. 输出严格的 JSON，不要解释、不要 markdown、不要思考过程，不要使用 <think> 标签。\n"
+        "/no_think"
+    )
+    user_prompt = (
+        f"邮件信息：\n"
+        f"- 发件人：{from_addr}\n"
+        f"- 发件时间：{date_str}\n"
+        f"- 主题：{subject}\n"
+        f"- 正文：\n{body}\n\n"
+        "请严格按下面的 JSON 输出：\n"
+        "{\n"
+        '  "has_task": true 或 false,\n'
+        '  "task": "任务的一句话摘要，若 has_task=false 则为空字符串",\n'
+        '  "deadline": "YYYY-MM-DD 或 YYYY-MM-DD HH:mm，若未明确给出则为空字符串"\n'
+        "}\n"
+        "/no_think"
+    )
+    return system_prompt, user_prompt
+
+
+def _parse_llm_task_content(content: str) -> dict:
+    """从大模型返回中鲁棒地解析任务 JSON。"""
+    text = (content or "").strip()
+    if not text:
+        raise ValueError("模型返回为空")
+
+    if "<think>" in text.lower() and "</think>" in text.lower():
+        end = text.lower().find("</think>") + len("</think>")
+        text = text[end:].strip()
+
+    try:
+        return json.loads(text)
+    except Exception:
+        pass
+
+    # 扫描最长的大括号对
+    stack: List[int] = []
+    best = (-1, -1)
+    for i, ch in enumerate(text):
+        if ch == "{":
+            stack.append(i)
+        elif ch == "}" and stack:
+            start = stack.pop()
+            if not stack and (i - start) > (best[1] - best[0]):
+                best = (start, i)
+    if best[0] != -1:
+        try:
+            return json.loads(text[best[0]: best[1] + 1])
+        except Exception:
+            pass
+
+    # 去除代码块再试一次
+    if text.startswith("```"):
+        text = re.sub(r"^```[a-zA-Z0-9]*", "", text).strip()
+        if text.endswith("```"):
+            text = text[:-3].strip()
+        try:
+            return json.loads(text)
+        except Exception:
+            pass
+
+    raise ValueError("无法解析为 JSON")
+
+
+def _analyze_email_with_llm(row: dict) -> dict:
+    """调用本地大模型抽取单封邮件的任务信息。返回 dict 或抛异常。"""
+    try:
+        from openai import OpenAI
+    except ImportError as e:
+        raise RuntimeError("服务端未安装 openai SDK") from e
+
+    # 复用 holiday 模块的本地大模型配置
+    from routers.holiday import _get_llm_config
+    config = _get_llm_config()
+    if not config.get("base_url") or not config.get("model"):
+        raise RuntimeError("未配置本地大模型（webconfig.llm_base_url / llm_model）")
+
+    system_prompt, user_prompt = _build_task_prompts(row)
+
+    client = OpenAI(base_url=config["base_url"], api_key="ollama")
+    completion = client.chat.completions.create(
+        model=config["model"],
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        temperature=0,
+        stream=False,
+        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+    )
+    content = (completion.choices[0].message.content or "").strip()
+    data = _parse_llm_task_content(content)
+
+    has_task = bool(data.get("has_task"))
+    task_summary = str(data.get("task") or "").strip()
+    deadline = str(data.get("deadline") or "").strip()
+    if not has_task:
+        task_summary = ""
+        deadline = ""
+    # 任务摘要限长，防止模型没遵守提示
+    if len(task_summary) > 500:
+        task_summary = task_summary[:500]
+    return {
+        "has_task": 1 if has_task and task_summary else 0,
+        "task_summary": task_summary,
+        "task_deadline": deadline,
+    }
+
+
+def _update_email_analysis(
+    email_id: int,
+    has_task: int,
+    task_summary: str,
+    task_deadline: str,
+    status: str,
+    error: str = "",
+) -> None:
+    try:
+        db.execute_update(
+            """
+            UPDATE inbox_emails SET
+              has_task = %s,
+              task_summary = %s,
+              task_deadline = %s,
+              task_analysis_status = %s,
+              task_analyzed_at = %s,
+              task_analysis_error = %s
+            WHERE id = %s
+            """,
+            (
+                int(has_task or 0),
+                task_summary or "",
+                task_deadline or "",
+                status,
+                datetime.now(),
+                error or "",
+                email_id,
+            ),
+        )
+    except Exception as e:
+        logger.error(f"更新邮件分析结果失败 id={email_id}: {e}")
+
+
+def _analyze_pending_emails(limit: int = ANALYZE_BATCH_SIZE) -> dict:
+    """从库里挑出 pending 或 failed 的邮件，逐封调用大模型分析。"""
+    _ensure_inbox_task_columns()
+    summary = {"analyzed": 0, "has_task": 0, "no_task": 0, "failed": 0}
+    try:
+        rows = db.execute_query(
+            """
+            SELECT id, subject, from_addr, email_date, body_text, body_html
+              FROM inbox_emails
+             WHERE task_analysis_status IS NULL
+                OR task_analysis_status = %s
+                OR task_analysis_status = %s
+             ORDER BY COALESCE(email_date, received_at) DESC, id DESC
+             LIMIT %s
+            """,
+            (ANALYSIS_STATUS_PENDING, ANALYSIS_STATUS_FAILED, int(limit)),
+        ) or []
+    except Exception as e:
+        logger.error(f"查询待分析邮件失败: {e}")
+        return summary
+
+    for r in rows:
+        try:
+            result = _analyze_email_with_llm(r)
+            if result.get("has_task"):
+                _update_email_analysis(
+                    r["id"], 1, result["task_summary"], result["task_deadline"],
+                    ANALYSIS_STATUS_SUCCESS, "",
+                )
+                summary["has_task"] += 1
+            else:
+                _update_email_analysis(
+                    r["id"], 0, "", "", ANALYSIS_STATUS_NO_TASK, "",
+                )
+                summary["no_task"] += 1
+            summary["analyzed"] += 1
+        except Exception as e:
+            msg = str(e)[:500]
+            logger.warning(f"[InboxEmail] 邮件 id={r.get('id')} 分析失败: {msg}")
+            _update_email_analysis(r["id"], 0, "", "", ANALYSIS_STATUS_FAILED, msg)
+            summary["failed"] += 1
+    return summary
+
+
 # ==================== API ====================
 
 class InboxConfigRequest(BaseModel):
@@ -441,7 +678,8 @@ async def list_inbox_emails(
         SELECT id, message_id, subject, from_addr, to_addrs, cc_addrs,
                email_date, received_at,
                CHAR_LENGTH(body_text) AS body_text_len,
-               CHAR_LENGTH(body_html) AS body_html_len
+               CHAR_LENGTH(body_html) AS body_html_len,
+               has_task, task_summary, task_deadline, task_analysis_status, task_analyzed_at
           FROM inbox_emails
           {where_sql}
           ORDER BY COALESCE(email_date, received_at) DESC, id DESC
@@ -463,6 +701,11 @@ async def list_inbox_emails(
             "receivedAt": r["received_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("received_at") else "",
             "bodyTextLen": int(r.get("body_text_len") or 0),
             "bodyHtmlLen": int(r.get("body_html_len") or 0),
+            "hasTask": int(r.get("has_task") or 0),
+            "taskSummary": r.get("task_summary") or "",
+            "taskDeadline": r.get("task_deadline") or "",
+            "taskAnalysisStatus": r.get("task_analysis_status") or "pending",
+            "taskAnalyzedAt": r["task_analyzed_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("task_analyzed_at") else "",
         })
     return {
         "success": True,
@@ -505,6 +748,128 @@ async def inbox_email_detail(
             "bodyText": r.get("body_text") or "",
             "bodyHtml": r.get("body_html") or "",
         },
+    }
+
+
+@router.get("/tasks")
+async def list_inbox_tasks(
+    current_user: str = Query(...),
+    limit: int = Query(50, ge=1, le=200),
+):
+    """
+    列出已被大模型识别为“含任务”的邮件，按截止时间优先、其次按发件时间排序。
+    用于前端看板滚动展示。
+    """
+    _require_admin(current_user)
+    _ensure_inbox_task_columns()
+
+    # 按：有截止时间的 && 未过期的优先；其次按截止时间升序；然后按发件时间倒序
+    sql = """
+        SELECT id, subject, from_addr, email_date, received_at,
+               task_summary, task_deadline, task_analyzed_at
+          FROM inbox_emails
+         WHERE has_task = 1 AND task_summary IS NOT NULL AND task_summary <> ''
+         ORDER BY
+            CASE WHEN task_deadline IS NULL OR task_deadline = '' THEN 1 ELSE 0 END ASC,
+            task_deadline ASC,
+            COALESCE(email_date, received_at) DESC
+         LIMIT %s
+    """
+    rows = db.execute_query(sql, (int(limit),)) or []
+    items = []
+    for r in rows:
+        items.append({
+            "id": r.get("id"),
+            "subject": r.get("subject") or "",
+            "from": r.get("from_addr") or "",
+            "emailDate": r["email_date"].strftime("%Y-%m-%d %H:%M:%S") if r.get("email_date") else "",
+            "receivedAt": r["received_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("received_at") else "",
+            "taskSummary": r.get("task_summary") or "",
+            "taskDeadline": r.get("task_deadline") or "",
+            "taskAnalyzedAt": r["task_analyzed_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("task_analyzed_at") else "",
+        })
+
+    # 另外统计一下尚未分析 / 分析失败数量，前端可显示
+    stat_rows = db.execute_query(
+        """
+        SELECT
+          SUM(CASE WHEN task_analysis_status = 'pending' OR task_analysis_status IS NULL THEN 1 ELSE 0 END) AS pending_count,
+          SUM(CASE WHEN task_analysis_status = 'failed' THEN 1 ELSE 0 END) AS failed_count,
+          SUM(CASE WHEN has_task = 1 THEN 1 ELSE 0 END) AS task_count,
+          COUNT(*) AS total
+          FROM inbox_emails
+        """,
+        (),
+    )
+    pending_count = int(stat_rows[0].get("pending_count") or 0) if stat_rows else 0
+    failed_count = int(stat_rows[0].get("failed_count") or 0) if stat_rows else 0
+    task_count = int(stat_rows[0].get("task_count") or 0) if stat_rows else 0
+    total = int(stat_rows[0].get("total") or 0) if stat_rows else 0
+
+    return {
+        "success": True,
+        "items": items,
+        "stats": {
+            "pending": pending_count,
+            "failed": failed_count,
+            "taskCount": task_count,
+            "total": total,
+        },
+    }
+
+
+@router.post("/analyze")
+async def analyze_inbox_emails(
+    current_user: str = Query(...),
+    id: Optional[int] = Query(None, description="指定邮件ID则仅分析该邮件，否则批量分析 pending/failed"),
+    limit: int = Query(ANALYZE_BATCH_SIZE, ge=1, le=50),
+):
+    """手动触发大模型任务抽取。"""
+    _require_admin(current_user)
+    loop = asyncio.get_event_loop()
+
+    if id is not None:
+        def _run_single():
+            rows = db.execute_query(
+                "SELECT id, subject, from_addr, email_date, body_text, body_html FROM inbox_emails WHERE id = %s LIMIT 1",
+                (int(id),),
+            )
+            if not rows:
+                return {"error": "邮件不存在"}
+            r = rows[0]
+            try:
+                result = _analyze_email_with_llm(r)
+            except Exception as e:
+                msg = str(e)[:500]
+                _update_email_analysis(r["id"], 0, "", "", ANALYSIS_STATUS_FAILED, msg)
+                return {"error": msg}
+            if result.get("has_task"):
+                _update_email_analysis(
+                    r["id"], 1, result["task_summary"], result["task_deadline"],
+                    ANALYSIS_STATUS_SUCCESS, "",
+                )
+            else:
+                _update_email_analysis(r["id"], 0, "", "", ANALYSIS_STATUS_NO_TASK, "")
+            return {
+                "hasTask": int(result.get("has_task") or 0),
+                "taskSummary": result.get("task_summary") or "",
+                "taskDeadline": result.get("task_deadline") or "",
+            }
+
+        res = await loop.run_in_executor(None, _run_single)
+        if res.get("error"):
+            return {"success": False, "message": res["error"]}
+        return {"success": True, "message": "分析完成", **res}
+
+    summary = await loop.run_in_executor(None, _analyze_pending_emails, int(limit))
+    return {
+        "success": True,
+        "message": (
+            f"本轮分析完成：新增任务 {summary.get('has_task', 0)} 封 / "
+            f"无任务 {summary.get('no_task', 0)} 封 / "
+            f"失败 {summary.get('failed', 0)} 封"
+        ),
+        **summary,
     }
 
 
@@ -553,4 +918,26 @@ async def inbox_email_background_loop():
                 )
         except Exception as e:
             logger.error(f"[InboxEmail] 后台循环异常: {e}")
+            await asyncio.sleep(60)
+
+
+async def inbox_email_analysis_background_loop():
+    """后台循环：周期性对未分析（pending/failed）的邮件调用本地大模型进行任务抽取。"""
+    logger.info("[InboxEmail] 后台任务抽取循环已启动，间隔 %s 秒", ANALYZE_INTERVAL_SECONDS)
+    print(f"[System] 共用邮箱任务抽取后台任务已启动（间隔 {ANALYZE_INTERVAL_SECONDS}s，每轮最多 {ANALYZE_BATCH_SIZE} 封）")
+    while True:
+        try:
+            await asyncio.sleep(ANALYZE_INTERVAL_SECONDS)
+            loop = asyncio.get_event_loop()
+            summary = await loop.run_in_executor(None, _analyze_pending_emails, ANALYZE_BATCH_SIZE)
+            if summary.get("analyzed"):
+                logger.info(
+                    "[InboxEmail] 任务抽取：分析 %s 封（任务 %s / 无任务 %s / 失败 %s）",
+                    summary.get("analyzed"),
+                    summary.get("has_task"),
+                    summary.get("no_task"),
+                    summary.get("failed"),
+                )
+        except Exception as e:
+            logger.error(f"[InboxEmail] 任务抽取循环异常: {e}")
             await asyncio.sleep(60)

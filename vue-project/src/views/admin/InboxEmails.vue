@@ -11,6 +11,16 @@
             <button
               type="button"
               class="btn btn-secondary"
+              :disabled="analyzing"
+              @click="manualAnalyze"
+              title="使用本地大模型抽取待办任务与截止时间"
+            >
+              <span v-if="analyzing">分析中…</span>
+              <span v-else>立即分析</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-secondary"
               :disabled="syncing"
               @click="manualSync"
             >
@@ -76,6 +86,59 @@
                   {{ configSaving ? '保存中…' : '保存配置' }}
                 </button>
                 <span v-if="configMsg" class="config-msg" :class="configMsgType">{{ configMsg }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 任务看板（大模型抽取） -->
+        <div class="card board-section">
+          <div class="board-head">
+            <div class="board-title-wrap">
+              <span class="board-badge">AI</span>
+              <h3 class="board-title">待办任务看板</h3>
+              <span class="board-sub">由本地大模型从每封邮件抽取任务与截止时间</span>
+            </div>
+            <div class="board-stats">
+              <span class="stat-item"><em>{{ taskStats.taskCount }}</em>个任务</span>
+              <span class="stat-item">待分析 <em>{{ taskStats.pending }}</em></span>
+              <span class="stat-item" :class="{ 'stat-warn': taskStats.failed > 0 }">失败 <em>{{ taskStats.failed }}</em></span>
+              <button class="btn btn-sm btn-ghost" @click="loadTasks" :disabled="taskLoading">
+                {{ taskLoading ? '刷新中…' : '刷新' }}
+              </button>
+            </div>
+          </div>
+
+          <div v-if="taskMsg" class="board-toast" :class="taskMsgType">{{ taskMsg }}</div>
+
+          <div class="board-body">
+            <div v-if="!tasks.length && !taskLoading" class="board-empty">
+              <p>暂无识别出的待办任务。可以先点击右上角“立即同步”拉取邮件，再点“立即分析”。</p>
+            </div>
+
+            <div v-else class="marquee" @mouseenter="marqueePaused = true" @mouseleave="marqueePaused = false">
+              <div class="marquee-track" :class="{ paused: marqueePaused, 'no-anim': tasks.length <= 2 }">
+                <div
+                  v-for="(t, idx) in loopedTasks"
+                  :key="`${t.id}-${idx}`"
+                  class="task-card"
+                  @click="openDetailById(t.id)"
+                >
+                  <div class="task-top">
+                    <span class="task-deadline" :class="deadlineClass(t.taskDeadline)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ico">
+                        <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
+                      </svg>
+                      {{ t.taskDeadline || '未指定截止时间' }}
+                    </span>
+                    <span class="task-from" :title="t.from">{{ shortFrom(t.from) }}</span>
+                  </div>
+                  <div class="task-summary" :title="t.taskSummary">{{ t.taskSummary }}</div>
+                  <div class="task-sub">
+                    <span class="task-subject" :title="t.subject">{{ t.subject || '（无主题）' }}</span>
+                    <span class="task-time">{{ t.emailDate || t.receivedAt }}</span>
+                  </div>
+                </div>
               </div>
             </div>
           </div>
@@ -196,7 +259,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getInboxConfig,
@@ -204,6 +267,8 @@ import {
   listInboxEmails,
   getInboxEmailDetail,
   syncInboxEmails,
+  listInboxTasks,
+  analyzeInboxEmails,
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
 
@@ -229,6 +294,21 @@ const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
 const syncing = ref(false)
+
+const tasks = ref([])
+const taskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
+const taskLoading = ref(false)
+const marqueePaused = ref(false)
+const analyzing = ref(false)
+const taskMsg = ref('')
+const taskMsgType = ref('')
+let taskRefreshTimer = null
+
+const loopedTasks = computed(() => {
+  const arr = tasks.value || []
+  if (arr.length <= 1) return arr
+  return arr.concat(arr) // 复制一份，实现无缝滚动
+})
 
 const totalPages = computed(() => {
   if (!total.value) return 1
@@ -372,6 +452,74 @@ function closeDetail() {
   detailItem.value = null
 }
 
+async function loadTasks() {
+  if (taskLoading.value) return
+  taskLoading.value = true
+  try {
+    const res = await listInboxTasks({ current_user: currentUserName.value, limit: 50 })
+    if (res && res.success) {
+      tasks.value = res.items || []
+      taskStats.value = res.stats || { pending: 0, failed: 0, taskCount: 0, total: 0 }
+    }
+  } catch (e) {
+    console.warn('加载任务看板失败', e)
+  } finally {
+    taskLoading.value = false
+  }
+}
+
+async function manualAnalyze() {
+  if (analyzing.value) return
+  analyzing.value = true
+  taskMsg.value = '正在调用本地大模型抽取任务，请耐心等待…'
+  taskMsgType.value = 'info'
+  try {
+    const res = await analyzeInboxEmails({ current_user: currentUserName.value, limit: 10 })
+    if (res && res.success) {
+      taskMsg.value = res.message || '分析完成'
+      taskMsgType.value = 'success'
+      await loadTasks()
+      await loadList()
+    } else {
+      taskMsg.value = (res && res.message) || '分析失败'
+      taskMsgType.value = 'error'
+    }
+  } catch (e) {
+    taskMsg.value = e.message || '分析失败'
+    taskMsgType.value = 'error'
+  } finally {
+    analyzing.value = false
+    setTimeout(() => { taskMsg.value = '' }, 6000)
+  }
+}
+
+function shortFrom(from) {
+  if (!from) return '—'
+  const m = String(from).match(/^(.*?)\s*<([^>]+)>$/)
+  if (m) {
+    const name = (m[1] || '').trim()
+    return name || m[2]
+  }
+  return from.length > 20 ? from.slice(0, 20) + '…' : from
+}
+
+function deadlineClass(deadline) {
+  if (!deadline) return 'none'
+  const d = new Date(deadline.replace(/\//g, '-').replace(/-(\d)(?!\d)/g, '-0$1'))
+  if (Number.isNaN(d.getTime())) return 'neutral'
+  const now = new Date()
+  const diffDays = (d.getTime() - now.getTime()) / (1000 * 60 * 60 * 24)
+  if (diffDays < 0) return 'overdue'
+  if (diffDays <= 2) return 'urgent'
+  if (diffDays <= 7) return 'soon'
+  return 'neutral'
+}
+
+async function openDetailById(id) {
+  if (!id) return
+  await openDetail({ id })
+}
+
 async function manualSync() {
   if (syncing.value) return
   syncing.value = true
@@ -413,6 +561,17 @@ onMounted(async () => {
   if (!canAccess.value) return
   await loadConfig()
   await loadList()
+  await loadTasks()
+  taskRefreshTimer = setInterval(() => {
+    loadTasks()
+  }, 60000)
+})
+
+onBeforeUnmount(() => {
+  if (taskRefreshTimer) {
+    clearInterval(taskRefreshTimer)
+    taskRefreshTimer = null
+  }
 })
 </script>
 
@@ -545,6 +704,202 @@ onMounted(async () => {
 }
 .config-msg.success { color: #16a34a; }
 .config-msg.error { color: #dc2626; }
+
+/* 任务看板 */
+.board-section {
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  border: 1px solid #e0e7ff;
+}
+.board-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-md);
+}
+.board-title-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.board-badge {
+  background: linear-gradient(135deg, #6366f1 0%, #a855f7 100%);
+  color: #fff;
+  font-size: 0.72rem;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 999px;
+  letter-spacing: 0.5px;
+}
+.board-title {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1e1b4b;
+}
+.board-sub {
+  font-size: 0.82rem;
+  color: #6b7280;
+}
+.board-stats {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+.board-stats .stat-item em {
+  color: #4338ca;
+  font-weight: 700;
+  font-style: normal;
+  margin: 0 4px;
+}
+.board-stats .stat-warn em {
+  color: #dc2626;
+}
+.btn-ghost {
+  background: #fff;
+  border: 1px solid #c7d2fe;
+  color: #4338ca;
+}
+.btn-ghost:hover {
+  background: #eef2ff;
+}
+.board-toast {
+  padding: 6px 12px;
+  border-radius: 6px;
+  font-size: 0.85rem;
+  margin-bottom: var(--spacing-sm);
+}
+.board-toast.info { background: #e0e7ff; color: #3730a3; }
+.board-toast.success { background: #dcfce7; color: #166534; }
+.board-toast.error { background: #fee2e2; color: #991b1b; }
+
+.board-empty {
+  text-align: center;
+  padding: var(--spacing-xl);
+  color: var(--color-text-tertiary);
+  font-size: 0.88rem;
+  background: rgba(255,255,255,0.65);
+  border-radius: 8px;
+}
+
+.board-body {
+  position: relative;
+}
+.marquee {
+  position: relative;
+  overflow: hidden;
+  max-height: 240px;
+  mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
+}
+.marquee-track {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: marquee-scroll 40s linear infinite;
+}
+.marquee-track.paused { animation-play-state: paused; }
+.marquee-track.no-anim { animation: none; }
+
+@keyframes marquee-scroll {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+.task-card {
+  background: #fff;
+  border: 1px solid #e0e7ff;
+  border-left: 4px solid #6366f1;
+  border-radius: 8px;
+  padding: 10px 14px;
+  box-shadow: 0 2px 6px rgba(99, 102, 241, 0.08);
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+}
+.task-card:hover {
+  transform: translateX(2px);
+  box-shadow: 0 4px 14px rgba(99, 102, 241, 0.18);
+}
+.task-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+.task-deadline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+}
+.task-deadline .ico {
+  width: 12px;
+  height: 12px;
+}
+.task-deadline.none {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+.task-deadline.overdue {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+.task-deadline.urgent {
+  background: #ffedd5;
+  color: #c2410c;
+}
+.task-deadline.soon {
+  background: #fef9c3;
+  color: #854d0e;
+}
+.task-from {
+  font-size: 0.8rem;
+  color: #6b7280;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-summary {
+  font-size: 0.95rem;
+  color: #1f2937;
+  line-height: 1.5;
+  margin: 4px 0;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.task-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 0.78rem;
+  color: #9ca3af;
+}
+.task-subject {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.task-time {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
 
 /* 列表区 */
 .list-section {
