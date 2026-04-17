@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email
 import logging
 import time
 
@@ -79,6 +79,7 @@ app.include_router(shift_schedule.router, prefix=settings.API_PREFIX)  # 排班�
 app.include_router(holiday_exchange.router, prefix=settings.API_PREFIX)  # 公出节假日换休票
 app.include_router(map_router, prefix=settings.API_PREFIX)  # 公出地图
 app.include_router(tech_problem.router, prefix=settings.API_PREFIX)  # 工艺技术问题手册
+app.include_router(inbox_email.router, prefix=settings.API_PREFIX)  # 共用邮箱收件箱（仅 admin1）
 
 @app.on_event("startup")
 async def startup_event():
@@ -116,6 +117,9 @@ async def startup_event():
     import asyncio as _asyncio
     from routers.email_sender import auto_reminder_background_loop
     _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
+    # 共用邮箱自动拉取后台任务
+    from routers.inbox_email import inbox_email_background_loop
+    _asyncio.get_event_loop().create_task(inbox_email_background_loop())
 
 
 @app.get("/")
