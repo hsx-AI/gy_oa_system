@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/inbox-email", tags=["共用邮箱收件箱"])
 
-IMAP_SERVER = "imap.qiye.163.com:"
+IMAP_SERVER = "imap.qiye.163.com"
 IMAP_PORT_SSL = 993
 
 # 后台轮询间隔（秒），可根据需要调整
