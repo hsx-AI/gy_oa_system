@@ -140,7 +140,7 @@ async def save_holidays(
                 type_str = (h.type or "").strip()
                 if not date_str:
                     continue
-                festival_str = (getattr(h, "festival", None) or "").strip()
+                festival_str = _normalize_festival_name((getattr(h, "festival", None) or "").strip())
                 try:
                     db.execute_update(
                         "INSERT INTO holiday (year, date, type, festival) VALUES (%s, %s, %s, %s)",
@@ -427,6 +427,24 @@ def _infer_festival_from_date(date_str: str) -> str:
         return ""
 
 
+def _normalize_festival_name(name: str) -> str:
+    """规范化节日名称，兼容模型返回“清明节/元旦节”等别名。"""
+    text = (name or "").strip()
+    if not text:
+        return ""
+    alias = {
+        "元旦节": "元旦",
+        "清明节": "清明",
+        "劳动": "劳动节",
+        "五一": "劳动节",
+        "五一劳动节": "劳动节",
+        "端午": "端午节",
+        "中秋": "中秋节",
+        "国庆": "国庆节",
+    }
+    return alias.get(text, text)
+
+
 class HolidayParseRequest(BaseModel):
     year: str
     current_user: str
@@ -477,7 +495,7 @@ def _save_holidays_from_data(y_int: int, data: dict) -> List[Holiday]:
     for d in days:
         date_str = str(d.get("date") or "").strip()
         type_str = str(d.get("type") or "").strip() or "放假"
-        festival_str = str(d.get("festival") or "").strip()
+        festival_str = _normalize_festival_name(str(d.get("festival") or "").strip())
         if not festival_str:
             festival_str = _infer_festival_from_date(date_str)
         if not date_str:
@@ -490,7 +508,7 @@ def _save_holidays_from_data(y_int: int, data: dict) -> List[Holiday]:
         type_str = (h.type or "").strip()
         if not date_str:
             continue
-        festival_str = (getattr(h, "festival", None) or "").strip()
+        festival_str = _normalize_festival_name((getattr(h, "festival", None) or "").strip())
         try:
             db.execute_update(
                 "INSERT INTO holiday (year, date, type, festival) VALUES (%s, %s, %s, %s)",
