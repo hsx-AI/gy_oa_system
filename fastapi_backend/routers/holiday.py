@@ -46,28 +46,28 @@ DEFAULT_LLM_BASE_URL = "http://10.42.60.250:11434/v1"
 DEFAULT_LLM_MODEL = "qwen3:8b"
 
 
-def _get_llm_api_key() -> Optional[str]:
-    """从 webconfig 表读取公网大模型 API Key（DeepSeek 等），用于本地不可用时的兜底。"""
-    try:
-        rows = db.execute_query("SELECT deepseek_api_key FROM webconfig WHERE id = %s LIMIT 1", ("1",))
-        if rows and rows[0].get("deepseek_api_key") is not None:
-            return (rows[0]["deepseek_api_key"] or "").strip() or None
-    except Exception as e:
-        logger.debug(f"读取 webconfig.deepseek_api_key 失败: {e}")
-    return os.getenv("DEEPSEEK_API_KEY") or None
+def _normalize_llm_base_url(url: str) -> str:
+    """兼容用户把完整路径填进来（如 http://host:port/v1/chat/completions）。
+    OpenAI SDK 只需要根路径，最多到 /v1。"""
+    u = (url or "").strip()
+    if not u:
+        return u
+    u = u.rstrip("/")
+    if u.endswith("/chat/completions"):
+        u = u[: -len("/chat/completions")].rstrip("/")
+    return u
 
 
 def _get_llm_config() -> dict:
     """
-    从 webconfig 表读取大模型配置：本地 URL、模型名、公网 API Key。
-    返回: {"base_url": str, "model": str, "api_key": str|None}
+    从 webconfig 表读取本地大模型配置（URL、模型名）。
+    返回: {"base_url": str, "model": str}
     """
     base_url = DEFAULT_LLM_BASE_URL
     model = DEFAULT_LLM_MODEL
-    api_key = None
     try:
         rows = db.execute_query(
-            "SELECT llm_base_url, llm_model, deepseek_api_key FROM webconfig WHERE id = %s LIMIT 1",
+            "SELECT llm_base_url, llm_model FROM webconfig WHERE id = %s LIMIT 1",
             ("1",),
         )
         if rows:
@@ -76,13 +76,10 @@ def _get_llm_config() -> dict:
                 base_url = (r["llm_base_url"] or "").strip()
             if r.get("llm_model") is not None and (r.get("llm_model") or "").strip():
                 model = (r["llm_model"] or "").strip()
-            if r.get("deepseek_api_key") is not None and (r.get("deepseek_api_key") or "").strip():
-                api_key = (r["deepseek_api_key"] or "").strip()
     except Exception as e:
         logger.debug(f"读取 webconfig 大模型配置失败（可能无 llm_base_url/llm_model 列）: {e}")
-    if not api_key:
-        api_key = os.getenv("DEEPSEEK_API_KEY") or None
-    return {"base_url": base_url, "model": model, "api_key": api_key}
+    base_url = _normalize_llm_base_url(base_url)
+    return {"base_url": base_url, "model": model}
 
 
 @router.get("", response_model=HolidayResponse)
@@ -436,47 +433,8 @@ class HolidayParseRequest(BaseModel):
     text: str
 
 
-@router.post("/parse-text", response_model=HolidayResponse)
-async def parse_holiday_text(req: HolidayParseRequest):
-    """
-    使用大模型解析一段放假通知文本，自动生成并保存某年的假期与调休设置。
-    仅打卡管理员可操作。
-    优先使用 webconfig 中的本地大模型（llm_base_url、llm_model），不可用时再使用公网 API（deepseek_api_key 或 DEEPSEEK_API_KEY）。
-    """
-    try:
-        return await _parse_holiday_text_impl(req)
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.exception("parse_holiday_text 未捕获异常")
-        raise HTTPException(status_code=500, detail=f"解析失败: {str(e)}")
-
-
-async def _parse_holiday_text_impl(req: HolidayParseRequest):
-    admin1 = _get_admin1()
-    dakaman = _get_dakaman()
-    current_user = (req.current_user or "").strip()
-    if not (admin1 and current_user == admin1) and not (dakaman and current_user == dakaman):
-        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可使用大模型解析假期")
-
-    try:
-        from openai import OpenAI
-    except ImportError:
-        raise HTTPException(status_code=500, detail="服务端未安装 openai SDK，无法调用大模型")
-
-    year = (req.year or "").strip()
-    try:
-        y_int = int(year)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="年份格式不正确")
-
-    config = _get_llm_config()
-    if not config.get("base_url") and not config.get("api_key"):
-        raise HTTPException(
-            status_code=500,
-            detail="未配置大模型：请在 webconfig 中设置 llm_base_url/llm_model（本地）或 deepseek_api_key（公网兜底）",
-        )
-
+def _build_holiday_prompts(y_int: int, text: str) -> tuple:
+    """构建假期解析的 system/user prompt，附带 Qwen3 的 /no_think 关闭思考模式。"""
     system_prompt = (
         "你是一个假期与调休解析助手。用户会给你一整段中文放假通知，"
         "请根据其中描述，推导出这一年内每一天是“放假”还是“上班”或“正常工作日”。\n"
@@ -487,12 +445,12 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
         "3. 如果一句话提到了利用某个节日假期调休，例如“利用冰雪节假日调休 1 天”，"
         "   只要有明确日期，也按放假或调休上班标记到对应日期；\n"
         "4. 节日名称请尽量归纳为：元旦、春节、清明、劳动节、端午节、中秋节、国庆节、高温防暑休假 等简短中文。\n"
-        "5. **重要**：不要输出任何思考过程或解释，只返回要求的JSON格式。不要使用<think>标签或其他标记。"
+        "5. **重要**：不要输出任何思考过程或解释，只返回要求的 JSON 格式。不要使用 <think> 标签或其他标记。\n"
+        "/no_think"
     )
-
     user_prompt = (
         f"年份：{y_int}\n\n"
-        f"放假通知原文如下：\n{req.text}\n\n"
+        f"放假通知原文如下：\n{text}\n\n"
         "请按照下面 JSON 格式输出：\n"
         "{\n"
         '  \"year\": 2025,\n'
@@ -506,112 +464,219 @@ async def _parse_holiday_text_impl(req: HolidayParseRequest):
         "1. date 固定为 yyyy-MM-dd 格式；\n"
         "2. type 只能是 \"放假\" 或 \"上班\" 两种；\n"
         "3. 每条记录必须包含 festival 且不能为空，为简短中文节日名称，例如 元旦/春节/清明/劳动节/端午节/中秋节/国庆节/高温防暑休假；\n"
-        "4. 不要包含任何多余字段或解释，只返回一个 JSON 对象。"
+        "4. 不要包含任何多余字段或解释，只返回一个 JSON 对象。\n"
+        "/no_think"
     )
+    return system_prompt, user_prompt
 
-    content = ""
-    data = None
-    # 优先使用本地大模型
-    if config.get("base_url") and config.get("model"):
+
+def _save_holidays_from_data(y_int: int, data: dict) -> List[Holiday]:
+    """根据大模型解析后的 JSON 写入 holiday 表并返回最新的 Holiday 列表。"""
+    days = data.get("days") or []
+    holidays: List[Holiday] = []
+    for d in days:
+        date_str = str(d.get("date") or "").strip()
+        type_str = str(d.get("type") or "").strip() or "放假"
+        festival_str = str(d.get("festival") or "").strip()
+        if not festival_str:
+            festival_str = _infer_festival_from_date(date_str)
+        if not date_str:
+            continue
+        holidays.append(Holiday(date=date_str, type=type_str, festival=festival_str or None))
+
+    db.execute_update("DELETE FROM holiday WHERE year = %s", (y_int,))
+    for h in holidays:
+        date_str = (h.date or "").strip()
+        type_str = (h.type or "").strip()
+        if not date_str:
+            continue
+        festival_str = (getattr(h, "festival", None) or "").strip()
         try:
-            local_client = OpenAI(
-                base_url=config["base_url"],
-                api_key=config.get("api_key") or "ollama",
+            db.execute_update(
+                "INSERT INTO holiday (year, date, type, festival) VALUES (%s, %s, %s, %s)",
+                (y_int, date_str, type_str, festival_str),
             )
-            completion = local_client.chat.completions.create(
-                model=config["model"],
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0,
-                stream=False,
+        except Exception:
+            db.execute_update(
+                "INSERT INTO holiday (year, date, type) VALUES (%s, %s, %s)",
+                (y_int, date_str, type_str),
             )
-            content = (completion.choices[0].message.content or "").strip()
-            # 添加调试日志
-            logger.debug(f"Ollama原始响应内容 (前500字符): {content[:500] if content else '空响应'}")
-            data = _parse_llm_json_content(content)
-            logger.info("假期解析使用本地大模型成功: %s", config["base_url"])
-        except json.JSONDecodeError as e:
-            logger.warning(f"JSON解析失败，原始内容: {content[:500] if content else '空响应'}, 错误: {e}")
-            content = ""
-            data = None
-        except Exception as e:
-            logger.warning("本地大模型调用失败，尝试公网兜底: %s", e)
-            content = ""
-            data = None
+    rows = load_holidays_for_year(str(y_int))
+    return [
+        Holiday(date=r["date"], type=r["type"], festival=r.get("festival") or None)
+        for r in rows if r.get("date")
+    ]
 
-    # 本地不可用时使用公网 API（DeepSeek）
-    if data is None and config.get("api_key"):
-        try:
-            deepseek_client = OpenAI(
-                api_key=config["api_key"],
-                base_url="https://api.deepseek.com",
-            )
-            completion = deepseek_client.chat.completions.create(
-                model="deepseek-chat",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0,
-                stream=False,
-            )
-            content = (completion.choices[0].message.content or "").strip()
-            data = _parse_llm_json_content(content)
-            logger.info("假期解析使用公网 DeepSeek 兜底成功")
-        except Exception as e:
-            logger.error("公网大模型兜底也失败: %s", e)
-            raise HTTPException(
-                status_code=500,
-                detail="本地大模型不可用且公网 API 调用失败，请检查网络与 webconfig.deepseek_api_key 配置",
-            )
 
-    if data is None:
-        raise HTTPException(
-            status_code=500,
-            detail="本地大模型不可用且未配置公网 API Key（webconfig.deepseek_api_key 或 DEEPSEEK_API_KEY），无法解析假期",
-        )
+def _validate_parse_request(req: HolidayParseRequest) -> int:
+    """校验解析请求并返回年份整数。"""
+    admin1 = _get_admin1()
+    dakaman = _get_dakaman()
+    current_user = (req.current_user or "").strip()
+    if not (admin1 and current_user == admin1) and not (dakaman and current_user == dakaman):
+        raise HTTPException(status_code=403, detail="仅打卡管理员或系统管理员可使用大模型解析假期")
+    year = (req.year or "").strip()
+    try:
+        return int(year)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="年份格式不正确")
+
+
+@router.post("/parse-text", response_model=HolidayResponse)
+async def parse_holiday_text(req: HolidayParseRequest):
+    """
+    使用本地大模型解析一段放假通知文本，自动生成并保存某年的假期与调休设置。
+    仅打卡管理员或系统管理员可操作。
+    仅使用 webconfig.llm_base_url / llm_model 配置的本地大模型（Ollama/OpenAI 兼容接口）。
+    """
+    y_int = _validate_parse_request(req)
 
     try:
-        days = data.get("days") or []
-        holidays: List[Holiday] = []
-        for d in days:
-            date_str = str(d.get("date") or "").strip()
-            type_str = str(d.get("type") or "").strip() or "放假"
-            festival_str = str(d.get("festival") or "").strip()
-            if not festival_str:
-                festival_str = _infer_festival_from_date(date_str)
-            if not date_str:
-                continue
-            holidays.append(Holiday(date=date_str, type=type_str, festival=festival_str or None))
+        from openai import OpenAI
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openai SDK，无法调用大模型")
 
-        # 复用保存逻辑（覆盖该年 holiday 表）。注意：save_holidays 是路由函数，内部调用时需传参
-        db.execute_update("DELETE FROM holiday WHERE year = %s", (y_int,))
-        for h in holidays:
-            date_str = (h.date or "").strip()
-            type_str = (h.type or "").strip()
-            if not date_str:
-                continue
-            festival_str = (getattr(h, "festival", None) or "").strip()
-            try:
-                db.execute_update(
-                    "INSERT INTO holiday (year, date, type, festival) VALUES (%s, %s, %s, %s)",
-                    (y_int, date_str, type_str, festival_str),
-                )
-            except Exception:
-                db.execute_update(
-                    "INSERT INTO holiday (year, date, type) VALUES (%s, %s, %s)",
-                    (y_int, date_str, type_str),
-                )
-        rows = load_holidays_for_year(str(y_int))
-        out = [
-            Holiday(date=r["date"], type=r["type"], festival=r.get("festival") or None)
-            for r in rows if r.get("date")
-        ]
+    config = _get_llm_config()
+    if not config.get("base_url") or not config.get("model"):
+        raise HTTPException(
+            status_code=500,
+            detail="未配置本地大模型：请在 webconfig 中设置 llm_base_url（如 http://host:11434/v1）和 llm_model（如 qwen3:8b）",
+        )
+
+    system_prompt, user_prompt = _build_holiday_prompts(y_int, req.text or "")
+
+    content = ""
+    try:
+        local_client = OpenAI(base_url=config["base_url"], api_key="ollama")
+        completion = local_client.chat.completions.create(
+            model=config["model"],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            stream=False,
+            extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+        )
+        content = (completion.choices[0].message.content or "").strip()
+        data = _parse_llm_json_content(content)
+    except json.JSONDecodeError as e:
+        logger.warning("JSON 解析失败，原始内容: %s, 错误: %s", content[:500] if content else "空响应", e)
+        raise HTTPException(status_code=500, detail="大模型返回内容无法解析为 JSON，请检查模型与通知原文")
+    except Exception as e:
+        logger.error("本地大模型调用失败: %s", e)
+        raise HTTPException(status_code=500, detail=f"本地大模型调用失败：{e}")
+
+    try:
+        out = _save_holidays_from_data(y_int, data)
         return HolidayResponse(success=True, year=str(y_int), holidays=out)
     except HTTPException:
         raise
     except Exception as e:
         logger.exception("解析或保存假期数据失败")
         raise HTTPException(status_code=500, detail=f"解析大模型返回的假期数据失败: {str(e)}")
+
+
+# ==================== 流式解析接口 ====================
+
+
+def _sse_event(payload: dict) -> str:
+    """将字典打包为一条 SSE 事件。"""
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.post("/parse-text-stream")
+async def parse_holiday_text_stream(req: HolidayParseRequest):
+    """
+    使用本地大模型流式解析放假通知。
+    以 SSE (text/event-stream) 形式返回：
+    - {"type": "meta", "model": "...", "base_url": "..."}
+    - {"type": "chunk", "text": "增量 token"}
+    - {"type": "done", "success": true, "year": "2025", "holidays": [...]}
+    - {"type": "error", "message": "..."}
+    """
+    y_int = _validate_parse_request(req)
+    try:
+        from openai import OpenAI
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openai SDK，无法调用大模型")
+
+    config = _get_llm_config()
+    if not config.get("base_url") or not config.get("model"):
+        raise HTTPException(
+            status_code=500,
+            detail="未配置本地大模型：请在 webconfig 中设置 llm_base_url（如 http://host:11434/v1）和 llm_model（如 qwen3:8b）",
+        )
+
+    system_prompt, user_prompt = _build_holiday_prompts(y_int, req.text or "")
+
+    def gen():
+        yield _sse_event({
+            "type": "meta",
+            "model": config["model"],
+            "base_url": config["base_url"],
+        })
+        accumulated: List[str] = []
+        try:
+            client = OpenAI(base_url=config["base_url"], api_key="ollama")
+            stream = client.chat.completions.create(
+                model=config["model"],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                stream=True,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            for event in stream:
+                try:
+                    delta = event.choices[0].delta
+                    piece = (getattr(delta, "content", None) or "")
+                except Exception:
+                    piece = ""
+                if not piece:
+                    continue
+                accumulated.append(piece)
+                yield _sse_event({"type": "chunk", "text": piece})
+        except Exception as e:
+            logger.error("本地大模型流式调用失败: %s", e)
+            yield _sse_event({"type": "error", "message": f"本地大模型调用失败：{e}"})
+            return
+
+        content = "".join(accumulated).strip()
+        if not content:
+            yield _sse_event({"type": "error", "message": "大模型未返回任何内容"})
+            return
+
+        try:
+            data = _parse_llm_json_content(content)
+        except Exception as e:
+            logger.warning("JSON 解析失败，原始内容: %s, 错误: %s", content[:500], e)
+            yield _sse_event({"type": "error", "message": "大模型返回内容无法解析为 JSON"})
+            return
+
+        try:
+            out = _save_holidays_from_data(y_int, data)
+            yield _sse_event({
+                "type": "done",
+                "success": True,
+                "year": str(y_int),
+                "holidays": [
+                    {"date": h.date, "type": h.type, "festival": h.festival}
+                    for h in out
+                ],
+            })
+        except Exception as e:
+            logger.exception("解析或保存假期数据失败")
+            yield _sse_event({"type": "error", "message": f"保存假期数据失败：{e}"})
+
+    return StreamingResponse(
+        gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        },
+    )

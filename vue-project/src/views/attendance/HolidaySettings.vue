@@ -30,9 +30,9 @@
 
     <div class="container">
       <div class="card mt-xl llm-card">
-        <h3 class="llm-title">使用大模型自动解析假期通知</h3>
+        <h3 class="llm-title">使用本地大模型自动解析假期通知</h3>
         <p class="llm-desc">
-          将全年放假通知原文粘贴在下面，大模型会自动解析出放假日和调休上班日，并写入 {{ year }} 年的假期设置。
+          将全年放假通知原文粘贴在下面，本地大模型会流式解析出放假日和调休上班日，并写入 {{ year }} 年的假期设置。
         </p>
         <textarea
           v-model="llmText"
@@ -42,6 +42,12 @@
         ></textarea>
         <div class="llm-actions">
           <button
+            v-if="llmParsing"
+            type="button"
+            class="btn btn-outline"
+            @click="cancelParse"
+          >取消</button>
+          <button
             type="button"
             class="btn btn-primary"
             :disabled="llmParsing || !llmText.trim()"
@@ -49,6 +55,20 @@
           >
             {{ llmParsing ? '解析中…' : '一键解析并填充' }}
           </button>
+        </div>
+
+        <div v-if="llmParsing || llmStreamText || llmStatusMsg" class="llm-stream">
+          <div class="llm-stream-head">
+            <span class="llm-stream-title">
+              解析过程
+              <span v-if="llmModelInfo" class="llm-stream-model">{{ llmModelInfo }}</span>
+            </span>
+            <span class="llm-stream-status" :class="llmStatusType">
+              <span v-if="llmParsing" class="llm-dot"></span>
+              {{ llmStatusMsg || (llmParsing ? '正在调用本地大模型…' : '已完成') }}
+            </span>
+          </div>
+          <pre ref="llmStreamBoxRef" class="llm-stream-body">{{ llmStreamText || '（等待模型输出…）' }}</pre>
         </div>
       </div>
 
@@ -127,6 +147,12 @@ const rows = ref([])
 const fileInput = ref(null)
 const llmText = ref('')
 const llmParsing = ref(false)
+const llmStreamText = ref('')
+const llmStatusMsg = ref('')
+const llmStatusType = ref('') // '', 'success', 'error'
+const llmModelInfo = ref('')
+const llmStreamBoxRef = ref(null)
+let llmAbortController = null
 
 const festivalOptions = [
   '元旦',
@@ -251,6 +277,49 @@ async function handleSave () {
   }
 }
 
+function cancelParse () {
+  if (llmAbortController) {
+    try { llmAbortController.abort() } catch { /* ignore */ }
+  }
+}
+
+function scrollStreamBoxToBottom () {
+  const box = llmStreamBoxRef.value
+  if (!box) return
+  // 等待 DOM 更新后滚动到底部
+  requestAnimationFrame(() => {
+    try { box.scrollTop = box.scrollHeight } catch { /* ignore */ }
+  })
+}
+
+function handleStreamEvent (evt) {
+  if (!evt || typeof evt !== 'object') return
+  if (evt.type === 'meta') {
+    if (evt.model) {
+      llmModelInfo.value = evt.model + (evt.base_url ? `  ·  ${evt.base_url}` : '')
+    }
+    llmStatusMsg.value = '正在调用本地大模型…'
+    llmStatusType.value = ''
+  } else if (evt.type === 'chunk') {
+    llmStreamText.value += (evt.text || '')
+    scrollStreamBoxToBottom()
+  } else if (evt.type === 'done') {
+    if (Array.isArray(evt.holidays)) {
+      rows.value = evt.holidays.map((h, idx) => ({
+        id: `${h.date}-${idx}`,
+        date: h.date,
+        type: h.type || '',
+        festival: h.festival || ''
+      }))
+    }
+    llmStatusMsg.value = `解析完成，已写入 ${evt.holidays ? evt.holidays.length : 0} 条记录`
+    llmStatusType.value = 'success'
+  } else if (evt.type === 'error') {
+    llmStatusMsg.value = evt.message || '解析失败'
+    llmStatusType.value = 'error'
+  }
+}
+
 async function handleParseByLLM () {
   const name = getCurrentUserName()
   if (!name) {
@@ -262,39 +331,76 @@ async function handleParseByLLM () {
     alert('请先粘贴放假通知内容')
     return
   }
+
   llmParsing.value = true
+  llmStreamText.value = ''
+  llmStatusMsg.value = '正在连接本地大模型…'
+  llmStatusType.value = ''
+  llmModelInfo.value = ''
+  llmAbortController = new AbortController()
+
   try {
-    const res = await fetch('/api/holiday/parse-text', {
+    const res = await fetch('/api/holiday/parse-text-stream', {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json'
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream'
       },
       body: JSON.stringify({
         year: year.value,
         current_user: name,
         text
-      })
+      }),
+      signal: llmAbortController.signal
     })
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}))
-      throw new Error(err.detail || err.message || '解析失败')
+    if (!res.ok || !res.body) {
+      let errMsg = '解析失败'
+      try {
+        const err = await res.json()
+        errMsg = err.detail || err.message || errMsg
+      } catch { /* ignore */ }
+      throw new Error(errMsg)
     }
-    const data = await res.json()
-    if (data && data.success && Array.isArray(data.holidays)) {
-      rows.value = data.holidays.map((h, idx) => ({
-        id: `${h.date}-${idx}`,
-        date: h.date,
-        type: h.type || '',
-        festival: h.festival || ''
-      }))
-      alert('解析并保存成功')
-    } else {
-      throw new Error(data?.detail || data?.message || '解析失败')
+
+    const reader = res.body.getReader()
+    const decoder = new TextDecoder('utf-8')
+    let buffer = ''
+    // SSE 按 \n\n 分隔事件；每条事件里 data: 之后是 JSON
+    while (true) {
+      const { value, done } = await reader.read()
+      if (done) break
+      buffer += decoder.decode(value, { stream: true })
+      let sepIdx
+      while ((sepIdx = buffer.indexOf('\n\n')) !== -1) {
+        const rawEvent = buffer.slice(0, sepIdx)
+        buffer = buffer.slice(sepIdx + 2)
+        const lines = rawEvent.split('\n')
+        const dataLines = []
+        for (const line of lines) {
+          if (line.startsWith('data:')) {
+            dataLines.push(line.slice(5).trimStart())
+          }
+        }
+        if (!dataLines.length) continue
+        try {
+          const evt = JSON.parse(dataLines.join('\n'))
+          handleStreamEvent(evt)
+        } catch (e) {
+          // 忽略解析失败的单条事件
+        }
+      }
     }
   } catch (e) {
-    alert(e?.message || '解析失败')
+    if (e && e.name === 'AbortError') {
+      llmStatusMsg.value = '已取消'
+      llmStatusType.value = 'error'
+    } else {
+      llmStatusMsg.value = e?.message || '解析失败'
+      llmStatusType.value = 'error'
+    }
   } finally {
     llmParsing.value = false
+    llmAbortController = null
   }
 }
 
@@ -451,6 +557,72 @@ onMounted(() => {
   margin-top: var(--spacing-sm);
   display: flex;
   justify-content: flex-end;
+  gap: var(--spacing-sm);
+}
+
+.llm-stream {
+  margin-top: var(--spacing-base);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-base);
+  background: #0f172a;
+  color: #e2e8f0;
+  overflow: hidden;
+}
+.llm-stream-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  padding: 8px 14px;
+  background: rgba(255, 255, 255, 0.06);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: var(--font-size-sm);
+}
+.llm-stream-title {
+  font-weight: var(--font-weight-semibold);
+  color: #f1f5f9;
+}
+.llm-stream-model {
+  margin-left: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(59, 130, 246, 0.18);
+  color: #93c5fd;
+  font-size: 0.75rem;
+  font-weight: 400;
+}
+.llm-stream-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.8rem;
+  color: #cbd5e1;
+}
+.llm-stream-status.success { color: #4ade80; }
+.llm-stream-status.error { color: #f87171; }
+.llm-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #3b82f6;
+  animation: llm-dot-pulse 1.1s infinite ease-in-out;
+}
+@keyframes llm-dot-pulse {
+  0%, 100% { transform: scale(0.85); opacity: 0.7; }
+  50% { transform: scale(1.15); opacity: 1; }
+}
+.llm-stream-body {
+  margin: 0;
+  padding: 12px 14px;
+  max-height: 260px;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: #e2e8f0;
+  background: transparent;
 }
 </style>
 
