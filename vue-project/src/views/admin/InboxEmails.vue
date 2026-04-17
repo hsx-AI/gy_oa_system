@@ -58,7 +58,13 @@
           <div v-show="showConfig" class="config-body">
             <div class="config-hint">
               <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
-              <p>自动拉取间隔：约 <code>{{ pollIntervalSeconds }}</code> 秒。保存配置后后台将自动按此频率同步。</p>
+              <p>
+                同步范围：仅拉取最近
+                <code>{{ syncRecentDays }}</code>
+                天内收到的邮件；自动拉取间隔：约
+                <code>{{ pollIntervalSeconds }}</code>
+                秒。
+              </p>
             </div>
             <div class="config-form">
               <div class="form-row">
@@ -282,6 +288,7 @@ const configured = ref(false)
 const imapServer = ref('')
 const imapPort = ref('')
 const pollIntervalSeconds = ref('')
+const syncRecentDays = ref(1)
 const configForm = ref({ email_address: '', email_auth_code: '' })
 const configSaving = ref(false)
 const configMsg = ref('')
@@ -344,6 +351,7 @@ async function loadConfig() {
       imapServer.value = res.imapServer || 'imap.qiye.163.com'
       imapPort.value = res.imapPort || 993
       pollIntervalSeconds.value = res.pollIntervalSeconds || 120
+      syncRecentDays.value = res.syncRecentDays || 1
     }
   } catch (e) {
     console.warn('加载共用邮箱配置失败', e)

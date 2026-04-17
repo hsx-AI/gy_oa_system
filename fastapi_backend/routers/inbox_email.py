@@ -10,7 +10,7 @@ import imaplib
 import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime, getaddresses
 from typing import List, Optional
@@ -29,7 +29,9 @@ IMAP_PORT_SSL = 993
 
 # 后台轮询间隔（秒），可根据需要调整
 POLL_INTERVAL_SECONDS = 120
-# 单次拉取的最多邮件数（避免首次拉取过多）
+# 仅同步最近 N 天的邮件（默认 1 天：约 24 小时，IMAP SINCE 是按自然日粒度）
+SYNC_RECENT_DAYS = 1
+# 单次拉取的最多邮件数（对 SINCE 过滤结果再做一次安全上限）
 MAX_FETCH_PER_POLL = 50
 
 # LLM 任务抽取相关
@@ -285,8 +287,8 @@ def _insert_email_row(row: dict) -> bool:
 
 # ==================== IMAP 拉取 ====================
 
-def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL) -> dict:
-    """连接 IMAP 拉取邮件。返回 {new, skipped, total, error}"""
+def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, recent_days: int = SYNC_RECENT_DAYS) -> dict:
+    """连接 IMAP 拉取最近 recent_days 天内的邮件。返回 {new, skipped, total, error}"""
     cfg = _get_inbox_config()
     address = cfg["address"]
     auth_code = cfg["auth_code"]
@@ -307,12 +309,16 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL) -> dict:
         except Exception:
             pass
         imap_obj.select("INBOX", readonly=True)
-        typ, data = imap_obj.search(None, "ALL")
+        # 仅查询最近 N 天的邮件（IMAP SINCE 的日期是包含当天，且按自然日粒度）
+        days = max(1, int(recent_days or 1))
+        since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
+        typ, data = imap_obj.search(None, "SINCE", since_date)
         if typ != "OK" or not data or not data[0]:
+            logger.info(f"[InboxEmail] SINCE {since_date} 无匹配邮件")
             return result
         ids = data[0].split()
         result["total"] = len(ids)
-        # 只取最新 max_fetch 封
+        # SINCE 过滤后再按最新 max_fetch 封做一次安全上限
         ids_to_fetch = ids[-max_fetch:] if max_fetch and len(ids) > max_fetch else ids
 
         # 先批量查 message_id 做去重（减少网络往返）
@@ -635,6 +641,7 @@ async def get_inbox_config(current_user: str = Query(...)):
         "imapServer": IMAP_SERVER,
         "imapPort": IMAP_PORT_SSL,
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+        "syncRecentDays": SYNC_RECENT_DAYS,
     }
 
 
