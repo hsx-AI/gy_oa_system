@@ -226,6 +226,17 @@ def _fmt_dt(d) -> str:
     return str(d)[:16]
 
 
+def _fmt_dt_sec(d) -> str:
+    """保留到秒的格式化，用于需要前端精准回填（如返回登记自动填充实际出发/返回时间）的字段。"""
+    if d is None:
+        return ""
+    if hasattr(d, "strftime"):
+        return d.strftime("%Y-%m-%d %H:%M:%S")
+    s = str(d)
+    # 兼容 "YYYY-MM-DD HH:MM:SS" / "YYYY-MM-DDTHH:MM:SS" / 带微秒
+    return s[:19]
+
+
 def _trip_status(bldzt, szrzt) -> tuple:
     """根据 bldzt/szrzt 返回 (状态文案, statusClass)。1=待审批 2=通过 22=驳回"""
     bldzt = bldzt if bldzt is not None else 0
@@ -262,8 +273,8 @@ def _row_to_record(row) -> dict:
         "location": row.get("gcdd") or "",
         "startTime": start_display,
         "actualReturnTime": actual_ret,
-        "expectedStartTime": _fmt_dt(row.get("yjcfsj")),
-        "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
+        "expectedStartTime": _fmt_dt_sec(row.get("yjcfsj")),
+        "expectedReturnTime": _fmt_dt_sec(row.get("yjfhsj")),
         "fhdjStatus": int(row.get("fhdj_status") or 0),
         "status": status,
         "statusClass": status_class,

@@ -943,10 +943,18 @@ function editRejectedTrip(r) {
   form.projectName = r.projectName || ''
   form.location = r.location || ''
   form.locations = r.location ? [r.location] : ['']
-  const toLocal = (s) => (s || '').replace(' ', 'T').slice(0, 16)
-  form.startTime = toLocal(r.expectedStartTime)
-  form.endTime = toLocal(r.expectedReturnTime)
-  form.assignTime = r.assignTime ? toLocal(r.assignTime) : ''
+  // 出发/返回时间用 DateTimePicker（支持秒）：保留原始秒；assignTime 仅用到分钟的输入框
+  const toLocalSec = (s) => {
+    if (!s) return ''
+    const t = (s || '').replace(' ', 'T').slice(0, 19)
+    if (/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/.test(t)) return t
+    const m = t.slice(0, 16)
+    return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(m) ? `${m}:00` : ''
+  }
+  const toLocalMin = (s) => (s || '').replace(' ', 'T').slice(0, 16)
+  form.startTime = toLocalSec(r.expectedStartTime)
+  form.endTime = toLocalSec(r.expectedReturnTime)
+  form.assignTime = r.assignTime ? toLocalMin(r.assignTime) : ''
   form.deptLeader = ''
   form.responsiblePerson = ''
   showApplyModal.value = true
@@ -1044,7 +1052,11 @@ watch(
     const toDatetimeLocal = (s) => {
       if (!s || typeof s !== 'string') return ''
       const t = s.trim().replace(' ', 'T').slice(0, 19)
-      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(t) ? t.slice(0, 16) : ''
+      if (!/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(t)) return ''
+      // 保留秒，供 DateTimePicker 解析；仅到分钟时补 :00（与 emitValue 的 YYYY-MM-DDTHH:mm:ss 一致）
+      if (/T\d{2}:\d{2}:\d{2}/.test(t)) return t
+      const m = t.slice(0, 16)
+      return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/.test(m) ? `${m}:00` : ''
     }
     const start = toDatetimeLocal(rec.expectedStartTime)
     const end = toDatetimeLocal(rec.expectedReturnTime)
