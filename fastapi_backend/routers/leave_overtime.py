@@ -730,16 +730,6 @@ async def register_overtime(req: OvertimeRegisterRequest):
             date_part = datetime.now().strftime("%Y-%m-%d")
         time_from = f"{date_part} {st}"
         time_to = f"{date_part} {et}"
-        # 加班开始时间不能早于 8:00，8:00 之前不计入加班
-        try:
-            from datetime import datetime as dt_parse
-            start_dt = dt_parse.strptime(st, "%H:%M:%S")
-            if start_dt.hour < 8:
-                raise HTTPException(status_code=400, detail="加班开始时间不能早于 8:00，8:00 之前不计入加班")
-        except HTTPException:
-            raise
-        except Exception:
-            pass  # 非时间格式时跳过，由后续逻辑处理
         hours = _calc_hours(st, et, req.date)
         hours = round_overtime_hours_down(hours)
 

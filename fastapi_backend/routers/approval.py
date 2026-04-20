@@ -909,7 +909,7 @@ async def overtime_validate(req: OvertimeValidateRequest):
 
         date_ymd = start_dt[:10]
         if start_dt < f"{date_ymd} 08:00:00":
-            results.append({"id": it.id, "pass": False, "reason": "开始时间不能早于8:00"})
+            results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
             continue
 
         # 2b) 打卡校验（基于进/出标记配对，从预取数据中查找）
@@ -934,7 +934,7 @@ async def overtime_validate(req: OvertimeValidateRequest):
                 punch_contained = True
                 break
         if not punch_contained:
-            results.append({"id": it.id, "pass": False, "reason": "打卡不实"})
+            results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
             continue
 
         # 3b) jiaban 查重（从预取数据中查找）
