@@ -348,8 +348,8 @@ async function loadConfig() {
       configured.value = !!res.configured
       configForm.value.email_address = res.emailAddress || ''
       configForm.value.email_auth_code = ''
-      imapServer.value = res.imapServer || 'imap.163.com'
-      //imapServer.value = res.imapServer || 'imap.qiye.163.com'
+      //imapServer.value = res.imapServer || 'imap.163.com'
+      imapServer.value = res.imapServer || 'imap.qiye.163.com'
       imapPort.value = res.imapPort || 993
       pollIntervalSeconds.value = res.pollIntervalSeconds || 120
       syncRecentDays.value = res.syncRecentDays || 1
