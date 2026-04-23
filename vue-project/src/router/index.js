@@ -226,6 +226,12 @@ const routes = [
     name: 'AttendanceDiscipline',
     component: () => import('@/views/attendance/AttendanceDiscipline.vue'),
     meta: { title: '考勤纪律审查' }
+  },
+  {
+    path: '/feedback',
+    name: 'FeedbackCenter',
+    component: () => import('@/views/feedback/FeedbackCenter.vue'),
+    meta: { title: '意见与建议' }
   }
   // 未来可以添加更多路由：
   // {

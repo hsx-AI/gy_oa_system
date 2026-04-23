@@ -125,6 +125,12 @@
             </svg>
             <span>技术问题手册</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/feedback" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <span>意见与建议</span>
+          </router-link>
           <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 14l9-5-9-5-9 5 9 5z" />
@@ -257,7 +263,7 @@
                         <div class="todo-popover-item__bottom">
                           <span class="todo-popover-item__meta">{{ task.applicant }}{{ task.time ? ' · ' + task.time : '' }}</span>
                           <button type="button" class="todo-popover-item__btn" @click="onHeaderTodoAction(task)">
-                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : '处理')))) }}
+                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : (task.btnLabel || '处理'))))) }}
                           </button>
                         </div>
                       </li>

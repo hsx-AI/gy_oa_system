@@ -295,7 +295,12 @@
                 class="col-day cell"
                 :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }, scheduleHlClass(2 + di, 3 + ei)]"
                 @mouseenter="scheduleSetHover(2 + di, 3 + ei)"
-                @click="cycleShift(emp, d.date)"
+                @click="onCellClick(emp, d.date)"
+                @mousedown="onCellDown(emp, d.date, $event)"
+                @mouseup="onCellUp"
+                @mouseleave="onCellUp"
+                @touchstart.prevent="onCellDown(emp, d.date, $event)"
+                @touchend="onCellUp"
               >
                 <span class="cell-text">{{ cellLabel(emp, d.date) }}</span>
               </td>
@@ -842,6 +847,8 @@ function goThisWeek() {
 }
 
 const SHIFT_CYCLE = ['白班', '夜班', '']
+let _lpTimer = null
+let _lpFired = false
 const shiftCapToast = ref('')
 let shiftCapToastTimer = null
 function showShiftCapToast(message) {
@@ -877,7 +884,9 @@ function shiftCapsForDateStr(dateStr) {
 function countShiftOnDate(dateStr, shift) {
   let n = 0
   for (const e of employees.value) {
-    if ((scheduleData[e]?.[dateStr] || '') === shift) n++
+    const v = scheduleData[e]?.[dateStr] || ''
+    if (v === shift) n++
+    else if (v === '白+夜' && (shift === '白班' || shift === '夜班')) n++
   }
   return n
 }
@@ -886,7 +895,7 @@ function cycleShift(emp, dateStr) {
   if (!canEditShiftCell(emp, dateStr)) return
   if (!scheduleData[emp]) scheduleData[emp] = {}
   const cur = scheduleData[emp][dateStr] || ''
-  const idxRaw = SHIFT_CYCLE.indexOf(cur)
+  const idxRaw = cur === '白+夜' ? 2 : SHIFT_CYCLE.indexOf(cur)
   const idx = idxRaw >= 0 ? idxRaw : 2
   const next = SHIFT_CYCLE[(idx + 1) % SHIFT_CYCLE.length]
   const caps = shiftCapsForDateStr(dateStr)
@@ -909,8 +918,50 @@ function cycleShift(emp, dateStr) {
   }
 }
 
+function onCellDown(emp, dateStr, e) {
+  _lpFired = false
+  if (_lpTimer) clearTimeout(_lpTimer)
+  _lpTimer = setTimeout(() => {
+    _lpFired = true
+    _lpTimer = null
+    toggleBothShift(emp, dateStr)
+  }, 500)
+}
+
+function onCellUp() {
+  if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null }
+}
+
+function onCellClick(emp, dateStr) {
+  if (_lpFired) { _lpFired = false; return }
+  cycleShift(emp, dateStr)
+}
+
+function toggleBothShift(emp, dateStr) {
+  if (!canEditShiftCell(emp, dateStr)) return
+  if (!scheduleData[emp]) scheduleData[emp] = {}
+  const cur = scheduleData[emp][dateStr] || ''
+  if (cur === '白+夜') {
+    scheduleData[emp][dateStr] = ''
+  } else {
+    scheduleData[emp][dateStr] = '白+夜'
+  }
+  dirty.value = true
+  const caps = shiftCapsForDateStr(dateStr)
+  const cntDay = countShiftOnDate(dateStr, '白班')
+  const cntNight = countShiftOnDate(dateStr, '夜班')
+  if (scheduleData[emp][dateStr] === '白+夜') {
+    if (cntDay > caps.day) {
+      showShiftCapToast(`提示：${caps.kindLabel}白班已超过配置（配置 ${caps.day} 人，当前 ${cntDay} 人），已保留您的排班`)
+    } else if (cntNight > caps.night) {
+      showShiftCapToast(`提示：${caps.kindLabel}夜班已超过配置（配置 ${caps.night} 人，当前 ${cntNight} 人），已保留您的排班`)
+    }
+  }
+}
+
 function cellLabel(emp, dateStr) {
   const v = scheduleData[emp]?.[dateStr] || ''
+  if (v === '白+夜') return '白夜'
   if (v === '白班') return '白'
   if (v === '夜班') return '夜'
   return ''
@@ -919,9 +970,10 @@ function cellLabel(emp, dateStr) {
 function cellClass(emp, d) {
   const v = scheduleData[emp]?.[d.date] || ''
   return {
+    'cell-both': v === '白+夜',
     'cell-day': v === '白班',
     'cell-night': v === '夜班',
-    'cell-empty': !v || (v !== '白班' && v !== '夜班'),
+    'cell-empty': !v || (v !== '白班' && v !== '夜班' && v !== '白+夜'),
     'col-weekend': !d.isWorkday,
     'col-today': d.date === todayStr,
   }
@@ -933,7 +985,8 @@ const empStats = computed(() => {
     let day = 0, night = 0
     const dayMap = scheduleData[emp] || {}
     for (const v of Object.values(dayMap)) {
-      if (v === '白班') day++
+      if (v === '白+夜') { day++; night++ }
+      else if (v === '白班') day++
       else if (v === '夜班') night++
     }
     stats[emp] = { day, night }
@@ -996,7 +1049,8 @@ const daySummary = computed(() => {
     let day = 0, night = 0
     for (const emp of employees.value) {
       const v = scheduleData[emp]?.[d.date] || ''
-      if (v === '白班') day++
+      if (v === '白+夜') { day++; night++ }
+      else if (v === '白班') day++
       else if (v === '夜班') night++
     }
     summary[d.date] = { day, night }
@@ -1765,6 +1819,7 @@ thead tr:first-child .sticky-col2 {
 .cell-text { display: inline-block; width: 100%; line-height: 34px; font-weight: 600; font-size: 12px; }
 .cell-day { background: #dbeafe; color: #1d4ed8; }
 .cell-night { background: #fef3c7; color: #92400e; }
+.cell-both { background: linear-gradient(135deg, #dbeafe 50%, #fef3c7 50%); color: #7c3aed; font-size: 11px; }
 .cell-empty { background: white; color: transparent; }
 
 .stat-day { color: #2563eb; font-weight: 600; }

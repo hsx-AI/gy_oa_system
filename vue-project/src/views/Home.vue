@@ -27,7 +27,7 @@
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
                   <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
-                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : '处理')))) }}
+                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.btnLabel || '处理'))))) }}
                   </button>
                 </div>
               </li>
@@ -542,6 +542,15 @@ const rawFeatureGroups = [
         color: 'linear-gradient(135deg, #f093fb 0%, #f5576c 100%)',
         tag: '核心',
         iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+      },
+      {
+        id: 'feedback',
+        title: '意见与建议',
+        description: '部门吐槽墙、领导匿名信箱、系统功能建议',
+        path: '/feedback',
+        color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+        tag: '新功能',
+        iconPath: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z'
       },
       {
         id: 'db-manager',

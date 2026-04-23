@@ -16,12 +16,23 @@ import {
 } from '@/api/attendance'
 import { getPendingHxpApprovals } from '@/api/admin'
 import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
+import { getLeaderInbox, getWallPending, getSystemList } from '@/api/feedback'
 
 function readUserName() {
   try {
     const s = localStorage.getItem('userInfo')
     const u = s ? JSON.parse(s) : {}
     return (u.name || u.userName || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function readUserJb() {
+  try {
+    const s = localStorage.getItem('userInfo')
+    const u = s ? JSON.parse(s) : {}
+    return (u.jb || '').trim()
   } catch {
     return ''
   }
@@ -51,6 +62,9 @@ const personnelNeedAudit = ref(0)
 const hxpUnreadList = ref([])
 const hxpApprovalPendingList = ref([])
 const todoRealTotal = ref(0)
+const feedbackLeaderCount = ref(0)
+const feedbackWallPendingCount = ref(0)
+const feedbackSystemPendingCount = ref(0)
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -112,6 +126,42 @@ const displayTodoList = computed(() => {
       isHxpApproval: true,
     })
   }
+  if (feedbackLeaderCount.value > 0) {
+    list.push({
+      uniqueId: 'feedback-leader-inbox',
+      type: '匿名意见待回复',
+      description: `您有 ${feedbackLeaderCount.value} 条匿名意见待回复`,
+      applicant: '意见与建议',
+      time: '',
+      isFeedback: true,
+      feedbackTab: 'leader',
+      btnLabel: '去回复',
+    })
+  }
+  if (feedbackWallPendingCount.value > 0) {
+    list.push({
+      uniqueId: 'feedback-wall-pending',
+      type: '吐槽墙待审核',
+      description: `您有 ${feedbackWallPendingCount.value} 条吐槽待审核上墙`,
+      applicant: '意见与建议',
+      time: '',
+      isFeedback: true,
+      feedbackTab: 'wall',
+      btnLabel: '去审核',
+    })
+  }
+  if (feedbackSystemPendingCount.value > 0) {
+    list.push({
+      uniqueId: 'feedback-system-pending',
+      type: '系统建议待回复',
+      description: `您有 ${feedbackSystemPendingCount.value} 条系统功能建议待回复`,
+      applicant: '意见与建议',
+      time: '',
+      isFeedback: true,
+      feedbackTab: 'system',
+      btnLabel: '去回复',
+    })
+  }
   return list
 })
 
@@ -122,6 +172,9 @@ const totalBadgeCount = computed(() => {
   count += Math.max(0, Number(personnelNeedAudit.value) || 0)
   count += hxpUnreadList.value.length
   count += hxpApprovalPendingList.value.length
+  if (feedbackLeaderCount.value > 0) count += 1
+  if (feedbackWallPendingCount.value > 0) count += 1
+  if (feedbackSystemPendingCount.value > 0) count += 1
   return count
 })
 
@@ -283,6 +336,58 @@ async function fetchTripReturnPending() {
   }
 }
 
+async function fetchFeedbackTodos() {
+  const userName = readUserName()
+  if (!userName) {
+    feedbackLeaderCount.value = 0
+    feedbackWallPendingCount.value = 0
+    feedbackSystemPendingCount.value = 0
+    return
+  }
+  const jb = readUserJb()
+  const isLeader = /经理|副经理/.test(jb)
+
+  let isAdmin = false
+  try {
+    const cfg = await getUploadConfig()
+    isAdmin = !!(cfg?.admin1 && userName === cfg.admin1.trim())
+  } catch { /* ignore */ }
+
+  const tasks = []
+
+  if (isLeader || isAdmin) {
+    tasks.push(
+      getLeaderInbox({ current_user: userName })
+        .then(res => {
+          feedbackLeaderCount.value = (res?.data || []).filter(m => m.status === 0).length
+        })
+        .catch(() => { feedbackLeaderCount.value = 0 })
+    )
+  } else {
+    feedbackLeaderCount.value = 0
+  }
+
+  if (isAdmin) {
+    tasks.push(
+      getWallPending({ current_user: userName })
+        .then(res => { feedbackWallPendingCount.value = (res?.data || []).length })
+        .catch(() => { feedbackWallPendingCount.value = 0 })
+    )
+    tasks.push(
+      getSystemList()
+        .then(res => {
+          feedbackSystemPendingCount.value = (res?.data || []).filter(s => s.status !== 1).length
+        })
+        .catch(() => { feedbackSystemPendingCount.value = 0 })
+    )
+  } else {
+    feedbackWallPendingCount.value = 0
+    feedbackSystemPendingCount.value = 0
+  }
+
+  await Promise.all(tasks)
+}
+
 export async function refreshWorkplaceTodos() {
   await Promise.all([
     fetchTodoList(),
@@ -291,6 +396,7 @@ export async function refreshWorkplaceTodos() {
     fetchPersonnelPending(),
     fetchUnreadHxp(),
     fetchHxpApprovalPending(),
+    fetchFeedbackTodos(),
   ])
 }
 
@@ -357,6 +463,10 @@ export function useWorkplaceTodos() {
     }
     if (task.isReturnReminder) {
       router.push('/attendance/business-trip')
+      return
+    }
+    if (task.isFeedback) {
+      router.push({ path: '/feedback', query: { tab: task.feedbackTab || 'wall' } })
       return
     }
     goApprove(task)
