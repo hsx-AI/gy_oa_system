@@ -5,7 +5,7 @@
         <div class="header-content">
           <div class="header-info">
             <h1 class="header-title">共用邮箱收件箱</h1>
-            <p class="header-subtitle">自动同步共用邮箱收到的邮件并入库（仅系统管理员）</p>
+            <p class="header-subtitle">自动同步共用邮箱中“最近标旗(FLAGGED)”邮件并入库（仅系统管理员）</p>
           </div>
           <div class="header-actions">
             <button
@@ -13,7 +13,7 @@
               class="btn btn-secondary"
               :disabled="analyzing"
               @click="manualAnalyze"
-              title="使用本地大模型抽取待办任务与截止时间"
+              title="优先使用本地大模型抽取任务；本地不可用时自动回退 DeepSeek"
             >
               <span v-if="analyzing">分析中…</span>
               <span v-else>立即分析</span>
@@ -61,7 +61,7 @@
               <p>
                 同步范围：仅拉取最近
                 <code>{{ syncRecentDays }}</code>
-                天内收到的邮件；自动拉取间隔：约
+                天内已标旗（FLAGGED）的邮件；自动拉取间隔：约
                 <code>{{ pollIntervalSeconds }}</code>
                 秒。
               </p>

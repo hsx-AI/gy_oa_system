@@ -26,6 +26,16 @@ export function changePassword(data) {
   return request({ url: '/auth/change-password', method: 'post', data })
 }
 
+/** 获取用户配色风格 */
+export function getUserStyle(params) {
+  return request({ url: '/auth/user-style', method: 'get', params })
+}
+
+/** 保存用户配色风格 */
+export function saveUserStyle(data) {
+  return request({ url: '/auth/user-style', method: 'post', data })
+}
+
 /**
  * 获取打卡记录（已废弃，请使用 queryAttendance）
  * @deprecated 使用 queryAttendance 代替

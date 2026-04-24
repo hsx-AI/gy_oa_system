@@ -389,3 +389,54 @@ async def change_password(req: ChangePasswordRequest):
     except Exception as e:
         logger.error(f"修改密码失败: {str(e)}")
         return {"success": False, "message": str(e)}
+
+
+# ==================== 用户配色风格 ====================
+
+def _ensure_skin_style_column():
+    """确保 yggl 表有 skin_style 列。"""
+    try:
+        db.execute_update("ALTER TABLE yggl ADD COLUMN skin_style VARCHAR(20) DEFAULT '' COMMENT '用户配色风格'", ())
+    except Exception:
+        pass
+
+
+_ensure_skin_style_column()
+
+
+@router.get("/user-style")
+async def get_user_style(name: str = Query(..., description="用户姓名")):
+    """获取用户保存的配色风格。"""
+    try:
+        rows = db.execute_query(
+            "SELECT skin_style FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+            (name,),
+        )
+        style = (rows[0].get("skin_style") or "").strip() if rows else ""
+        return {"success": True, "skinStyle": style}
+    except Exception as e:
+        logger.error(f"获取用户风格失败: {e}")
+        return {"success": False, "message": str(e)}
+
+
+class UserStyleRequest(BaseModel):
+    name: str
+    skinStyle: str
+
+
+@router.post("/user-style")
+async def save_user_style(req: UserStyleRequest):
+    """保存用户配色风格到 yggl.skin_style。"""
+    try:
+        style = (req.skinStyle or "").strip()
+        allowed = {"", "default", "dark", "green", "purple", "blue", "warm"}
+        if style not in allowed:
+            style = ""
+        db.execute_update(
+            "UPDATE yggl SET skin_style=%s WHERE name=%s AND (COALESCE(zaizhi,0)=0)",
+            (style, req.name),
+        )
+        return {"success": True, "message": "已保存"}
+    except Exception as e:
+        logger.error(f"保存用户风格失败: {e}")
+        return {"success": False, "message": str(e)}

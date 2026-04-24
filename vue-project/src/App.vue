@@ -283,12 +283,42 @@
                   </div>
                 </div>
               </div>
-              <button type="button" class="header-action-btn" aria-label="系统设置">
-                <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <circle cx="12" cy="12" r="3" />
-                  <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                </svg>
-              </button>
+              <div ref="settingsWrapRef" class="settings-wrap">
+                <button type="button" class="header-action-btn" aria-label="系统设置" @click.stop="toggleSettingsPopover">
+                  <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3" />
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                  </svg>
+                </button>
+                <div v-show="settingsPopoverOpen" class="settings-popover" @click.stop>
+                  <div class="settings-popover__header">个性化设置</div>
+                  <div class="settings-popover__body">
+                    <div class="settings-section">
+                      <div class="settings-section__title">配色风格</div>
+                      <div class="theme-grid">
+                        <div
+                          v-for="s in themeList"
+                          :key="s.id"
+                          class="theme-card"
+                          :class="{ active: skinStyle === s.id }"
+                          @click="applySkin(s.id)"
+                        >
+                          <div class="theme-card__preview" :style="previewStyle(s.id)">
+                            <div class="theme-card__bar" :style="{ background: s.headerBg }"></div>
+                            <div class="theme-card__body">
+                              <div class="theme-card__accent" :style="{ background: s.primary }"></div>
+                              <div class="theme-card__line" :style="{ background: s.bg }"></div>
+                              <div class="theme-card__line" :style="{ background: s.bg }" style="width:60%"></div>
+                            </div>
+                          </div>
+                          <div class="theme-card__label">{{ s.label }}</div>
+                          <div v-if="skinStyle === s.id" class="theme-card__check">✓</div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              </div>
               <div class="user-info" ref="userInfoRef" @click="toggleUserMenu">
                 <div class="user-avatar">
                   <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -392,7 +422,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUploadConfig, setLoginStatus } from '@/api/attendance'
+import { getUploadConfig, setLoginStatus, getUserStyle, saveUserStyle } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
@@ -454,6 +484,18 @@ const currentUser = ref({
 
 const showUserMenu = ref(false)
 const userInfoRef = ref(null)
+// 系统设置弹窗
+const settingsWrapRef = ref(null)
+const settingsPopoverOpen = ref(false)
+const skinStyle = ref('default')
+const themeList = ref([
+  { id: 'default', label: '极简白', primary: '#1890ff', headerBg: '#1f2937', bg: '#f0f2f5' },
+  { id: 'dark', label: '深邃灰', primary: '#6366f1', headerBg: '#0f172a', bg: '#1e293b' },
+  { id: 'blue', label: '深海蓝', primary: '#0284c7', headerBg: '#0c4a6e', bg: '#f0f9ff' },
+  { id: 'green', label: '护眼绿', primary: '#059669', headerBg: '#064e3b', bg: '#ecfdf5' },
+  { id: 'purple', label: '优雅紫', primary: '#7c3aed', headerBg: '#4c1d95', bg: '#faf5ff' },
+  { id: 'warm', label: '暖阳橙', primary: '#d97706', headerBg: '#78350f', bg: '#fffbeb' },
+])
 // 打卡数据上传权限：webconfig.dakaman 对应用户
 const dakaman = ref('')
 // 人事管理员：webconfig.admin2，权限等同于部长/副部长（含员工在职管理）
@@ -530,6 +572,37 @@ const toggleUserMenu = () => {
   showUserMenu.value = !showUserMenu.value
 }
 
+// 系统设置弹窗
+function toggleSettingsPopover() {
+  settingsPopoverOpen.value = !settingsPopoverOpen.value
+}
+function previewStyle(id) {
+  const s = themeList.value.find(t => t.id === id)
+  if (!s) return {}
+  return { '--card-primary': s.primary, '--card-header-bg': s.headerBg, '--card-bg': s.bg }
+}
+function applySkin(id) {
+  skinStyle.value = id
+  document.documentElement.setAttribute('data-skin', id)
+  localStorage.setItem('oa_skin_style', id)
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  if (name) saveUserStyle({ name, skinStyle: id }).catch(() => {})
+}
+async function loadSkinStyle() {
+  const cached = localStorage.getItem('oa_skin_style')
+  if (cached) { skinStyle.value = cached; document.documentElement.setAttribute('data-skin', cached) }
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  if (!name) return
+  try {
+    const res = await getUserStyle({ name })
+    if (res && res.success && res.skinStyle) {
+      const s = res.skinStyle; skinStyle.value = s
+      document.documentElement.setAttribute('data-skin', s)
+      localStorage.setItem('oa_skin_style', s)
+    }
+  } catch {}
+}
+
 // 点击外部关闭菜单
 const onDocumentClick = (e) => {
   if (userInfoRef.value && !userInfoRef.value.contains(e.target)) {
@@ -538,6 +611,9 @@ const onDocumentClick = (e) => {
   if (todoBellWrapRef.value && !todoBellWrapRef.value.contains(e.target)) {
     todoPopoverOpen.value = false
     todoActiveTab.value = 'todo'
+  }
+  if (settingsWrapRef.value && !settingsWrapRef.value.contains(e.target)) {
+    settingsPopoverOpen.value = false
   }
 }
 
@@ -689,6 +765,7 @@ const loadUploadConfig = () => {
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
   loadUploadConfig()
+  loadSkinStyle()
 })
 
 onUnmounted(() => {
@@ -1594,4 +1671,123 @@ a.user-menu__item {
   font-size: 12px;
   opacity: 0.95;
 }
+
+/* 系统设置弹窗 */
+.settings-wrap {
+  position: relative;
+}
+.settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 340px;
+  background: #fff;
+  border: 1px solid var(--color-border-lighter, #e5e7eb);
+  border-radius: var(--radius-md, 10px);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
+  z-index: 1000;
+  overflow: hidden;
+}
+.settings-popover__header {
+  display: flex;
+  align-items: center;
+  padding: 14px 16px;
+  font-size: 15px;
+  font-weight: 600;
+  color: #111827;
+  border-bottom: 1px solid var(--color-border-lighter, #e5e7eb);
+  background: #f9fafb;
+}
+.settings-popover__body {
+  padding: 14px 16px;
+  max-height: 380px;
+  overflow-y: auto;
+}
+.settings-section__title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #374151;
+  margin-bottom: 10px;
+}
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.theme-card {
+  position: relative;
+  cursor: pointer;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 2px solid transparent;
+  transition: all .15s ease;
+}
+.theme-card:hover { border-color: #d1d5db; }
+.theme-card.active { border-color: #6366f1; }
+.theme-card__preview {
+  border-radius: 4px; overflow: hidden; height: 52px;
+  display: flex; flex-direction: column;
+}
+.theme-card__bar { height: 12px; flex-shrink: 0; }
+.theme-card__body { flex: 1; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
+.theme-card__accent { width: 24px; height: 6px; border-radius: 3px; }
+.theme-card__line { height: 4px; border-radius: 2px; width: 80%; }
+.theme-card__label {
+  font-size: 11px; text-align: center; padding: 4px 0 2px;
+  color: #374151; font-weight: 500;
+}
+.theme-card__check {
+  position: absolute; top: 2px; right: 2px;
+  width: 18px; height: 18px; background: #6366f1; color: #fff;
+  border-radius: 50%; display: flex; align-items: center; justify-content: center;
+  font-size: 11px; font-weight: 700;
+}
+
+/* 主题配色 */
+[data-skin="dark"] .app-sidebar,
+[data-skin="dark"] .app-header {
+  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
+}
+[data-skin="blue"] .app-sidebar,
+[data-skin="blue"] .app-header {
+  background: linear-gradient(180deg, #0c4a6e 0%, #082f49 100%);
+}
+[data-skin="green"] .app-sidebar,
+[data-skin="green"] .app-header {
+  background: linear-gradient(180deg, #064e3b 0%, #022c22 100%);
+}
+[data-skin="purple"] .app-sidebar,
+[data-skin="purple"] .app-header {
+  background: linear-gradient(180deg, #4c1d95 0%, #2e1065 100%);
+}
+[data-skin="warm"] .app-sidebar,
+[data-skin="warm"] .app-header {
+  background: linear-gradient(180deg, #78350f 0%, #451a03 100%);
+}
+[data-skin="dark"] .sidebar-item-active {
+  background: rgba(99,102,241,.2); border-left-color: #6366f1;
+}
+[data-skin="blue"] .sidebar-item-active {
+  background: rgba(14,165,233,.2); border-left-color: #0ea5e9;
+}
+[data-skin="green"] .sidebar-item-active {
+  background: rgba(52,211,153,.2); border-left-color: #34d399;
+}
+[data-skin="purple"] .sidebar-item-active {
+  background: rgba(167,139,250,.2); border-left-color: #a78bfa;
+}
+[data-skin="warm"] .sidebar-item-active {
+  background: rgba(251,191,36,.2); border-left-color: #fbbf24;
+}
+[data-skin="dark"] {
+  --color-primary: #6366f1; --color-primary-light: #818cf8;
+  --color-bg-layout: #0f172a; --color-bg-container: #1e293b;
+  --color-text-primary: #e2e8f0; --color-text-secondary: #94a3b8;
+  --color-text-tertiary: #64748b; --color-border-base: #334155;
+  --color-border-light: #475569; --color-border-lighter: #1e293b;
+}
+[data-skin="blue"] { --color-primary: #0284c7; --color-primary-light: #38bdf8; }
+[data-skin="green"] { --color-primary: #059669; --color-primary-light: #34d399; }
+[data-skin="purple"] { --color-primary: #7c3aed; --color-primary-light: #a78bfa; }
+[data-skin="warm"] { --color-primary: #d97706; --color-primary-light: #f59e0b; }
 </style>

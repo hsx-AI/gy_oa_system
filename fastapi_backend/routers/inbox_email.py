@@ -9,8 +9,11 @@ import email
 import imaplib
 import json
 import logging
+import os
 import re
 from datetime import datetime, timedelta
+
+import httpx
 from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime, getaddresses
 from typing import List, Optional
@@ -30,7 +33,8 @@ IMAP_PORT_SSL = 993
 
 # 后台轮询间隔（秒），可根据需要调整
 POLL_INTERVAL_SECONDS = 120
-# 仅同步最近 N 天的邮件（默认 1 天：约 24 小时，IMAP SINCE 是按自然日粒度）
+# 仅同步最近 N 天内的“标旗(FLAGGED)”邮件
+# 注意：IMAP SINCE 是按自然日粒度
 SYNC_RECENT_DAYS = 1
 # 单次拉取的最多邮件数（对 SINCE 过滤结果再做一次安全上限）
 MAX_FETCH_PER_POLL = 50
@@ -43,6 +47,10 @@ ANALYSIS_STATUS_PENDING = "pending"
 ANALYSIS_STATUS_SUCCESS = "success"
 ANALYSIS_STATUS_NO_TASK = "no_task"
 ANALYSIS_STATUS_FAILED = "failed"
+
+# 联网模型（DeepSeek）兜底配置
+DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
+DEEPSEEK_MODEL = "deepseek-chat"
 
 
 # ==================== 建表 / 字段保障 ====================
@@ -289,7 +297,7 @@ def _insert_email_row(row: dict) -> bool:
 # ==================== IMAP 拉取 ====================
 
 def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, recent_days: int = SYNC_RECENT_DAYS) -> dict:
-    """连接 IMAP 拉取最近 recent_days 天内的邮件。返回 {new, skipped, total, error}"""
+    """连接 IMAP 拉取最近 recent_days 天内的 FLAGGED 邮件。返回 {new, skipped, total, error}"""
     cfg = _get_inbox_config()
     address = cfg["address"]
     auth_code = cfg["auth_code"]
@@ -310,12 +318,12 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, recent_days: int = SYN
         except Exception:
             pass
         imap_obj.select("INBOX", readonly=True)
-        # 仅查询最近 N 天的邮件（IMAP SINCE 的日期是包含当天，且按自然日粒度）
+        # 仅查询最近 N 天内的 FLAGGED 邮件
         days = max(1, int(recent_days or 1))
         since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
-        typ, data = imap_obj.search(None, "SINCE", since_date)
+        typ, data = imap_obj.search(None, "FLAGGED", "SINCE", since_date)
         if typ != "OK" or not data or not data[0]:
-            logger.info(f"[InboxEmail] SINCE {since_date} 无匹配邮件")
+            logger.info(f"[InboxEmail] FLAGGED + SINCE {since_date} 无匹配邮件")
             return result
         ids = data[0].split()
         result["total"] = len(ids)
@@ -502,27 +510,65 @@ def _analyze_email_with_llm(row: dict) -> dict:
     except ImportError as e:
         raise RuntimeError("服务端未安装 openai SDK") from e
 
-    # 复用 holiday 模块的本地大模型配置
-    from routers.holiday import _get_llm_config
-    config = _get_llm_config()
-    if not config.get("base_url") or not config.get("model"):
-        raise RuntimeError("未配置本地大模型（webconfig.llm_base_url / llm_model）")
-
     system_prompt, user_prompt = _build_task_prompts(row)
+    config = _get_inbox_llm_config()
 
-    client = OpenAI(base_url=config["base_url"], api_key="ollama")
-    completion = client.chat.completions.create(
-        model=config["model"],
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
-        temperature=0,
-        stream=False,
-        extra_body={"chat_template_kwargs": {"enable_thinking": False}},
-    )
-    content = (completion.choices[0].message.content or "").strip()
-    data = _parse_llm_task_content(content)
+    data = None
+    local_err = None
+    use_fallback = False
+
+    # 1) 优先本地大模型
+    if config.get("local_base_url") and config.get("local_model"):
+        try:
+            local_client = OpenAI(
+                base_url=config["local_base_url"],
+                api_key="ollama",
+                max_retries=0,
+                timeout=httpx.Timeout(15.0, connect=5.0),
+            )
+            completion = local_client.chat.completions.create(
+                model=config["local_model"],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                temperature=0,
+                stream=False,
+                extra_body={"chat_template_kwargs": {"enable_thinking": False}},
+            )
+            content = (completion.choices[0].message.content or "").strip()
+            data = _parse_llm_task_content(content)
+        except Exception as e:
+            local_err = str(e)
+            use_fallback = True
+            logger.warning("[InboxEmail] 本地大模型不可用，尝试 DeepSeek 兜底: %s", e)
+    else:
+        use_fallback = True
+
+    # 2) 本地不可用时，兜底 DeepSeek 联网模型
+    if data is None and use_fallback:
+        api_key = config.get("deepseek_api_key")
+        if not api_key:
+            if local_err:
+                raise RuntimeError(f"本地大模型不可用，且未配置 DeepSeek API Key: {local_err}")
+            raise RuntimeError("未配置可用大模型：请配置本地 llm_base_url/llm_model 或 deepseek_api_key")
+        deepseek_client = OpenAI(
+            base_url=DEEPSEEK_BASE_URL,
+            api_key=api_key,
+            max_retries=1,
+            timeout=httpx.Timeout(60.0, connect=10.0),
+        )
+        completion = deepseek_client.chat.completions.create(
+            model=DEEPSEEK_MODEL,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ],
+            temperature=0,
+            stream=False,
+        )
+        content = (completion.choices[0].message.content or "").strip()
+        data = _parse_llm_task_content(content)
 
     has_task = bool(data.get("has_task"))
     task_summary = str(data.get("task") or "").strip()
@@ -537,6 +583,50 @@ def _analyze_email_with_llm(row: dict) -> dict:
         "has_task": 1 if has_task and task_summary else 0,
         "task_summary": task_summary,
         "task_deadline": deadline,
+    }
+
+
+def _normalize_llm_base_url(url: str) -> str:
+    """兼容填入 /chat/completions 的情况；OpenAI SDK 只需要根路径，最多到 /v1。"""
+    u = (url or "").strip()
+    if not u:
+        return ""
+    u = u.rstrip("/")
+    if u.endswith("/chat/completions"):
+        u = u[: -len("/chat/completions")].rstrip("/")
+    return u
+
+
+def _get_inbox_llm_config() -> dict:
+    """读取 inbox 分析用的大模型配置：本地优先，DeepSeek 作为兜底。"""
+    # 复用 holiday 的本地模型配置（有默认值）
+    local_base_url = ""
+    local_model = ""
+    try:
+        from routers.holiday import _get_llm_config
+        cfg = _get_llm_config() or {}
+        local_base_url = _normalize_llm_base_url(cfg.get("base_url") or "")
+        local_model = (cfg.get("model") or "").strip()
+    except Exception as e:
+        logger.debug("读取本地大模型配置失败: %s", e)
+
+    deepseek_api_key = ""
+    try:
+        rows = db.execute_query(
+            "SELECT deepseek_api_key FROM webconfig WHERE id = %s LIMIT 1",
+            ("1",),
+        )
+        if rows:
+            deepseek_api_key = (rows[0].get("deepseek_api_key") or "").strip()
+    except Exception as e:
+        logger.debug("读取 webconfig.deepseek_api_key 失败: %s", e)
+    if not deepseek_api_key:
+        deepseek_api_key = (os.getenv("DEEPSEEK_API_KEY") or "").strip()
+
+    return {
+        "local_base_url": local_base_url,
+        "local_model": local_model,
+        "deepseek_api_key": deepseek_api_key,
     }
 
 
@@ -897,7 +987,7 @@ async def manual_sync(current_user: str = Query(...)):
         }
     return {
         "success": True,
-        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封（邮箱共 {result['total']} 封）",
+        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封（最近标旗邮件共 {result['total']} 封）",
         "new": result["new"],
         "skipped": result["skipped"],
         "total": result["total"],
