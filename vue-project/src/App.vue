@@ -199,7 +199,7 @@
             </svg>
             <span>消息推送</span>
           </router-link>
-          <router-link v-if="canAccessDbManager" to="/admin/inbox-emails" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="canAccessInboxEmails" to="/admin/inbox-emails" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 12h-6l-2 3h-4l-2-3H2" />
               <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
@@ -345,13 +345,6 @@
             </div>
           </div>
         </header>
-
-        <!-- 原考勤系统入口（临时显眼条） -->
-        <div class="legacy-bar">
-          <span class="legacy-bar-text">访问原考勤系统「230」请点击</span>
-          <a href="http://10.42.60.223" target="_blank" rel="noopener noreferrer" class="legacy-bar-btn">原考勤系统入口</a>
-          <span class="legacy-bar-note">新老系统交替期，原「230」系统仍可使用</span>
-        </div>
 
         <main class="app-main">
           <router-view />
@@ -863,6 +856,12 @@ const canSeeLeaderDashboard = computed(() => {
 
 // 是否显示数据库表管理入口（仅 webconfig.admin1 系统管理员）
 const canAccessDbManager = ref(false)
+
+const canAccessInboxEmails = computed(() => {
+  if (canAccessDbManager.value) return true
+  const jb = (currentUser.value?.jb || '').trim()
+  return isMinisterOrDeptLeader(jb)
+})
 
 // 是否显示打卡数据上传（webconfig.dakaman 或 系统管理员 admin1）
 const canShowUpload = computed(() => {
@@ -2039,36 +2038,4 @@ a.user-menu__item {
   padding: 8px 28px;
 }
 
-/* 原考勤系统入口条（主页面临时显眼条） */
-.legacy-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 8px 16px;
-  background: linear-gradient(90deg, var(--color-legacy-bar-start) 0%, var(--color-legacy-bar-end) 100%);
-  color: var(--color-legacy-bar-text);
-  font-size: 14px;
-  flex-wrap: wrap;
-}
-.legacy-bar-text {
-  font-weight: 700;
-}
-.legacy-bar-btn {
-  display: inline-flex;
-  align-items: center;
-  padding: 6px 16px;
-  background: var(--color-legacy-bar-btn-bg);
-  color: var(--color-legacy-bar-btn-text);
-  font-weight: 700;
-  text-decoration: none;
-  border-radius: 8px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.2);
-}
-.legacy-bar-btn:hover {
-  background: var(--color-legacy-bar-btn-hover);
-}
-.legacy-bar-note {
-  font-size: 12px;
-  color: var(--color-legacy-bar-note);
-}
 </style>

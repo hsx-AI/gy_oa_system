@@ -292,6 +292,7 @@ import {
   analyzeInboxEmails,
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
+import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
 
 const router = useRouter()
 
@@ -592,10 +593,20 @@ onMounted(async () => {
   }
   currentUserName.value = name
   try {
+    let jb = ''
+    try {
+      const u = JSON.parse(localStorage.getItem('userInfo') || '{}')
+      jb = (u.jb || '').trim()
+    } catch {}
     const res = await getDbManagerPermission({ current_user: name })
-    canAccess.value = !!(res && res.canAccess)
+    canAccess.value = !!(res && res.canAccess) || isMinisterOrDeptLeader(jb)
   } catch {
-    canAccess.value = false
+    let jb = ''
+    try {
+      const u = JSON.parse(localStorage.getItem('userInfo') || '{}')
+      jb = (u.jb || '').trim()
+    } catch {}
+    canAccess.value = isMinisterOrDeptLeader(jb)
   }
   if (!canAccess.value) return
   await loadConfig()

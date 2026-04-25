@@ -82,6 +82,82 @@
       </div>
     </section>
 
+    <section v-if="canAccessInboxBoard" class="home-ai-task-section">
+      <article class="dashboard-card ai-task-card">
+        <header class="dashboard-card__header ai-task-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--ai" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83"/>
+                <circle cx="12" cy="12" r="4"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">AI 待办任务看板</span>
+            <span class="dashboard-card__badge">{{ inboxTaskStats.taskCount }}</span>
+          </h2>
+          <div class="ai-task-actions">
+            <span class="ai-task-stat">待分析 {{ inboxTaskStats.pending }}</span>
+            <span class="ai-task-stat" :class="{ 'ai-task-stat--warn': inboxTaskStats.failed > 0 }">失败 {{ inboxTaskStats.failed }}</span>
+            <button type="button" class="ai-task-icon-btn" :disabled="inboxTaskLoading" title="刷新" @click="loadInboxTasks">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <button type="button" class="ai-task-analyze-btn" :disabled="inboxAnalyzing" @click="manualAnalyzeInboxTasks">
+              {{ inboxAnalyzing ? '分析中...' : '立即分析' }}
+            </button>
+          </div>
+        </header>
+
+        <div v-if="inboxTaskMsg" class="ai-task-toast" :class="inboxTaskMsgType">{{ inboxTaskMsg }}</div>
+
+        <div class="ai-task-body">
+          <div v-if="!inboxTasks.length && !inboxTaskLoading" class="dashboard-empty">
+            <p>暂无识别出的邮件待办任务</p>
+          </div>
+          <div v-else-if="inboxTaskLoading" class="dashboard-empty">
+            <p>加载中...</p>
+          </div>
+          <div
+            v-else
+            ref="inboxTaskBoardRef"
+            class="ai-task-marquee"
+            @mouseenter="inboxTaskMarqueePaused = true"
+            @mouseleave="inboxTaskMarqueePaused = false"
+            @wheel="onInboxTaskWheel"
+          >
+            <div class="ai-task-track" :class="{ paused: inboxTaskMarqueePaused, 'no-anim': inboxTasks.length <= 2 }">
+              <button
+                v-for="(task, idx) in inboxDisplayTasks"
+                :key="`${task.id}-${idx}`"
+                type="button"
+                class="ai-mail-task"
+                @click="openInboxTask(task.id)"
+              >
+                <span class="ai-mail-task__top">
+                  <span class="ai-mail-task__deadline" :class="deadlineClass(task.taskDeadline)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="10" />
+                      <polyline points="12 6 12 12 16 14" />
+                    </svg>
+                    {{ task.taskDeadline || '未指定截止时间' }}
+                  </span>
+                  <span class="ai-mail-task__from" :title="task.from">{{ shortFrom(task.from) }}</span>
+                </span>
+                <span class="ai-mail-task__summary" :title="task.taskSummary">{{ task.taskSummary }}</span>
+                <span class="ai-mail-task__sub">
+                  <span :title="task.subject">{{ task.subject || '（无主题）' }}</span>
+                  <span>{{ task.emailDate || task.receivedAt }}</span>
+                </span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <!-- 重要信息审阅（仅部长可见） -->
     <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
       <article class="dashboard-card dashboard-card--briefing">
@@ -163,31 +239,64 @@
       </div>
     </div>
 
-    <!-- 功能导航卡片 -->
-    <div class="container">
-      <div v-for="group in featureGroups" :key="group.title" class="feature-group mt-xl">
-        <h2 class="section-title mb-lg">{{ group.title }}</h2>
-        <div class="features-grid">
-          <div
-            v-for="feature in group.items"
-            :key="feature.id"
-            class="feature-card card"
-            @click="navigateTo(feature)"
+    <!-- 功能快捷入口：分类文件夹 -->
+    <div class="container shortcuts-container">
+      <section class="shortcuts-section">
+        <header class="shortcuts-header">
+          <h2 class="section-title">快捷入口</h2>
+          <span class="shortcuts-count">{{ visibleFeatureCount }} 项功能</span>
+        </header>
+        <div class="shortcut-folders">
+          <button
+            v-for="group in featureGroups"
+            :key="group.title"
+            type="button"
+            class="shortcut-folder"
+            @click="openShortcutGroup(group)"
           >
-            <div class="feature-icon" :style="{ background: feature.color }">
+            <span class="shortcut-folder__icon" :style="{ background: folderAccent(group) }">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
+              </svg>
+            </span>
+            <span class="shortcut-folder__body">
+              <strong>{{ group.title }}</strong>
+              <small>{{ group.items.length }} 项</small>
+            </span>
+            <span class="shortcut-folder__arrow">→</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
+    <div v-if="selectedShortcutGroup" class="modal-overlay" @click.self="closeShortcutGroup">
+      <div class="shortcut-modal">
+        <div class="shortcut-modal__header">
+          <div>
+            <h2>{{ selectedShortcutGroup.title }}</h2>
+            <p>{{ selectedShortcutGroup.items.length }} 项可用功能</p>
+          </div>
+          <button type="button" class="shortcut-modal__close" aria-label="关闭" @click="closeShortcutGroup">&times;</button>
+        </div>
+        <div class="shortcut-modal__grid">
+          <button
+            v-for="feature in selectedShortcutGroup.items"
+            :key="feature.id"
+            type="button"
+            class="shortcut-app"
+            @click="navigateFromShortcut(feature)"
+          >
+            <span class="shortcut-app__icon" :style="{ background: feature.color }">
               <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path :d="feature.iconPath" />
               </svg>
-            </div>
-            <div class="feature-content">
-              <h3 class="feature-title">{{ feature.title }}</h3>
-              <p class="feature-desc">{{ feature.description }}</p>
-              <div class="feature-footer">
-                <span class="feature-tag" v-if="feature.tag">{{ feature.tag }}</span>
-                <span class="feature-arrow">→</span>
-              </div>
-            </div>
-          </div>
+            </span>
+            <span class="shortcut-app__text">
+              <strong>{{ feature.title }}</strong>
+              <small>{{ feature.description }}</small>
+            </span>
+            <span v-if="feature.tag" class="shortcut-app__tag">{{ feature.tag }}</span>
+          </button>
         </div>
       </div>
     </div>
@@ -205,6 +314,7 @@ import {
 } from '@/api/attendance'
 import { getLeaderBriefing } from '@/api/admin'
 import { getDbManagerPermission } from '@/api/dbManager'
+import { analyzeInboxEmails, listInboxTasks } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
@@ -223,6 +333,21 @@ const admin2 = ref('')
 const admin1 = ref('')
 const personnelArchiveUrl = ref('')
 const canAccessDbManager = ref(false)
+const canAccessInboxBoard = computed(() => {
+  if (canAccessDbManager.value) return true
+  const jb = (userJb.value || '').trim()
+  return isMinisterOrDeptLeader(jb)
+})
+const selectedShortcutGroup = ref(null)
+const inboxTasks = ref([])
+const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
+const inboxTaskLoading = ref(false)
+const inboxAnalyzing = ref(false)
+const inboxTaskMsg = ref('')
+const inboxTaskMsgType = ref('')
+const inboxTaskBoardRef = ref(null)
+const inboxTaskMarqueePaused = ref(false)
+let inboxTaskRefreshTimer = null
 
 const isBuzhang = ref(false)
 const briefingItems = ref([])
@@ -241,6 +366,16 @@ const briefingFilterOptions = [
 let marqueeTimer = null
 let marqueeOffset = 0
 let marqueePaused = false
+
+const inboxLoopedTasks = computed(() => {
+  const arr = inboxTasks.value || []
+  return arr.length <= 1 ? arr : arr.concat(arr)
+})
+
+const inboxDisplayTasks = computed(() => {
+  const arr = inboxTasks.value || []
+  return arr.length <= 2 ? arr : inboxLoopedTasks.value
+})
 
 function startMarquee() {
   stopMarquee()
@@ -518,6 +653,14 @@ const rawFeatureGroups = [
         iconPath: 'M12 14l9-5-9-5-9 5 9 5zM12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z'
       },
       {
+        id: 'old-230',
+        title: '老230系统',
+        description: '打开历史考勤系统入口（10.42.60.223）',
+        color: 'linear-gradient(135deg, #fb7185 0%, #f43f5e 100%)',
+        tag: '外链',
+        iconPath: 'M12 14l9-5-9-5-9 5 9 5zM12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z'
+      },
+      {
         id: 'filenumbering',
         title: '文件编号管理',
         description: '技术文件与管理文件编号、查询',
@@ -604,6 +747,10 @@ const featureGroups = computed(() => {
     .filter(group => group.items.length > 0)
 })
 
+const visibleFeatureCount = computed(() => {
+  return featureGroups.value.reduce((sum, group) => sum + group.items.length, 0)
+})
+
 // 我的申请（真实数据）
 const requestList = ref([])
 const requestLoading = ref(false)
@@ -620,6 +767,88 @@ function getStoredUserInfo() {
 const userInfo = getStoredUserInfo()
 // 首页挂载时再读一次，避免登录后 userName 未更新
 const userName = ref(userInfo.name || userInfo.userName || '')
+
+async function loadInboxTasks() {
+  const name = (userName.value || '').trim()
+  if (!name || inboxTaskLoading.value) return
+  inboxTaskLoading.value = true
+  try {
+    const res = await listInboxTasks({ current_user: name, limit: 50 })
+    if (res && res.success) {
+      inboxTasks.value = res.items || []
+      inboxTaskStats.value = res.stats || { pending: 0, failed: 0, taskCount: 0, total: 0 }
+    } else {
+      inboxTasks.value = []
+    }
+  } catch (e) {
+    console.warn('加载AI邮件待办失败', e)
+    inboxTasks.value = []
+  } finally {
+    inboxTaskLoading.value = false
+  }
+}
+
+async function manualAnalyzeInboxTasks() {
+  const name = (userName.value || '').trim()
+  if (!name || inboxAnalyzing.value) return
+  inboxAnalyzing.value = true
+  inboxTaskMsg.value = '正在调用本地大模型抽取任务，请稍候...'
+  inboxTaskMsgType.value = 'info'
+  try {
+    const res = await analyzeInboxEmails({ current_user: name, limit: 10 })
+    if (res && res.success) {
+      inboxTaskMsg.value = res.message || '分析完成'
+      inboxTaskMsgType.value = 'success'
+      await loadInboxTasks()
+    } else {
+      inboxTaskMsg.value = (res && res.message) || '分析失败'
+      inboxTaskMsgType.value = 'error'
+    }
+  } catch (e) {
+    inboxTaskMsg.value = e?.message || '分析失败'
+    inboxTaskMsgType.value = 'error'
+  } finally {
+    inboxAnalyzing.value = false
+    setTimeout(() => { inboxTaskMsg.value = '' }, 6000)
+  }
+}
+
+function shortFrom(from) {
+  if (!from) return '-'
+  const text = String(from)
+  const m = text.match(/^(.*?)\s*<([^>]+)>$/)
+  if (m) {
+    const name = (m[1] || '').trim()
+    return name || m[2]
+  }
+  return text.length > 20 ? `${text.slice(0, 20)}...` : text
+}
+
+function deadlineClass(deadline) {
+  if (!deadline) return 'none'
+  const d = new Date(String(deadline).replace(/\//g, '-').replace(/-(\d)(?!\d)/g, '-0$1'))
+  if (Number.isNaN(d.getTime())) return 'neutral'
+  const diffDays = (d.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+  if (diffDays < 0) return 'overdue'
+  if (diffDays <= 2) return 'urgent'
+  if (diffDays <= 7) return 'soon'
+  return 'neutral'
+}
+
+function onInboxTaskWheel(e) {
+  const el = inboxTaskBoardRef.value
+  if (!el) return
+  const deltaY = Number(e?.deltaY || 0)
+  if (!deltaY) return
+  const maxScroll = el.scrollHeight - el.clientHeight
+  if (maxScroll <= 0) return
+  e.preventDefault()
+  el.scrollTop += deltaY
+}
+
+function openInboxTask() {
+  router.push('/admin/inbox-emails')
+}
 
 function goMyApplications() {
   router.push('/attendance/my-applications')
@@ -732,7 +961,13 @@ async function fetchRequestList() {
   }
 }
 
-onBeforeUnmount(() => { stopMarquee() })
+onBeforeUnmount(() => {
+  stopMarquee()
+  if (inboxTaskRefreshTimer) {
+    clearInterval(inboxTaskRefreshTimer)
+    inboxTaskRefreshTimer = null
+  }
+})
 
 onMounted(() => {
   const info = getStoredUserInfo()
@@ -756,9 +991,30 @@ onMounted(() => {
   if (name) {
     getDbManagerPermission({ current_user: name }).then(res => {
       canAccessDbManager.value = !!(res && res.canAccess)
-    }).catch(() => { canAccessDbManager.value = false })
+      if (canAccessInboxBoard.value) {
+        loadInboxTasks()
+        inboxTaskRefreshTimer = setInterval(loadInboxTasks, 60000)
+      }
+  }).catch(() => { canAccessDbManager.value = false })
   }
 })
+
+function folderAccent(group) {
+  return group?.items?.[0]?.color || 'linear-gradient(135deg, #4f46e5 0%, #0891b2 100%)'
+}
+
+function openShortcutGroup(group) {
+  selectedShortcutGroup.value = group
+}
+
+function closeShortcutGroup() {
+  selectedShortcutGroup.value = null
+}
+
+async function navigateFromShortcut(feature) {
+  closeShortcutGroup()
+  await navigateTo(feature)
+}
 
 async function navigateTo(feature) {
   if (!feature) return
@@ -788,6 +1044,10 @@ async function navigateTo(feature) {
       const msg = e?.response?.data?.detail || e?.message || '跳转失败'
       alert(typeof msg === 'string' ? msg : (Array.isArray(msg) ? msg.join(' ') : '跳转失败'))
     }
+    return
+  }
+  if (feature.id === 'old-230') {
+    window.open('http://10.42.60.223', '_blank', 'noopener,noreferrer')
     return
   }
   if (!feature.path) return
@@ -1094,99 +1354,238 @@ async function navigateTo(feature) {
   margin: 0;
 }
 
-/* 功能卡片图标尺寸 */
-.feature-icon svg {
-  width: 100%;
-  height: 100%;
-  max-width: 24px;
-  max-height: 24px;
-  display: block;
+/* 快捷入口文件夹 */
+.shortcuts-container {
+  margin-top: var(--spacing-xl);
 }
 
-/* 功能卡片 */
-.features-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(360px, 1fr));
-  gap: var(--spacing-xl);
-  margin-top: var(--spacing-md);
-}
-
-.feature-card {
-  padding: var(--spacing-xl);
-  cursor: pointer;
-  transition: all var(--transition-base) var(--transition-ease);
+.shortcuts-section {
+  padding: var(--spacing-lg);
+  background: #fff;
   border: 1px solid var(--color-border-lighter);
-  display: flex;
-  gap: var(--spacing-base);
-}
-
-.feature-card:hover {
-  transform: translateY(-4px);
-  box-shadow: var(--shadow-elevated);
-  border-color: var(--color-primary-lightest);
-}
-
-.feature-icon {
-  width: 56px;
-  height: 56px;
   border-radius: var(--radius-md);
+  box-shadow: var(--shadow-sm);
+}
+
+.shortcuts-header {
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.shortcuts-count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
+}
+
+.shortcut-folders {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-md);
+}
+
+.shortcut-folder {
+  min-width: 0;
+  min-height: 74px;
+  padding: var(--spacing-md);
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  text-align: left;
+  background: #f8fafc;
+  border: 1px solid var(--color-border-lighter);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform var(--transition-base) var(--transition-ease), box-shadow var(--transition-base) var(--transition-ease), border-color var(--transition-base) var(--transition-ease);
+}
+
+.shortcut-folder:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary-light);
+  box-shadow: var(--shadow-md);
+  background: #fff;
+}
+
+.shortcut-folder__icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
   justify-content: center;
+  color: #fff;
   flex-shrink: 0;
 }
 
-.feature-icon .icon {
-  width: 28px;
-  height: 28px;
-  color: white;
+.shortcut-folder__icon svg {
+  width: 23px;
+  height: 23px;
 }
 
-.feature-content {
+.shortcut-folder__body {
+  min-width: 0;
   flex: 1;
   display: flex;
   flex-direction: column;
+  gap: 4px;
 }
 
-.feature-title {
-  font-size: var(--font-size-lg);
-  font-weight: var(--font-weight-semibold);
+.shortcut-folder__body strong {
+  overflow: hidden;
   color: var(--color-text-primary);
-  margin-bottom: var(--spacing-sm);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.feature-desc {
-  font-size: var(--font-size-sm);
-  color: var(--color-text-secondary);
-  line-height: 1.6;
-  margin-bottom: var(--spacing-base);
-  flex: 1;
-}
-
-.feature-footer {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.feature-tag {
+.shortcut-folder__body small {
+  color: var(--color-text-tertiary);
   font-size: var(--font-size-xs);
-  padding: 2px var(--spacing-sm);
-  background: var(--color-primary-lightest);
-  color: var(--color-primary);
-  border-radius: var(--radius-sm);
-  font-weight: var(--font-weight-medium);
 }
 
-.feature-arrow {
+.shortcut-folder__arrow {
+  flex-shrink: 0;
   color: var(--color-text-tertiary);
   font-size: var(--font-size-lg);
-  transition: transform var(--transition-base) var(--transition-ease);
 }
 
-.feature-card:hover .feature-arrow {
-  transform: translateX(4px);
+.shortcut-modal {
+  width: min(900px, calc(100vw - 32px));
+  max-height: min(760px, calc(100vh - 56px));
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: var(--shadow-elevated);
+  overflow: hidden;
+}
+
+.shortcut-modal__header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  padding: var(--spacing-lg) var(--spacing-xl);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+
+.shortcut-modal__header h2 {
+  margin: 0 0 4px;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-semibold);
+}
+
+.shortcut-modal__header p {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+
+.shortcut-modal__close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--color-text-tertiary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.shortcut-modal__close:hover {
+  background: var(--color-bg-layout);
+  color: var(--color-text-primary);
+}
+
+.shortcut-modal__grid {
+  padding: var(--spacing-lg);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: var(--spacing-md);
+  overflow-y: auto;
+}
+
+.shortcut-app {
+  position: relative;
+  min-width: 0;
+  min-height: 112px;
+  padding: var(--spacing-md);
+  display: flex;
+  align-items: flex-start;
+  gap: var(--spacing-md);
+  text-align: left;
+  background: #fff;
+  border: 1px solid var(--color-border-lighter);
+  border-radius: 8px;
+  cursor: pointer;
+  transition: transform var(--transition-base) var(--transition-ease), box-shadow var(--transition-base) var(--transition-ease), border-color var(--transition-base) var(--transition-ease);
+}
+
+.shortcut-app:hover {
+  transform: translateY(-2px);
+  border-color: var(--color-primary-light);
+  box-shadow: var(--shadow-md);
+}
+
+.shortcut-app__icon {
+  width: 40px;
+  height: 40px;
+  border-radius: 9px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  flex-shrink: 0;
+}
+
+.shortcut-app__icon svg {
+  width: 22px;
+  height: 22px;
+}
+
+.shortcut-app__text {
+  min-width: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.shortcut-app__text strong {
+  color: var(--color-text-primary);
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  line-height: 1.25;
+}
+
+.shortcut-app__text small {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.shortcut-app__tag {
+  position: absolute;
+  right: 10px;
+  bottom: 8px;
+  padding: 2px 7px;
   color: var(--color-primary);
+  background: var(--color-primary-lightest);
+  border-radius: var(--radius-sm);
+  font-size: 11px;
+  font-weight: var(--font-weight-medium);
 }
 
 .section-title {
@@ -1216,9 +1615,246 @@ async function navigateTo(feature) {
     grid-template-columns: 1fr;
   }
   
-  .features-grid {
-    grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  .shortcut-folders {
+    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   }
+}
+
+.home-ai-task-section {
+  margin-bottom: var(--spacing-xxl);
+}
+
+.ai-task-card {
+  background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%);
+  border-color: #dbeafe;
+}
+
+.dashboard-card__icon--ai {
+  background: linear-gradient(135deg, #4f46e5 0%, #0891b2 100%);
+}
+
+.ai-task-card__header {
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
+.ai-task-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.ai-task-stat {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  white-space: nowrap;
+}
+
+.ai-task-stat--warn {
+  color: #dc2626;
+  font-weight: 600;
+}
+
+.ai-task-icon-btn,
+.ai-task-analyze-btn {
+  height: 30px;
+  border: 1px solid #c7d2fe;
+  background: #fff;
+  color: #3730a3;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.ai-task-icon-btn {
+  width: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.ai-task-icon-btn svg {
+  width: 16px;
+  height: 16px;
+}
+
+.ai-task-analyze-btn {
+  padding: 0 12px;
+  font-size: var(--font-size-sm);
+}
+
+.ai-task-icon-btn:hover,
+.ai-task-analyze-btn:hover {
+  background: #eef2ff;
+}
+
+.ai-task-icon-btn:disabled,
+.ai-task-analyze-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.65;
+}
+
+.ai-task-toast {
+  margin: var(--spacing-md) var(--spacing-xl) 0;
+  padding: 7px 12px;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+
+.ai-task-toast.info {
+  background: #e0e7ff;
+  color: #3730a3;
+}
+
+.ai-task-toast.success {
+  background: #dcfce7;
+  color: #166534;
+}
+
+.ai-task-toast.error {
+  background: #fee2e2;
+  color: #991b1b;
+}
+
+.ai-task-body {
+  padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+}
+
+.ai-task-marquee {
+  max-height: 300px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.ai-task-track {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  animation: inbox-task-scroll 40s linear infinite;
+  will-change: transform;
+}
+
+.ai-task-track.paused {
+  animation-play-state: paused;
+}
+
+.ai-task-track.no-anim {
+  animation: none;
+}
+
+@keyframes inbox-task-scroll {
+  0% { transform: translateY(0); }
+  100% { transform: translateY(-50%); }
+}
+
+.ai-mail-task {
+  width: 100%;
+  min-width: 0;
+  padding: 10px 14px;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid #dbeafe;
+  border-left: 4px solid #4f46e5;
+  border-radius: 8px;
+  box-shadow: 0 2px 8px rgba(79, 70, 229, 0.08);
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s;
+}
+
+.ai-mail-task:hover {
+  transform: translateX(2px);
+  box-shadow: 0 6px 18px rgba(79, 70, 229, 0.15);
+}
+
+.ai-mail-task__top,
+.ai-mail-task__sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-width: 0;
+}
+
+.ai-mail-task__deadline {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 60%;
+  padding: 2px 10px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #3730a3;
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.ai-mail-task__deadline svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+}
+
+.ai-mail-task__deadline.none {
+  background: #f3f4f6;
+  color: #6b7280;
+}
+
+.ai-mail-task__deadline.overdue {
+  background: #fee2e2;
+  color: #b91c1c;
+}
+
+.ai-mail-task__deadline.urgent {
+  background: #ffedd5;
+  color: #c2410c;
+}
+
+.ai-mail-task__deadline.soon {
+  background: #fef9c3;
+  color: #854d0e;
+}
+
+.ai-mail-task__from {
+  min-width: 0;
+  max-width: 220px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+}
+
+.ai-mail-task__summary {
+  display: -webkit-box;
+  margin: 7px 0 4px;
+  overflow: hidden;
+  color: var(--color-text-primary);
+  font-size: 0.95rem;
+  line-height: 1.45;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+}
+
+.ai-mail-task__sub {
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.ai-mail-task__sub span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ai-mail-task__sub span:last-child {
+  flex-shrink: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
 /* 重要信息审阅 - 滚动播放窗口 */
@@ -1532,12 +2168,50 @@ async function navigateTo(feature) {
     padding-right: var(--spacing-lg);
   }
   
-  .features-grid {
+  .shortcuts-container {
+    padding: 0 var(--spacing-md);
+  }
+
+  .shortcuts-section {
+    padding: var(--spacing-md);
+  }
+
+  .shortcut-folders,
+  .shortcut-modal__grid {
     grid-template-columns: 1fr;
+  }
+
+  .shortcut-modal {
+    width: calc(100vw - 24px);
+    max-height: calc(100vh - 40px);
   }
 
   .briefing-section {
     padding: 0 var(--spacing-md);
+  }
+
+  .home-ai-task-section {
+    padding: 0 var(--spacing-md);
+  }
+
+  .ai-task-card__header {
+    gap: var(--spacing-sm);
+  }
+
+  .ai-task-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .ai-task-body,
+  .ai-task-toast {
+    margin-left: var(--spacing-lg);
+    margin-right: var(--spacing-lg);
+  }
+
+  .ai-task-body {
+    padding-left: var(--spacing-lg);
+    padding-right: var(--spacing-lg);
   }
 }
 </style>

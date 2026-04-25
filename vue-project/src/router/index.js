@@ -441,7 +441,25 @@ router.beforeEach(async (to, _from, next) => {
     } catch { next('/') }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification' || to.path === '/admin/inbox-emails') {
+  if (to.path === '/admin/inbox-emails') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) { next('/login'); return }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const jb = (user.jb || '').trim()
+      if (!name) { next('/'); return }
+      const res = await getDbManagerPermission({ current_user: name })
+      const canDbAdmin = !!(res && res.canAccess)
+      const canLeader = isMinisterOrDeptLeader(jb)
+      if (canDbAdmin || canLeader) next()
+      else next('/')
+    } catch {
+      next('/')
+    }
+    return
+  }
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

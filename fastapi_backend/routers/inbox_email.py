@@ -142,6 +142,37 @@ def _require_admin(current_user: str):
         raise HTTPException(status_code=403, detail="仅系统管理员（webconfig.admin1）可操作")
 
 
+def _has_inbox_role(current_user: str) -> bool:
+    """
+    共用邮箱权限：
+    - 系统管理员（admin1）
+    - yggl.jb 为 经理/副经理/主任/副主任/组长（含前缀）
+    """
+    name = (current_user or "").strip()
+    if not name:
+        return False
+    admin1 = _get_admin1()
+    if admin1 and name == admin1:
+        return True
+    try:
+        rows = db.execute_query(
+            "SELECT jb FROM yggl WHERE TRIM(name) = %s LIMIT 1",
+            (name,),
+        ) or []
+        jb = (rows[0].get("jb") or "").strip() if rows else ""
+        if not jb:
+            return False
+        allowed_prefixes = ("经理", "副经理", "主任", "副主任", "组长")
+        return any(jb.startswith(p) for p in allowed_prefixes)
+    except Exception:
+        return False
+
+
+def _require_inbox_access(current_user: str):
+    if not _has_inbox_role(current_user):
+        raise HTTPException(status_code=403, detail="仅系统管理员、经理/副经理、主任/副主任、组长可操作")
+
+
 def _get_inbox_config(current_user: str) -> dict:
     _ensure_yggl_email_columns()
     name = (current_user or "").strip()
@@ -730,7 +761,7 @@ class InboxConfigRequest(BaseModel):
 @router.get("/config")
 async def get_inbox_config(current_user: str = Query(...)):
     """获取共用邮箱配置（脱敏）"""
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
     cfg = _get_inbox_config(current_user)
     masked_addr = cfg["address"]
     ac = cfg["auth_code"]
@@ -749,7 +780,7 @@ async def get_inbox_config(current_user: str = Query(...)):
 @router.post("/config")
 async def update_inbox_config(req: InboxConfigRequest):
     """更新共用邮箱配置"""
-    _require_admin(req.current_user)
+    _require_inbox_access(req.current_user)
     _ensure_yggl_email_columns()
     affected = db.execute_update(
         "UPDATE yggl SET enterprise_email = %s, email_auth_code = %s WHERE name = %s",
@@ -768,7 +799,7 @@ async def list_inbox_emails(
     keyword: Optional[str] = Query(None, description="模糊搜索主题/发件人/正文"),
 ):
     """分页列出共用邮箱收到的邮件"""
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
 
     where = []
     params: list = []
@@ -832,7 +863,7 @@ async def inbox_email_detail(
     id: int = Query(..., ge=1),
 ):
     """获取单封邮件详情（含全部正文）"""
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
     rows = db.execute_query(
         """
         SELECT id, message_id, subject, from_addr, to_addrs, cc_addrs,
@@ -870,7 +901,7 @@ async def list_inbox_tasks(
     列出已被大模型识别为“含任务”的邮件，按截止时间优先、其次按发件时间排序。
     用于前端看板滚动展示。
     """
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
     _ensure_inbox_task_columns()
 
     # 按：有截止时间的 && 未过期的优先；其次按截止时间升序；然后按发件时间倒序
@@ -935,7 +966,7 @@ async def analyze_inbox_emails(
     limit: int = Query(ANALYZE_BATCH_SIZE, ge=1, le=50),
 ):
     """手动触发大模型任务抽取。"""
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
     loop = asyncio.get_event_loop()
 
     if id is not None:
@@ -986,7 +1017,7 @@ async def analyze_inbox_emails(
 @router.post("/sync")
 async def manual_sync(current_user: str = Query(...)):
     """手动触发一次邮件同步"""
-    _require_admin(current_user)
+    _require_inbox_access(current_user)
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, current_user)
     if result.get("error"):
