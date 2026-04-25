@@ -77,6 +77,8 @@
               <tr>
                 <th>姓名</th>
                 <th>工号</th>
+                <th>企业邮箱</th>
+                <th>邮箱授权码</th>
                 <th>科室</th>
                 <th>级别</th>
                 <th>在职状态</th>
@@ -87,6 +89,49 @@
               <tr v-for="row in list" :key="row.name">
                 <td>{{ row.name }}</td>
                 <td>{{ row.gh }}</td>
+                <td>
+                  <input
+                    v-model="row.enterpriseEmail"
+                    class="form-input inline-input email-input"
+                    type="text"
+                    placeholder="企业邮箱"
+                    :disabled="emailSaving === row.name"
+                    @keydown.enter="saveEmployeeEmail(row)"
+                    @blur="saveEmployeeEmail(row)"
+                  />
+                </td>
+                <td>
+                  <div class="auth-code-cell">
+                    <span class="auth-status" :class="{ configured: row.emailAuthCodeConfigured }">
+                      {{ row.emailAuthCodeConfigured ? '已配置' : '未配置' }}
+                    </span>
+                    <input
+                      v-model="row.emailAuthCodeInput"
+                      class="form-input inline-input auth-input"
+                      type="password"
+                      placeholder="输入新授权码"
+                      :disabled="emailSaving === row.name"
+                      @keydown.enter="saveEmployeeEmail(row)"
+                    />
+                    <button
+                      type="button"
+                      class="btn btn-sm btn-primary-outline"
+                      :disabled="emailSaving === row.name"
+                      @click="saveEmployeeEmail(row)"
+                    >
+                      保存
+                    </button>
+                    <button
+                      v-if="row.emailAuthCodeConfigured"
+                      type="button"
+                      class="btn btn-sm btn-danger-outline"
+                      :disabled="emailSaving === row.name"
+                      @click="clearEmployeeAuthCode(row)"
+                    >
+                      清空
+                    </button>
+                  </div>
+                </td>
                 <td>
                   <template v-if="isDeptOnly">{{ row.lsys }}</template>
                   <select
@@ -242,6 +287,26 @@
                 />
               </div>
             </div>
+            <div class="form-row">
+              <div class="form-item">
+                <label class="form-label">企业邮箱</label>
+                <input
+                  v-model="addForm.enterprise_email"
+                  type="email"
+                  class="form-input"
+                  placeholder="如 name@company.com"
+                />
+              </div>
+              <div class="form-item">
+                <label class="form-label">邮箱授权码</label>
+                <input
+                  v-model="addForm.email_auth_code"
+                  type="password"
+                  class="form-input"
+                  placeholder="IMAP 授权码（非邮箱密码）"
+                />
+              </div>
+            </div>
             <p class="modal-hint">新员工将写入 YGGL 主表，可凭姓名与初始密码登录系统。</p>
           </form>
           <div class="modal-footer">
@@ -259,7 +324,7 @@
 
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
-import { getAdminEmployees, setEmployeeStatus, getAdminDeptList, exportEmployeesExcel, addEmployee, updateEmployeeDeptLevel } from '@/api/attendance'
+import { getAdminEmployees, setEmployeeStatus, getAdminDeptList, exportEmployeesExcel, addEmployee, updateEmployeeDeptLevel, updateEmployeeEmail } from '@/api/attendance'
 
 const currentUserName = ref('')
 const deptList = ref([])
@@ -277,7 +342,9 @@ const addForm = reactive({
   lsys: '',
   jb: '',
   xbie: '',
-  password: ''
+  password: '',
+  enterprise_email: '',
+  email_auth_code: ''
 })
 
 const filters = reactive({
@@ -291,6 +358,7 @@ const pageSize = 50
 /** 级别下拉选项（与添丁弹窗一致） */
 const jbOptions = ['员工', '组长', '班组长', '主任', '副主任', '副部长', '部长', '经理', '副经理', '经理助理', '返聘', '副总专业师', '总专业师', '责任师', '主任责', '专员']
 const updateDeptLevelLoading = ref('') // 正在保存的员工 name
+const emailSaving = ref('')
 
 function getCurrentUser() {
   try {
@@ -340,7 +408,11 @@ async function loadList() {
       page_size: pageSize
     })
     if (res?.success) {
-      list.value = res.list || []
+      list.value = (res.list || []).map(row => ({
+        ...row,
+        emailAuthCodeInput: '',
+        _enterpriseEmailSaved: row.enterpriseEmail || ''
+      }))
       total.value = res.total ?? 0
     } else {
       list.value = []
@@ -426,6 +498,66 @@ async function onDeptLevelChange(row, field) {
   }
 }
 
+async function saveEmployeeEmail(row) {
+  const name = getCurrentUser()
+  if (!name || !row?.name || emailSaving.value === row.name) return
+  const email = (row.enterpriseEmail || '').trim()
+  const authCode = (row.emailAuthCodeInput || '').trim()
+  if (email === (row._enterpriseEmailSaved || '') && !authCode) return
+  emailSaving.value = row.name
+  try {
+    const res = await updateEmployeeEmail({
+      current_user: name,
+      name: row.name,
+      enterprise_email: email,
+      email_auth_code: authCode || undefined
+    })
+    if (res?.success) {
+      row.enterpriseEmail = res.enterpriseEmail || ''
+      row._enterpriseEmailSaved = row.enterpriseEmail
+      row.emailAuthCodeConfigured = !!res.emailAuthCodeConfigured
+      row.emailAuthCodeInput = ''
+    } else {
+      alert(res?.message || '邮箱配置保存失败')
+      await loadList()
+    }
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '邮箱配置保存失败')
+    await loadList()
+  } finally {
+    emailSaving.value = ''
+  }
+}
+
+async function clearEmployeeAuthCode(row) {
+  const name = getCurrentUser()
+  if (!name || !row?.name || emailSaving.value === row.name) return
+  if (!confirm(`确认清空「${row.name}」的邮箱授权码？`)) return
+  emailSaving.value = row.name
+  try {
+    const res = await updateEmployeeEmail({
+      current_user: name,
+      name: row.name,
+      enterprise_email: (row.enterpriseEmail || '').trim(),
+      clear_email_auth_code: true
+    })
+    if (res?.success) {
+      row.enterpriseEmail = res.enterpriseEmail || ''
+      row._enterpriseEmailSaved = row.enterpriseEmail
+      row.emailAuthCodeConfigured = false
+      row.emailAuthCodeInput = ''
+    } else {
+      alert(res?.message || '清空失败')
+      await loadList()
+    }
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '清空失败')
+    await loadList()
+  } finally {
+    emailSaving.value = ''
+  }
+}
+
 function formatExportFilename() {
   const now = new Date()
   const y = now.getFullYear()
@@ -477,6 +609,8 @@ function openAddModal() {
   addForm.jb = ''
   addForm.xbie = ''
   addForm.password = ''
+  addForm.enterprise_email = ''
+  addForm.email_auth_code = ''
   showAddModal.value = true
 }
 
@@ -512,7 +646,9 @@ async function submitAdd() {
       lsys: (addForm.lsys || '').trim(),
       jb: (addForm.jb || '').trim(),
       xbie: (addForm.xbie || '').trim(),
-      password: (addForm.password || '').trim()
+      password: (addForm.password || '').trim(),
+      enterprise_email: (addForm.enterprise_email || '').trim(),
+      email_auth_code: (addForm.email_auth_code || '').trim()
     })
     if (res?.success) {
       alert(res.message || '添加成功')
@@ -712,6 +848,37 @@ onMounted(async () => {
   max-width: 100%;
   padding: var(--spacing-xs) var(--spacing-sm);
   font-size: var(--font-size-sm);
+}
+
+.data-table .inline-input {
+  min-width: 160px;
+  padding: var(--spacing-xs) var(--spacing-sm);
+  font-size: var(--font-size-sm);
+}
+
+.email-input {
+  width: 220px;
+}
+
+.auth-code-cell {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm, 8px);
+  min-width: 360px;
+}
+
+.auth-input {
+  width: 160px;
+}
+
+.auth-status {
+  white-space: nowrap;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
+
+.auth-status.configured {
+  color: var(--color-success);
 }
 
 .status-tag {

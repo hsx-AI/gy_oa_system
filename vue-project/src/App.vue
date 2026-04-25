@@ -284,38 +284,44 @@
                 </div>
               </div>
               <div ref="settingsWrapRef" class="settings-wrap">
-                <button type="button" class="header-action-btn" aria-label="系统设置" @click.stop="toggleSettingsPopover">
+                <button
+                  type="button"
+                  class="header-action-btn"
+                  aria-label="系统设置"
+                  :aria-expanded="settingsPopoverOpen ? 'true' : 'false'"
+                  @click.stop="toggleSettingsPopover"
+                >
                   <svg class="action-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <circle cx="12" cy="12" r="3" />
                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                   </svg>
                 </button>
-                <div v-show="settingsPopoverOpen" class="settings-popover" @click.stop>
-                  <div class="settings-popover__header">个性化设置</div>
-                  <div class="settings-popover__body">
-                    <div class="settings-section">
-                      <div class="settings-section__title">配色风格</div>
-                      <div class="theme-grid">
-                        <div
-                          v-for="s in themeList"
-                          :key="s.id"
-                          class="theme-card"
-                          :class="{ active: skinStyle === s.id }"
-                          @click="applySkin(s.id)"
-                        >
-                          <div class="theme-card__preview" :style="previewStyle(s.id)">
-                            <div class="theme-card__bar" :style="{ background: s.headerBg }"></div>
-                            <div class="theme-card__body">
-                              <div class="theme-card__accent" :style="{ background: s.primary }"></div>
-                              <div class="theme-card__line" :style="{ background: s.bg }"></div>
-                              <div class="theme-card__line" :style="{ background: s.bg }" style="width:60%"></div>
-                            </div>
-                          </div>
-                          <div class="theme-card__label">{{ s.label }}</div>
-                          <div v-if="skinStyle === s.id" class="theme-card__check">✓</div>
-                        </div>
-                      </div>
-                    </div>
+                <div v-show="settingsPopoverOpen" class="settings-popover" role="dialog" aria-label="系统配色设置" @click.stop>
+                  <div class="settings-popover__header">
+                    <svg class="settings-popover__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <circle cx="12" cy="12" r="3" />
+                      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+                    </svg>
+                    <span>界面风格</span>
+                  </div>
+                  <div class="settings-style-grid">
+                    <button
+                      v-for="item in skinStyleOptions"
+                      :key="item.key"
+                      type="button"
+                      class="settings-style-card"
+                      :class="{ active: activeSkinStyle === item.key }"
+                      @click="changeSkinStyle(item.key)"
+                    >
+                      <span class="settings-style-card__preview">
+                        <span class="settings-style-card__bar" :style="{ background: item.primary }"></span>
+                        <span class="settings-style-card__bar" :style="{ background: item.secondary }"></span>
+                      </span>
+                      <span class="settings-style-card__label">{{ item.label }}</span>
+                      <span v-if="activeSkinStyle === item.key" class="settings-style-card__check">
+                        <svg viewBox="0 0 24 24" fill="currentColor" width="14" height="14"><path d="M9 16.17L4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></svg>
+                      </span>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -441,6 +447,334 @@ const {
 
 const todoBellWrapRef = ref(null)
 const todoPopoverOpen = ref(false)
+const settingsWrapRef = ref(null)
+const settingsPopoverOpen = ref(false)
+const activeSkinStyle = ref('default')
+
+const skinStyleOptions = [
+  { key: 'default', label: '默认蓝', primary: '#1890ff', secondary: '#e6f7ff' },
+  { key: 'dark', label: '深色夜间', primary: '#5b8cff', secondary: '#161b22' },
+  { key: 'green', label: '清新绿色', primary: '#2f9e44', secondary: '#ebfbee' },
+  { key: 'purple', label: '优雅紫色', primary: '#7c3aed', secondary: '#f3e8ff' },
+  { key: 'pink', label: '甜美粉', primary: '#e84393', secondary: '#fce4ec' },
+  { key: 'warm', label: '暖橙风格', primary: '#f97316', secondary: '#fff7ed' },
+]
+
+const skinStyleVarMap = {
+  default: {
+    '--color-primary': '#1890ff',
+    '--color-primary-light': '#40a9ff',
+    '--color-primary-lighter': '#69c0ff',
+    '--color-primary-lightest': '#e6f7ff',
+    '--color-primary-dark': '#096dd9',
+    '--color-primary-darker': '#0050b3',
+    '--color-info': '#1890ff',
+    '--color-info-light': '#69c0ff',
+    '--color-info-bg': '#e6f7ff',
+    '--color-bg-layout': '#f0f2f5',
+    '--color-bg-container': '#ffffff',
+    '--color-bg-elevated': '#ffffff',
+    '--color-bg-spotlight': '#fafafa',
+    '--color-text-primary': '#262626',
+    '--color-text-secondary': '#595959',
+    '--color-text-tertiary': '#8c8c8c',
+    '--color-border-base': '#d9d9d9',
+    '--color-border-light': '#e8e8e8',
+    '--color-border-lighter': '#f0f0f0',
+    '--color-sb-bg-start': '#1f2937',
+    '--color-sb-bg-end': '#111827',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.75)',
+    '--color-sb-active-bg': 'rgba(96, 165, 250, 0.15)',
+    '--color-sb-active-border': '#60a5fa',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#1f2937',
+    '--color-header-bg-end': '#111827',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#fff',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.2)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-legacy-bar-start': '#ff4d4f',
+    '--color-legacy-bar-end': '#ff7a45',
+    '--color-legacy-bar-text': '#fff',
+    '--color-legacy-bar-btn-bg': '#ffc53d',
+    '--color-legacy-bar-btn-text': '#1a1a1a',
+    '--color-legacy-bar-btn-hover': '#ffd666',
+    '--color-legacy-bar-note': 'rgba(255,255,255,0.95)',
+  },
+  dark: {
+    '--color-primary': '#5b8cff',
+    '--color-primary-light': '#7aa2ff',
+    '--color-primary-lighter': '#9bb9ff',
+    '--color-primary-lightest': '#1c2538',
+    '--color-primary-dark': '#3d6ee6',
+    '--color-primary-darker': '#2d57bf',
+    '--color-info': '#5b8cff',
+    '--color-info-light': '#9bb9ff',
+    '--color-info-bg': '#1c2538',
+    '--color-bg-layout': '#0f172a',
+    '--color-bg-container': '#111827',
+    '--color-bg-elevated': '#1f2937',
+    '--color-bg-spotlight': '#273449',
+    '--color-text-primary': '#e5e7eb',
+    '--color-text-secondary': '#cbd5e1',
+    '--color-text-tertiary': '#94a3b8',
+    '--color-border-base': '#334155',
+    '--color-border-light': '#283549',
+    '--color-border-lighter': '#1e293b',
+    '--color-sb-bg-start': '#0b1120',
+    '--color-sb-bg-end': '#070b15',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.7)',
+    '--color-sb-active-bg': 'rgba(91, 140, 255, 0.18)',
+    '--color-sb-active-border': '#5b8cff',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#0b1120',
+    '--color-header-bg-end': '#070b15',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#e5e7eb',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.08)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.12)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.08)',
+    '--color-legacy-bar-start': '#dc2626',
+    '--color-legacy-bar-end': '#ea580c',
+    '--color-legacy-bar-text': '#e5e7eb',
+    '--color-legacy-bar-btn-bg': '#fbbf24',
+    '--color-legacy-bar-btn-text': '#1a1a1a',
+    '--color-legacy-bar-btn-hover': '#fcd34d',
+    '--color-legacy-bar-note': 'rgba(229,231,235,0.9)',
+  },
+  green: {
+    '--color-primary': '#2f9e44',
+    '--color-primary-light': '#40c057',
+    '--color-primary-lighter': '#69db7c',
+    '--color-primary-lightest': '#ebfbee',
+    '--color-primary-dark': '#2b8a3e',
+    '--color-primary-darker': '#237032',
+    '--color-info': '#2f9e44',
+    '--color-info-light': '#69db7c',
+    '--color-info-bg': '#ebfbee',
+    '--color-bg-layout': '#f1f8f2',
+    '--color-bg-container': '#ffffff',
+    '--color-bg-elevated': '#ffffff',
+    '--color-bg-spotlight': '#f4fbf5',
+    '--color-text-primary': '#1f2937',
+    '--color-text-secondary': '#4b5563',
+    '--color-text-tertiary': '#6b7280',
+    '--color-border-base': '#cfe8d3',
+    '--color-border-light': '#dbefde',
+    '--color-border-lighter': '#e8f5ea',
+    '--color-sb-bg-start': '#1a3a21',
+    '--color-sb-bg-end': '#0f2a15',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.75)',
+    '--color-sb-active-bg': 'rgba(47, 158, 68, 0.2)',
+    '--color-sb-active-border': '#2f9e44',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#1a3a21',
+    '--color-header-bg-end': '#0f2a15',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#fff',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.2)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-legacy-bar-start': '#dc2626',
+    '--color-legacy-bar-end': '#f97316',
+    '--color-legacy-bar-text': '#fff',
+    '--color-legacy-bar-btn-bg': '#86efac',
+    '--color-legacy-bar-btn-text': '#1a1a1a',
+    '--color-legacy-bar-btn-hover': '#a7f3d0',
+    '--color-legacy-bar-note': 'rgba(255,255,255,0.95)',
+  },
+  purple: {
+    '--color-primary': '#7c3aed',
+    '--color-primary-light': '#8b5cf6',
+    '--color-primary-lighter': '#a78bfa',
+    '--color-primary-lightest': '#f3e8ff',
+    '--color-primary-dark': '#6d28d9',
+    '--color-primary-darker': '#5b21b6',
+    '--color-info': '#7c3aed',
+    '--color-info-light': '#a78bfa',
+    '--color-info-bg': '#f3e8ff',
+    '--color-bg-layout': '#f6f3ff',
+    '--color-bg-container': '#ffffff',
+    '--color-bg-elevated': '#ffffff',
+    '--color-bg-spotlight': '#faf5ff',
+    '--color-text-primary': '#312e81',
+    '--color-text-secondary': '#4c1d95',
+    '--color-text-tertiary': '#6d28d9',
+    '--color-border-base': '#ddd6fe',
+    '--color-border-light': '#ede9fe',
+    '--color-border-lighter': '#f5f3ff',
+    '--color-sb-bg-start': '#2d1a4a',
+    '--color-sb-bg-end': '#1f1035',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.75)',
+    '--color-sb-active-bg': 'rgba(124, 58, 237, 0.2)',
+    '--color-sb-active-border': '#a78bfa',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#2d1a4a',
+    '--color-header-bg-end': '#1f1035',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#fff',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.2)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-legacy-bar-start': '#dc2626',
+    '--color-legacy-bar-end': '#a855f7',
+    '--color-legacy-bar-text': '#fff',
+    '--color-legacy-bar-btn-bg': '#c084fc',
+    '--color-legacy-bar-btn-text': '#1a1a1a',
+    '--color-legacy-bar-btn-hover': '#d8b4fe',
+    '--color-legacy-bar-note': 'rgba(255,255,255,0.95)',
+  },
+  pink: {
+    '--color-primary': '#e84393',
+    '--color-primary-light': '#f06292',
+    '--color-primary-lighter': '#f48fb1',
+    '--color-primary-lightest': '#fce4ec',
+    '--color-primary-dark': '#d81b60',
+    '--color-primary-darker': '#c2185b',
+    '--color-info': '#e84393',
+    '--color-info-light': '#f48fb1',
+    '--color-info-bg': '#fce4ec',
+    '--color-bg-layout': '#fef0f5',
+    '--color-bg-container': '#ffffff',
+    '--color-bg-elevated': '#ffffff',
+    '--color-bg-spotlight': '#fff0f6',
+    '--color-text-primary': '#3f3f46',
+    '--color-text-secondary': '#6b3a5a',
+    '--color-text-tertiary': '#9c6b87',
+    '--color-border-base': '#f5c6d6',
+    '--color-border-light': '#f8d6e3',
+    '--color-border-lighter': '#fce4ec',
+    '--color-sb-bg-start': '#4a1a2e',
+    '--color-sb-bg-end': '#2d1020',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.75)',
+    '--color-sb-active-bg': 'rgba(232, 67, 147, 0.2)',
+    '--color-sb-active-border': '#f06292',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#4a1a2e',
+    '--color-header-bg-end': '#2d1020',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#ffe4ec',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.2)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-legacy-bar-start': '#e84393',
+    '--color-legacy-bar-end': '#d81b60',
+    '--color-legacy-bar-text': '#fff',
+    '--color-legacy-bar-btn-bg': '#f48fb1',
+    '--color-legacy-bar-btn-text': '#4a1a2e',
+    '--color-legacy-bar-btn-hover': '#f8bbd0',
+    '--color-legacy-bar-note': 'rgba(255,228,236,0.95)',
+  },
+  warm: {
+    '--color-primary': '#f97316',
+    '--color-primary-light': '#fb923c',
+    '--color-primary-lighter': '#fdba74',
+    '--color-primary-lightest': '#fff7ed',
+    '--color-primary-dark': '#ea580c',
+    '--color-primary-darker': '#c2410c',
+    '--color-info': '#f97316',
+    '--color-info-light': '#fdba74',
+    '--color-info-bg': '#fff7ed',
+    '--color-bg-layout': '#fffaf5',
+    '--color-bg-container': '#ffffff',
+    '--color-bg-elevated': '#ffffff',
+    '--color-bg-spotlight': '#fff3e8',
+    '--color-text-primary': '#3f3f46',
+    '--color-text-secondary': '#52525b',
+    '--color-text-tertiary': '#71717a',
+    '--color-border-base': '#fed7aa',
+    '--color-border-light': '#ffedd5',
+    '--color-border-lighter': '#fff4e6',
+    '--color-sb-bg-start': '#3b2410',
+    '--color-sb-bg-end': '#2a190b',
+    '--color-sb-text': 'rgba(255, 255, 255, 0.9)',
+    '--color-sb-text-hover': '#fff',
+    '--color-sb-text-muted': 'rgba(255, 255, 255, 0.75)',
+    '--color-sb-active-bg': 'rgba(249, 115, 22, 0.2)',
+    '--color-sb-active-border': '#f97316',
+    '--color-sb-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-bg-start': '#3b2410',
+    '--color-header-bg-end': '#2a190b',
+    '--color-header-border': 'rgba(255, 255, 255, 0.08)',
+    '--color-header-text': '#fff',
+    '--color-header-action-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-user-avatar-bg': 'rgba(255, 255, 255, 0.2)',
+    '--color-user-hover': 'rgba(255, 255, 255, 0.1)',
+    '--color-legacy-bar-start': '#dc2626',
+    '--color-legacy-bar-end': '#f97316',
+    '--color-legacy-bar-text': '#fff',
+    '--color-legacy-bar-btn-bg': '#fdba74',
+    '--color-legacy-bar-btn-text': '#1a1a1a',
+    '--color-legacy-bar-btn-hover': '#fed7aa',
+    '--color-legacy-bar-note': 'rgba(255,255,255,0.95)',
+  },
+}
+
+function applySkinStyle(styleKey) {
+  const normalized = skinStyleVarMap[styleKey] ? styleKey : 'default'
+  const root = document.documentElement
+  const vars = skinStyleVarMap[normalized]
+  Object.keys(vars).forEach((cssVar) => {
+    root.style.setProperty(cssVar, vars[cssVar])
+  })
+  activeSkinStyle.value = normalized
+}
+
+function toggleSettingsPopover() {
+  settingsPopoverOpen.value = !settingsPopoverOpen.value
+}
+
+async function changeSkinStyle(styleKey) {
+  applySkinStyle(styleKey)
+  settingsPopoverOpen.value = false
+  try {
+    localStorage.setItem('skinStyle', activeSkinStyle.value)
+  } catch {}
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  if (!name) return
+  try {
+    await saveUserStyle({ name, skinStyle: activeSkinStyle.value })
+  } catch (e) {
+    console.warn('保存用户风格失败:', e)
+  }
+}
+
+async function loadUserSkinStyle() {
+  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
+  const localStyle = (() => {
+    try {
+      return localStorage.getItem('skinStyle') || ''
+    } catch {
+      return ''
+    }
+  })()
+  if (!name) {
+    applySkinStyle(localStyle || 'default')
+    return
+  }
+  try {
+    const res = await getUserStyle({ name })
+    const serverStyle = (res?.skinStyle || '').trim()
+    const finalStyle = skinStyleVarMap[serverStyle] ? serverStyle : (skinStyleVarMap[localStyle] ? localStyle : 'default')
+    applySkinStyle(finalStyle)
+    try {
+      localStorage.setItem('skinStyle', finalStyle)
+    } catch {}
+  } catch {
+    applySkinStyle(skinStyleVarMap[localStyle] ? localStyle : 'default')
+  }
+}
 
 function toggleTodoPopover() {
   todoPopoverOpen.value = !todoPopoverOpen.value
@@ -484,18 +818,6 @@ const currentUser = ref({
 
 const showUserMenu = ref(false)
 const userInfoRef = ref(null)
-// 系统设置弹窗
-const settingsWrapRef = ref(null)
-const settingsPopoverOpen = ref(false)
-const skinStyle = ref('default')
-const themeList = ref([
-  { id: 'default', label: '极简白', primary: '#1890ff', headerBg: '#1f2937', bg: '#f0f2f5' },
-  { id: 'dark', label: '深邃灰', primary: '#6366f1', headerBg: '#0f172a', bg: '#1e293b' },
-  { id: 'blue', label: '深海蓝', primary: '#0284c7', headerBg: '#0c4a6e', bg: '#f0f9ff' },
-  { id: 'green', label: '护眼绿', primary: '#059669', headerBg: '#064e3b', bg: '#ecfdf5' },
-  { id: 'purple', label: '优雅紫', primary: '#7c3aed', headerBg: '#4c1d95', bg: '#faf5ff' },
-  { id: 'warm', label: '暖阳橙', primary: '#d97706', headerBg: '#78350f', bg: '#fffbeb' },
-])
 // 打卡数据上传权限：webconfig.dakaman 对应用户
 const dakaman = ref('')
 // 人事管理员：webconfig.admin2，权限等同于部长/副部长（含员工在职管理）
@@ -572,37 +894,6 @@ const toggleUserMenu = () => {
   showUserMenu.value = !showUserMenu.value
 }
 
-// 系统设置弹窗
-function toggleSettingsPopover() {
-  settingsPopoverOpen.value = !settingsPopoverOpen.value
-}
-function previewStyle(id) {
-  const s = themeList.value.find(t => t.id === id)
-  if (!s) return {}
-  return { '--card-primary': s.primary, '--card-header-bg': s.headerBg, '--card-bg': s.bg }
-}
-function applySkin(id) {
-  skinStyle.value = id
-  document.documentElement.setAttribute('data-skin', id)
-  localStorage.setItem('oa_skin_style', id)
-  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
-  if (name) saveUserStyle({ name, skinStyle: id }).catch(() => {})
-}
-async function loadSkinStyle() {
-  const cached = localStorage.getItem('oa_skin_style')
-  if (cached) { skinStyle.value = cached; document.documentElement.setAttribute('data-skin', cached) }
-  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
-  if (!name) return
-  try {
-    const res = await getUserStyle({ name })
-    if (res && res.success && res.skinStyle) {
-      const s = res.skinStyle; skinStyle.value = s
-      document.documentElement.setAttribute('data-skin', s)
-      localStorage.setItem('oa_skin_style', s)
-    }
-  } catch {}
-}
-
 // 点击外部关闭菜单
 const onDocumentClick = (e) => {
   if (userInfoRef.value && !userInfoRef.value.contains(e.target)) {
@@ -620,11 +911,13 @@ const onDocumentClick = (e) => {
 // 退出登录
 const handleLogout = () => {
   localStorage.removeItem('userInfo')
+  localStorage.removeItem('skinStyle')
   currentUser.value = { name: '', dept: '', username: '' }
   canAccessDbManager.value = false
   admin2.value = ''
   admin1.value = ''
   showUserMenu.value = false
+  applySkinStyle('default')
   router.push('/login')
 }
 
@@ -654,6 +947,11 @@ const loadUserInfo = () => {
 // 路由变化时重新加载用户信息（登录后跳转时 currentUser 能正确更新）
 watch(() => route.path, () => {
   loadUserInfo()
+  if (route.path === '/login') {
+    applySkinStyle('default')
+  } else {
+    loadUserSkinStyle()
+  }
   if (route.path !== '/login') {
     refreshWorkplaceTodos()
   }
@@ -765,7 +1063,6 @@ const loadUploadConfig = () => {
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
   loadUploadConfig()
-  loadSkinStyle()
 })
 
 onUnmounted(() => {
@@ -830,8 +1127,8 @@ const displayUserName = computed(() => {
 .app-sidebar {
   width: 220px;
   min-width: 220px;
-  background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
-  color: rgba(255, 255, 255, 0.9);
+  background: linear-gradient(180deg, var(--color-sb-bg-start) 0%, var(--color-sb-bg-end) 100%);
+  color: var(--color-sb-text);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
@@ -843,21 +1140,21 @@ const displayUserName = computed(() => {
   gap: var(--spacing-sm);
   height: var(--header-height);
   padding: 0 var(--spacing-lg);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  border-bottom: 1px solid var(--color-sb-border);
   flex-shrink: 0;
 }
 
 .sidebar-logo {
   width: 28px;
   height: 28px;
-  color: #fff;
+  color: var(--color-sb-text-hover);
   flex-shrink: 0;
 }
 
 .sidebar-title {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
-  color: #fff;
+  color: var(--color-header-text);
   white-space: nowrap;
 }
 
@@ -873,21 +1170,21 @@ const displayUserName = computed(() => {
   gap: var(--spacing-md);
   padding: 12px var(--spacing-lg);
   font-size: var(--font-size-sm);
-  color: rgba(255, 255, 255, 0.75);
+  color: var(--color-sb-text-muted);
   text-decoration: none;
   transition: all 0.2s ease;
   border-left: 3px solid transparent;
 }
 
 .sidebar-item:hover {
-  color: #fff;
-  background: rgba(255, 255, 255, 0.06);
+  color: var(--color-sb-text-hover);
+  background: var(--color-sb-active-bg);
 }
 
 .sidebar-item-active {
-  color: #fff;
-  background: rgba(96, 165, 250, 0.15);
-  border-left-color: #60a5fa;
+  color: var(--color-sb-text-hover);
+  background: var(--color-sb-active-bg);
+  border-left-color: var(--color-sb-active-border);
   font-weight: 500;
 }
 
@@ -916,8 +1213,8 @@ const displayUserName = computed(() => {
   position: sticky;
   top: 0;
   z-index: var(--z-index-sticky);
-  background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  background: linear-gradient(180deg, var(--color-header-bg-start) 0%, var(--color-header-bg-end) 100%);
+  border-bottom: 1px solid var(--color-header-border);
   flex-shrink: 0;
   width: 100%;
   min-width: 0;
@@ -941,7 +1238,7 @@ const displayUserName = computed(() => {
 .app-title {
   font-size: var(--font-size-lg);
   font-weight: var(--font-weight-semibold);
-  color: #fff;
+  color: var(--color-header-text);
   white-space: nowrap;
 }
 
@@ -966,13 +1263,13 @@ const displayUserName = computed(() => {
 }
 
 .header-action-btn:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-header-action-hover);
 }
 
 .action-icon {
   width: 20px;
   height: 20px;
-  color: #fff;
+  color: var(--color-header-text);
 }
 
 .badge-dot {
@@ -983,12 +1280,115 @@ const displayUserName = computed(() => {
   height: 8px;
   background: var(--color-error, #ef4444);
   border-radius: 50%;
-  border: 2px solid #1f2937;
+  border: 2px solid var(--color-header-bg-end);
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.2);
 }
 
 .todo-bell-wrap {
   position: relative;
+}
+
+.settings-wrap {
+  position: relative;
+}
+
+.settings-popover {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  min-width: 248px;
+  padding: 0 0 10px;
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: 14px;
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.14);
+  z-index: 1000;
+  overflow: hidden;
+}
+
+.settings-popover__header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 14px 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-secondary);
+  border-bottom: 1px solid var(--color-border-lighter);
+  margin-bottom: 8px;
+}
+
+.settings-popover__icon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--color-text-tertiary);
+}
+
+.settings-style-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 10px;
+}
+
+.settings-style-card {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  transition: all .2s ease;
+  position: relative;
+}
+
+.settings-style-card:hover {
+  background: var(--color-primary-lightest);
+}
+
+.settings-style-card.active {
+  background: var(--color-primary-lightest);
+  box-shadow: inset 0 0 0 1.5px var(--color-primary);
+}
+
+.settings-style-card__preview {
+  width: 32px;
+  height: 22px;
+  border-radius: 6px;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  border: 1px solid rgba(0, 0, 0, 0.06);
+}
+
+.settings-style-card__bar {
+  flex: 1;
+  width: 100%;
+}
+
+.settings-style-card__label {
+  font-size: 13px;
+  font-weight: 500;
+  flex: 1;
+  text-align: left;
+}
+
+.settings-style-card__check {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--color-primary);
+  color: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
 }
 
 .todo-popover {
@@ -1253,15 +1653,15 @@ const displayUserName = computed(() => {
 }
 
 .user-info:hover {
-  background: rgba(255, 255, 255, 0.1);
+  background: var(--color-user-hover);
 }
 
 .user-avatar {
   width: 32px;
   height: 32px;
   border-radius: var(--radius-circle);
-  background: rgba(255, 255, 255, 0.2);
-  color: #fff;
+  background: var(--color-user-avatar-bg);
+  color: var(--color-header-text);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1274,7 +1674,7 @@ const displayUserName = computed(() => {
 
 .user-name {
   font-size: var(--font-size-sm);
-  color: #fff;
+  color: var(--color-header-text);
   font-weight: var(--font-weight-medium);
 }
 
@@ -1437,7 +1837,7 @@ a.user-menu__item {
 
   .sidebar-item-active {
     border-left: none;
-    border-bottom-color: #60a5fa;
+    border-bottom-color: var(--color-sb-active-border);
   }
 
   .user-name {
@@ -1645,8 +2045,8 @@ a.user-menu__item {
   align-items: center;
   gap: 12px;
   padding: 8px 16px;
-  background: linear-gradient(90deg, #ff4d4f 0%, #ff7a45 100%);
-  color: #fff;
+  background: linear-gradient(90deg, var(--color-legacy-bar-start) 0%, var(--color-legacy-bar-end) 100%);
+  color: var(--color-legacy-bar-text);
   font-size: 14px;
   flex-wrap: wrap;
 }
@@ -1657,137 +2057,18 @@ a.user-menu__item {
   display: inline-flex;
   align-items: center;
   padding: 6px 16px;
-  background: #ffc53d;
-  color: #1a1a1a;
+  background: var(--color-legacy-bar-btn-bg);
+  color: var(--color-legacy-bar-btn-text);
   font-weight: 700;
   text-decoration: none;
   border-radius: 8px;
   box-shadow: 0 2px 8px rgba(0,0,0,0.2);
 }
 .legacy-bar-btn:hover {
-  background: #ffd666;
+  background: var(--color-legacy-bar-btn-hover);
 }
 .legacy-bar-note {
   font-size: 12px;
-  opacity: 0.95;
+  color: var(--color-legacy-bar-note);
 }
-
-/* 系统设置弹窗 */
-.settings-wrap {
-  position: relative;
-}
-.settings-popover {
-  position: absolute;
-  top: calc(100% + 8px);
-  right: 0;
-  width: 340px;
-  background: #fff;
-  border: 1px solid var(--color-border-lighter, #e5e7eb);
-  border-radius: var(--radius-md, 10px);
-  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.18);
-  z-index: 1000;
-  overflow: hidden;
-}
-.settings-popover__header {
-  display: flex;
-  align-items: center;
-  padding: 14px 16px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #111827;
-  border-bottom: 1px solid var(--color-border-lighter, #e5e7eb);
-  background: #f9fafb;
-}
-.settings-popover__body {
-  padding: 14px 16px;
-  max-height: 380px;
-  overflow-y: auto;
-}
-.settings-section__title {
-  font-size: 13px;
-  font-weight: 600;
-  color: #374151;
-  margin-bottom: 10px;
-}
-.theme-grid {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-}
-.theme-card {
-  position: relative;
-  cursor: pointer;
-  border-radius: 8px;
-  overflow: hidden;
-  border: 2px solid transparent;
-  transition: all .15s ease;
-}
-.theme-card:hover { border-color: #d1d5db; }
-.theme-card.active { border-color: #6366f1; }
-.theme-card__preview {
-  border-radius: 4px; overflow: hidden; height: 52px;
-  display: flex; flex-direction: column;
-}
-.theme-card__bar { height: 12px; flex-shrink: 0; }
-.theme-card__body { flex: 1; padding: 6px; display: flex; flex-direction: column; gap: 3px; }
-.theme-card__accent { width: 24px; height: 6px; border-radius: 3px; }
-.theme-card__line { height: 4px; border-radius: 2px; width: 80%; }
-.theme-card__label {
-  font-size: 11px; text-align: center; padding: 4px 0 2px;
-  color: #374151; font-weight: 500;
-}
-.theme-card__check {
-  position: absolute; top: 2px; right: 2px;
-  width: 18px; height: 18px; background: #6366f1; color: #fff;
-  border-radius: 50%; display: flex; align-items: center; justify-content: center;
-  font-size: 11px; font-weight: 700;
-}
-
-/* 主题配色 */
-[data-skin="dark"] .app-sidebar,
-[data-skin="dark"] .app-header {
-  background: linear-gradient(180deg, #0f172a 0%, #020617 100%);
-}
-[data-skin="blue"] .app-sidebar,
-[data-skin="blue"] .app-header {
-  background: linear-gradient(180deg, #0c4a6e 0%, #082f49 100%);
-}
-[data-skin="green"] .app-sidebar,
-[data-skin="green"] .app-header {
-  background: linear-gradient(180deg, #064e3b 0%, #022c22 100%);
-}
-[data-skin="purple"] .app-sidebar,
-[data-skin="purple"] .app-header {
-  background: linear-gradient(180deg, #4c1d95 0%, #2e1065 100%);
-}
-[data-skin="warm"] .app-sidebar,
-[data-skin="warm"] .app-header {
-  background: linear-gradient(180deg, #78350f 0%, #451a03 100%);
-}
-[data-skin="dark"] .sidebar-item-active {
-  background: rgba(99,102,241,.2); border-left-color: #6366f1;
-}
-[data-skin="blue"] .sidebar-item-active {
-  background: rgba(14,165,233,.2); border-left-color: #0ea5e9;
-}
-[data-skin="green"] .sidebar-item-active {
-  background: rgba(52,211,153,.2); border-left-color: #34d399;
-}
-[data-skin="purple"] .sidebar-item-active {
-  background: rgba(167,139,250,.2); border-left-color: #a78bfa;
-}
-[data-skin="warm"] .sidebar-item-active {
-  background: rgba(251,191,36,.2); border-left-color: #fbbf24;
-}
-[data-skin="dark"] {
-  --color-primary: #6366f1; --color-primary-light: #818cf8;
-  --color-bg-layout: #0f172a; --color-bg-container: #1e293b;
-  --color-text-primary: #e2e8f0; --color-text-secondary: #94a3b8;
-  --color-text-tertiary: #64748b; --color-border-base: #334155;
-  --color-border-light: #475569; --color-border-lighter: #1e293b;
-}
-[data-skin="blue"] { --color-primary: #0284c7; --color-primary-light: #38bdf8; }
-[data-skin="green"] { --color-primary: #059669; --color-primary-light: #34d399; }
-[data-skin="purple"] { --color-primary: #7c3aed; --color-primary-light: #a78bfa; }
-[data-skin="warm"] { --color-primary: #d97706; --color-primary-light: #f59e0b; }
 </style>

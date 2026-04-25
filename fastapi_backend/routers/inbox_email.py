@@ -11,7 +11,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 
 import httpx
 from email.header import decode_header, make_header
@@ -33,10 +33,7 @@ IMAP_PORT_SSL = 993
 
 # 后台轮询间隔（秒），可根据需要调整
 POLL_INTERVAL_SECONDS = 120
-# 仅同步最近 N 天内的“标旗(FLAGGED)”邮件
-# 注意：IMAP SINCE 是按自然日粒度
-SYNC_RECENT_DAYS = 1
-# 单次拉取的最多邮件数（对 SINCE 过滤结果再做一次安全上限）
+# 单次拉取的最多邮件数（仅取最新标旗邮件）
 MAX_FETCH_PER_POLL = 50
 
 # LLM 任务抽取相关
@@ -56,13 +53,25 @@ DEEPSEEK_MODEL = "deepseek-chat"
 # ==================== 建表 / 字段保障 ====================
 
 def _ensure_inbox_columns():
-    """确保 webconfig 表有共用邮箱配置字段。"""
+    """兼容保留旧 webconfig 共用邮箱配置字段。"""
     for col, typedef in [
         ("inbox_email_address", "VARCHAR(200) DEFAULT ''"),
         ("inbox_email_auth_code", "VARCHAR(200) DEFAULT ''"),
     ]:
         try:
             db.execute_update(f"ALTER TABLE webconfig ADD COLUMN {col} {typedef}", ())
+        except Exception:
+            pass
+
+
+def _ensure_yggl_email_columns():
+    """确保 yggl 表有企业邮箱与 IMAP 授权码字段。"""
+    for col, typedef in [
+        ("enterprise_email", "VARCHAR(255) DEFAULT NULL COMMENT '企业邮箱地址'"),
+        ("email_auth_code", "VARCHAR(200) DEFAULT '' COMMENT '企业邮箱IMAP授权码'"),
+    ]:
+        try:
+            db.execute_update(f"ALTER TABLE yggl ADD COLUMN {col} {typedef}", ())
         except Exception:
             pass
 
@@ -110,6 +119,7 @@ def _ensure_inbox_table():
 
 
 _ensure_inbox_columns()
+_ensure_yggl_email_columns()
 _ensure_inbox_table()
 _ensure_inbox_task_columns()
 
@@ -132,20 +142,23 @@ def _require_admin(current_user: str):
         raise HTTPException(status_code=403, detail="仅系统管理员（webconfig.admin1）可操作")
 
 
-def _get_inbox_config() -> dict:
-    _ensure_inbox_columns()
+def _get_inbox_config(current_user: str) -> dict:
+    _ensure_yggl_email_columns()
+    name = (current_user or "").strip()
+    if not name:
+        return {"address": "", "auth_code": ""}
     try:
         rows = db.execute_query(
-            "SELECT inbox_email_address, inbox_email_auth_code FROM webconfig WHERE id = %s LIMIT 1",
-            ("1",),
+            "SELECT enterprise_email, email_auth_code FROM yggl WHERE name = %s LIMIT 1",
+            (name,),
         )
         if rows:
             return {
-                "address": (rows[0].get("inbox_email_address") or "").strip(),
-                "auth_code": (rows[0].get("inbox_email_auth_code") or "").strip(),
+                "address": (rows[0].get("enterprise_email") or "").strip(),
+                "auth_code": (rows[0].get("email_auth_code") or "").strip(),
             }
     except Exception as e:
-        logger.debug(f"读取共用邮箱配置失败: {e}")
+        logger.debug(f"读取 yggl 企业邮箱配置失败: {e}")
     return {"address": "", "auth_code": ""}
 
 
@@ -296,9 +309,9 @@ def _insert_email_row(row: dict) -> bool:
 
 # ==================== IMAP 拉取 ====================
 
-def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, recent_days: int = SYNC_RECENT_DAYS) -> dict:
-    """连接 IMAP 拉取最近 recent_days 天内的 FLAGGED 邮件。返回 {new, skipped, total, error}"""
-    cfg = _get_inbox_config()
+def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = "") -> dict:
+    """连接 IMAP 拉取 FLAGGED 邮件，按最新顺序仅处理最多 max_fetch 封。"""
+    cfg = _get_inbox_config(current_user)
     address = cfg["address"]
     auth_code = cfg["auth_code"]
     if not address or not auth_code:
@@ -318,16 +331,14 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, recent_days: int = SYN
         except Exception:
             pass
         imap_obj.select("INBOX", readonly=True)
-        # 仅查询最近 N 天内的 FLAGGED 邮件
-        days = max(1, int(recent_days or 1))
-        since_date = (datetime.now() - timedelta(days=days)).strftime("%d-%b-%Y")
-        typ, data = imap_obj.search(None, "FLAGGED", "SINCE", since_date)
+        # 查询全部 FLAGGED 邮件，不限制时间范围
+        typ, data = imap_obj.search(None, "FLAGGED")
         if typ != "OK" or not data or not data[0]:
-            logger.info(f"[InboxEmail] FLAGGED + SINCE {since_date} 无匹配邮件")
+            logger.info("[InboxEmail] FLAGGED 无匹配邮件")
             return result
         ids = data[0].split()
         result["total"] = len(ids)
-        # SINCE 过滤后再按最新 max_fetch 封做一次安全上限
+        # 按最新 max_fetch 封做安全上限
         ids_to_fetch = ids[-max_fetch:] if max_fetch and len(ids) > max_fetch else ids
 
         # 先批量查 message_id 做去重（减少网络往返）
@@ -720,7 +731,7 @@ class InboxConfigRequest(BaseModel):
 async def get_inbox_config(current_user: str = Query(...)):
     """获取共用邮箱配置（脱敏）"""
     _require_admin(current_user)
-    cfg = _get_inbox_config()
+    cfg = _get_inbox_config(current_user)
     masked_addr = cfg["address"]
     ac = cfg["auth_code"]
     masked_code = ("*" * (len(ac) - 4) + ac[-4:]) if len(ac) > 4 else ("已配置" if ac else "")
@@ -732,7 +743,6 @@ async def get_inbox_config(current_user: str = Query(...)):
         "imapServer": IMAP_SERVER,
         "imapPort": IMAP_PORT_SSL,
         "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
-        "syncRecentDays": SYNC_RECENT_DAYS,
     }
 
 
@@ -740,11 +750,13 @@ async def get_inbox_config(current_user: str = Query(...)):
 async def update_inbox_config(req: InboxConfigRequest):
     """更新共用邮箱配置"""
     _require_admin(req.current_user)
-    _ensure_inbox_columns()
-    db.execute_update(
-        "UPDATE webconfig SET inbox_email_address = %s, inbox_email_auth_code = %s WHERE id = %s",
-        (req.email_address.strip(), req.email_auth_code.strip(), "1"),
+    _ensure_yggl_email_columns()
+    affected = db.execute_update(
+        "UPDATE yggl SET enterprise_email = %s, email_auth_code = %s WHERE name = %s",
+        (req.email_address.strip(), req.email_auth_code.strip(), req.current_user.strip()),
     )
+    if affected is not None and affected <= 0:
+        raise HTTPException(status_code=404, detail="未找到当前管理员的员工记录")
     return {"success": True, "message": "共用邮箱配置已更新"}
 
 
@@ -976,7 +988,7 @@ async def manual_sync(current_user: str = Query(...)):
     """手动触发一次邮件同步"""
     _require_admin(current_user)
     loop = asyncio.get_event_loop()
-    result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL)
+    result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, current_user)
     if result.get("error"):
         return {
             "success": False,
@@ -1003,11 +1015,14 @@ async def inbox_email_background_loop():
     while True:
         try:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            cfg = _get_inbox_config()
+            admin1 = _get_admin1()
+            if not admin1:
+                continue
+            cfg = _get_inbox_config(admin1)
             if not cfg["address"] or not cfg["auth_code"]:
                 continue
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL)
+            result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, admin1)
             if result.get("error"):
                 logger.warning(f"[InboxEmail] 自动同步失败: {result['error']}")
             elif result["new"] > 0:

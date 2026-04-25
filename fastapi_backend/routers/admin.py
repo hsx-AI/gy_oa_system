@@ -30,6 +30,21 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/admin", tags=["管理员"])
 
 
+def _ensure_yggl_email_columns():
+    """确保 yggl 表有企业邮箱与 IMAP 授权码字段。"""
+    for col, typedef in [
+        ("enterprise_email", "VARCHAR(255) DEFAULT NULL COMMENT '企业邮箱地址'"),
+        ("email_auth_code", "VARCHAR(200) DEFAULT '' COMMENT '企业邮箱IMAP授权码'"),
+    ]:
+        try:
+            db.execute_update(f"ALTER TABLE yggl ADD COLUMN {col} {typedef}", ())
+        except Exception:
+            pass
+
+
+_ensure_yggl_email_columns()
+
+
 def _get_admin2() -> Optional[str]:
     """从 webconfig 表读取 admin2（人事管理员用户名，与 yggl.name 对应）。"""
     try:
@@ -102,6 +117,18 @@ def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
     return None
 
 
+def _assert_can_manage_employee(scope: Dict[str, Any], employee_name: str) -> None:
+    """校验当前管理范围是否允许操作指定员工。"""
+    if scope["role"] != "dept":
+        return
+    emp_rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (employee_name,))
+    if not emp_rows:
+        raise HTTPException(status_code=404, detail="未找到该员工")
+    emp_lsys = (emp_rows[0].get("lsys") or "").strip()
+    if emp_lsys != (scope.get("lsys") or ""):
+        raise HTTPException(status_code=403, detail="仅可操作本室员工")
+
+
 @router.get("/employees")
 async def list_employees(
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
@@ -119,6 +146,7 @@ async def list_employees(
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可查看员工在职管理")
     try:
+        _ensure_yggl_email_columns()
         conditions = ["name IS NOT NULL", "name != ''"]
         params: list = []
         if scope["role"] == "dept":
@@ -142,7 +170,7 @@ async def list_employees(
         count_sql = f"SELECT COUNT(*) AS cnt FROM yggl WHERE {where}"
         total = db.execute_scalar(count_sql, tuple(params) if params else None) or 0
         select_sql = (
-            f"SELECT name, gh, lsys, jb, COALESCE(zaizhi,0) AS zaizhi FROM yggl WHERE {where} "
+            f"SELECT name, gh, enterprise_email, email_auth_code, lsys, jb, COALESCE(zaizhi,0) AS zaizhi FROM yggl WHERE {where} "
             "ORDER BY lsys, name LIMIT %s OFFSET %s"
         )
         params.extend([page_size, (page - 1) * page_size])
@@ -153,6 +181,8 @@ async def list_employees(
             list_data.append({
                 "name": (r.get("name") or "").strip(),
                 "gh": (r.get("gh") or "").strip(),
+                "enterpriseEmail": (r.get("enterprise_email") or "").strip(),
+                "emailAuthCodeConfigured": bool((r.get("email_auth_code") or "").strip()),
                 "lsys": (r.get("lsys") or "").strip(),
                 "jb": (r.get("jb") or "").strip(),
                 "zaizhi": z,
@@ -178,6 +208,8 @@ class AddEmployeeRequest(BaseModel):
     jb: str = ""       # 级别（如 员工、组长、主任 等）
     xbie: str = ""     # 性别
     password: str = "" # 初始登录密码（必填，至少4位）
+    enterprise_email: str = ""  # 企业邮箱地址
+    email_auth_code: str = ""   # 企业邮箱 IMAP 授权码
 
 
 @router.post("/employee")
@@ -189,6 +221,7 @@ async def add_employee(req: AddEmployeeRequest):
     scope = _get_admin_scope(req.current_user)
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可添加员工")
+    _ensure_yggl_email_columns()
     name = (req.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="请填写姓名")
@@ -211,12 +244,14 @@ async def add_employee(req: AddEmployeeRequest):
         gh_val = (req.gh or "").strip()
         jb_val = (req.jb or "").strip()
         xbie_val = (req.xbie or "").strip()
+        enterprise_email_val = (req.enterprise_email or "").strip()
+        email_auth_code_val = (req.email_auth_code or "").strip()
         # yggl 常用字段：name, pass, gh, lsys, jb, xbie, zaizhi；若有 lsysjm 可同 lsys 或空
         sql = (
-            "INSERT INTO yggl (name, `pass`, gh, lsys, jb, xbie, zaizhi) "
-            "VALUES (%s, %s, %s, %s, %s, %s, 0)"
+            "INSERT INTO yggl (name, `pass`, gh, enterprise_email, email_auth_code, lsys, jb, xbie, zaizhi) "
+            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0)"
         )
-        db.execute_update(sql, (name, pwd, gh_val, lsys_val, jb_val, xbie_val))
+        db.execute_update(sql, (name, pwd, gh_val, enterprise_email_val, email_auth_code_val, lsys_val, jb_val, xbie_val))
         return {
             "success": True,
             "message": "添加成功，新员工可凭姓名与初始密码登录",
@@ -240,6 +275,15 @@ class UpdateEmployeeDeptLevelRequest(BaseModel):
     name: str
     lsys: Optional[str] = None   # 新科室，仅部长/副部长可改
     jb: Optional[str] = None     # 新级别
+
+
+class UpdateEmployeeEmailRequest(BaseModel):
+    """更新员工企业邮箱与 IMAP 授权码。"""
+    current_user: str
+    name: str
+    enterprise_email: Optional[str] = None
+    email_auth_code: Optional[str] = None
+    clear_email_auth_code: bool = False
 
 
 @router.post("/employee-update-dept-level")
@@ -279,6 +323,51 @@ async def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
         raise
     except Exception as e:
         logger.error(f"更新员工科室/级别失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/employee-update-email")
+async def update_employee_email(req: UpdateEmployeeEmailRequest):
+    """更新员工企业邮箱和 IMAP 授权码；授权码未传时保留原值。"""
+    scope = _get_admin_scope(req.current_user)
+    if not scope:
+        raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可访问")
+    _ensure_yggl_email_columns()
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="请指定员工姓名")
+    try:
+        _assert_can_manage_employee(scope, name)
+        emp_rows = db.execute_query(
+            "SELECT enterprise_email, email_auth_code FROM yggl WHERE name = %s LIMIT 1",
+            (name,),
+        )
+        if not emp_rows:
+            raise HTTPException(status_code=404, detail="未找到该员工")
+        current_email = (emp_rows[0].get("enterprise_email") or "").strip()
+        current_auth_code = (emp_rows[0].get("email_auth_code") or "").strip()
+        new_email = (req.enterprise_email if req.enterprise_email is not None else current_email).strip()
+        if req.clear_email_auth_code:
+            new_auth_code = ""
+        elif req.email_auth_code is not None and req.email_auth_code.strip():
+            new_auth_code = req.email_auth_code.strip()
+        else:
+            new_auth_code = current_auth_code
+        db.execute_update(
+            "UPDATE yggl SET enterprise_email = %s, email_auth_code = %s WHERE name = %s",
+            (new_email, new_auth_code, name),
+        )
+        return {
+            "success": True,
+            "message": "邮箱配置已更新",
+            "name": name,
+            "enterpriseEmail": new_email,
+            "emailAuthCodeConfigured": bool(new_auth_code),
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"更新员工邮箱配置失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

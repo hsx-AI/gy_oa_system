@@ -1,35 +1,6 @@
 <template>
   <div class="inbox-page">
-    <div class="container">
-      <header class="page-header">
-        <div class="header-content">
-          <div class="header-info">
-            <h1 class="header-title">共用邮箱收件箱</h1>
-            <p class="header-subtitle">自动同步共用邮箱中“最近标旗(FLAGGED)”邮件并入库（仅系统管理员）</p>
-          </div>
-          <div class="header-actions">
-            <button
-              type="button"
-              class="btn btn-secondary"
-              :disabled="analyzing"
-              @click="manualAnalyze"
-              title="优先使用本地大模型抽取任务；本地不可用时自动回退 DeepSeek"
-            >
-              <span v-if="analyzing">分析中…</span>
-              <span v-else>立即分析</span>
-            </button>
-            <button
-              type="button"
-              class="btn btn-secondary"
-              :disabled="syncing"
-              @click="manualSync"
-            >
-              <span v-if="syncing">同步中…</span>
-              <span v-else>立即同步</span>
-            </button>
-          </div>
-        </div>
-      </header>
+    <div class="container" :class="{ 'tasks-mode': activeTab === 'tasks' }">
 
       <div v-if="!canAccess" class="card no-permission">
         <p>您暂无权限访问此页面，仅系统管理员（webconfig.admin1 对应用户）可操作。</p>
@@ -37,68 +8,25 @@
       </div>
 
       <template v-else>
-        <!-- 邮箱配置区 -->
-        <div class="card config-section">
-          <div class="section-header" @click="showConfig = !showConfig">
-            <h3 class="section-title">共用邮箱配置</h3>
-            <span class="config-status" :class="configured ? 'ok' : 'warn'">
-              {{ configured ? '已配置' : '未配置' }}
-            </span>
-            <svg
-              class="toggle-icon"
-              :class="{ open: showConfig }"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-            >
-              <polyline points="6 9 12 15 18 9" />
-            </svg>
-          </div>
-          <div v-show="showConfig" class="config-body">
-            <div class="config-hint">
-              <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
-              <p>
-                同步范围：仅拉取最近
-                <code>{{ syncRecentDays }}</code>
-                天内已标旗（FLAGGED）的邮件；自动拉取间隔：约
-                <code>{{ pollIntervalSeconds }}</code>
-                秒。
-              </p>
-            </div>
-            <div class="config-form">
-              <div class="form-row">
-                <label>共用邮箱地址</label>
-                <input
-                  v-model="configForm.email_address"
-                  type="text"
-                  placeholder="如 shared@company.com"
-                />
-              </div>
-              <div class="form-row">
-                <label>授权码</label>
-                <input
-                  v-model="configForm.email_auth_code"
-                  type="password"
-                  placeholder="IMAP 授权码（非邮箱密码）"
-                />
-              </div>
-              <div class="form-row">
-                <button
-                  class="btn btn-primary btn-sm"
-                  :disabled="configSaving"
-                  @click="saveConfig"
-                >
-                  {{ configSaving ? '保存中…' : '保存配置' }}
-                </button>
-                <span v-if="configMsg" class="config-msg" :class="configMsgType">{{ configMsg }}</span>
-              </div>
-            </div>
+        <div class="view-tabs-wrap">
+          <div class="view-tabs">
+            <button
+              type="button"
+              class="tab-btn"
+              :class="{ active: activeTab === 'tasks' }"
+              @click="activeTab = 'tasks'"
+            >AI 待办看板</button>
+            <button
+              type="button"
+              class="tab-btn"
+              :class="{ active: activeTab === 'emails' }"
+              @click="activeTab = 'emails'"
+            >邮件列表</button>
           </div>
         </div>
 
-        <!-- 任务看板（大模型抽取） -->
-        <div class="card board-section">
+        <!-- AI 看板主视图 -->
+        <div v-if="activeTab === 'tasks'" class="card board-section board-main">
           <div class="board-head">
             <div class="board-title-wrap">
               <span class="board-badge">AI</span>
@@ -115,17 +43,36 @@
             </div>
           </div>
 
+          <div class="board-actions">
+            <button
+              type="button"
+              class="btn btn-secondary btn-sm"
+              :disabled="analyzing"
+              @click="manualAnalyze"
+            >
+              <span v-if="analyzing">分析中…</span>
+              <span v-else>立即分析</span>
+            </button>
+          </div>
+
           <div v-if="taskMsg" class="board-toast" :class="taskMsgType">{{ taskMsg }}</div>
 
-          <div class="board-body">
+          <div class="board-body board-body-main">
             <div v-if="!tasks.length && !taskLoading" class="board-empty">
-              <p>暂无识别出的待办任务。可以先点击右上角“立即同步”拉取邮件，再点“立即分析”。</p>
+              <p>暂无识别出的待办任务。可以先点击上方“立即同步”拉取邮件，再点“立即分析”。</p>
             </div>
 
-            <div v-else class="marquee" @mouseenter="marqueePaused = true" @mouseleave="marqueePaused = false">
+            <div
+              v-else
+              ref="marqueeMainRef"
+              class="marquee marquee-main"
+              @mouseenter="marqueePaused = true"
+              @mouseleave="marqueePaused = false"
+              @wheel="onBoardWheel"
+            >
               <div class="marquee-track" :class="{ paused: marqueePaused, 'no-anim': tasks.length <= 2 }">
                 <div
-                  v-for="(t, idx) in loopedTasks"
+                  v-for="(t, idx) in displayTasks"
                   :key="`${t.id}-${idx}`"
                   class="task-card"
                   @click="openDetailById(t.id)"
@@ -150,8 +97,70 @@
           </div>
         </div>
 
-        <!-- 邮件列表 -->
-        <div class="card list-section">
+        <!-- 邮件列表模式 -->
+        <template v-else>
+          <!-- 邮箱配置区 -->
+          <div class="card config-section">
+            <div class="section-header" @click="showConfig = !showConfig">
+              <h3 class="section-title">共用邮箱配置</h3>
+              <span class="config-status" :class="configured ? 'ok' : 'warn'">
+                {{ configured ? '已配置' : '未配置' }}
+              </span>
+              <svg
+                class="toggle-icon"
+                :class="{ open: showConfig }"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              >
+                <polyline points="6 9 12 15 18 9" />
+              </svg>
+            </div>
+            <div v-show="showConfig" class="config-body">
+              <div class="config-hint">
+                <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
+                <p>
+                同步范围：仅拉取已标旗（FLAGGED）的最新
+                <code>50</code>
+                封邮件；自动拉取间隔：约
+                  <code>{{ pollIntervalSeconds }}</code>
+                  秒。
+                </p>
+              </div>
+              <div class="config-form">
+                <div class="form-row">
+                  <label>共用邮箱地址</label>
+                  <input
+                    v-model="configForm.email_address"
+                    type="text"
+                    placeholder="如 shared@company.com"
+                  />
+                </div>
+                <div class="form-row">
+                  <label>授权码</label>
+                  <input
+                    v-model="configForm.email_auth_code"
+                    type="password"
+                    placeholder="IMAP 授权码（非邮箱密码）"
+                  />
+                </div>
+                <div class="form-row">
+                  <button
+                    class="btn btn-primary btn-sm"
+                    :disabled="configSaving"
+                    @click="saveConfig"
+                  >
+                    {{ configSaving ? '保存中…' : '保存配置' }}
+                  </button>
+                  <span v-if="configMsg" class="config-msg" :class="configMsgType">{{ configMsg }}</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- 邮件列表 -->
+          <div class="card list-section">
           <div class="toolbar">
             <input
               v-model="keyword"
@@ -161,6 +170,10 @@
               @keydown.enter="onSearch"
             />
             <button class="btn btn-primary btn-sm" @click="onSearch">搜索</button>
+            <button class="btn btn-secondary btn-sm" :disabled="syncing" @click="manualSync">
+              <span v-if="syncing">同步中…</span>
+              <span v-else>立即同步</span>
+            </button>
             <button class="btn btn-secondary btn-sm" @click="resetSearch">重置</button>
             <span class="list-count">共 {{ total }} 封邮件</span>
           </div>
@@ -212,6 +225,8 @@
             </select>
           </div>
         </div>
+
+        </template>
       </template>
     </div>
 
@@ -288,7 +303,6 @@ const configured = ref(false)
 const imapServer = ref('')
 const imapPort = ref('')
 const pollIntervalSeconds = ref('')
-const syncRecentDays = ref(1)
 const configForm = ref({ email_address: '', email_auth_code: '' })
 const configSaving = ref(false)
 const configMsg = ref('')
@@ -301,6 +315,7 @@ const page = ref(1)
 const pageSize = ref(20)
 const loading = ref(false)
 const syncing = ref(false)
+const activeTab = ref('tasks')
 
 const tasks = ref([])
 const taskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
@@ -309,12 +324,19 @@ const marqueePaused = ref(false)
 const analyzing = ref(false)
 const taskMsg = ref('')
 const taskMsgType = ref('')
+const marqueeMainRef = ref(null)
 let taskRefreshTimer = null
 
 const loopedTasks = computed(() => {
   const arr = tasks.value || []
   if (arr.length <= 1) return arr
-  return arr.concat(arr) // 复制一份，实现无缝滚动
+  return arr.concat(arr)
+})
+
+const displayTasks = computed(() => {
+  const arr = tasks.value || []
+  if (arr.length <= 2) return arr
+  return loopedTasks.value
 })
 
 const totalPages = computed(() => {
@@ -328,7 +350,6 @@ const bodyMode = ref('html')
 
 const safeHtml = computed(() => {
   if (!detailItem.value || !detailItem.value.bodyHtml) return ''
-  // iframe 的 sandbox="" 禁止脚本执行，直接塞入 srcdoc 即可
   return detailItem.value.bodyHtml
 })
 
@@ -348,11 +369,9 @@ async function loadConfig() {
       configured.value = !!res.configured
       configForm.value.email_address = res.emailAddress || ''
       configForm.value.email_auth_code = ''
-      //imapServer.value = res.imapServer || 'imap.163.com'
       imapServer.value = res.imapServer || 'imap.qiye.163.com'
       imapPort.value = res.imapPort || 993
       pollIntervalSeconds.value = res.pollIntervalSeconds || 120
-      syncRecentDays.value = res.syncRecentDays || 1
     }
   } catch (e) {
     console.warn('加载共用邮箱配置失败', e)
@@ -524,6 +543,17 @@ function deadlineClass(deadline) {
   return 'neutral'
 }
 
+function onBoardWheel(e) {
+  const el = marqueeMainRef.value
+  if (!el) return
+  const deltaY = Number(e?.deltaY || 0)
+  if (!deltaY) return
+  const maxScroll = el.scrollHeight - el.clientHeight
+  if (maxScroll <= 0) return
+  e.preventDefault()
+  el.scrollTop += deltaY
+}
+
 async function openDetailById(id) {
   if (!id) return
   await openDetail({ id })
@@ -593,6 +623,13 @@ onBeforeUnmount(() => {
   max-width: 1200px;
   margin: 0 auto;
   padding: var(--spacing-xl) var(--spacing-lg);
+}
+.inbox-page .container.tasks-mode {
+  max-width: 100%;
+  padding-top: var(--spacing-xl);
+  min-height: calc(100dvh - 120px);
+  display: flex;
+  flex-direction: column;
 }
 .page-header {
   margin-bottom: var(--spacing-xl);
@@ -714,12 +751,61 @@ onBeforeUnmount(() => {
 .config-msg.success { color: #16a34a; }
 .config-msg.error { color: #dc2626; }
 
+.view-tabs-wrap {
+  display: flex;
+  justify-content: flex-start;
+  margin-bottom: var(--spacing-md);
+}
+
+.view-tabs {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
+  border: 1px solid #c7d2fe;
+  padding: 6px;
+  border-radius: 12px;
+  box-shadow: 0 6px 16px rgba(79, 70, 229, 0.12);
+}
+
+.tab-btn {
+  border: none;
+  background: transparent;
+  color: #4b5563;
+  font-size: 0.92rem;
+  font-weight: 600;
+  padding: 9px 18px;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: all .2s ease;
+}
+
+.tab-btn:hover {
+  background: rgba(255, 255, 255, 0.72);
+  color: #4338ca;
+}
+
+.tab-btn.active {
+  background: #fff;
+  color: #312e81;
+  box-shadow: 0 4px 12px rgba(79, 70, 229, 0.2);
+}
+
 /* 任务看板 */
 .board-section {
   margin-bottom: var(--spacing-lg);
   padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
   background: linear-gradient(135deg, #eef2ff 0%, #f5f3ff 100%);
   border: 1px solid #e0e7ff;
+}
+.board-main {
+  flex: 1;
+  height: calc(100dvh - 180px);
+  min-height: calc(100dvh - 180px);
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .board-head {
   display: flex;
@@ -770,6 +856,9 @@ onBeforeUnmount(() => {
 .board-stats .stat-warn em {
   color: #dc2626;
 }
+.board-actions {
+  margin-bottom: var(--spacing-sm);
+}
 .btn-ghost {
   background: #fff;
   border: 1px solid #c7d2fe;
@@ -800,6 +889,11 @@ onBeforeUnmount(() => {
 .board-body {
   position: relative;
 }
+.board-body-main {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
 .marquee {
   position: relative;
   overflow: hidden;
@@ -807,11 +901,24 @@ onBeforeUnmount(() => {
   mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
   -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 24px, #000 calc(100% - 24px), transparent 100%);
 }
+.marquee-main {
+  flex: 1;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scroll-behavior: smooth;
+  mask-image: none;
+  -webkit-mask-image: none;
+}
 .marquee-track {
   display: flex;
   flex-direction: column;
   gap: 10px;
   animation: marquee-scroll 40s linear infinite;
+  will-change: transform;
 }
 .marquee-track.paused { animation-play-state: paused; }
 .marquee-track.no-anim { animation: none; }

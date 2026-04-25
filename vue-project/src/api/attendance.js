@@ -481,6 +481,11 @@ export function updateEmployeeDeptLevel(data) {
   return request({ url: '/admin/employee-update-dept-level', method: 'post', data })
 }
 
+/** 更新员工企业邮箱/IMAP授权码 */
+export function updateEmployeeEmail(data) {
+  return request({ url: '/admin/employee-update-email', method: 'post', data })
+}
+
 /** 管理员：添丁（向 yggl 主表新增员工） */
 export function addEmployee(data) {
   return request({ url: '/admin/employee', method: 'post', data })
@@ -778,5 +783,4 @@ export function getClockInDisciplineStats(params) {
 export function getPersonScatterData(params) {
   return request({ url: '/discipline/person-scatter', method: 'get', params })
 }
-
 
