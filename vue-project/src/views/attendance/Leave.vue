@@ -244,7 +244,7 @@
                 <input type="checkbox" v-model="form.needSecondApproval" :disabled="secondApprovalAutoRequired">
                 需要二级审批
               </label>
-              <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">换休超过2天自动需要二级审批</p>
+              <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">请假时长超过2天自动需要二级审批</p>
             </div>
           </div>
 
@@ -477,7 +477,7 @@ const exchangeTicketConsume = computed(() => {
 })
 const materialFileRef = ref(null)
 
-const secondApprovalAutoRequired = computed(() => form.type === '换休' && (form.duration || 0) > 2)
+const secondApprovalAutoRequired = computed(() => Number(form.duration || 0) > 2)
 
 watch(secondApprovalAutoRequired, (required) => {
   if (required) form.needSecondApproval = true
