@@ -153,6 +153,9 @@
       <span class="legend-item"><span class="legend-dot legend-night"></span>夜班</span>
       <span class="legend-item"><span class="legend-dot legend-empty"></span>不值班</span>
       <span class="legend-sep">|</span>
+      <span class="legend-item"><span class="legend-dot legend-loc-zhunbei"></span>准备组值班</span>
+      <span class="legend-item"><span class="legend-dot legend-loc-fuwu"></span>服务组值班</span>
+      <span class="legend-sep">|</span>
       <span class="legend-hint">点击单元格切换：白班 → 夜班 → 不值班</span>
       <span class="legend-sep">|</span>
       <span class="legend-item"><span class="legend-dot legend-open"></span>已解锁（成员仅可填本人班次；计划可协同）</span>
@@ -295,7 +298,7 @@
                 class="col-day cell"
                 :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }, scheduleHlClass(2 + di, 3 + ei)]"
                 @mouseenter="scheduleSetHover(2 + di, 3 + ei)"
-                @click="onCellClick(emp, d.date)"
+                @click="onCellClick(emp, d.date, $event)"
                 @mousedown="onCellDown(emp, d.date, $event)"
                 @mouseup="onCellUp"
                 @mouseleave="onCellUp"
@@ -303,6 +306,12 @@
                 @touchend="onCellUp"
               >
                 <span class="cell-text">{{ cellLabel(emp, d.date) }}</span>
+                <span
+                  v-if="cellLocationLabel(emp, d.date) && (scheduleData[emp]?.[d.date] === '白班' || scheduleData[emp]?.[d.date] === '夜班')"
+                  class="cell-loc-dot"
+                  :class="{ 'cell-loc-zhunbei': cellLocationLabel(emp, d.date) === '准备组', 'cell-loc-fuwu': cellLocationLabel(emp, d.date) === '服务组' }"
+                  :title="cellLocationLabel(emp, d.date)"
+                ></span>
               </td>
             </tr>
           </tbody>
@@ -314,6 +323,29 @@
     </div>
     <div v-else-if="loading" class="empty-state card"><p>加载中…</p></div>
     <div v-else class="empty-state card"><p>请先选择科室</p></div>
+
+    <!-- 值班位置选择弹窗 -->
+    <Teleport to="body">
+      <div v-if="locPickerVisible" class="loc-picker-overlay" @click.self="dismissLocPicker">
+        <div
+          class="loc-picker"
+          :style="{ top: locPickerPos.top + 'px', left: locPickerPos.left + 'px' }"
+        >
+          <div class="loc-picker-title">选择值班位置</div>
+          <div class="loc-picker-btns">
+            <button
+              v-for="loc in LOCATION_OPTIONS"
+              :key="loc"
+              type="button"
+              class="loc-picker-btn"
+              :class="{ active: cellLocationLabel(locPickerEmp, locPickerDate) === loc }"
+              @click="pickLocation(loc)"
+            >{{ loc }}</button>
+          </div>
+          <button type="button" class="loc-picker-skip" @click="dismissLocPicker">暂不选择</button>
+        </div>
+      </div>
+    </Teleport>
 
     <!-- 值班工作计划弹出编辑器 -->
     <div v-if="planEditing" class="plan-overlay" @click.self="closePlanEditor">
@@ -513,12 +545,47 @@ const selectedDept = ref('')
 const employees = ref([])
 const dates = ref([])
 const scheduleData = reactive({})
+const scheduleLocations = reactive({})
 const dayPlans = reactive({})
 const loading = ref(false)
 const saving = ref(false)
 const dirty = ref(false)
 const plansDirty = ref(false)
 const effectiveDirty = computed(() => dirty.value || plansDirty.value)
+
+const LOCATION_OPTIONS = ['准备组', '服务组']
+const locPickerVisible = ref(false)
+const locPickerEmp = ref('')
+const locPickerDate = ref('')
+const locPickerPos = reactive({ top: 0, left: 0 })
+
+function showLocPicker(emp, dateStr, event) {
+  locPickerEmp.value = emp
+  locPickerDate.value = dateStr
+  const rect = event?.target?.getBoundingClientRect?.()
+  if (rect) {
+    locPickerPos.top = rect.bottom + 4
+    locPickerPos.left = rect.left
+  }
+  locPickerVisible.value = true
+}
+
+function pickLocation(loc) {
+  const emp = locPickerEmp.value
+  const ds = locPickerDate.value
+  if (!scheduleLocations[emp]) scheduleLocations[emp] = {}
+  scheduleLocations[emp][ds] = loc
+  dirty.value = true
+  locPickerVisible.value = false
+}
+
+function dismissLocPicker() {
+  locPickerVisible.value = false
+}
+
+function cellLocationLabel(emp, dateStr) {
+  return scheduleLocations[emp]?.[dateStr] || ''
+}
 
 const planEditing = ref(false)
 const planEditDate = ref('')
@@ -578,6 +645,7 @@ const monthOverviewMonth = ref(new Date().getMonth() + 1)
 const monthOverviewEmployees = ref([])
 const monthOverviewDates = ref([])
 const moSchedule = reactive({})
+const moLocations = reactive({})
 const moDayPlans = reactive({})
 const moViewMode = ref('calendar')
 
@@ -597,8 +665,10 @@ const calDayData = computed(() => {
     const nightList = []
     for (const emp of monthOverviewEmployees.value) {
       const v = moSchedule[emp]?.[d.date] || ''
-      if (v === '白班') dayList.push(emp)
-      else if (v === '夜班') nightList.push(emp)
+      const loc = moLocations[emp]?.[d.date] || ''
+      const locTag = loc ? `(${loc === '准备组' ? '准' : loc === '服务组' ? '服' : loc})` : ''
+      if (v === '白班') dayList.push(emp + locTag)
+      else if (v === '夜班') nightList.push(emp + locTag)
     }
     result[d.date] = { day: dayList, night: nightList }
   }
@@ -656,11 +726,16 @@ async function loadMonthOverview() {
     monthOverviewEmployees.value = res?.employees || []
     monthOverviewDates.value = res?.dates || []
     Object.keys(moSchedule).forEach((k) => delete moSchedule[k])
+    Object.keys(moLocations).forEach((k) => delete moLocations[k])
     Object.keys(moDayPlans).forEach((k) => delete moDayPlans[k])
     const sch = res?.schedule || {}
+    const moLocs = res?.locations || {}
     const dp = res?.dayPlans || {}
     for (const [emp, dayMap] of Object.entries(sch)) {
       moSchedule[emp] = { ...dayMap }
+    }
+    for (const [emp, dayMap] of Object.entries(moLocs)) {
+      moLocations[emp] = { ...dayMap }
     }
     for (const d of monthOverviewDates.value) {
       moDayPlans[d.date] = dp[d.date] ?? ''
@@ -694,8 +769,10 @@ function shiftOverviewMonth(delta) {
 
 function moCellLabel(emp, dateStr) {
   const v = moSchedule[emp]?.[dateStr] || ''
-  if (v === '白班') return '白'
-  if (v === '夜班') return '夜'
+  const loc = moLocations[emp]?.[dateStr] || ''
+  const ls = loc === '准备组' ? '准' : loc === '服务组' ? '服' : ''
+  if (v === '白班') return ls ? `白${ls}` : '白'
+  if (v === '夜班') return ls ? `夜${ls}` : '夜'
   return ''
 }
 
@@ -808,6 +885,11 @@ async function loadSchedule() {
     for (const [emp, dayMap] of Object.entries(sch)) {
       scheduleData[emp] = { ...dayMap }
     }
+    Object.keys(scheduleLocations).forEach(k => delete scheduleLocations[k])
+    const locs = schRes?.locations || {}
+    for (const [emp, dayMap] of Object.entries(locs)) {
+      scheduleLocations[emp] = { ...dayMap }
+    }
     Object.keys(dayPlans).forEach(k => delete dayPlans[k])
     const dp = schRes?.dayPlans || {}
     for (const d of schRes?.dates || []) {
@@ -891,7 +973,7 @@ function countShiftOnDate(dateStr, shift) {
   return n
 }
 
-function cycleShift(emp, dateStr) {
+function cycleShift(emp, dateStr, event) {
   if (!canEditShiftCell(emp, dateStr)) return
   if (!scheduleData[emp]) scheduleData[emp] = {}
   const cur = scheduleData[emp][dateStr] || ''
@@ -901,6 +983,11 @@ function cycleShift(emp, dateStr) {
   const caps = shiftCapsForDateStr(dateStr)
   scheduleData[emp][dateStr] = next
   dirty.value = true
+  if (next === '白班' || next === '夜班') {
+    if (event) showLocPicker(emp, dateStr, event)
+  } else {
+    if (scheduleLocations[emp]) scheduleLocations[emp][dateStr] = ''
+  }
   if (next === '白班') {
     const cnt = countShiftOnDate(dateStr, '白班')
     if (cnt > caps.day) {
@@ -932,9 +1019,9 @@ function onCellUp() {
   if (_lpTimer) { clearTimeout(_lpTimer); _lpTimer = null }
 }
 
-function onCellClick(emp, dateStr) {
+function onCellClick(emp, dateStr, event) {
   if (_lpFired) { _lpFired = false; return }
-  cycleShift(emp, dateStr)
+  cycleShift(emp, dateStr, event)
 }
 
 function toggleBothShift(emp, dateStr) {
@@ -961,9 +1048,11 @@ function toggleBothShift(emp, dateStr) {
 
 function cellLabel(emp, dateStr) {
   const v = scheduleData[emp]?.[dateStr] || ''
+  const loc = scheduleLocations[emp]?.[dateStr] || ''
+  const locShort = loc === '准备组' ? '准' : loc === '服务组' ? '服' : ''
   if (v === '白+夜') return '白夜'
-  if (v === '白班') return '白'
-  if (v === '夜班') return '夜'
+  if (v === '白班') return locShort ? `白${locShort}` : '白'
+  if (v === '夜班') return locShort ? `夜${locShort}` : '夜'
   return ''
 }
 
@@ -1092,6 +1181,7 @@ async function handleSave() {
           year: rs.getFullYear(),
           month: rs.getMonth() + 1,
           schedule: { ...scheduleData },
+          locations: { ...scheduleLocations },
           current_user: getCurrentUser(),
         }),
       )
@@ -1444,6 +1534,8 @@ async function handleExportExcel() {
 .legend-day { background: #dbeafe; border: 1px solid #93c5fd; }
 .legend-night { background: #fef3c7; border: 1px solid #fbbf24; }
 .legend-empty { background: white; border: 1px solid #d1d5db; }
+.legend-loc-zhunbei { background: #22c55e; border: 1px solid #16a34a; border-radius: 50%; }
+.legend-loc-fuwu { background: #f97316; border: 1px solid #ea580c; border-radius: 50%; }
 .legend-sep { color: #d1d5db; }
 .legend-hint { font-style: italic; color: #9ca3af; }
 
@@ -1821,6 +1913,20 @@ thead tr:first-child .sticky-col2 {
 .cell-night { background: #fef3c7; color: #92400e; }
 .cell-both { background: linear-gradient(135deg, #dbeafe 50%, #fef3c7 50%); color: #7c3aed; font-size: 11px; }
 .cell-empty { background: white; color: transparent; }
+
+/* 值班位置小圆点 */
+.cell { position: relative; }
+.cell-loc-dot {
+  position: absolute;
+  top: 2px;
+  right: 2px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  pointer-events: none;
+}
+.cell-loc-zhunbei { background: #22c55e; box-shadow: 0 0 0 1px #fff; }
+.cell-loc-fuwu { background: #f97316; box-shadow: 0 0 0 1px #fff; }
 
 .stat-day { color: #2563eb; font-weight: 600; }
 .stat-night { color: #d97706; font-weight: 600; }
@@ -2200,6 +2306,77 @@ thead tr:first-child .sticky-col2 {
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* 值班位置选择弹窗 */
+.loc-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  background: rgba(0, 0, 0, 0.15);
+}
+.loc-picker {
+  position: fixed;
+  z-index: 201;
+  background: #fff;
+  border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.18);
+  border: 1px solid #e2e8f0;
+  padding: 12px 16px;
+  min-width: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+.loc-picker-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #334155;
+}
+.loc-picker-btns {
+  display: flex;
+  gap: 10px;
+}
+.loc-picker-btn {
+  padding: 8px 18px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1.5px solid #cbd5e1;
+  background: #fff;
+  color: #334155;
+  cursor: pointer;
+  transition: all .15s;
+}
+.loc-picker-btn:first-child {
+  border-color: #22c55e;
+  color: #15803d;
+}
+.loc-picker-btn:first-child:hover,
+.loc-picker-btn:first-child.active {
+  background: #dcfce7;
+  border-color: #16a34a;
+}
+.loc-picker-btn:last-child {
+  border-color: #f97316;
+  color: #c2410c;
+}
+.loc-picker-btn:last-child:hover,
+.loc-picker-btn:last-child.active {
+  background: #fff7ed;
+  border-color: #ea580c;
+}
+.loc-picker-skip {
+  background: none;
+  border: none;
+  font-size: 12px;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 2px 6px;
+}
+.loc-picker-skip:hover {
+  color: #475569;
 }
 
 @media (max-width: 768px) {

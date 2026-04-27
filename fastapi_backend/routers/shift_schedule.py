@@ -63,6 +63,21 @@ def _ensure_tables():
           INDEX idx_dept_ym (department, year, month)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    # shift_location 字段：值班位置（准备组/服务组）
+    loc_col = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shift_schedule' AND COLUMN_NAME = 'shift_location' "
+        "LIMIT 1"
+    )
+    if not loc_col:
+        try:
+            db.execute_update(
+                "ALTER TABLE shift_schedule ADD COLUMN shift_location VARCHAR(20) NOT NULL DEFAULT '' "
+                "COMMENT '值班位置：准备组/服务组' AFTER shift_type"
+            )
+        except Exception:
+            pass
+
     db.execute_update("""
         CREATE TABLE IF NOT EXISTS shift_day_plan (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -361,11 +376,12 @@ async def get_schedule(
     ds_lo = dates[0].strftime("%Y-%m-%d")
     ds_hi = dates[-1].strftime("%Y-%m-%d")
     rows = db.execute_query(
-        f"SELECT employee_name, shift_date, shift_type FROM shift_schedule "
+        f"SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
         f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s AND employee_name IN ({ph})",
         (department, ds_lo, ds_hi) + tuple(employees),
     )
     schedule = {}
+    locations = {}
     for r in rows:
         name = (r.get("employee_name") or "").strip()
         sd = r.get("shift_date")
@@ -374,8 +390,11 @@ async def get_schedule(
         else:
             sd = str(sd)[:10] if sd else ""
         st = (r.get("shift_type") or "").strip()
+        sl = (r.get("shift_location") or "").strip()
         if name and sd:
             schedule.setdefault(name, {})[sd] = st
+            if sl:
+                locations.setdefault(name, {})[sd] = sl
 
     day_plans = {}
     try:
@@ -417,6 +436,7 @@ async def get_schedule(
         "success": True,
         "employees": employees,
         "schedule": schedule,
+        "locations": locations,
         "dates": date_info,
         "dayPlans": day_plans,
         "openDates": open_dates,
@@ -425,9 +445,10 @@ async def get_schedule(
 
 class SaveScheduleRequest(BaseModel):
     department: str
-    year: int = 0  # 兼容旧前端；实际以每条 date 解析年月写入
+    year: int = 0
     month: int = 0
     schedule: dict  # { "张三": { "2026-03-01": "白班", ... }, ... }
+    locations: dict = {}  # { "张三": { "2026-03-01": "准备组", ... }, ... }
     current_user: str = ""
 
 
@@ -458,6 +479,7 @@ async def save_schedule(req: SaveScheduleRequest):
         else:
             open_set = set()
 
+    loc_map = req.locations or {}
     params_list = []
     for emp_name, day_map in req.schedule.items():
         en = (emp_name or "").strip()
@@ -474,17 +496,18 @@ async def save_schedule(req: SaveScheduleRequest):
             if not is_mgr and d < today_d:
                 continue
             y, m = d.year, d.month
+            loc = (loc_map.get(en, {}).get(ds) or "").strip()
             params_list.append((
-                req.department, en, ds, shift_type,
+                req.department, en, ds, shift_type, loc,
                 y, m, req.current_user, now,
-                shift_type, req.current_user, now,
+                shift_type, loc, req.current_user, now,
             ))
     if not params_list:
         return {"success": True, "message": "无排班数据"}
     sql = (
-        "INSERT INTO shift_schedule (department, employee_name, shift_date, shift_type, year, month, updated_by, updated_at) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE shift_type = %s, updated_by = %s, updated_at = %s"
+        "INSERT INTO shift_schedule (department, employee_name, shift_date, shift_type, shift_location, year, month, updated_by, updated_at) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE shift_type = %s, shift_location = %s, updated_by = %s, updated_at = %s"
     )
     n = db.execute_many(sql, params_list)
     if n < 0:
@@ -915,10 +938,11 @@ async def export_schedule_excel(
 
     ds_lo, ds_hi = dates[0].strftime("%Y-%m-%d"), dates[-1].strftime("%Y-%m-%d")
     schedule = {}
+    export_locations = {}
     if employees:
         ph = ",".join(["%s"] * len(employees))
         rows = db.execute_query(
-            f"SELECT employee_name, shift_date, shift_type FROM shift_schedule "
+            f"SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
             f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s AND employee_name IN ({ph})",
             (department, ds_lo, ds_hi) + tuple(employees),
         )
@@ -927,8 +951,11 @@ async def export_schedule_excel(
             sd = r.get("shift_date")
             sd = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
             st = (r.get("shift_type") or "").strip()
+            sl = (r.get("shift_location") or "").strip()
             if name and sd:
                 schedule.setdefault(name, {})[sd] = st
+                if sl:
+                    export_locations.setdefault(name, {})[sd] = sl
 
     day_plans = {}
     try:
@@ -1030,12 +1057,14 @@ async def export_schedule_excel(
         for ci, di in enumerate(date_info):
             col = 3 + ci
             v = schedule.get(emp, {}).get(di["date"], "")
+            loc = export_locations.get(emp, {}).get(di["date"], "")
+            loc_short = "准" if loc == "准备组" else ("服" if loc == "服务组" else "")
             label = ""
             if v == "白班":
-                label = "白"
+                label = f"白{loc_short}" if loc_short else "白"
                 day_cnt += 1
             elif v == "夜班":
-                label = "夜"
+                label = f"夜{loc_short}" if loc_short else "夜"
                 night_cnt += 1
             cell = ws1.cell(row=row, column=col, value=label)
             cell.font = font_body
@@ -1127,10 +1156,12 @@ async def export_schedule_excel(
         night_emps = []
         for emp in employees:
             v = schedule.get(emp, {}).get(ds, "")
+            loc = export_locations.get(emp, {}).get(ds, "")
+            loc_tag = f"({loc})" if loc else ""
             if v == "白班":
-                day_emps.append(emp)
+                day_emps.append(emp + loc_tag)
             elif v == "夜班":
-                night_emps.append(emp)
+                night_emps.append(emp + loc_tag)
         if day_emps:
             lines.append(f"白班({len(day_emps)})：{'、'.join(day_emps)}")
         if night_emps:
