@@ -288,7 +288,7 @@ async def wall_like(item_id: str, req: WallLike):
             "UPDATE feedback_wall SET like_count = GREATEST(like_count - 1, 0) WHERE id = %s",
             (item_id,),
         )
-        return {"success": True, "liked": False}
+        liked = False
     else:
         db.execute_update(
             "INSERT INTO feedback_wall_likes (wall_id, user_name) VALUES (%s, %s)",
@@ -298,7 +298,12 @@ async def wall_like(item_id: str, req: WallLike):
             "UPDATE feedback_wall SET like_count = like_count + 1 WHERE id = %s",
             (item_id,),
         )
-        return {"success": True, "liked": True}
+        liked = True
+    row = db.execute_query(
+        "SELECT like_count FROM feedback_wall WHERE id = %s", (item_id,)
+    )
+    like_count = row[0]["like_count"] if row else 0
+    return {"success": True, "liked": liked, "likeCount": like_count}
 
 
 @router.get("/wall/{item_id}/detail")

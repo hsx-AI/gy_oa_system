@@ -258,7 +258,14 @@
               <div class="wall-mini-foot">
                 <span class="wall-mini-avatar">匿</span>
                 <span class="wall-mini-dept">匿名</span>
-                <span class="wall-mini-like" @click.stop="doWallLike(card.id)">👍 {{ card.likeCount || 0 }}</span>
+                <span
+                  class="wall-mini-like"
+                  :class="{ liked: wallLikedIds.has(card.id), animating: wallLikeAnimating.has(card.id) }"
+                  @click.stop="doWallLike(card.id)"
+                >
+                  <span class="wall-like-icon">👍</span>
+                  <span class="wall-like-count">{{ card.likeCount || 0 }}</span>
+                </span>
               </div>
             </div>
           </div>
@@ -499,6 +506,9 @@ async function loadWallList() {
   wallLoading.value = false
 }
 
+const wallLikedIds = ref(new Set())
+const wallLikeAnimating = ref(new Set())
+
 async function doWallLike(id) {
   const name = (userName.value || '').trim()
   if (!name) return
@@ -506,7 +516,19 @@ async function doWallLike(id) {
     const res = await likeWall(id, { current_user: name })
     if (res && res.success) {
       const card = wallList.value.find(w => w.id === id)
-      if (card) card.likeCount = res.likeCount ?? (card.likeCount || 0) + 1
+      if (card) card.likeCount = res.likeCount ?? card.likeCount
+      if (res.liked) {
+        wallLikedIds.value.add(id)
+      } else {
+        wallLikedIds.value.delete(id)
+      }
+      wallLikedIds.value = new Set(wallLikedIds.value)
+      wallLikeAnimating.value.add(id)
+      wallLikeAnimating.value = new Set(wallLikeAnimating.value)
+      setTimeout(() => {
+        wallLikeAnimating.value.delete(id)
+        wallLikeAnimating.value = new Set(wallLikeAnimating.value)
+      }, 600)
     }
   } catch { /* ignore */ }
 }
@@ -2359,13 +2381,66 @@ async function navigateTo(feature) {
 }
 
 .wall-mini-like {
+  position: relative;
   cursor: pointer;
   white-space: nowrap;
   transition: transform .15s;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  user-select: none;
 }
 
 .wall-mini-like:hover {
   transform: scale(1.15);
+  background: rgba(255, 255, 255, 0.25);
+}
+
+.wall-mini-like.liked {
+  background: rgba(255, 255, 255, 0.35);
+  font-weight: 700;
+}
+
+.wall-mini-like.liked .wall-like-count {
+  color: #fff;
+}
+
+.wall-like-icon {
+  display: inline-block;
+  transition: transform .3s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+.wall-mini-like.animating .wall-like-icon {
+  animation: wall-like-pop .5s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+@keyframes wall-like-pop {
+  0%   { transform: scale(1); }
+  25%  { transform: scale(1.5) rotate(-15deg); }
+  50%  { transform: scale(0.9) rotate(5deg); }
+  75%  { transform: scale(1.2); }
+  100% { transform: scale(1); }
+}
+
+.wall-mini-like.animating.liked::after {
+  content: '';
+  position: absolute;
+  top: -4px;
+  left: 50%;
+  width: 6px;
+  height: 6px;
+  background: rgba(255, 255, 255, 0.9);
+  border-radius: 50%;
+  animation: wall-like-burst .5s ease-out forwards;
+  pointer-events: none;
+}
+
+@keyframes wall-like-burst {
+  0%   { transform: translate(-50%, 0) scale(0); opacity: 1; }
+  50%  { transform: translate(-50%, -12px) scale(1.5); opacity: 0.8; }
+  100% { transform: translate(-50%, -20px) scale(0.5); opacity: 0; }
 }
 
 /* ========== 重要信息审阅 ========== */
