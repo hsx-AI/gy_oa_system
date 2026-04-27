@@ -211,6 +211,61 @@
       </div>
     </div>
 
+    <!-- 吐槽墙预览 -->
+    <section class="home-wall-section">
+      <article class="dashboard-card wall-preview-card">
+        <header class="dashboard-card__header wall-preview-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--wall" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">吐槽墙</span>
+            <span class="dashboard-card__badge" v-if="wallList.length">{{ wallList.length }}</span>
+          </h2>
+          <div class="wall-preview-actions">
+            <button type="button" class="wall-preview-refresh" title="刷新" @click="loadWallList">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <router-link to="/feedback" class="wall-preview-viewall">
+              查看全部
+            </router-link>
+          </div>
+        </header>
+        <div class="wall-preview-body">
+          <div v-if="wallLoading" class="dashboard-empty"><p>加载中...</p></div>
+          <div v-else-if="!wallDisplayCards.length" class="dashboard-empty"><p>暂无吐槽</p></div>
+          <div v-else class="wall-preview-grid">
+            <div
+              v-for="card in wallDisplayCards"
+              :key="card.id"
+              class="wall-mini-card"
+              :style="{ background: card._bg, '--rot': card._rotate + 'deg' }"
+              @click="router.push('/feedback')"
+            >
+              <span :class="['wall-mini-badge', `wmb-${card.resolved || 0}`]">
+                {{ wallResolveLabel(card.resolved) }}
+              </span>
+              <p class="wall-mini-body">{{ card.content }}</p>
+              <div v-if="card.replies?.length" class="wall-mini-reply">
+                {{ card.replies[card.replies.length - 1].replyBy }} 回复：{{ (card.replies[card.replies.length - 1].replyContent || '').slice(0, 12) }}{{ (card.replies[card.replies.length - 1].replyContent || '').length > 12 ? '…' : '' }}
+              </div>
+              <div class="wall-mini-foot">
+                <span class="wall-mini-avatar">匿</span>
+                <span class="wall-mini-dept">匿名</span>
+                <span class="wall-mini-like" @click.stop="doWallLike(card.id)">👍 {{ card.likeCount || 0 }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
     <!-- 重要信息审阅（仅部长可见） -->
     <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
       <article class="dashboard-card dashboard-card--briefing">
@@ -366,6 +421,7 @@ import {
   getUploadConfig,
 } from '@/api/attendance'
 import { getLeaderBriefing } from '@/api/admin'
+import { getWallList, likeWall, wallImageUrl } from '@/api/feedback'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
@@ -407,6 +463,53 @@ const inboxTaskMsgType = ref('')
 const inboxTaskBoardRef = ref(null)
 const inboxTaskMarqueePaused = ref(false)
 let inboxTaskRefreshTimer = null
+
+// 吐槽墙首页预览
+const wallList = ref([])
+const wallLoading = ref(false)
+const WALL_CARD_BG = [
+  'linear-gradient(135deg,#e74c5e,#c62d42)', 'linear-gradient(135deg,#3a7bd5,#2b5ea7)',
+  'linear-gradient(135deg,#43a047,#2e7d32)', 'linear-gradient(135deg,#f4a62a,#e88d1a)',
+  'linear-gradient(135deg,#8e44ad,#6c3483)', 'linear-gradient(135deg,#00acc1,#00838f)',
+]
+const WALL_CARD_ROT = [-2, 1.5, -1, 2, -1.5, 1]
+
+const wallDisplayCards = computed(() => {
+  return (wallList.value || []).slice(0, 6).map((w, i) => ({
+    ...w,
+    _bg: WALL_CARD_BG[i % WALL_CARD_BG.length],
+    _rotate: WALL_CARD_ROT[i % WALL_CARD_ROT.length],
+  }))
+})
+
+function wallResolveLabel(v) {
+  return v === 2 ? '已回复' : v === 1 ? '处理中' : '未处理'
+}
+
+function getWallImgSrc(filename) {
+  return wallImageUrl(filename)
+}
+
+async function loadWallList() {
+  wallLoading.value = true
+  try {
+    const res = await getWallList()
+    if (res && res.success) wallList.value = res.data || []
+  } catch { /* ignore */ }
+  wallLoading.value = false
+}
+
+async function doWallLike(id) {
+  const name = (userName.value || '').trim()
+  if (!name) return
+  try {
+    const res = await likeWall(id, { current_user: name })
+    if (res && res.success) {
+      const card = wallList.value.find(w => w.id === id)
+      if (card) card.likeCount = res.likeCount ?? (card.likeCount || 0) + 1
+    }
+  } catch { /* ignore */ }
+}
 
 const isBuzhang = ref(false)
 const briefingItems = ref([])
@@ -1113,6 +1216,7 @@ onMounted(() => {
   isBuzhang.value = jbMatch(jb, '部长')
   refreshWorkplaceTodos()
   fetchRequestList()
+  loadWallList()
   if (isBuzhang.value) fetchBriefing()
   getUploadConfig().then(res => {
     if (res && res.success) {
@@ -2092,6 +2196,179 @@ async function navigateTo(feature) {
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
 }
 
+/* ========== 吐槽墙首页预览 ========== */
+.home-wall-section {
+  margin-bottom: var(--spacing-xxl);
+}
+
+.wall-preview-card {
+  background: linear-gradient(135deg, #fef3f2 0%, #fdf2f8 50%, #f5f3ff 100%);
+  border-color: #fecdd3;
+}
+
+.dashboard-card__icon--wall {
+  background: linear-gradient(135deg, #e11d48 0%, #db2777 100%);
+}
+
+.wall-preview-card__header {
+  align-items: center;
+}
+
+.wall-preview-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.wall-preview-refresh {
+  width: 32px;
+  height: 30px;
+  border: 1px solid #fda4af;
+  background: #fff;
+  color: #be123c;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+
+.wall-preview-refresh svg {
+  width: 16px;
+  height: 16px;
+}
+
+.wall-preview-refresh:hover {
+  background: #fff1f2;
+}
+
+.wall-preview-viewall {
+  height: 30px;
+  padding: 0 12px;
+  border: 1px solid #fda4af;
+  background: #fff;
+  color: #be123c;
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+
+.wall-preview-viewall:hover {
+  background: #fff1f2;
+}
+
+.wall-preview-body {
+  padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+}
+
+.wall-preview-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+}
+
+.wall-mini-card {
+  position: relative;
+  padding: 14px 14px 10px;
+  border-radius: 10px;
+  color: #fff;
+  cursor: pointer;
+  transform: rotate(calc(var(--rot, 0deg)));
+  transition: transform .2s, box-shadow .2s;
+  min-height: 100px;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+}
+
+.wall-mini-card:hover {
+  transform: rotate(0deg) scale(1.04);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+  z-index: 1;
+}
+
+.wall-mini-badge {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 600;
+  background: rgba(255, 255, 255, 0.28);
+  color: #fff;
+}
+
+.wmb-1 { background: rgba(251, 191, 36, 0.5); }
+.wmb-2 { background: rgba(74, 222, 128, 0.5); }
+
+.wall-mini-body {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.5;
+  overflow: hidden;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  flex: 1;
+  word-break: break-all;
+}
+
+.wall-mini-reply {
+  margin-top: 6px;
+  padding: 4px 8px;
+  background: rgba(255, 255, 255, 0.2);
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 1.4;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.wall-mini-foot {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+.wall-mini-avatar {
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.wall-mini-dept {
+  flex: 1;
+  min-width: 0;
+}
+
+.wall-mini-like {
+  cursor: pointer;
+  white-space: nowrap;
+  transition: transform .15s;
+}
+
+.wall-mini-like:hover {
+  transform: scale(1.15);
+}
+
+/* ========== 重要信息审阅 ========== */
 /* 重要信息审阅 - 滚动播放窗口 */
 .briefing-section {
   margin-bottom: var(--spacing-xxl);
@@ -2425,8 +2702,13 @@ async function navigateTo(feature) {
     padding: 0 var(--spacing-md);
   }
 
-  .home-ai-task-section {
+  .home-ai-task-section,
+  .home-wall-section {
     padding: 0 var(--spacing-md);
+  }
+
+  .wall-preview-grid {
+    grid-template-columns: repeat(2, 1fr);
   }
 
   .ai-task-card__header {
