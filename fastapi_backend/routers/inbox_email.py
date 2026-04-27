@@ -402,9 +402,9 @@ def _insert_email_row(row: dict, owner: str = "") -> bool:
 
 def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = "") -> dict:
     """
-    连接 IMAP 拉取 FLAGGED 邮件，分两阶段：
-    阶段 1：只取全部旗帜邮件的 header（Message-ID），快速且轻量
-    阶段 2：对新邮件下载完整内容（受 max_fetch 限制）
+    连接 IMAP 拉取 FLAGGED 邮件。
+    单次遍历：逐封取 header 判重，新邮件才下载全文。
+    清理逻辑：仅在完整获取了所有旗帜邮件 message_id 后才执行。
     """
     cfg = _get_inbox_config(current_user)
     address = cfg["address"]
@@ -428,15 +428,15 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
         imap_obj.select("INBOX", readonly=True)
         typ, data = imap_obj.search(None, "FLAGGED")
 
-        imap_search_ok = (typ == "OK")
+        if typ != "OK":
+            logger.warning(f"[InboxEmail] [{owner_name}] IMAP SEARCH 异常 typ={typ}，跳过本轮")
+            return result
+
         ids = []
-        if imap_search_ok and data and data[0]:
+        if data and data[0]:
             ids = data[0].split()
         result["total"] = len(ids)
-
-        if not imap_search_ok:
-            logger.warning(f"[InboxEmail] [{owner_name}] IMAP SEARCH 返回异常 typ={typ}，跳过本轮同步")
-            return result
+        ids_to_fetch = ids[-max_fetch:] if max_fetch and len(ids) > max_fetch else ids
 
         # 数据库中该用户已有的 message_id
         existing_mids = set()
@@ -452,98 +452,85 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
         except Exception:
             pass
 
-        # ========== 阶段 1：轻量扫描全部旗帜邮件的 Message-ID ==========
+        # 单次遍历：取 header → 判重 → 新邮件下载全文
         flagged_mids_in_imap: set = set()
-        header_scan_ok = True
-        for seq_id in ids:
+        scan_failures = 0
+        for seq_id in ids_to_fetch:
             try:
+                # 先只取 Message-ID header（几十字节，快速）
                 typ2, header_data = imap_obj.fetch(
                     seq_id, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
                 )
+                mid = None
                 if typ2 == "OK" and header_data and header_data[0]:
                     raw_hdr = header_data[0][1] if isinstance(header_data[0], tuple) else b""
                     if raw_hdr:
-                        hm = email.message_from_bytes(raw_hdr)
-                        mid = (hm.get("Message-ID") or "").strip() or None
-                        if mid:
-                            flagged_mids_in_imap.add(mid)
-            except Exception as e:
-                logger.warning(f"[InboxEmail] [{owner_name}] 阶段1 header扫描 seq={seq_id} 失败: {e}")
-                header_scan_ok = False
-
-        # ========== 阶段 2：下载新邮件完整内容（仅限 max_fetch 封） ==========
-        new_mids = flagged_mids_in_imap - existing_mids
-        if new_mids:
-            # 找出哪些 seq_id 是新的（需要下载全文）
-            ids_latest = ids[-max_fetch:] if max_fetch and len(ids) > max_fetch else ids
-            fetch_count = 0
-            for seq_id in ids_latest:
-                if max_fetch and fetch_count >= max_fetch:
-                    break
-                try:
-                    # 先快速取 message_id 判断是否需要下载
-                    typ2, header_data = imap_obj.fetch(
-                        seq_id, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
-                    )
-                    mid = None
-                    if typ2 == "OK" and header_data and header_data[0]:
-                        raw_hdr = header_data[0][1] if isinstance(header_data[0], tuple) else b""
-                        if raw_hdr:
+                        try:
                             hm = email.message_from_bytes(raw_hdr)
                             mid = (hm.get("Message-ID") or "").strip() or None
+                        except Exception:
+                            mid = None
 
-                    if mid and mid in existing_mids:
-                        result["skipped"] += 1
-                        continue
+                if mid:
+                    flagged_mids_in_imap.add(mid)
 
-                    # 下载完整邮件（可能较大）
-                    typ3, msg_data = imap_obj.fetch(seq_id, "(RFC822)")
-                    if typ3 != "OK" or not msg_data or not msg_data[0]:
-                        continue
-                    raw_msg = msg_data[0][1] if isinstance(msg_data[0], tuple) else None
-                    if not raw_msg:
-                        continue
-                    msg = email.message_from_bytes(raw_msg)
-
-                    message_id = (msg.get("Message-ID") or "").strip() or None
-                    if message_id and message_id in existing_mids:
-                        result["skipped"] += 1
-                        continue
-
-                    subject = _decode_mime_header(msg.get("Subject", ""))
-                    from_addr = _format_address_list(msg.get("From", ""))
-                    to_addrs = _format_address_list(msg.get("To", ""))
-                    cc_addrs = _format_address_list(msg.get("Cc", ""))
-                    email_dt = _parse_email_date(msg.get("Date"))
-                    body_text, body_html = _extract_bodies(msg)
-
-                    row = {
-                        "message_id": message_id,
-                        "uid": seq_id.decode() if isinstance(seq_id, bytes) else str(seq_id),
-                        "subject": subject,
-                        "from_addr": from_addr,
-                        "to_addrs": to_addrs,
-                        "cc_addrs": cc_addrs,
-                        "email_date": email_dt,
-                        "body_text": body_text,
-                        "body_html": body_html,
-                    }
-                    if _insert_email_row(row, owner=owner_name):
-                        result["new"] += 1
-                        fetch_count += 1
-                        if message_id:
-                            existing_mids.add(message_id)
-                    else:
-                        result["skipped"] += 1
-                except Exception as e:
-                    logger.warning(f"[InboxEmail] [{owner_name}] 阶段2 下载邮件 seq={seq_id} 失败: {e}")
+                if mid and mid in existing_mids:
+                    result["skipped"] += 1
                     continue
-        else:
-            result["skipped"] = len(existing_mids & flagged_mids_in_imap)
 
-        # ========== 阶段 3：清理已取消旗帜的邮件 ==========
-        # 安全条件：阶段1 header 扫描全部成功 且 至少拿到了 1 个 message_id
-        can_cleanup = header_scan_ok and len(flagged_mids_in_imap) > 0
+                # 新邮件：下载完整内容（可能较大，超时设 60s）
+                typ3, msg_data = imap_obj.fetch(seq_id, "(RFC822)")
+                if typ3 != "OK" or not msg_data or not msg_data[0]:
+                    continue
+                raw_msg = msg_data[0][1] if isinstance(msg_data[0], tuple) else None
+                if not raw_msg:
+                    continue
+                msg = email.message_from_bytes(raw_msg)
+
+                message_id = (msg.get("Message-ID") or "").strip() or None
+                if message_id:
+                    flagged_mids_in_imap.add(message_id)
+                if message_id and message_id in existing_mids:
+                    result["skipped"] += 1
+                    continue
+
+                subject = _decode_mime_header(msg.get("Subject", ""))
+                from_addr = _format_address_list(msg.get("From", ""))
+                to_addrs = _format_address_list(msg.get("To", ""))
+                cc_addrs = _format_address_list(msg.get("Cc", ""))
+                email_dt = _parse_email_date(msg.get("Date"))
+                body_text, body_html = _extract_bodies(msg)
+
+                row = {
+                    "message_id": message_id,
+                    "uid": seq_id.decode() if isinstance(seq_id, bytes) else str(seq_id),
+                    "subject": subject,
+                    "from_addr": from_addr,
+                    "to_addrs": to_addrs,
+                    "cc_addrs": cc_addrs,
+                    "email_date": email_dt,
+                    "body_text": body_text,
+                    "body_html": body_html,
+                }
+                if _insert_email_row(row, owner=owner_name):
+                    result["new"] += 1
+                    if message_id:
+                        existing_mids.add(message_id)
+                else:
+                    result["skipped"] += 1
+            except Exception as e:
+                scan_failures += 1
+                logger.warning(f"[InboxEmail] [{owner_name}] 处理邮件 seq={seq_id} 失败: {e}")
+                continue
+
+        # 清理已取消旗帜的邮件
+        # 安全条件：无任何扫描失败 且 未被 max_fetch 截断 且 至少拿到了 1 个 message_id
+        fetched_all = (len(ids) <= max_fetch) if max_fetch else True
+        can_cleanup = (
+            scan_failures == 0
+            and fetched_all
+            and len(flagged_mids_in_imap) > 0
+        )
         if can_cleanup:
             unflagged_mids = existing_mids - flagged_mids_in_imap
             if unflagged_mids:
@@ -560,9 +547,9 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
                     logger.info(
                         f"[InboxEmail] [{owner_name}] 清理已取消旗帜邮件 {result['removed']} 封"
                     )
-        elif existing_mids and not header_scan_ok:
+        elif existing_mids and scan_failures > 0:
             logger.warning(
-                f"[InboxEmail] [{owner_name}] header 扫描未完整完成，跳过旗帜清理（保护现有 {len(existing_mids)} 条数据）"
+                f"[InboxEmail] [{owner_name}] 有 {scan_failures} 封邮件处理失败，跳过旗帜清理（保护现有 {len(existing_mids)} 条数据）"
             )
 
     except imaplib.IMAP4.error as e:
@@ -1213,13 +1200,25 @@ async def manual_sync(current_user: str = Query(...)):
         except Exception as e:
             logger.warning(f"[InboxEmail] 手动同步后即时分析失败: {e}")
 
+    # 查询数据库中该用户当前实际邮件数
+    db_count = 0
+    try:
+        cnt_rows = db.execute_query(
+            "SELECT COUNT(*) AS cnt FROM inbox_emails WHERE owner = %s",
+            (owner,),
+        )
+        if cnt_rows:
+            db_count = cnt_rows[0].get("cnt", 0)
+    except Exception:
+        pass
+
     return {
         "success": True,
-        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封，移除 {result.get('removed', 0)} 封（当前标旗 {result['total']} 封）{analyze_msg}",
+        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封，移除 {result.get('removed', 0)} 封（当前库中 {db_count} 封）{analyze_msg}",
         "new": result["new"],
         "skipped": result["skipped"],
         "removed": result.get("removed", 0),
-        "total": result["total"],
+        "total": db_count,
     }
 
 
