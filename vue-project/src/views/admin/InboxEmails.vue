@@ -3,7 +3,7 @@
     <div class="container" :class="{ 'tasks-mode': activeTab === 'tasks' }">
 
       <div v-if="!canAccess" class="card no-permission">
-        <p>您暂无权限访问此页面，仅系统管理员（webconfig.admin1 对应用户）可操作。</p>
+        <p>您暂无权限访问此页面。</p>
         <router-link to="/" class="btn btn-primary">返回首页</router-link>
       </div>
 
@@ -70,7 +70,7 @@
               @mouseleave="marqueePaused = false"
               @wheel="onBoardWheel"
             >
-              <div class="marquee-track" :class="{ paused: marqueePaused, 'no-anim': tasks.length <= 2 }">
+              <div class="marquee-track no-anim">
                 <div
                   v-for="(t, idx) in displayTasks"
                   :key="`${t.id}-${idx}`"
@@ -85,6 +85,18 @@
                       {{ t.taskDeadline || '未指定截止时间' }}
                     </span>
                     <span class="task-from" :title="t.from">{{ shortFrom(t.from) }}</span>
+                    <button
+                      type="button"
+                      class="task-complete-btn"
+                      title="标记已完成（去除旗帜并删除记录）"
+                      @click.stop="completeTask(t.id)"
+                      :disabled="completingId === t.id"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="12" r="10" />
+                      </svg>
+                      {{ completingId === t.id ? '处理中…' : '待完成' }}
+                    </button>
                   </div>
                   <div class="task-summary" :title="t.taskSummary">{{ t.taskSummary }}</div>
                   <div class="task-sub">
@@ -102,7 +114,7 @@
           <!-- 邮箱配置区 -->
           <div class="card config-section">
             <div class="section-header" @click="showConfig = !showConfig">
-              <h3 class="section-title">共用邮箱配置</h3>
+              <h3 class="section-title">个人企业邮箱配置</h3>
               <span class="config-status" :class="configured ? 'ok' : 'warn'">
                 {{ configured ? '已配置' : '未配置' }}
               </span>
@@ -121,28 +133,36 @@
               <div class="config-hint">
                 <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
                 <p>
-                同步范围：仅拉取已标旗（FLAGGED）的最新
+                同步范围：仅拉取您个人邮箱中已标旗（FLAGGED）的最新
                 <code>50</code>
                 封邮件；自动拉取间隔：约
                   <code>{{ pollIntervalSeconds }}</code>
                   秒。
                 </p>
               </div>
+              <div class="config-guide">
+                <h4 class="config-guide-title">使用步骤</h4>
+                <ol class="config-guide-steps">
+                  <li>在下方填写您的企业邮箱地址和 IMAP 授权码，点击"保存配置"</li>
+                  <li>在企业邮箱客户端（网页版 / Outlook 等）中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong></li>
+                  <li>系统会自动同步红旗邮件并由 AI 提取待办任务，展示在"AI 待办看板"中</li>
+                </ol>
+              </div>
               <div class="config-form">
                 <div class="form-row">
-                  <label>共用邮箱地址</label>
+                  <label>企业邮箱地址</label>
                   <input
                     v-model="configForm.email_address"
                     type="text"
-                    placeholder="如 shared@company.com"
+                    placeholder="如 yourname@hec-china.com"
                   />
                 </div>
                 <div class="form-row">
-                  <label>授权码</label>
+                  <label>IMAP 授权码</label>
                   <input
                     v-model="configForm.email_auth_code"
                     type="password"
-                    placeholder="IMAP 授权码（非邮箱密码）"
+                    placeholder="企业邮箱 IMAP 授权码（非登录密码）"
                   />
                 </div>
                 <div class="form-row">
@@ -281,7 +301,7 @@
 
 <script setup>
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import {
   getInboxConfig,
   updateInboxConfig,
@@ -290,11 +310,13 @@ import {
   syncInboxEmails,
   listInboxTasks,
   analyzeInboxEmails,
+  completeInboxTask,
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
 
 const router = useRouter()
+const route = useRoute()
 
 const canAccess = ref(false)
 const currentUserName = ref('')
@@ -326,19 +348,10 @@ const analyzing = ref(false)
 const taskMsg = ref('')
 const taskMsgType = ref('')
 const marqueeMainRef = ref(null)
+const completingId = ref(null)
 let taskRefreshTimer = null
 
-const loopedTasks = computed(() => {
-  const arr = tasks.value || []
-  if (arr.length <= 1) return arr
-  return arr.concat(arr)
-})
-
-const displayTasks = computed(() => {
-  const arr = tasks.value || []
-  if (arr.length <= 2) return arr
-  return loopedTasks.value
-})
+const displayTasks = computed(() => tasks.value || [])
 
 const totalPages = computed(() => {
   if (!total.value) return 1
@@ -555,6 +568,29 @@ function onBoardWheel(e) {
   el.scrollTop += deltaY
 }
 
+async function completeTask(id) {
+  if (!id || completingId.value) return
+  completingId.value = id
+  try {
+    const res = await completeInboxTask({ current_user: currentUserName.value, id })
+    if (res && res.success) {
+      taskMsg.value = res.message || '任务已完成'
+      taskMsgType.value = 'success'
+      await loadTasks()
+      await loadList()
+    } else {
+      taskMsg.value = (res && res.message) || '操作失败'
+      taskMsgType.value = 'error'
+    }
+  } catch (e) {
+    taskMsg.value = e.message || '操作失败'
+    taskMsgType.value = 'error'
+  } finally {
+    completingId.value = null
+    setTimeout(() => { taskMsg.value = '' }, 5000)
+  }
+}
+
 async function openDetailById(id) {
   if (!id) return
   await openDetail({ id })
@@ -566,22 +602,20 @@ async function manualSync() {
   try {
     const res = await syncInboxEmails(currentUserName.value)
     if (res && res.success) {
-      configMsg.value = res.message
-      configMsgType.value = 'success'
-      showConfig.value = true
+      taskMsg.value = res.message
+      taskMsgType.value = 'success'
       await loadList()
+      await loadTasks()
     } else {
-      configMsg.value = (res && res.message) || '同步失败'
-      configMsgType.value = 'error'
-      showConfig.value = true
+      taskMsg.value = (res && res.message) || '同步失败'
+      taskMsgType.value = 'error'
     }
   } catch (e) {
-    configMsg.value = e.message || '同步失败'
-    configMsgType.value = 'error'
-    showConfig.value = true
+    taskMsg.value = e.message || '同步失败'
+    taskMsgType.value = 'error'
   } finally {
     syncing.value = false
-    setTimeout(() => { configMsg.value = '' }, 5000)
+    setTimeout(() => { taskMsg.value = '' }, 5000)
   }
 }
 
@@ -609,6 +643,11 @@ onMounted(async () => {
     canAccess.value = isMinisterOrDeptLeader(jb)
   }
   if (!canAccess.value) return
+  // 支持从首页跳转时自动打开邮件列表+配置区
+  if (route.query.tab === 'emails') {
+    activeTab.value = 'emails'
+    showConfig.value = true
+  }
   await loadConfig()
   await loadList()
   await loadTasks()
@@ -736,6 +775,30 @@ onBeforeUnmount(() => {
   padding: 1px 6px;
   border-radius: 3px;
   font-size: 0.82rem;
+}
+.config-guide {
+  background: linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%);
+  border: 1px dashed #f59e0b;
+  border-radius: 8px;
+  padding: var(--spacing-sm) var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+.config-guide-title {
+  margin: 0 0 6px 0;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #92400e;
+}
+.config-guide-steps {
+  margin: 0;
+  padding-left: 1.4em;
+  font-size: 0.85rem;
+  color: #78350f;
+  line-height: 1.8;
+  list-style: decimal;
+}
+.config-guide-steps strong {
+  color: #dc2626;
 }
 .config-form .form-row {
   display: flex;
@@ -998,6 +1061,35 @@ onBeforeUnmount(() => {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+.task-complete-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 3px 10px;
+  font-size: 0.76rem;
+  font-weight: 600;
+  color: #16a34a;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.task-complete-btn svg {
+  width: 12px;
+  height: 12px;
+}
+.task-complete-btn:hover {
+  background: #16a34a;
+  color: #fff;
+  border-color: #16a34a;
+}
+.task-complete-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 .task-summary {
   font-size: 0.95rem;

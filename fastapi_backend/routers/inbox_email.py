@@ -32,7 +32,7 @@ IMAP_SERVER = "imap.qiye.163.com"
 IMAP_PORT_SSL = 993
 
 # 后台轮询间隔（秒），可根据需要调整
-POLL_INTERVAL_SECONDS = 120
+POLL_INTERVAL_SECONDS = 15
 # 单次拉取的最多邮件数（仅取最新标旗邮件）
 MAX_FETCH_PER_POLL = 50
 
@@ -52,32 +52,58 @@ DEEPSEEK_MODEL = "deepseek-chat"
 
 # ==================== 建表 / 字段保障 ====================
 
+def _column_exists(table: str, column: str) -> bool:
+    """检查表中某列是否已存在。"""
+    try:
+        rows = db.execute_query(
+            "SELECT 1 FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND COLUMN_NAME = %s LIMIT 1",
+            (table, column),
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def _index_exists(table: str, index_name: str) -> bool:
+    """检查表中某索引是否已存在。"""
+    try:
+        rows = db.execute_query(
+            "SELECT 1 FROM information_schema.STATISTICS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s AND INDEX_NAME = %s LIMIT 1",
+            (table, index_name),
+        )
+        return bool(rows)
+    except Exception:
+        return False
+
+
+def _safe_add_column(table: str, col: str, typedef: str):
+    """仅在列不存在时添加，不会产生 ERROR 日志。"""
+    if not _column_exists(table, col):
+        try:
+            db.execute_update(f"ALTER TABLE {table} ADD COLUMN {col} {typedef}", ())
+        except Exception:
+            pass
+
+
 def _ensure_inbox_columns():
-    """兼容保留旧 webconfig 共用邮箱配置字段。"""
     for col, typedef in [
         ("inbox_email_address", "VARCHAR(200) DEFAULT ''"),
         ("inbox_email_auth_code", "VARCHAR(200) DEFAULT ''"),
     ]:
-        try:
-            db.execute_update(f"ALTER TABLE webconfig ADD COLUMN {col} {typedef}", ())
-        except Exception:
-            pass
+        _safe_add_column("webconfig", col, typedef)
 
 
 def _ensure_yggl_email_columns():
-    """确保 yggl 表有企业邮箱与 IMAP 授权码字段。"""
     for col, typedef in [
         ("enterprise_email", "VARCHAR(255) DEFAULT NULL COMMENT '企业邮箱地址'"),
         ("email_auth_code", "VARCHAR(200) DEFAULT '' COMMENT '企业邮箱IMAP授权码'"),
     ]:
-        try:
-            db.execute_update(f"ALTER TABLE yggl ADD COLUMN {col} {typedef}", ())
-        except Exception:
-            pass
+        _safe_add_column("yggl", col, typedef)
 
 
 def _ensure_inbox_task_columns():
-    """确保 inbox_emails 表拥有大模型任务抽取相关字段。"""
     for col, typedef in [
         ("has_task", "TINYINT(1) DEFAULT 0 COMMENT '是否包含待办任务'"),
         ("task_summary", "TEXT COMMENT '任务摘要（大模型抽取）'"),
@@ -86,10 +112,42 @@ def _ensure_inbox_task_columns():
         ("task_analyzed_at", "DATETIME DEFAULT NULL COMMENT '最近一次分析时间'"),
         ("task_analysis_error", "TEXT COMMENT '最近一次分析的错误信息（若失败）'"),
     ]:
+        _safe_add_column("inbox_emails", col, typedef)
+
+
+def _ensure_inbox_owner_column():
+    _safe_add_column("inbox_emails", "owner", "VARCHAR(100) DEFAULT '' COMMENT '所属用户（yggl.name）'")
+
+    if not _index_exists("inbox_emails", "idx_owner"):
         try:
-            db.execute_update(f"ALTER TABLE inbox_emails ADD COLUMN {col} {typedef}", ())
+            db.execute_update("ALTER TABLE inbox_emails ADD INDEX idx_owner (owner)", ())
         except Exception:
             pass
+
+    if _index_exists("inbox_emails", "uk_message_id"):
+        try:
+            db.execute_update("ALTER TABLE inbox_emails DROP INDEX uk_message_id", ())
+        except Exception:
+            pass
+
+    if not _index_exists("inbox_emails", "uk_message_id_owner"):
+        try:
+            db.execute_update(
+                "ALTER TABLE inbox_emails ADD UNIQUE KEY uk_message_id_owner (message_id, owner)",
+                (),
+            )
+        except Exception:
+            pass
+
+    try:
+        admin1 = _get_admin1()
+        if admin1:
+            db.execute_update(
+                "UPDATE inbox_emails SET owner = %s WHERE owner IS NULL OR owner = ''",
+                (admin1,),
+            )
+    except Exception:
+        pass
 
 
 def _ensure_inbox_table():
@@ -122,6 +180,7 @@ _ensure_inbox_columns()
 _ensure_yggl_email_columns()
 _ensure_inbox_table()
 _ensure_inbox_task_columns()
+_ensure_inbox_owner_column()
 
 
 # ==================== 辅助函数 ====================
@@ -310,15 +369,15 @@ def _html_to_text(html: str) -> str:
     return s.strip()
 
 
-def _insert_email_row(row: dict) -> bool:
-    """写入一条邮件记录，若 message_id 冲突则跳过。返回是否新增。"""
+def _insert_email_row(row: dict, owner: str = "") -> bool:
+    """写入一条邮件记录，若 (message_id, owner) 冲突则跳过。返回是否新增。"""
     try:
         affected = db.execute_update(
             """
             INSERT IGNORE INTO inbox_emails
                 (message_id, uid, subject, from_addr, to_addrs, cc_addrs,
-                 email_date, body_text, body_html)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                 email_date, body_text, body_html, owner)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """,
             (
                 row.get("message_id"),
@@ -330,6 +389,7 @@ def _insert_email_row(row: dict) -> bool:
                 row.get("email_date"),
                 row.get("body_text") or "",
                 row.get("body_html") or "",
+                owner,
             ),
         )
         return affected and affected > 0
@@ -348,12 +408,12 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
     if not address or not auth_code:
         return {"new": 0, "skipped": 0, "total": 0, "error": "共用邮箱未配置"}
 
-    result = {"new": 0, "skipped": 0, "total": 0, "error": None}
+    result = {"new": 0, "skipped": 0, "total": 0, "removed": 0, "error": None}
+    owner_name = (current_user or "").strip()
     imap_obj = None
     try:
         imap_obj = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT_SSL, timeout=30)
         imap_obj.login(address, auth_code)
-        # 网易企业邮箱 IMAP 第一次登录需发送 ID 命令，否则部分场景收不到邮件
         try:
             imap_obj.xatom(
                 "ID",
@@ -362,20 +422,23 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
         except Exception:
             pass
         imap_obj.select("INBOX", readonly=True)
-        # 查询全部 FLAGGED 邮件，不限制时间范围
         typ, data = imap_obj.search(None, "FLAGGED")
-        if typ != "OK" or not data or not data[0]:
-            logger.info("[InboxEmail] FLAGGED 无匹配邮件")
-            return result
-        ids = data[0].split()
+
+        # 收集 IMAP 中当前所有 FLAGGED 邮件的 message_id
+        flagged_mids_in_imap: set = set()
+        ids = []
+        if typ == "OK" and data and data[0]:
+            ids = data[0].split()
         result["total"] = len(ids)
-        # 按最新 max_fetch 封做安全上限
         ids_to_fetch = ids[-max_fetch:] if max_fetch and len(ids) > max_fetch else ids
 
-        # 先批量查 message_id 做去重（减少网络往返）
+        # 数据库中该用户已有的 message_id
         existing_mids = set()
         try:
-            rows = db.execute_query("SELECT message_id FROM inbox_emails", ())
+            rows = db.execute_query(
+                "SELECT message_id FROM inbox_emails WHERE owner = %s",
+                (owner_name,),
+            )
             for r in rows or []:
                 mid = r.get("message_id")
                 if mid:
@@ -385,7 +448,6 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
 
         for seq_id in ids_to_fetch:
             try:
-                # 先只取 header 判断 message-id 是否已存在，避免重复下载大邮件
                 typ2, header_data = imap_obj.fetch(
                     seq_id, "(BODY.PEEK[HEADER.FIELDS (MESSAGE-ID)])"
                 )
@@ -398,6 +460,10 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
                             mid = (hm.get("Message-ID") or "").strip() or None
                         except Exception:
                             mid = None
+
+                if mid:
+                    flagged_mids_in_imap.add(mid)
+
                 if mid and mid in existing_mids:
                     result["skipped"] += 1
                     continue
@@ -411,6 +477,8 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
                 msg = email.message_from_bytes(raw_msg)
 
                 message_id = (msg.get("Message-ID") or "").strip() or None
+                if message_id:
+                    flagged_mids_in_imap.add(message_id)
                 if message_id and message_id in existing_mids:
                     result["skipped"] += 1
                     continue
@@ -433,7 +501,7 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
                     "body_text": body_text,
                     "body_html": body_html,
                 }
-                if _insert_email_row(row):
+                if _insert_email_row(row, owner=owner_name):
                     result["new"] += 1
                     if message_id:
                         existing_mids.add(message_id)
@@ -442,12 +510,30 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
             except Exception as e:
                 logger.warning(f"处理邮件 seq={seq_id} 失败: {e}")
                 continue
+
+        # 清理已取消旗帜的邮件：数据库中有但 IMAP 中不再 FLAGGED 的记录删除
+        unflagged_mids = existing_mids - flagged_mids_in_imap
+        if unflagged_mids:
+            for uf_mid in unflagged_mids:
+                try:
+                    db.execute_update(
+                        "DELETE FROM inbox_emails WHERE message_id = %s AND owner = %s",
+                        (uf_mid, owner_name),
+                    )
+                    result["removed"] += 1
+                except Exception as e:
+                    logger.warning(f"删除已取消旗帜邮件失败 mid={uf_mid}: {e}")
+            if result["removed"]:
+                logger.info(
+                    f"[InboxEmail] [{owner_name}] 清理已取消旗帜邮件 {result['removed']} 封"
+                )
+
     except imaplib.IMAP4.error as e:
         err = str(e)
         logger.error(f"IMAP 登录/操作失败: {err}")
         result["error"] = f"IMAP 操作失败：{err}"
     except Exception as e:
-        logger.error(f"共用邮箱同步异常: {e}")
+        logger.error(f"邮箱同步异常: {e}")
         result["error"] = str(e)
     finally:
         if imap_obj is not None:
@@ -706,23 +792,39 @@ def _update_email_analysis(
         logger.error(f"更新邮件分析结果失败 id={email_id}: {e}")
 
 
-def _analyze_pending_emails(limit: int = ANALYZE_BATCH_SIZE) -> dict:
-    """从库里挑出 pending 或 failed 的邮件，逐封调用大模型分析。"""
+def _analyze_pending_emails(limit: int = ANALYZE_BATCH_SIZE, owner: str = "") -> dict:
+    """从库里挑出指定用户的 pending 或 failed 邮件，逐封调用大模型分析。"""
     _ensure_inbox_task_columns()
     summary = {"analyzed": 0, "has_task": 0, "no_task": 0, "failed": 0}
+    owner_filter = (owner or "").strip()
     try:
-        rows = db.execute_query(
-            """
-            SELECT id, subject, from_addr, email_date, body_text, body_html
-              FROM inbox_emails
-             WHERE task_analysis_status IS NULL
-                OR task_analysis_status = %s
-                OR task_analysis_status = %s
-             ORDER BY COALESCE(email_date, received_at) DESC, id DESC
-             LIMIT %s
-            """,
-            (ANALYSIS_STATUS_PENDING, ANALYSIS_STATUS_FAILED, int(limit)),
-        ) or []
+        if owner_filter:
+            rows = db.execute_query(
+                """
+                SELECT id, subject, from_addr, email_date, body_text, body_html
+                  FROM inbox_emails
+                 WHERE owner = %s
+                   AND (task_analysis_status IS NULL
+                        OR task_analysis_status = %s
+                        OR task_analysis_status = %s)
+                 ORDER BY COALESCE(email_date, received_at) DESC, id DESC
+                 LIMIT %s
+                """,
+                (owner_filter, ANALYSIS_STATUS_PENDING, ANALYSIS_STATUS_FAILED, int(limit)),
+            ) or []
+        else:
+            rows = db.execute_query(
+                """
+                SELECT id, subject, from_addr, email_date, body_text, body_html
+                  FROM inbox_emails
+                 WHERE task_analysis_status IS NULL
+                    OR task_analysis_status = %s
+                    OR task_analysis_status = %s
+                 ORDER BY COALESCE(email_date, received_at) DESC, id DESC
+                 LIMIT %s
+                """,
+                (ANALYSIS_STATUS_PENDING, ANALYSIS_STATUS_FAILED, int(limit)),
+            ) or []
     except Exception as e:
         logger.error(f"查询待分析邮件失败: {e}")
         return summary
@@ -798,17 +900,18 @@ async def list_inbox_emails(
     page_size: int = Query(20, ge=1, le=200),
     keyword: Optional[str] = Query(None, description="模糊搜索主题/发件人/正文"),
 ):
-    """分页列出共用邮箱收到的邮件"""
+    """分页列出当前用户邮箱收到的邮件"""
     _require_inbox_access(current_user)
+    owner = (current_user or "").strip()
 
-    where = []
-    params: list = []
+    where = ["owner = %s"]
+    params: list = [owner]
     if keyword and keyword.strip():
         kw = f"%{keyword.strip()}%"
         where.append("(subject LIKE %s OR from_addr LIKE %s OR to_addrs LIKE %s OR cc_addrs LIKE %s OR body_text LIKE %s)")
         params.extend([kw, kw, kw, kw, kw])
 
-    where_sql = f"WHERE {' AND '.join(where)}" if where else ""
+    where_sql = f"WHERE {' AND '.join(where)}"
 
     total_row = db.execute_query(f"SELECT COUNT(*) AS c FROM inbox_emails {where_sql}", tuple(params))
     total = int(total_row[0]["c"]) if total_row else 0
@@ -864,13 +967,14 @@ async def inbox_email_detail(
 ):
     """获取单封邮件详情（含全部正文）"""
     _require_inbox_access(current_user)
+    owner = (current_user or "").strip()
     rows = db.execute_query(
         """
         SELECT id, message_id, subject, from_addr, to_addrs, cc_addrs,
                email_date, received_at, body_text, body_html
-          FROM inbox_emails WHERE id = %s LIMIT 1
+          FROM inbox_emails WHERE id = %s AND owner = %s LIMIT 1
         """,
-        (id,),
+        (id, owner),
     )
     if not rows:
         raise HTTPException(status_code=404, detail="邮件不存在")
@@ -903,20 +1007,21 @@ async def list_inbox_tasks(
     """
     _require_inbox_access(current_user)
     _ensure_inbox_task_columns()
+    owner = (current_user or "").strip()
 
-    # 按：有截止时间的 && 未过期的优先；其次按截止时间升序；然后按发件时间倒序
     sql = """
         SELECT id, subject, from_addr, email_date, received_at,
                task_summary, task_deadline, task_analyzed_at
           FROM inbox_emails
-         WHERE has_task = 1 AND task_summary IS NOT NULL AND task_summary <> ''
+         WHERE owner = %s
+           AND has_task = 1 AND task_summary IS NOT NULL AND task_summary <> ''
          ORDER BY
             CASE WHEN task_deadline IS NULL OR task_deadline = '' THEN 1 ELSE 0 END ASC,
             task_deadline ASC,
             COALESCE(email_date, received_at) DESC
          LIMIT %s
     """
-    rows = db.execute_query(sql, (int(limit),)) or []
+    rows = db.execute_query(sql, (owner, int(limit))) or []
     items = []
     for r in rows:
         items.append({
@@ -930,7 +1035,6 @@ async def list_inbox_tasks(
             "taskAnalyzedAt": r["task_analyzed_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("task_analyzed_at") else "",
         })
 
-    # 另外统计一下尚未分析 / 分析失败数量，前端可显示
     stat_rows = db.execute_query(
         """
         SELECT
@@ -939,8 +1043,9 @@ async def list_inbox_tasks(
           SUM(CASE WHEN has_task = 1 THEN 1 ELSE 0 END) AS task_count,
           COUNT(*) AS total
           FROM inbox_emails
+         WHERE owner = %s
         """,
-        (),
+        (owner,),
     )
     pending_count = int(stat_rows[0].get("pending_count") or 0) if stat_rows else 0
     failed_count = int(stat_rows[0].get("failed_count") or 0) if stat_rows else 0
@@ -967,13 +1072,14 @@ async def analyze_inbox_emails(
 ):
     """手动触发大模型任务抽取。"""
     _require_inbox_access(current_user)
+    owner = (current_user or "").strip()
     loop = asyncio.get_event_loop()
 
     if id is not None:
         def _run_single():
             rows = db.execute_query(
-                "SELECT id, subject, from_addr, email_date, body_text, body_html FROM inbox_emails WHERE id = %s LIMIT 1",
-                (int(id),),
+                "SELECT id, subject, from_addr, email_date, body_text, body_html FROM inbox_emails WHERE id = %s AND owner = %s LIMIT 1",
+                (int(id), owner),
             )
             if not rows:
                 return {"error": "邮件不存在"}
@@ -1002,7 +1108,9 @@ async def analyze_inbox_emails(
             return {"success": False, "message": res["error"]}
         return {"success": True, "message": "分析完成", **res}
 
-    summary = await loop.run_in_executor(None, _analyze_pending_emails, int(limit))
+    def _run_batch():
+        return _analyze_pending_emails(limit=int(limit), owner=owner)
+    summary = await loop.run_in_executor(None, _run_batch)
     return {
         "success": True,
         "message": (
@@ -1016,8 +1124,9 @@ async def analyze_inbox_emails(
 
 @router.post("/sync")
 async def manual_sync(current_user: str = Query(...)):
-    """手动触发一次邮件同步"""
+    """手动触发一次邮件同步，有新邮件则立即分析"""
     _require_inbox_access(current_user)
+    owner = (current_user or "").strip()
     loop = asyncio.get_event_loop()
     result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, current_user)
     if result.get("error"):
@@ -1028,47 +1137,184 @@ async def manual_sync(current_user: str = Query(...)):
             "skipped": result.get("skipped", 0),
             "total": result.get("total", 0),
         }
+
+    analyze_msg = ""
+    if result["new"] > 0:
+        try:
+            def _run_analyze():
+                return _analyze_pending_emails(limit=result["new"], owner=owner)
+            summary = await loop.run_in_executor(None, _run_analyze)
+            analyzed = summary.get("analyzed", 0)
+            has_task = summary.get("has_task", 0)
+            if analyzed:
+                analyze_msg = f"，已自动分析 {analyzed} 封（识别出 {has_task} 个任务）"
+        except Exception as e:
+            logger.warning(f"[InboxEmail] 手动同步后即时分析失败: {e}")
+
     return {
         "success": True,
-        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封（最近标旗邮件共 {result['total']} 封）",
+        "message": f"同步完成：新增 {result['new']} 封，跳过 {result['skipped']} 封，移除 {result.get('removed', 0)} 封（当前标旗 {result['total']} 封）{analyze_msg}",
         "new": result["new"],
         "skipped": result["skipped"],
+        "removed": result.get("removed", 0),
         "total": result["total"],
     }
 
 
+@router.post("/complete")
+async def complete_inbox_task(
+    current_user: str = Query(...),
+    id: int = Query(..., ge=1, description="inbox_emails 表的 id"),
+):
+    """
+    标记任务已完成：
+    1. 连接 IMAP 去除该邮件的 \\Flagged 旗帜
+    2. 从 inbox_emails 表中删除该记录
+    """
+    _require_inbox_access(current_user)
+    owner = (current_user or "").strip()
+
+    rows = db.execute_query(
+        "SELECT id, message_id FROM inbox_emails WHERE id = %s AND owner = %s LIMIT 1",
+        (int(id), owner),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="邮件记录不存在")
+    row = rows[0]
+    message_id = (row.get("message_id") or "").strip()
+
+    cfg = _get_inbox_config(current_user)
+    imap_error = None
+    if cfg["address"] and cfg["auth_code"] and message_id:
+        loop = asyncio.get_event_loop()
+        imap_error = await loop.run_in_executor(
+            None, _unflag_email_imap, cfg["address"], cfg["auth_code"], message_id
+        )
+
+    try:
+        db.execute_update(
+            "DELETE FROM inbox_emails WHERE id = %s AND owner = %s",
+            (int(id), owner),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"删除邮件记录失败: {e}")
+
+    msg = "任务已完成，邮件旗帜已移除"
+    if imap_error:
+        msg = f"任务已完成（数据库已删除，但去除旗帜失败：{imap_error}）"
+    return {"success": True, "message": msg}
+
+
+def _unflag_email_imap(address: str, auth_code: str, message_id: str) -> Optional[str]:
+    """连接 IMAP 找到指定 message_id 的邮件并去除 \\Flagged 标记。返回错误信息或 None。"""
+    imap_obj = None
+    try:
+        imap_obj = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT_SSL, timeout=30)
+        imap_obj.login(address, auth_code)
+        try:
+            imap_obj.xatom(
+                "ID",
+                '("name" "OA-InboxSync" "version" "1.0" "vendor" "myclient" "contact" "' + address + '")',
+            )
+        except Exception:
+            pass
+        imap_obj.select("INBOX", readonly=False)
+
+        # 通过 HEADER 搜索 Message-ID
+        clean_mid = message_id.strip().strip("<>")
+        typ, data = imap_obj.search(None, f'HEADER Message-ID "<{clean_mid}>"')
+        if typ != "OK" or not data or not data[0]:
+            return f"IMAP 中未找到 Message-ID={message_id}"
+
+        seq_ids = data[0].split()
+        for seq_id in seq_ids:
+            imap_obj.store(seq_id, "-FLAGS", "\\Flagged")
+
+        return None
+    except Exception as e:
+        return str(e)
+    finally:
+        if imap_obj is not None:
+            try:
+                imap_obj.logout()
+            except Exception:
+                pass
+
+
 # ==================== 后台定时拉取 ====================
 
+def _get_all_configured_users() -> list:
+    """获取所有已配置企业邮箱的用户列表 [{name, enterprise_email, email_auth_code}]"""
+    try:
+        rows = db.execute_query(
+            """
+            SELECT name, enterprise_email, email_auth_code
+              FROM yggl
+             WHERE enterprise_email IS NOT NULL AND enterprise_email <> ''
+               AND email_auth_code IS NOT NULL AND email_auth_code <> ''
+            """,
+            (),
+        )
+        return rows or []
+    except Exception as e:
+        logger.debug(f"查询已配置邮箱用户失败: {e}")
+        return []
+
+
 async def inbox_email_background_loop():
-    """后台循环：按 POLL_INTERVAL_SECONDS 自动拉取共用邮箱"""
-    logger.info("[InboxEmail] 后台自动拉取已启动，间隔 %s 秒", POLL_INTERVAL_SECONDS)
-    print(f"[System] 共用邮箱自动拉取后台任务已启动（间隔 {POLL_INTERVAL_SECONDS}s）")
+    """后台循环：遍历所有已配置企业邮箱的用户，定期自动拉取邮件，有新邮件则立即分析"""
+    logger.info("[InboxEmail] 后台自动拉取+分析已启动，间隔 %s 秒", POLL_INTERVAL_SECONDS)
+    print(f"[System] 邮箱自动拉取+分析后台任务已启动（间隔 {POLL_INTERVAL_SECONDS}s）")
     while True:
         try:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            admin1 = _get_admin1()
-            if not admin1:
-                continue
-            cfg = _get_inbox_config(admin1)
-            if not cfg["address"] or not cfg["auth_code"]:
+            users = _get_all_configured_users()
+            if not users:
                 continue
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, admin1)
-            if result.get("error"):
-                logger.warning(f"[InboxEmail] 自动同步失败: {result['error']}")
-            elif result["new"] > 0:
-                logger.info(
-                    f"[InboxEmail] 自动同步: 新增 {result['new']} 封 / 跳过 {result['skipped']} 封"
-                )
+            total_new = 0
+            for u in users:
+                uname = (u.get("name") or "").strip()
+                if not uname:
+                    continue
+                try:
+                    result = await loop.run_in_executor(
+                        None, _sync_inbox_once, MAX_FETCH_PER_POLL, uname
+                    )
+                    if result.get("error"):
+                        logger.warning(f"[InboxEmail] 自动同步 [{uname}] 失败: {result['error']}")
+                    elif result["new"] > 0:
+                        total_new += result["new"]
+                        logger.info(
+                            f"[InboxEmail] 自动同步 [{uname}]: 新增 {result['new']} 封 / 跳过 {result['skipped']} 封"
+                        )
+                except Exception as e:
+                    logger.warning(f"[InboxEmail] 自动同步 [{uname}] 异常: {e}")
+
+            # 有新邮件入库则立即触发分析，无需等待下一轮
+            if total_new > 0:
+                try:
+                    summary = await loop.run_in_executor(
+                        None, _analyze_pending_emails, max(total_new, ANALYZE_BATCH_SIZE)
+                    )
+                    if summary.get("analyzed"):
+                        logger.info(
+                            "[InboxEmail] 同步后即时分析：%s 封（任务 %s / 无任务 %s / 失败 %s）",
+                            summary.get("analyzed"),
+                            summary.get("has_task"),
+                            summary.get("no_task"),
+                            summary.get("failed"),
+                        )
+                except Exception as e:
+                    logger.warning(f"[InboxEmail] 同步后即时分析异常: {e}")
         except Exception as e:
             logger.error(f"[InboxEmail] 后台循环异常: {e}")
             await asyncio.sleep(60)
 
 
 async def inbox_email_analysis_background_loop():
-    """后台循环：周期性对未分析（pending/failed）的邮件调用本地大模型进行任务抽取。"""
-    logger.info("[InboxEmail] 后台任务抽取循环已启动，间隔 %s 秒", ANALYZE_INTERVAL_SECONDS)
-    print(f"[System] 共用邮箱任务抽取后台任务已启动（间隔 {ANALYZE_INTERVAL_SECONDS}s，每轮最多 {ANALYZE_BATCH_SIZE} 封）")
+    """后台循环：兜底处理漏网的 pending/failed 邮件（主要由同步循环即时触发分析）"""
+    logger.info("[InboxEmail] 后台兜底分析循环已启动，间隔 %s 秒", ANALYZE_INTERVAL_SECONDS)
     while True:
         try:
             await asyncio.sleep(ANALYZE_INTERVAL_SECONDS)
@@ -1076,12 +1322,12 @@ async def inbox_email_analysis_background_loop():
             summary = await loop.run_in_executor(None, _analyze_pending_emails, ANALYZE_BATCH_SIZE)
             if summary.get("analyzed"):
                 logger.info(
-                    "[InboxEmail] 任务抽取：分析 %s 封（任务 %s / 无任务 %s / 失败 %s）",
+                    "[InboxEmail] 兜底分析：%s 封（任务 %s / 无任务 %s / 失败 %s）",
                     summary.get("analyzed"),
                     summary.get("has_task"),
                     summary.get("no_task"),
                     summary.get("failed"),
                 )
         except Exception as e:
-            logger.error(f"[InboxEmail] 任务抽取循环异常: {e}")
+            logger.error(f"[InboxEmail] 兜底分析循环异常: {e}")
             await asyncio.sleep(60)

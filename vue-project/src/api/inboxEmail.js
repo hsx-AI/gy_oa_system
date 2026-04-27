@@ -34,3 +34,8 @@ export function listInboxTasks(params) {
 export function analyzeInboxEmails(params) {
   return request({ url: '/inbox-email/analyze', method: 'post', params })
 }
+
+/** 标记任务已完成（去旗帜 + 删记录） */
+export function completeInboxTask(params) {
+  return request({ url: '/inbox-email/complete', method: 'post', params })
+}

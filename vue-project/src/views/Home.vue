@@ -98,23 +98,36 @@
           <div class="ai-task-actions">
             <span class="ai-task-stat">待分析 {{ inboxTaskStats.pending }}</span>
             <span class="ai-task-stat" :class="{ 'ai-task-stat--warn': inboxTaskStats.failed > 0 }">失败 {{ inboxTaskStats.failed }}</span>
-            <button type="button" class="ai-task-icon-btn" :disabled="inboxTaskLoading" title="刷新" @click="loadInboxTasks">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <button type="button" class="ai-task-icon-btn" :disabled="inboxSyncing" :title="inboxSyncing ? '同步中…' : '同步邮箱并刷新'" @click="syncAndRefresh">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ spinning: inboxSyncing }">
                 <polyline points="23 4 23 10 17 10"/>
                 <polyline points="1 20 1 14 7 14"/>
                 <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
               </svg>
             </button>
-            <button type="button" class="ai-task-analyze-btn" :disabled="inboxAnalyzing" @click="manualAnalyzeInboxTasks">
-              {{ inboxAnalyzing ? '分析中...' : '立即分析' }}
-            </button>
+            <router-link to="/admin/inbox-emails" class="ai-task-viewall-btn">
+              查看全部
+            </router-link>
           </div>
         </header>
 
         <div v-if="inboxTaskMsg" class="ai-task-toast" :class="inboxTaskMsgType">{{ inboxTaskMsg }}</div>
 
         <div class="ai-task-body">
-          <div v-if="!inboxTasks.length && !inboxTaskLoading" class="dashboard-empty">
+          <div v-if="!inboxConfigured && !inboxTaskLoading" class="ai-task-unconfigured">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ai-task-unconfigured__icon">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            <p>您尚未配置个人企业邮箱授权码，无法同步和分析邮件任务。</p>
+            <ol class="ai-task-unconfigured__steps">
+              <li>点击下方按钮，填写您的企业邮箱地址和 IMAP 授权码</li>
+              <li>在企业邮箱客户端中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong>，系统将自动同步并由 AI 提取待办任务</li>
+            </ol>
+            <router-link to="/admin/inbox-emails?tab=emails" class="ai-task-unconfigured__link">
+              前往配置邮箱 →
+            </router-link>
+          </div>
+          <div v-else-if="!inboxTasks.length && !inboxTaskLoading" class="dashboard-empty">
             <p>暂无识别出的邮件待办任务</p>
           </div>
           <div v-else-if="inboxTaskLoading" class="dashboard-empty">
@@ -145,6 +158,16 @@
                     {{ task.taskDeadline || '未指定截止时间' }}
                   </span>
                   <span class="ai-mail-task__from" :title="task.from">{{ shortFrom(task.from) }}</span>
+                  <span
+                    class="ai-mail-task__complete"
+                    role="button"
+                    title="标记已完成（去除旗帜并删除记录）"
+                    @click.stop="completeInboxTaskAction(task.id)"
+                    :class="{ disabled: inboxCompletingId === task.id }"
+                  >
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+                    {{ inboxCompletingId === task.id ? '处理中…' : '待完成' }}
+                  </span>
                 </span>
                 <span class="ai-mail-task__summary" :title="task.taskSummary">{{ task.taskSummary }}</span>
                 <span class="ai-mail-task__sub">
@@ -157,6 +180,36 @@
         </div>
       </article>
     </section>
+
+    <!-- 邮件详情弹窗 -->
+    <div v-if="inboxDetailOpen" class="inbox-detail-overlay" @click.self="closeInboxDetail">
+      <div class="inbox-detail-modal">
+        <div class="inbox-detail-modal__header">
+          <h2 class="inbox-detail-modal__title">邮件详情</h2>
+          <button type="button" class="inbox-detail-modal__close" aria-label="关闭" @click="closeInboxDetail">×</button>
+        </div>
+        <div class="inbox-detail-modal__body" v-if="inboxDetailItem">
+          <div class="inbox-detail-meta">
+            <div class="inbox-detail-meta__row"><span class="inbox-detail-meta__label">主题</span><span>{{ inboxDetailItem.subject || '（无主题）' }}</span></div>
+            <div class="inbox-detail-meta__row"><span class="inbox-detail-meta__label">发件人</span><span>{{ inboxDetailItem.from || '—' }}</span></div>
+            <div class="inbox-detail-meta__row"><span class="inbox-detail-meta__label">收件人</span><span>{{ inboxDetailItem.to || '—' }}</span></div>
+            <div class="inbox-detail-meta__row"><span class="inbox-detail-meta__label">抄送</span><span>{{ inboxDetailItem.cc || '—' }}</span></div>
+            <div class="inbox-detail-meta__row"><span class="inbox-detail-meta__label">发件时间</span><span class="mono">{{ inboxDetailItem.emailDate || '—' }}</span></div>
+          </div>
+          <div class="inbox-detail-toggle">
+            <button type="button" :class="{ active: inboxDetailBodyMode === 'html' }" :disabled="!inboxDetailItem.bodyHtml" @click="inboxDetailBodyMode = 'html'">HTML</button>
+            <button type="button" :class="{ active: inboxDetailBodyMode === 'text' }" @click="inboxDetailBodyMode = 'text'">纯文本</button>
+          </div>
+          <div class="inbox-detail-body">
+            <iframe v-if="inboxDetailBodyMode === 'html' && inboxDetailItem.bodyHtml" class="inbox-detail-iframe" :srcdoc="inboxDetailSafeHtml" sandbox=""></iframe>
+            <pre v-else class="inbox-detail-text">{{ inboxDetailItem.bodyText || '（无正文）' }}</pre>
+          </div>
+        </div>
+        <div class="inbox-detail-modal__body" v-else>
+          <p>加载中…</p>
+        </div>
+      </div>
+    </div>
 
     <!-- 重要信息审阅（仅部长可见） -->
     <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
@@ -314,7 +367,7 @@ import {
 } from '@/api/attendance'
 import { getLeaderBriefing } from '@/api/admin'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { analyzeInboxEmails, listInboxTasks } from '@/api/inboxEmail'
+import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
@@ -342,6 +395,12 @@ const selectedShortcutGroup = ref(null)
 const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
 const inboxTaskLoading = ref(false)
+const inboxConfigured = ref(true)
+const inboxCompletingId = ref(null)
+const inboxSyncing = ref(false)
+const inboxDetailOpen = ref(false)
+const inboxDetailItem = ref(null)
+const inboxDetailBodyMode = ref('html')
 const inboxAnalyzing = ref(false)
 const inboxTaskMsg = ref('')
 const inboxTaskMsgType = ref('')
@@ -770,19 +829,21 @@ const userName = ref(userInfo.name || userInfo.userName || '')
 
 async function loadInboxTasks() {
   const name = (userName.value || '').trim()
-  if (!name || inboxTaskLoading.value) return
-  inboxTaskLoading.value = true
+  if (!name) return
+  const isFirstLoad = !inboxTasks.value.length && !inboxTaskLoading.value
+  if (isFirstLoad) inboxTaskLoading.value = true
   try {
-    const res = await listInboxTasks({ current_user: name, limit: 50 })
-    if (res && res.success) {
-      inboxTasks.value = res.items || []
-      inboxTaskStats.value = res.stats || { pending: 0, failed: 0, taskCount: 0, total: 0 }
-    } else {
-      inboxTasks.value = []
+    const [tasksRes, cfgRes] = await Promise.all([
+      listInboxTasks({ current_user: name, limit: 50 }),
+      getInboxConfig(name),
+    ])
+    if (tasksRes && tasksRes.success) {
+      inboxTasks.value = tasksRes.items || []
+      inboxTaskStats.value = tasksRes.stats || { pending: 0, failed: 0, taskCount: 0, total: 0 }
     }
+    inboxConfigured.value = !!(cfgRes && cfgRes.configured)
   } catch (e) {
     console.warn('加载AI邮件待办失败', e)
-    inboxTasks.value = []
   } finally {
     inboxTaskLoading.value = false
   }
@@ -810,6 +871,55 @@ async function manualAnalyzeInboxTasks() {
   } finally {
     inboxAnalyzing.value = false
     setTimeout(() => { inboxTaskMsg.value = '' }, 6000)
+  }
+}
+
+async function syncAndRefresh() {
+  const name = (userName.value || '').trim()
+  if (!name || inboxSyncing.value) return
+  inboxSyncing.value = true
+  inboxTaskMsg.value = '正在同步邮箱…'
+  inboxTaskMsgType.value = 'info'
+  try {
+    const res = await syncInboxEmails(name)
+    if (res && res.success) {
+      inboxTaskMsg.value = res.message || '同步完成'
+      inboxTaskMsgType.value = 'success'
+    } else {
+      inboxTaskMsg.value = (res && res.message) || '同步失败'
+      inboxTaskMsgType.value = 'error'
+    }
+    await loadInboxTasks()
+  } catch (e) {
+    inboxTaskMsg.value = e?.message || '同步失败'
+    inboxTaskMsgType.value = 'error'
+  } finally {
+    inboxSyncing.value = false
+    setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
+  }
+}
+
+async function completeInboxTaskAction(id) {
+  if (!id || inboxCompletingId.value) return
+  const name = (userName.value || '').trim()
+  if (!name) return
+  inboxCompletingId.value = id
+  try {
+    const res = await completeInboxTask({ current_user: name, id })
+    if (res && res.success) {
+      inboxTaskMsg.value = res.message || '任务已完成'
+      inboxTaskMsgType.value = 'success'
+      await loadInboxTasks()
+    } else {
+      inboxTaskMsg.value = (res && res.message) || '操作失败'
+      inboxTaskMsgType.value = 'error'
+    }
+  } catch (e) {
+    inboxTaskMsg.value = e?.message || '操作失败'
+    inboxTaskMsgType.value = 'error'
+  } finally {
+    inboxCompletingId.value = null
+    setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
   }
 }
 
@@ -846,9 +956,34 @@ function onInboxTaskWheel(e) {
   el.scrollTop += deltaY
 }
 
-function openInboxTask() {
-  router.push('/admin/inbox-emails')
+async function openInboxTask(id) {
+  if (!id) return
+  const name = (userName.value || '').trim()
+  if (!name) return
+  inboxDetailOpen.value = true
+  inboxDetailItem.value = null
+  inboxDetailBodyMode.value = 'html'
+  try {
+    const res = await getInboxEmailDetail({ current_user: name, id })
+    if (res && res.success) {
+      inboxDetailItem.value = res.item
+      inboxDetailBodyMode.value = res.item && res.item.bodyHtml ? 'html' : 'text'
+    }
+  } catch (e) {
+    console.error('加载邮件详情失败', e)
+    inboxDetailItem.value = { subject: '', from: '', to: '', cc: '', emailDate: '', receivedAt: '', bodyText: '加载失败', bodyHtml: '' }
+  }
 }
+
+function closeInboxDetail() {
+  inboxDetailOpen.value = false
+  inboxDetailItem.value = null
+}
+
+const inboxDetailSafeHtml = computed(() => {
+  if (!inboxDetailItem.value || !inboxDetailItem.value.bodyHtml) return ''
+  return inboxDetailItem.value.bodyHtml
+})
 
 function goMyApplications() {
   router.push('/attendance/my-applications')
@@ -992,8 +1127,8 @@ onMounted(() => {
     getDbManagerPermission({ current_user: name }).then(res => {
       canAccessDbManager.value = !!(res && res.canAccess)
       if (canAccessInboxBoard.value) {
-        loadInboxTasks()
-        inboxTaskRefreshTimer = setInterval(loadInboxTasks, 60000)
+        syncInboxEmails(name).then(() => loadInboxTasks()).catch(() => loadInboxTasks())
+        inboxTaskRefreshTimer = setInterval(loadInboxTasks, 15000)
       }
   }).catch(() => { canAccessDbManager.value = false })
   }
@@ -1354,6 +1489,59 @@ async function navigateTo(feature) {
   margin: 0;
 }
 
+.ai-task-unconfigured {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  padding: var(--spacing-xl) var(--spacing-xxl);
+  text-align: center;
+  background: linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%);
+  border: 1px dashed #f59e0b;
+  border-radius: 10px;
+  margin: 0 var(--spacing-md);
+}
+.ai-task-unconfigured__icon {
+  width: 32px;
+  height: 32px;
+  color: #f59e0b;
+}
+.ai-task-unconfigured p {
+  margin: 0;
+  font-size: 0.9rem;
+  color: #92400e;
+  line-height: 1.6;
+}
+.ai-task-unconfigured__steps {
+  margin: 0;
+  padding-left: 1.4em;
+  text-align: left;
+  font-size: 0.85rem;
+  color: #78350f;
+  line-height: 1.8;
+  list-style: decimal;
+}
+.ai-task-unconfigured__steps strong {
+  color: #dc2626;
+}
+.ai-task-unconfigured__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 20px;
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  border-radius: 8px;
+  text-decoration: none;
+  transition: transform .15s, box-shadow .15s;
+}
+.ai-task-unconfigured__link:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 4px 12px rgba(245, 158, 11, 0.35);
+}
+
 /* 快捷入口文件夹 */
 .shortcuts-container {
   margin-top: var(--spacing-xl);
@@ -1658,7 +1846,8 @@ async function navigateTo(feature) {
 }
 
 .ai-task-icon-btn,
-.ai-task-analyze-btn {
+.ai-task-analyze-btn,
+.ai-task-viewall-btn {
   height: 30px;
   border: 1px solid #c7d2fe;
   background: #fff;
@@ -1680,13 +1869,22 @@ async function navigateTo(feature) {
   height: 16px;
 }
 
-.ai-task-analyze-btn {
+.ai-task-analyze-btn,
+.ai-task-viewall-btn {
   padding: 0 12px;
   font-size: var(--font-size-sm);
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+}
+
+.ai-task-viewall-btn {
+  font-weight: 600;
 }
 
 .ai-task-icon-btn:hover,
-.ai-task-analyze-btn:hover {
+.ai-task-analyze-btn:hover,
+.ai-task-viewall-btn:hover {
   background: #eef2ff;
 }
 
@@ -1694,6 +1892,14 @@ async function navigateTo(feature) {
 .ai-task-analyze-btn:disabled {
   cursor: not-allowed;
   opacity: 0.65;
+}
+
+@keyframes spin-icon {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+.ai-task-icon-btn svg.spinning {
+  animation: spin-icon 1s linear infinite;
 }
 
 .ai-task-toast {
@@ -1732,7 +1938,7 @@ async function navigateTo(feature) {
 .ai-task-track {
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 6px;
   animation: inbox-task-scroll 40s linear infinite;
   will-change: transform;
 }
@@ -1753,7 +1959,7 @@ async function navigateTo(feature) {
 .ai-mail-task {
   width: 100%;
   min-width: 0;
-  padding: 10px 14px;
+  padding: 8px 14px;
   text-align: left;
   background: rgba(255, 255, 255, 0.92);
   border: 1px solid #dbeafe;
@@ -1826,6 +2032,35 @@ async function navigateTo(feature) {
   white-space: nowrap;
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
+}
+.ai-mail-task__complete {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 10px;
+  font-size: 0.74rem;
+  font-weight: 600;
+  color: #16a34a;
+  background: #dcfce7;
+  border: 1px solid #bbf7d0;
+  border-radius: 999px;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.ai-mail-task__complete svg {
+  width: 12px;
+  height: 12px;
+}
+.ai-mail-task__complete:hover {
+  background: #16a34a;
+  color: #fff;
+  border-color: #16a34a;
+}
+.ai-mail-task__complete.disabled {
+  opacity: 0.5;
+  pointer-events: none;
 }
 
 .ai-mail-task__summary {
@@ -2213,5 +2448,123 @@ async function navigateTo(feature) {
     padding-left: var(--spacing-lg);
     padding-right: var(--spacing-lg);
   }
+}
+
+/* 邮件详情弹窗 */
+.inbox-detail-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.45);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+  padding: 24px;
+}
+.inbox-detail-modal {
+  background: #fff;
+  border-radius: 8px;
+  width: min(920px, 100%);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+}
+.inbox-detail-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border);
+}
+.inbox-detail-modal__title {
+  margin: 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.inbox-detail-modal__close {
+  background: transparent;
+  border: none;
+  font-size: 1.5rem;
+  cursor: pointer;
+  color: var(--color-text-tertiary);
+  line-height: 1;
+}
+.inbox-detail-modal__body {
+  overflow: auto;
+  padding: var(--spacing-lg);
+  flex: 1;
+}
+.inbox-detail-meta {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+  background: #f8fafc;
+}
+.inbox-detail-meta__row {
+  display: flex;
+  gap: var(--spacing-md);
+  padding: 4px 0;
+  font-size: 0.88rem;
+}
+.inbox-detail-meta__label {
+  width: 80px;
+  color: var(--color-text-tertiary);
+  flex-shrink: 0;
+}
+.inbox-detail-meta__row > span:last-child {
+  flex: 1;
+  word-break: break-all;
+  color: var(--color-text-primary);
+}
+.inbox-detail-toggle {
+  display: flex;
+  gap: 6px;
+  margin-bottom: var(--spacing-sm);
+}
+.inbox-detail-toggle button {
+  padding: 4px 14px;
+  font-size: 0.85rem;
+  border: 1px solid var(--color-border);
+  background: #fff;
+  border-radius: 4px;
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.inbox-detail-toggle button.active {
+  background: var(--color-primary, #3b82f6);
+  color: #fff;
+  border-color: var(--color-primary, #3b82f6);
+}
+.inbox-detail-toggle button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.inbox-detail-body {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  overflow: hidden;
+  min-height: 260px;
+  max-height: 60vh;
+  background: #fff;
+}
+.inbox-detail-iframe {
+  width: 100%;
+  height: 60vh;
+  border: 0;
+  background: #fff;
+}
+.inbox-detail-text {
+  margin: 0;
+  padding: var(--spacing-md);
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: var(--color-text-primary);
+  max-height: 60vh;
+  overflow: auto;
 }
 </style>
