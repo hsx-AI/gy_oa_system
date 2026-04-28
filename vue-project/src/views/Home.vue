@@ -82,6 +82,76 @@
       </div>
     </section>
 
+    <!-- 常用功能 -->
+    <section class="home-favorites-section">
+      <div class="favorites-header">
+        <h2 class="favorites-title">
+          <svg class="favorites-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+          常用功能
+        </h2>
+        <button type="button" class="favorites-edit-btn" @click="openFavEditor" title="自定义常用功能">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+          自定义
+        </button>
+      </div>
+      <div class="favorites-grid">
+        <button
+          v-for="fav in favFeatures"
+          :key="fav.id"
+          type="button"
+          class="fav-card"
+          @click="navigateTo(fav)"
+        >
+          <span class="fav-card__icon" :style="{ background: fav.color }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="fav.iconPath" /></svg>
+          </span>
+          <span class="fav-card__label">{{ fav.title }}</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 常用功能编辑弹窗 -->
+    <div v-if="favEditorVisible" class="modal-overlay" @click.self="closeFavEditor">
+      <div class="fav-editor-modal">
+        <div class="fav-editor-header">
+          <h3>自定义常用功能</h3>
+          <button type="button" class="fav-editor-close" @click="closeFavEditor">&times;</button>
+        </div>
+        <p class="fav-editor-hint">勾选要显示在首页的功能（最多 8 个）</p>
+        <div class="fav-editor-groups">
+          <div v-for="group in featureGroups" :key="group.title" class="fav-editor-group">
+            <h4 class="fav-editor-group-title">{{ group.title }}</h4>
+            <div class="fav-editor-items">
+              <label
+                v-for="item in group.items"
+                :key="item.id"
+                class="fav-editor-item"
+                :class="{ checked: favEditorSet.has(item.id), disabled: !favEditorSet.has(item.id) && favEditorSet.size >= 8 }"
+              >
+                <input
+                  type="checkbox"
+                  :checked="favEditorSet.has(item.id)"
+                  :disabled="!favEditorSet.has(item.id) && favEditorSet.size >= 8"
+                  @change="toggleFavEditorItem(item.id)"
+                />
+                <span class="fav-editor-item__icon" :style="{ background: item.color }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="item.iconPath" /></svg>
+                </span>
+                <span class="fav-editor-item__name">{{ item.title }}</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        <div class="fav-editor-footer">
+          <span class="fav-editor-count">已选 {{ favEditorSet.size }} / 8</span>
+          <div class="fav-editor-btns">
+            <button type="button" class="btn-fav-cancel" @click="closeFavEditor">取消</button>
+            <button type="button" class="btn-fav-save" @click="saveFavEditor">保存</button>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <section v-if="canAccessInboxBoard" class="home-ai-task-section">
       <article class="dashboard-card ai-task-card">
         <header class="dashboard-card__header ai-task-card__header">
@@ -419,7 +489,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
+import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import {
   getLeaveList,
@@ -871,6 +941,14 @@ const rawFeatureGroups = [
         iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
       },
       {
+        id: 'contacts',
+        title: '部门通讯录',
+        description: '按科室查看员工手机号、座机号等联系方式',
+        path: '/contacts',
+        color: 'linear-gradient(135deg, #43e97b 0%, #38f9d7 100%)',
+        iconPath: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100 8 4 4 0 000-8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75'
+      },
+      {
         id: 'feedback',
         title: '意见与建议',
         description: '部门吐槽墙、领导匿名信箱、系统功能建议',
@@ -934,6 +1012,74 @@ const featureGroups = computed(() => {
 const visibleFeatureCount = computed(() => {
   return featureGroups.value.reduce((sum, group) => sum + group.items.length, 0)
 })
+
+// ==================== 常用功能 ====================
+const DEFAULT_FAV_IDS = ['attendance', 'businesstrip', 'filenumbering', 'contacts']
+
+function _favStorageKey() {
+  const name = (userName.value || '').trim()
+  return name ? `home_fav_ids_${name}` : 'home_fav_ids'
+}
+
+function loadFavIds() {
+  try {
+    const raw = localStorage.getItem(_favStorageKey())
+    if (raw) {
+      const arr = JSON.parse(raw)
+      if (Array.isArray(arr) && arr.length) return arr
+    }
+  } catch { /* ignore */ }
+  return [...DEFAULT_FAV_IDS]
+}
+
+const favIds = ref(loadFavIds())
+
+const allFeaturesFlat = computed(() => {
+  const map = {}
+  for (const group of rawFeatureGroups) {
+    for (const item of group.items) {
+      map[item.id] = item
+    }
+  }
+  return map
+})
+
+const favFeatures = computed(() => {
+  return favIds.value
+    .map(id => allFeaturesFlat.value[id])
+    .filter(Boolean)
+    .filter(f => canShowFeature(f.permission))
+})
+
+const favEditorVisible = ref(false)
+const favEditorSet = reactive(new Set())
+
+function openFavEditor() {
+  favEditorSet.clear()
+  for (const id of favIds.value) favEditorSet.add(id)
+  favEditorVisible.value = true
+}
+
+function closeFavEditor() {
+  favEditorVisible.value = false
+}
+
+function toggleFavEditorItem(id) {
+  if (favEditorSet.has(id)) {
+    favEditorSet.delete(id)
+  } else if (favEditorSet.size < 8) {
+    favEditorSet.add(id)
+  }
+}
+
+function saveFavEditor() {
+  const ids = [...favEditorSet]
+  favIds.value = ids
+  try {
+    localStorage.setItem(_favStorageKey(), JSON.stringify(ids))
+  } catch { /* ignore */ }
+  favEditorVisible.value = false
+}
 
 // 我的申请（真实数据）
 const requestList = ref([])
@@ -1934,6 +2080,212 @@ async function navigateTo(feature) {
   }
 }
 
+/* ==================== 常用功能 ==================== */
+.home-favorites-section {
+  margin-bottom: var(--spacing-lg);
+}
+.favorites-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+}
+.favorites-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 16px;
+  font-weight: 700;
+  color: #1e293b;
+}
+.favorites-title-icon {
+  width: 20px;
+  height: 20px;
+  color: #f59e0b;
+  fill: #fbbf24;
+}
+.favorites-edit-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  padding: 4px 12px;
+  font-size: 12px;
+  color: #64748b;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.favorites-edit-btn svg { width: 13px; height: 13px; }
+.favorites-edit-btn:hover { background: #f8fafc; border-color: #94a3b8; color: #334155; }
+
+.favorites-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 12px;
+}
+.fav-card {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 14px 16px;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-align: left;
+}
+.fav-card:hover {
+  border-color: #bfdbfe;
+  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
+  transform: translateY(-1px);
+}
+.fav-card__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  min-width: 36px;
+  border-radius: 8px;
+}
+.fav-card__icon svg {
+  width: 18px;
+  height: 18px;
+  color: #fff;
+  stroke: #fff;
+}
+.fav-card__label {
+  font-size: 13px;
+  font-weight: 600;
+  color: #1e293b;
+  line-height: 1.3;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 常用功能编辑弹窗 */
+.fav-editor-modal {
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.2);
+  width: 520px;
+  max-width: 92vw;
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.fav-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #e5e7eb;
+}
+.fav-editor-header h3 { margin: 0; font-size: 16px; font-weight: 700; color: #1e293b; }
+.fav-editor-close {
+  background: none;
+  border: none;
+  font-size: 22px;
+  color: #94a3b8;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.fav-editor-close:hover { color: #ef4444; }
+.fav-editor-hint {
+  margin: 0;
+  padding: 10px 20px 6px;
+  font-size: 12px;
+  color: #94a3b8;
+}
+.fav-editor-groups {
+  flex: 1;
+  overflow-y: auto;
+  padding: 4px 20px 12px;
+}
+.fav-editor-group { margin-bottom: 12px; }
+.fav-editor-group:last-child { margin-bottom: 0; }
+.fav-editor-group-title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 700;
+  color: #64748b;
+  letter-spacing: 0.02em;
+}
+.fav-editor-items {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+}
+.fav-editor-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  border: 1px solid #f1f5f9;
+  cursor: pointer;
+  transition: all 0.12s;
+  background: #fafafa;
+}
+.fav-editor-item:hover { background: #f0f9ff; border-color: #bfdbfe; }
+.fav-editor-item.checked { background: #eff6ff; border-color: #93c5fd; }
+.fav-editor-item.disabled { opacity: 0.4; cursor: not-allowed; }
+.fav-editor-item input[type="checkbox"] { width: 15px; height: 15px; accent-color: #3b82f6; cursor: inherit; flex-shrink: 0; }
+.fav-editor-item__icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  min-width: 24px;
+  border-radius: 5px;
+}
+.fav-editor-item__icon svg { width: 13px; height: 13px; color: #fff; stroke: #fff; }
+.fav-editor-item__name { font-size: 12px; font-weight: 500; color: #334155; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fav-editor-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 20px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+.fav-editor-count { font-size: 12px; color: #94a3b8; font-weight: 500; }
+.fav-editor-btns { display: flex; gap: 8px; }
+.btn-fav-cancel {
+  padding: 6px 18px;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  background: #fff;
+  font-size: 13px;
+  cursor: pointer;
+  color: #475569;
+}
+.btn-fav-cancel:hover { background: #f1f5f9; }
+.btn-fav-save {
+  padding: 6px 20px;
+  border: none;
+  border-radius: 6px;
+  background: var(--color-primary, #3b82f6);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.btn-fav-save:hover { opacity: 0.9; }
+
+@media (max-width: 768px) {
+  .favorites-grid { grid-template-columns: repeat(2, 1fr); }
+  .fav-editor-items { grid-template-columns: 1fr; }
+}
+
 .home-ai-task-section {
   margin-bottom: var(--spacing-xxl);
 }
@@ -2777,6 +3129,7 @@ async function navigateTo(feature) {
     padding: 0 var(--spacing-md);
   }
 
+  .home-favorites-section,
   .home-ai-task-section,
   .home-wall-section {
     padding: 0 var(--spacing-md);

@@ -232,6 +232,12 @@ const routes = [
     name: 'FeedbackCenter',
     component: () => import('@/views/feedback/FeedbackCenter.vue'),
     meta: { title: '意见与建议' }
+  },
+  {
+    path: '/contacts',
+    name: 'Contacts',
+    component: () => import('@/views/Contacts.vue'),
+    meta: { title: '部门通讯录' }
   }
   // 未来可以添加更多路由：
   // {
