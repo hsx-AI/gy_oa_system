@@ -226,6 +226,7 @@
                       <polyline points="12 6 12 12 16 14" />
                     </svg>
                     {{ task.taskDeadline || '未指定截止时间' }}
+                    <span v-if="task.taskDeadline && deadlineCountdown(task.taskDeadline)" class="ai-mail-task__countdown">{{ deadlineCountdown(task.taskDeadline) }}</span>
                   </span>
                   <span class="ai-mail-task__from" :title="task.from">{{ shortFrom(task.from) }}</span>
                   <span
@@ -1205,15 +1206,43 @@ function shortFrom(from) {
   return text.length > 20 ? `${text.slice(0, 20)}...` : text
 }
 
-function deadlineClass(deadline) {
-  if (!deadline) return 'none'
+const nowTick = ref(Date.now())
+let _countdownTimer = null
+
+function _parseDeadline(deadline) {
+  if (!deadline) return null
   const d = new Date(String(deadline).replace(/\//g, '-').replace(/-(\d)(?!\d)/g, '-0$1'))
-  if (Number.isNaN(d.getTime())) return 'neutral'
-  const diffDays = (d.getTime() - Date.now()) / (1000 * 60 * 60 * 24)
+  return Number.isNaN(d.getTime()) ? null : d
+}
+
+function deadlineClass(deadline) {
+  const d = _parseDeadline(deadline)
+  if (!d) return 'none'
+  const diffDays = (d.getTime() - nowTick.value) / (1000 * 60 * 60 * 24)
   if (diffDays < 0) return 'overdue'
   if (diffDays <= 2) return 'urgent'
   if (diffDays <= 7) return 'soon'
   return 'neutral'
+}
+
+function deadlineCountdown(deadline) {
+  const d = _parseDeadline(deadline)
+  if (!d) return ''
+  const diff = d.getTime() - nowTick.value
+  if (diff <= 0) {
+    const past = -diff
+    const days = Math.floor(past / 86400000)
+    const hours = Math.floor((past % 86400000) / 3600000)
+    if (days > 0) return `已超 ${days}天${hours}小时`
+    const mins = Math.floor((past % 3600000) / 60000)
+    return `已超 ${hours}时${mins}分`
+  }
+  const days = Math.floor(diff / 86400000)
+  const hours = Math.floor((diff % 86400000) / 3600000)
+  const mins = Math.floor((diff % 3600000) / 60000)
+  if (days > 0) return `剩 ${days}天${hours}小时`
+  if (hours > 0) return `剩 ${hours}时${mins}分`
+  return `剩 ${mins}分钟`
 }
 
 function onInboxTaskWheel(e) {
@@ -1373,6 +1402,10 @@ onBeforeUnmount(() => {
     clearInterval(inboxTaskRefreshTimer)
     inboxTaskRefreshTimer = null
   }
+  if (_countdownTimer) {
+    clearInterval(_countdownTimer)
+    _countdownTimer = null
+  }
 })
 
 onMounted(() => {
@@ -1404,6 +1437,7 @@ onMounted(() => {
       }
   }).catch(() => { canAccessDbManager.value = false })
   }
+  _countdownTimer = setInterval(() => { nowTick.value = Date.now() }, 30000)
 })
 
 function folderAccent(group) {
@@ -2500,6 +2534,14 @@ async function navigateTo(feature) {
 .ai-mail-task__deadline.soon {
   background: #fef9c3;
   color: #854d0e;
+}
+
+.ai-mail-task__countdown {
+  font-size: 10px;
+  font-weight: 700;
+  opacity: 0.85;
+  padding-left: 4px;
+  white-space: nowrap;
 }
 
 .ai-mail-task__from {

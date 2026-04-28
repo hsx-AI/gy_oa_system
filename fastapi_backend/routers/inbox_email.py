@@ -524,14 +524,10 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
                 continue
 
         # 清理已取消旗帜的邮件
-        # 安全条件：无任何扫描失败 且 未被 max_fetch 截断 且 至少拿到了 1 个 message_id
+        # 安全条件：无扫描失败 且 未被 max_fetch 截断（IMAP 搜索结果完整）
         fetched_all = (len(ids) <= max_fetch) if max_fetch else True
-        can_cleanup = (
-            scan_failures == 0
-            and fetched_all
-            and len(flagged_mids_in_imap) > 0
-        )
-        if can_cleanup:
+        can_cleanup = scan_failures == 0 and fetched_all
+        if can_cleanup and existing_mids:
             unflagged_mids = existing_mids - flagged_mids_in_imap
             if unflagged_mids:
                 for uf_mid in unflagged_mids:
