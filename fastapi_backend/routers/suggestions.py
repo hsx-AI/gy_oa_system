@@ -708,6 +708,18 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     intervals = build_intervals_from_marks(time_mark_pairs)
 
     # -------------------------------------------------
+    # 3a. 仅有进入打卡但无离开打卡记录 → 无法形成完整区间，视为全天异常
+    # -------------------------------------------------
+    if not intervals:
+        has_entry_mark = any(m == 0 for _, m in time_mark_pairs)
+        all_marks_unknown = not any(m is not None for _, m in time_mark_pairs)
+        if has_entry_mark or all_marks_unknown:
+            return [_sugg(
+                "08:00:00", "17:00:00", 1,
+                "【考勤建议】检测到打卡数据异常（仅有进入记录，缺少离开记录），建议补录 8:00 到 17:00 的考勤（全天）"
+            )]
+
+    # -------------------------------------------------
     # 3b. 早班前到岗但未待到工作时段的补充检测
     #     当 first_val <= 8 时，step 2 不会触发任何分支（视为"准时到岗"），
     #     但实际可能在 8:00 前就离开了。需要通过区间判断真正覆盖工作时段的"有效首次到岗时间"。
