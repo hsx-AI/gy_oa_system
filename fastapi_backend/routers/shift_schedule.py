@@ -169,6 +169,54 @@ def _get_dept_people(department: str) -> List[dict]:
     return people
 
 
+def _get_dept_business_trips(department: str, start: date, end: date) -> dict:
+    """查询科室已审批通过且与日期区间重叠的公出，返回 {姓名: {日期: 项目名}}。"""
+    business_trips = {}
+    try:
+        trip_rows = db.execute_query(
+            "SELECT g.gcr, g.xmmc, "
+            "  COALESCE(g.gcsj, g.yjcfsj) AS trip_start, "
+            "  COALESCE(g.sjfhtime, g.yjfhsj) AS trip_end "
+            "FROM gcsqb g "
+            "JOIN yggl y ON g.gcr = y.name AND COALESCE(y.zaizhi, 0) = 0 "
+            "WHERE y.lsys = %s "
+            "  AND g.bldzt = 2 AND g.szrzt = 2 "
+            "  AND COALESCE(g.gcsj, g.yjcfsj) IS NOT NULL "
+            "  AND COALESCE(g.sjfhtime, g.yjfhsj) IS NOT NULL "
+            "  AND DATE(COALESCE(g.gcsj, g.yjcfsj)) <= %s "
+            "  AND DATE(COALESCE(g.sjfhtime, g.yjfhsj)) >= %s",
+            (department, end.strftime("%Y-%m-%d"), start.strftime("%Y-%m-%d")),
+        )
+        for tr in trip_rows or []:
+            name = (tr.get("gcr") or "").strip()
+            xmmc = (tr.get("xmmc") or "").strip()
+            ts = tr.get("trip_start")
+            te = tr.get("trip_end")
+            if not name or not ts or not te:
+                continue
+            if isinstance(ts, datetime):
+                ts = ts.date()
+            elif isinstance(ts, str):
+                ts = datetime.strptime(ts[:10], "%Y-%m-%d").date()
+            elif not isinstance(ts, date):
+                continue
+            if isinstance(te, datetime):
+                te = te.date()
+            elif isinstance(te, str):
+                te = datetime.strptime(te[:10], "%Y-%m-%d").date()
+            elif not isinstance(te, date):
+                continue
+            d_cur = max(ts, start)
+            d_end = min(te, end)
+            while d_cur <= d_end:
+                ds = d_cur.strftime("%Y-%m-%d")
+                business_trips.setdefault(name, {})[ds] = xmmc or "公出"
+                d_cur += timedelta(days=1)
+    except Exception as e:
+        logger.warning("查询公出数据失败: %s", e)
+    return business_trips
+
+
 def _month_dates(year: int, month: int) -> List[date]:
     """返回指定月份的所有日期列表"""
     d = date(year, month, 1)
@@ -488,51 +536,7 @@ async def get_schedule(
     except Exception as e:
         logger.warning("读取 shift_day_lock 失败: %s", e)
 
-    # 公出数据：查本科室已审批通过、且时间段与排班区间有交集的公出单
-    business_trips = {}  # {employee_name: {date_str: xmmc}}
-    try:
-        trip_rows = db.execute_query(
-            "SELECT g.gcr, g.xmmc, g.gclx, "
-            "  COALESCE(g.gcsj, g.yjcfsj) AS trip_start, "
-            "  COALESCE(g.sjfhtime, g.yjfhsj) AS trip_end "
-            "FROM gcsqb g "
-            "JOIN yggl y ON g.gcr = y.name AND COALESCE(y.zaizhi, 0) = 0 "
-            "WHERE y.lsys = %s "
-            "  AND g.bldzt = 2 AND g.szrzt = 2 "
-            "  AND COALESCE(g.gcsj, g.yjcfsj) IS NOT NULL "
-            "  AND COALESCE(g.sjfhtime, g.yjfhsj) IS NOT NULL "
-            "  AND DATE(COALESCE(g.gcsj, g.yjcfsj)) <= %s "
-            "  AND DATE(COALESCE(g.sjfhtime, g.yjfhsj)) >= %s",
-            (department, ds_hi, ds_lo),
-        )
-        for tr in trip_rows or []:
-            name = (tr.get("gcr") or "").strip()
-            xmmc = (tr.get("xmmc") or "").strip()
-            ts = tr.get("trip_start")
-            te = tr.get("trip_end")
-            if not name or not ts or not te:
-                continue
-            if hasattr(ts, "date"):
-                ts = ts.date() if not isinstance(ts, date) else ts
-            elif isinstance(ts, str):
-                ts = datetime.strptime(ts[:10], "%Y-%m-%d").date()
-            else:
-                continue
-            if hasattr(te, "date"):
-                te = te.date() if not isinstance(te, date) else te
-            elif isinstance(te, str):
-                te = datetime.strptime(te[:10], "%Y-%m-%d").date()
-            else:
-                continue
-            # 只展示与当前排班区间有交集的天
-            d_cur = max(ts, dates[0])
-            d_end = min(te, dates[-1])
-            while d_cur <= d_end:
-                ds = d_cur.strftime("%Y-%m-%d")
-                business_trips.setdefault(name, {})[ds] = xmmc or "公出"
-                d_cur += timedelta(days=1)
-    except Exception as e:
-        logger.warning("查询公出数据失败: %s", e)
+    business_trips = _get_dept_business_trips(department, dates[0], dates[-1])
 
     return {
         "success": True,
@@ -1034,6 +1038,8 @@ async def export_schedule_excel(
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
+        from openpyxl.cell.rich_text import CellRichText, TextBlock
+        from openpyxl.cell.text import InlineFont
     except ImportError:
         raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
 
@@ -1143,8 +1149,18 @@ async def export_schedule_excel(
             return plan
         return "按当日生产、技术准备、工地服务及专项工作安排执行。"
 
-    def _format_group_lines(title: str, names: List[str], people_by_name: dict) -> str:
-        if not names:
+    def _format_trip_line(trip_entries: List[tuple]) -> str:
+        if not trip_entries:
+            return ""
+        parts = []
+        for name, project in trip_entries:
+            project = (project or "").strip()
+            parts.append(f"{name}（{project}）" if project and project != "公出" else name)
+        return f"公出人员：{'、'.join(parts)}"
+
+    def _format_group_lines(title: str, names: List[str], people_by_name: dict, trip_entries: Optional[List[tuple]] = None) -> str:
+        trip_line = _format_trip_line(trip_entries or [])
+        if not names and not trip_line:
             return ""
         body = "、".join(names)
         phones = []
@@ -1153,9 +1169,23 @@ async def export_schedule_excel(
             phone = (person or {}).get("telephone") or (person or {}).get("mobile") or ""
             if phone:
                 phones.append(phone)
+        lines = [title]
+        if body:
+            lines.append(body)
         if phones:
-            return f"{title}\n{body}\n{'、'.join(phones)}"
-        return f"{title}\n{body}"
+            lines.append("、".join(phones))
+        if trip_line:
+            lines.append(trip_line)
+        return "\n".join(lines)
+
+    def _format_group_rich(title: str, text: str):
+        if not text:
+            return ""
+        rest = text[len(title):] if text.startswith(title) else f"\n{text}"
+        return CellRichText([
+            TextBlock(InlineFont(rFont="宋体", sz=9, b=True), title),
+            rest,
+        ])
 
     def _is_duty_contact_candidate(person: Optional[dict]) -> bool:
         jb = ((person or {}).get("jb") or "").strip()
@@ -1213,6 +1243,11 @@ async def export_schedule_excel(
                 pds = pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10]
                 if pds:
                     dept_plans[pds] = (pr.get("content") or "").strip()
+            dept_trips = _get_dept_business_trips(
+                dept_name,
+                datetime.strptime(ds_lo, "%Y-%m-%d").date(),
+                datetime.strptime(ds_hi, "%Y-%m-%d").date(),
+            )
 
             dept_cache[dept_name] = {
                 "employees": employees_local,
@@ -1221,6 +1256,7 @@ async def export_schedule_excel(
                 "schedule": dept_schedule,
                 "locations": dept_locations,
                 "plans": dept_plans,
+                "businessTrips": dept_trips,
             }
 
         wb_h = Workbook()
@@ -1291,8 +1327,9 @@ async def export_schedule_excel(
                 cached = dept_cache.get(dept_name) or {}
                 people_by_name = cached.get("peopleByName") or {}
                 dept_schedule = cached.get("schedule") or {}
+                dept_trips = cached.get("businessTrips") or {}
                 for emp in cached.get("employees") or []:
-                    if dept_schedule.get(emp, {}).get(ds, ""):
+                    if dept_schedule.get(emp, {}).get(ds, "") or dept_trips.get(emp, {}).get(ds, ""):
                         person = people_by_name.get(emp)
                         if _is_duty_contact_candidate(person):
                             daily_contact = person
@@ -1306,18 +1343,20 @@ async def export_schedule_excel(
                 cached = dept_cache.get(dept_name) or {}
                 employees_local = cached.get("employees") or []
                 people_by_name = cached.get("peopleByName") or {}
-                managers = cached.get("managers") or []
                 dept_schedule = cached.get("schedule") or {}
                 dept_locations = cached.get("locations") or {}
                 dept_plans = cached.get("plans") or {}
+                dept_trips = cached.get("businessTrips") or {}
 
                 day_shift = []
                 night_shift = []
                 prepare_names = []
                 service_names = []
+                trip_entries = []
                 for emp in employees_local:
                     st = dept_schedule.get(emp, {}).get(ds, "")
                     loc = dept_locations.get(emp, {}).get(ds, "")
+                    trip_project = dept_trips.get(emp, {}).get(ds, "")
                     if st:
                         if loc == "准备组":
                             prepare_names.append(emp)
@@ -1331,23 +1370,32 @@ async def export_schedule_excel(
                             day_shift.append(emp)
                         elif st == "夜班":
                             night_shift.append(emp)
+                    if trip_project:
+                        trip_entries.append((emp, trip_project))
 
-                attendance_count = len(set(day_shift + night_shift))
+                trip_names = [name for name, _project in trip_entries]
+                attendance_count = len(set(day_shift + night_shift + trip_names))
+                prepare_text = _format_group_lines(dept_name, prepare_names, people_by_name, trip_entries)
+                service_text = _format_group_lines(dept_name, service_names, people_by_name, trip_entries)
+                plan_text = _compact_plan(dept_plans.get(ds, ""))
+                trip_line = _format_trip_line(trip_entries)
+                if trip_line:
+                    plan_text = f"{plan_text}\n{trip_line}"
 
                 values = [
                     date_label,
                     "",
                     _phone_text(daily_contact),
-                    _format_group_lines(dept_name, prepare_names, people_by_name),
-                    _format_group_lines(dept_name, service_names, people_by_name),
-                    _compact_plan(dept_plans.get(ds, "")),
+                    _format_group_rich(dept_name, prepare_text),
+                    _format_group_rich(dept_name, service_text),
+                    plan_text,
                     "",
                     attendance_count,
                 ]
                 for col, value in enumerate(values, start=1):
                     cell = ws.cell(current_row, col, value)
                     cell.font = small_font if col in (4, 5, 6) else body_font
-                    cell.alignment = left_top if col in (4, 5, 6) else center
+                    cell.alignment = center if col in (4, 5) else (left_top if col == 6 else center)
                     cell.border = border
                     if col == 8:
                         cell.fill = grey_fill
