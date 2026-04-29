@@ -2457,36 +2457,36 @@ thead tr:first-child .sticky-col2 {
 
 .cal-plan-popover {
   display: none;
-  position: absolute;
+  position: fixed;
   left: 50%;
-  transform: translateX(-50%);
-  top: calc(100% + 4px);
-  width: max(200px, 100%);
-  max-height: 160px;
+  top: 50%;
+  transform: translate(-50%, -50%);
+  width: min(480px, 85vw);
+  max-height: min(360px, 60vh);
+  z-index: 9999;
+  background: #fff;
+  color: #1e293b;
+  border-radius: 12px;
+  padding: 16px 20px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.25);
+  border: 1px solid #e2e8f0;
   overflow-y: auto;
-  z-index: 20;
-  background: rgba(15, 23, 42, 0.97);
-  color: #f8fafc;
-  border-radius: 8px;
-  padding: 8px 10px;
-  box-shadow: 0 10px 24px rgba(15, 23, 42, 0.35);
-  border: 1px solid rgba(148, 163, 184, 0.35);
 }
-.cal-day-cell:hover { z-index: 10; }
 .cal-day-cell:hover .cal-plan-popover { display: block; }
 .cal-plan-title {
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
-  color: #93c5fd;
-  margin-bottom: 4px;
+  color: #3b82f6;
+  margin-bottom: 8px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid #e5e7eb;
 }
 .cal-plan-text {
-  font-size: 11px;
-  line-height: 1.45;
-  max-height: 140px;
-  overflow: auto;
+  font-size: 13px;
+  line-height: 1.7;
   white-space: pre-wrap;
   word-break: break-word;
+  color: #334155;
 }
 
 /* 值班位置选择弹窗 */
