@@ -1211,6 +1211,17 @@ async def export_schedule_excel(
         jb = ((person or {}).get("jb") or "").strip()
         return ("主任" in jb) or ("组长" in jb)
 
+    def _duty_contact_priority(person: Optional[dict]) -> int:
+        """值班联系人择优：主任 > 副主任 > 组长 > 其他当天值班人员。"""
+        jb = ((person or {}).get("jb") or "").strip()
+        if "副主任" in jb:
+            return 2
+        if "主任" in jb:
+            return 1
+        if "组长" in jb:
+            return 3
+        return 9
+
     def _export_holiday_duty_excel():
         """按参考表样式导出节假日期间值班值宿人员安排表。"""
         holiday_dates = date_info
@@ -1330,9 +1341,6 @@ async def export_schedule_excel(
             ws.column_dimensions[col].width = width
 
         current_row = 4
-        contact_rotation = []
-        for dept_name in scoped_departments:
-            contact_rotation.extend((dept_cache.get(dept_name) or {}).get("managers") or [])
 
         for idx, di in enumerate(holiday_dates):
             ds = di["date"]
@@ -1342,22 +1350,16 @@ async def export_schedule_excel(
                 date_label += f"\n{di['holidayMark']}"
             date_start_row = current_row
 
-            daily_contact = None
-            for dept_name in scoped_departments:
+            daily_contact_candidates = []
+            for dept_idx, dept_name in enumerate(scoped_departments):
                 cached = dept_cache.get(dept_name) or {}
                 people_by_name = cached.get("peopleByName") or {}
                 dept_schedule = cached.get("schedule") or {}
-                dept_trips = cached.get("businessTrips") or {}
-                for emp in cached.get("employees") or []:
-                    if dept_schedule.get(emp, {}).get(ds, "") or dept_trips.get(emp, {}).get(ds, ""):
-                        person = people_by_name.get(emp)
-                        if _is_duty_contact_candidate(person):
-                            daily_contact = person
-                            break
-                if daily_contact:
-                    break
-            if not daily_contact and contact_rotation:
-                daily_contact = contact_rotation[idx % len(contact_rotation)]
+                for emp_idx, emp in enumerate(cached.get("employees") or []):
+                    if dept_schedule.get(emp, {}).get(ds, ""):
+                        person = people_by_name.get(emp) or {"name": emp, "jb": ""}
+                        daily_contact_candidates.append((_duty_contact_priority(person), dept_idx, emp_idx, person))
+            daily_contact = sorted(daily_contact_candidates, key=lambda x: (x[0], x[1], x[2]))[0][3] if daily_contact_candidates else None
 
             daily_total = 0
             for dept_index, dept_name in enumerate(scoped_departments):
