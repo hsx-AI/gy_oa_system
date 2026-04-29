@@ -18,6 +18,18 @@ from utils.holiday_loader import load_holidays_for_year
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/shift", tags=["排班管理"])
 
+SHIFT_DEPARTMENT_ORDER = [
+    "水轮机工艺室",
+    "水发工艺室",
+    "汽发工艺室",
+    "焊接工艺室",
+    "综合技术室",
+    "智能制造技术室",
+    "工具技术室",
+    "非标技术室",
+    "数控编程室",
+]
+
 
 def _ensure_tables():
     """确保排班相关表存在。
@@ -120,7 +132,15 @@ def _get_shift_departments() -> List[str]:
         "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
         "AND COALESCE(zaizhi,0) = 0 ORDER BY lsys"
     )
-    return [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]
+    depts = [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]
+
+    def _dept_sort_key(name: str):
+        try:
+            return (SHIFT_DEPARTMENT_ORDER.index(name), "")
+        except ValueError:
+            return (len(SHIFT_DEPARTMENT_ORDER), name)
+
+    return sorted(depts, key=_dept_sort_key)
 
 
 def _get_dept_people(department: str) -> List[dict]:
@@ -1339,6 +1359,7 @@ async def export_schedule_excel(
             if not daily_contact and contact_rotation:
                 daily_contact = contact_rotation[idx % len(contact_rotation)]
 
+            daily_total = 0
             for dept_index, dept_name in enumerate(scoped_departments):
                 cached = dept_cache.get(dept_name) or {}
                 employees_local = cached.get("employees") or []
@@ -1375,6 +1396,7 @@ async def export_schedule_excel(
 
                 trip_names = [name for name, _project in trip_entries]
                 attendance_count = len(set(day_shift + night_shift + trip_names))
+                daily_total += attendance_count
                 prepare_text = _format_group_lines(dept_name, prepare_names, people_by_name, trip_entries)
                 service_text = _format_group_lines(dept_name, service_names, people_by_name, trip_entries)
                 plan_text = _compact_plan(dept_plans.get(ds, ""))
@@ -1402,6 +1424,19 @@ async def export_schedule_excel(
                 ws.merge_cells(start_row=current_row, start_column=6, end_row=current_row, end_column=7)
                 ws.row_dimensions[current_row].height = 120
                 current_row += 1
+
+            total_row = current_row
+            for col in range(1, 9):
+                cell = ws.cell(total_row, col, "")
+                cell.border = border
+                cell.fill = grey_fill
+                cell.alignment = center
+                cell.font = header_font if col in (4, 8) else body_font
+            ws.cell(total_row, 4, "当日总人数")
+            ws.cell(total_row, 8, daily_total)
+            ws.merge_cells(start_row=total_row, start_column=4, end_row=total_row, end_column=7)
+            ws.row_dimensions[total_row].height = 28
+            current_row += 1
 
             if current_row - date_start_row > 1:
                 for merge_col in (1, 2, 3):

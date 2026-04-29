@@ -266,13 +266,13 @@
                 v-for="(d, di) in dates"
                 :key="'plan-' + d.date"
                 class="col-day plan-cell"
-                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date] || !!tripSummaryForDate(d.date), 'plan-trip': !dayPlans[d.date] && !!tripSummaryForDate(d.date), 'col-open': openDates[d.date] && isSameDept && !isManager }, scheduleHlClass(2 + di, 1)]"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date], 'col-open': openDates[d.date] && isSameDept && !isManager }, scheduleHlClass(2 + di, 1)]"
                 :title="planCellTitle(d)"
                 @mouseenter="scheduleSetHover(2 + di, 1)"
                 @click="openPlanEditor(d)"
               >
-                <span v-if="dayPlans[d.date] || tripSummaryForDate(d.date)" class="plan-preview">{{ planPreview(d.date) }}</span>
-                <span class="plan-add-hint" :class="{ 'plan-add-hint--sole': !dayPlans[d.date] && !tripSummaryForDate(d.date) }">+</span>
+                <span v-if="dayPlans[d.date]" class="plan-preview">{{ planPreview(d.date) }}</span>
+                <span class="plan-add-hint" :class="{ 'plan-add-hint--sole': !dayPlans[d.date] }">+</span>
               </th>
             </tr>
             <tr class="summary-head-row">
@@ -402,7 +402,9 @@
         <div class="mo-header">
           <div class="mo-header-left">
             <h2 class="mo-title">整月排班总览</h2>
-            <span class="mo-dept">{{ selectedDept }}</span>
+            <select v-model="moDept" class="mo-dept-select" @change="loadMonthOverview">
+              <option v-for="d in departments" :key="d" :value="d">{{ d }}</option>
+            </select>
             <span class="mo-badge">仅查看</span>
             <div class="mo-view-toggle">
               <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'table' }" @click="moViewMode = 'table'">表格</button>
@@ -661,10 +663,8 @@ function tripSummaryForDate(dateStr) {
 
 function planPreview(dateStr) {
   const txt = (dayPlans[dateStr] || '').trim()
-  const tripTxt = tripSummaryForDate(dateStr)
-  const combined = [txt, tripTxt].filter(Boolean).join('；')
-  if (!combined) return ''
-  return combined.length > 6 ? combined.slice(0, 6) + '…' : combined
+  if (!txt) return ''
+  return txt.length > 6 ? txt.slice(0, 6) + '…' : txt
 }
 
 function openPlanEditor(d) {
@@ -696,6 +696,7 @@ const moSchedule = reactive({})
 const moLocations = reactive({})
 const moDayPlans = reactive({})
 const moBusinessTrips = reactive({})
+const moDept = ref('')
 const moViewMode = ref('calendar')
 
 const monthOverviewTitle = computed(() => `${monthOverviewYear.value}年${monthOverviewMonth.value}月`)
@@ -760,17 +761,18 @@ function openMonthOverview() {
   const x = parseYMD(rangeStartStr.value)
   monthOverviewYear.value = x.getFullYear()
   monthOverviewMonth.value = x.getMonth() + 1
+  moDept.value = selectedDept.value
   moViewMode.value = 'calendar'
   monthOverviewVisible.value = true
   loadMonthOverview()
 }
 
 async function loadMonthOverview() {
-  if (!selectedDept.value) return
+  if (!moDept.value) return
   monthOverviewLoading.value = true
   try {
     const res = await getSchedule({
-      department: selectedDept.value,
+      department: moDept.value,
       year: monthOverviewYear.value,
       month: monthOverviewMonth.value,
     })
@@ -898,10 +900,8 @@ const canEditCurrentPlan = computed(() => canEditPlanDate(planEditDate.value))
 
 function planCellTitle(d) {
   const hint = (dayPlans[d.date] || '').trim()
-  const tripTxt = tripSummaryForDate(d.date)
-  const combined = [hint, tripTxt].filter(Boolean).join('\n')
   const act = canEditPlanDate(d.date) ? '点击编辑计划' : '点击查看'
-  return combined ? `${combined.slice(0, 120)}${combined.length > 120 ? '…' : ''}\n${act}` : act
+  return hint ? `${hint.slice(0, 120)}${hint.length > 120 ? '…' : ''}\n${act}` : act
 }
 
 onMounted(async () => {
@@ -2158,7 +2158,17 @@ thead tr:first-child .sticky-col2 {
 }
 .mo-header-left { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .mo-title { margin: 0; font-size: 17px; font-weight: 700; color: #1e293b; }
-.mo-dept { font-size: 13px; color: var(--color-primary, #3b82f6); font-weight: 600; }
+.mo-dept-select {
+  font-size: 13px;
+  color: var(--color-primary, #3b82f6);
+  font-weight: 600;
+  border: 1px solid #d1d5db;
+  border-radius: 6px;
+  padding: 3px 8px;
+  background: #fff;
+  cursor: pointer;
+}
+.mo-dept-select:focus { outline: none; border-color: var(--color-primary, #3b82f6); }
 .mo-badge {
   font-size: 11px;
   padding: 2px 8px;
@@ -2448,9 +2458,12 @@ thead tr:first-child .sticky-col2 {
 .cal-plan-popover {
   display: none;
   position: absolute;
-  left: 6px;
-  right: 6px;
-  bottom: calc(100% - 2px);
+  left: 50%;
+  transform: translateX(-50%);
+  top: calc(100% + 4px);
+  width: max(200px, 100%);
+  max-height: 160px;
+  overflow-y: auto;
   z-index: 20;
   background: rgba(15, 23, 42, 0.97);
   color: #f8fafc;
@@ -2459,6 +2472,7 @@ thead tr:first-child .sticky-col2 {
   box-shadow: 0 10px 24px rgba(15, 23, 42, 0.35);
   border: 1px solid rgba(148, 163, 184, 0.35);
 }
+.cal-day-cell:hover { z-index: 10; }
 .cal-day-cell:hover .cal-plan-popover { display: block; }
 .cal-plan-title {
   font-size: 11px;
