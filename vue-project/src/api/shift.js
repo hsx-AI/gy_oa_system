@@ -4,6 +4,10 @@ export function getDepartments() {
   return request({ url: '/shift/departments', method: 'get' })
 }
 
+export function getShiftHolidayOptions(params) {
+  return request({ url: '/shift/holiday-options', method: 'get', params })
+}
+
 export function getShiftConfig(params) {
   return request({ url: '/shift/config', method: 'get', params })
 }

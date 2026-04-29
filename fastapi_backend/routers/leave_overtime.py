@@ -256,7 +256,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
         jb = (user.get("jb") or "").strip()
         lsys = (user.get("lsys") or "").strip()
         meta["lsysLabel"] = lsys
-        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
+        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长") or _jb_match(jb, "副组长")) and bool(lsys)
     is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
     zonghe_dir = bool(user and is_zonghe_tech_director(user))
     meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir or is_dakaman
@@ -307,7 +307,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
     if not meta["canViewLsys"]:
         raise HTTPException(
             status_code=403,
-            detail="仅主任、副主任可查看本专业全员请假记录" if resource == "leave" else "仅主任、副主任可查看本专业全员加班记录",
+            detail="仅主任、副主任、组长可查看本专业全员请假记录" if resource == "leave" else "仅主任、副主任、组长可查看本专业全员加班记录",
         )
     clause = (
         "xm IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "

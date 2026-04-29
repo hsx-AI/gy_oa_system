@@ -319,7 +319,7 @@ def _business_trip_list_gcr_clause(
         jb = (user.get("jb") or "").strip()
         lsys = (user.get("lsys") or "").strip()
         meta["lsysLabel"] = lsys
-        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任")) and bool(lsys)
+        meta["canViewLsys"] = (_jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长") or _jb_match(jb, "副组长")) and bool(lsys)
     is_minister = _jb_match(jb, "部长") or _jb_match(jb, "副部长")
     zonghe_dir = bool(user and is_zonghe_tech_director(user))
     meta["canViewAll"] = is_admin_user or is_minister or zonghe_dir or is_dakaman
@@ -354,7 +354,7 @@ def _business_trip_list_gcr_clause(
         )
         return clause, [], meta
     if not meta["canViewLsys"]:
-        raise HTTPException(status_code=403, detail="仅主任、副主任可查看本专业全员公出记录")
+        raise HTTPException(status_code=403, detail="仅主任、副主任、组长可查看本专业全员公出记录")
     lsys_u = (user.get("lsys") or "").strip()
     clause = (
         "g.gcr IN (SELECT y.name FROM yggl AS y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0 "

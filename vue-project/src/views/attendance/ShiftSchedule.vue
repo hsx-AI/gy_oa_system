@@ -90,34 +90,56 @@
           {{ saving ? '保存中…' : '保存排班' }}
         </button>
         <button
-          v-if="selectedDept"
           type="button"
           class="btn btn-outline btn-sm"
           @click="showExportPanel = !showExportPanel"
-          title="导出排班表为 Excel（按月）"
+          title="导出排班表或节假日值班表"
         >导出 Excel</button>
       </div>
     </div>
 
     <!-- 导出面板 -->
-    <div v-if="showExportPanel && selectedDept" class="export-panel card">
-      <h3>导出排班表 <span class="config-dept">{{ selectedDept }}</span></h3>
+    <div v-if="showExportPanel" class="export-panel card">
+      <h3>导出排班表 <span class="config-dept">{{ exportScopeLabel }}</span></h3>
       <div class="config-form">
         <div class="config-item">
-          <label>年份</label>
-          <input type="number" v-model.number="exportYear" min="2020" max="2099" style="width:80px">
+          <label>格式</label>
+          <select v-model="exportFormat" style="width:150px">
+            <option value="month">月排班表</option>
+            <option value="holiday">节假日值班表</option>
+          </select>
         </div>
         <div class="config-item">
+          <label>年份</label>
+          <input type="number" v-model.number="exportYear" min="2020" max="2099" style="width:80px" @change="loadExportHolidayOptions">
+        </div>
+        <div v-if="exportFormat === 'month'" class="config-item">
           <label>月份</label>
           <select v-model.number="exportMonth" style="width:72px">
             <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+          </select>
+        </div>
+        <div v-if="exportFormat === 'holiday'" class="config-item">
+          <label>假期</label>
+          <select v-model="exportHoliday" style="width:180px">
+            <option value="">请选择假期</option>
+            <option v-for="h in exportHolidayOptions" :key="h.name" :value="h.name">
+              {{ h.name }}（{{ h.startDate }} 至 {{ h.endDate }}）
+            </option>
+          </select>
+        </div>
+        <div v-if="exportFormat === 'holiday'" class="config-item">
+          <label>范围</label>
+          <select v-model="exportDeptScope" style="width:150px">
+            <option value="current" :disabled="!selectedDept">当前科室</option>
+            <option value="all">全部门汇总</option>
           </select>
         </div>
         <button type="button" class="btn btn-primary btn-sm" @click="handleExportExcel" :disabled="exporting">
           {{ exporting ? '导出中…' : '下载' }}
         </button>
       </div>
-      <p class="config-hint">导出该科室所选月份的排班表 Excel，含表格与日历两个 Sheet；值班计划、休息日着色均已包含。</p>
+      <p class="config-hint">月排班表含表格与日历两个 Sheet；节假日值班表按五一、十一、高温假等假期样式导出值班领导、负责人、准备组、服务组、工作内容和出勤人数。</p>
     </div>
 
     <!-- 配置面板 -->
@@ -152,6 +174,8 @@
       <span class="legend-item"><span class="legend-dot legend-day"></span>白班</span>
       <span class="legend-item"><span class="legend-dot legend-night"></span>夜班</span>
       <span class="legend-item"><span class="legend-dot legend-empty"></span>不值班</span>
+      <span class="legend-sep">|</span>
+      <span class="legend-item"><span class="legend-dot legend-trip"></span>公出</span>
       <span class="legend-sep">|</span>
       <span class="legend-item"><span class="legend-dot legend-loc-zhunbei"></span>准备组值班</span>
       <span class="legend-item"><span class="legend-dot legend-loc-fuwu"></span>服务组值班</span>
@@ -242,12 +266,12 @@
                 v-for="(d, di) in dates"
                 :key="'plan-' + d.date"
                 class="col-day plan-cell"
-                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date], 'col-open': openDates[d.date] && isSameDept && !isManager }, scheduleHlClass(2 + di, 1)]"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'plan-has': !!dayPlans[d.date] || !!tripSummaryForDate(d.date), 'plan-trip': !dayPlans[d.date] && !!tripSummaryForDate(d.date), 'col-open': openDates[d.date] && isSameDept && !isManager }, scheduleHlClass(2 + di, 1)]"
                 :title="planCellTitle(d)"
                 @mouseenter="scheduleSetHover(2 + di, 1)"
                 @click="openPlanEditor(d)"
               >
-                <span v-if="dayPlans[d.date]" class="plan-preview">{{ planPreview(d.date) }}</span>
+                <span v-if="dayPlans[d.date] || tripSummaryForDate(d.date)" class="plan-preview">{{ planPreview(d.date) }}</span>
                 <span v-else class="plan-empty-dot">+</span>
               </th>
             </tr>
@@ -297,6 +321,7 @@
                 :key="d.date"
                 class="col-day cell"
                 :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }, scheduleHlClass(2 + di, 3 + ei)]"
+                :title="cellTripTitle(emp, d.date)"
                 @mouseenter="scheduleSetHover(2 + di, 3 + ei)"
                 @click="onCellClick(emp, d.date, $event)"
                 @mousedown="onCellDown(emp, d.date, $event)"
@@ -426,6 +451,7 @@
                   :key="emp + d.date"
                   class="mo-cell"
                   :class="moCellClass(emp, d)"
+                  :title="moBusinessTrips[emp]?.[d.date] ? `公出：${moBusinessTrips[emp][d.date]}` : ''"
                 >
                   <span class="mo-cell-text">{{ moCellLabel(emp, d.date) }}</span>
                 </td>
@@ -495,8 +521,8 @@
 </template>
 
 <script setup>
-import { ref, reactive, computed, onMounted, onUnmounted, nextTick } from 'vue'
-import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks } from '@/api/shift'
+import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
+import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions } from '@/api/shift'
 import { isDeptLeader } from '@/utils/roleMatch'
 
 const PERIOD_DAYS = 14
@@ -547,6 +573,7 @@ const dates = ref([])
 const scheduleData = reactive({})
 const scheduleLocations = reactive({})
 const dayPlans = reactive({})
+const businessTrips = reactive({})
 const loading = ref(false)
 const saving = ref(false)
 const dirty = ref(false)
@@ -613,10 +640,24 @@ function scheduleHlClass(col, row) {
   }
 }
 
+function tripSummaryForDate(dateStr) {
+  const trips = {}
+  for (const emp of employees.value) {
+    const xmmc = businessTrips[emp]?.[dateStr]
+    if (xmmc) {
+      trips[xmmc] = (trips[xmmc] || 0) + 1
+    }
+  }
+  if (!Object.keys(trips).length) return ''
+  return Object.entries(trips).map(([proj, cnt]) => `${cnt}人公出(${proj})`).join('；')
+}
+
 function planPreview(dateStr) {
   const txt = (dayPlans[dateStr] || '').trim()
-  if (!txt) return ''
-  return txt.length > 6 ? txt.slice(0, 6) + '…' : txt
+  const tripTxt = tripSummaryForDate(dateStr)
+  const combined = [txt, tripTxt].filter(Boolean).join('；')
+  if (!combined) return ''
+  return combined.length > 6 ? combined.slice(0, 6) + '…' : combined
 }
 
 function openPlanEditor(d) {
@@ -647,6 +688,7 @@ const monthOverviewDates = ref([])
 const moSchedule = reactive({})
 const moLocations = reactive({})
 const moDayPlans = reactive({})
+const moBusinessTrips = reactive({})
 const moViewMode = ref('calendar')
 
 const monthOverviewTitle = computed(() => `${monthOverviewYear.value}年${monthOverviewMonth.value}月`)
@@ -728,9 +770,11 @@ async function loadMonthOverview() {
     Object.keys(moSchedule).forEach((k) => delete moSchedule[k])
     Object.keys(moLocations).forEach((k) => delete moLocations[k])
     Object.keys(moDayPlans).forEach((k) => delete moDayPlans[k])
+    Object.keys(moBusinessTrips).forEach((k) => delete moBusinessTrips[k])
     const sch = res?.schedule || {}
     const moLocs = res?.locations || {}
     const dp = res?.dayPlans || {}
+    const moTrips = res?.businessTrips || {}
     for (const [emp, dayMap] of Object.entries(sch)) {
       moSchedule[emp] = { ...dayMap }
     }
@@ -739,6 +783,9 @@ async function loadMonthOverview() {
     }
     for (const d of monthOverviewDates.value) {
       moDayPlans[d.date] = dp[d.date] ?? ''
+    }
+    for (const [emp, dayMap] of Object.entries(moTrips)) {
+      moBusinessTrips[emp] = { ...dayMap }
     }
   } catch (e) {
     console.error('月览加载失败:', e)
@@ -773,15 +820,18 @@ function moCellLabel(emp, dateStr) {
   const ls = loc === '准备组' ? '准' : loc === '服务组' ? '服' : ''
   if (v === '白班') return ls ? `白${ls}` : '白'
   if (v === '夜班') return ls ? `夜${ls}` : '夜'
+  if (!v && moBusinessTrips[emp]?.[dateStr]) return '出'
   return ''
 }
 
 function moCellClass(emp, d) {
   const v = moSchedule[emp]?.[d.date] || ''
+  const isTrip = !v && !!moBusinessTrips[emp]?.[d.date]
   return {
     'mo-cell-day': v === '白班',
     'mo-cell-night': v === '夜班',
-    'mo-cell-empty': !v || (v !== '白班' && v !== '夜班'),
+    'mo-cell-trip': isTrip,
+    'mo-cell-empty': !v && !isTrip,
     'mo-col-weekend': !d.isWorkday,
     'mo-col-today': d.date === todayStr,
   }
@@ -839,8 +889,10 @@ const canEditCurrentPlan = computed(() => canEditPlanDate(planEditDate.value))
 
 function planCellTitle(d) {
   const hint = (dayPlans[d.date] || '').trim()
+  const tripTxt = tripSummaryForDate(d.date)
+  const combined = [hint, tripTxt].filter(Boolean).join('\n')
   const act = canEditPlanDate(d.date) ? '点击编辑计划' : '点击查看'
-  return hint ? `${hint.slice(0, 80)}${hint.length > 80 ? '…' : ''} · ${act}` : act
+  return combined ? `${combined.slice(0, 120)}${combined.length > 120 ? '…' : ''}\n${act}` : act
 }
 
 onMounted(async () => {
@@ -898,6 +950,11 @@ async function loadSchedule() {
     Object.keys(openDates).forEach(k => delete openDates[k])
     for (const ds of schRes?.openDates || []) {
       openDates[ds] = true
+    }
+    Object.keys(businessTrips).forEach(k => delete businessTrips[k])
+    const bTrips = schRes?.businessTrips || {}
+    for (const [emp, dayMap] of Object.entries(bTrips)) {
+      businessTrips[emp] = { ...dayMap }
     }
     const c = cfgRes?.data || {}
     config.workday_day = c.workday_day ?? 2
@@ -1053,16 +1110,24 @@ function cellLabel(emp, dateStr) {
   if (v === '白+夜') return '白夜'
   if (v === '白班') return locShort ? `白${locShort}` : '白'
   if (v === '夜班') return locShort ? `夜${locShort}` : '夜'
+  if (!v && businessTrips[emp]?.[dateStr]) return '公出'
   return ''
+}
+
+function cellTripTitle(emp, dateStr) {
+  const xmmc = businessTrips[emp]?.[dateStr]
+  return xmmc ? `公出：${xmmc}` : ''
 }
 
 function cellClass(emp, d) {
   const v = scheduleData[emp]?.[d.date] || ''
+  const isTrip = !v && !!businessTrips[emp]?.[d.date]
   return {
     'cell-both': v === '白+夜',
     'cell-day': v === '白班',
     'cell-night': v === '夜班',
-    'cell-empty': !v || (v !== '白班' && v !== '夜班' && v !== '白+夜'),
+    'cell-trip': isTrip,
+    'cell-empty': !v && !isTrip,
     'col-weekend': !d.isWorkday,
     'col-today': d.date === todayStr,
   }
@@ -1350,17 +1415,71 @@ async function handleBatchLock(open) {
 const showExportPanel = ref(false)
 const exportYear = ref(new Date().getFullYear())
 const exportMonth = ref(new Date().getMonth() + 1)
+const exportFormat = ref('month')
+const exportHoliday = ref('')
+const exportHolidayOptions = ref([])
+const exportDeptScope = ref('current')
 const exporting = ref(false)
 
+const exportScopeLabel = computed(() => {
+  if (exportFormat.value === 'holiday' && exportDeptScope.value === 'all') return '全部门汇总'
+  return selectedDept.value || '未选择科室'
+})
+
+async function loadExportHolidayOptions() {
+  if (exportFormat.value !== 'holiday') return
+  try {
+    const res = await getShiftHolidayOptions({ year: exportYear.value })
+    exportHolidayOptions.value = res?.options || []
+    if (!exportHolidayOptions.value.some(h => h.name === exportHoliday.value)) {
+      exportHoliday.value = exportHolidayOptions.value[0]?.name || ''
+    }
+  } catch (e) {
+    console.error('加载假期选项失败:', e)
+    exportHolidayOptions.value = []
+    exportHoliday.value = ''
+  }
+}
+
+watch(exportFormat, async (val) => {
+  if (val === 'holiday') {
+    if (!selectedDept.value) exportDeptScope.value = 'all'
+    await loadExportHolidayOptions()
+  }
+})
+
+watch(exportYear, () => {
+  if (exportFormat.value === 'holiday') loadExportHolidayOptions()
+})
+
+watch(selectedDept, (val) => {
+  if (!val && exportDeptScope.value === 'current') exportDeptScope.value = 'all'
+})
+
 async function handleExportExcel() {
-  if (!selectedDept.value) return
+  if (exportFormat.value === 'month' && !selectedDept.value) {
+    alert('月排班表请先选择科室')
+    return
+  }
+  if (exportFormat.value === 'holiday' && !exportHoliday.value) {
+    alert('请选择要导出的假期')
+    return
+  }
   exporting.value = true
   try {
+    const exportDept = exportFormat.value === 'holiday' && exportDeptScope.value === 'all'
+      ? '__ALL__'
+      : selectedDept.value
     const params = new URLSearchParams({
-      department: selectedDept.value,
+      department: exportDept,
       year: String(exportYear.value),
-      month: String(exportMonth.value),
+      format: exportFormat.value,
     })
+    if (exportFormat.value === 'month') {
+      params.set('month', String(exportMonth.value))
+    } else {
+      params.set('holiday', exportHoliday.value)
+    }
     const url = `/api/shift/export-excel?${params.toString()}`
     const resp = await fetch(url, { credentials: 'include' })
     if (!resp.ok) {
@@ -1373,7 +1492,9 @@ async function handleExportExcel() {
     const blob = await resp.blob()
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
-    a.download = `${selectedDept.value}_${exportYear.value}年${exportMonth.value}月_排班表.xlsx`
+    const scopeName = exportDept === '__ALL__' ? '全部门汇总' : selectedDept.value
+    const suffix = exportFormat.value === 'holiday' ? `${exportHoliday.value}期间值班值宿人员安排表` : `${exportMonth.value}月_排班表`
+    a.download = `${scopeName}_${exportYear.value}年${suffix}.xlsx`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
@@ -1534,6 +1655,7 @@ async function handleExportExcel() {
 .legend-day { background: #dbeafe; border: 1px solid #93c5fd; }
 .legend-night { background: #fef3c7; border: 1px solid #fbbf24; }
 .legend-empty { background: white; border: 1px solid #d1d5db; }
+.legend-trip { background: #d1fae5; border: 1px solid #34d399; }
 .legend-loc-zhunbei { background: #22c55e; border: 1px solid #16a34a; border-radius: 50%; }
 .legend-loc-fuwu { background: #f97316; border: 1px solid #ea580c; border-radius: 50%; }
 .legend-sep { color: #d1d5db; }
@@ -1663,6 +1785,12 @@ async function handleExportExcel() {
 }
 .plan-has {
   background: #eff6ff !important;
+}
+.plan-trip {
+  background: #ecfdf5 !important;
+}
+.plan-trip .plan-preview {
+  color: #065f46;
 }
 .plan-cell:hover {
   background: #dbeafe !important;
@@ -1912,6 +2040,7 @@ thead tr:first-child .sticky-col2 {
 .cell-day { background: #dbeafe; color: #1d4ed8; }
 .cell-night { background: #fef3c7; color: #92400e; }
 .cell-both { background: linear-gradient(135deg, #dbeafe 50%, #fef3c7 50%); color: #7c3aed; font-size: 11px; }
+.cell-trip { background: #d1fae5; color: #065f46; }
 .cell-empty { background: white; color: transparent; }
 
 /* 值班位置小圆点 */
@@ -2123,6 +2252,7 @@ thead tr:first-child .sticky-col2 {
 }
 .mo-cell-day { background: #dbeafe; color: #1d4ed8; }
 .mo-cell-night { background: #fef3c7; color: #92400e; }
+.mo-cell-trip { background: #d1fae5; color: #065f46; }
 .mo-cell-empty { background: #fff; color: transparent; }
 .mo-col-weekend { background: #fafaf9; }
 .mo-col-today { box-shadow: inset 0 0 0 2px var(--color-primary, #3b82f6); }

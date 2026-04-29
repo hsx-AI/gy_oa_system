@@ -12,7 +12,7 @@ from urllib.parse import quote
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
 from pydantic import BaseModel
-from database import db
+from database import db, db_demo
 from utils.holiday_loader import load_holidays_for_year
 
 logger = logging.getLogger(__name__)
@@ -111,6 +111,62 @@ def _get_dept_employees(department: str) -> List[str]:
         (department,),
     )
     return [(r.get("name") or "").strip() for r in rows if (r.get("name") or "").strip()]
+
+
+def _get_shift_departments() -> List[str]:
+    rows = db.execute_query(
+        "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
+        "AND RIGHT(TRIM(lsys),1) != '1' AND TRIM(lsys) != '部办' "
+        "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
+        "AND COALESCE(zaizhi,0) = 0 ORDER BY lsys"
+    )
+    return [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]
+
+
+def _get_dept_people(department: str) -> List[dict]:
+    """获取科室在职人员及职务、联系方式，用于节假日值班表导出。"""
+    rows = db.execute_query(
+        "SELECT name, gh, jb, sfzh FROM yggl WHERE lsys = %s AND COALESCE(zaizhi,0) = 0 "
+        "AND RIGHT(TRIM(name),1) != '1' ORDER BY gh",
+        (department,),
+    )
+    people = []
+    sfzh_map = {}
+    for r in rows or []:
+        name = (r.get("name") or "").strip()
+        if not name:
+            continue
+        sfzh = (r.get("sfzh") or "").strip().replace(" ", "")
+        item = {
+            "name": name,
+            "gh": (r.get("gh") or "").strip(),
+            "jb": (r.get("jb") or "").strip(),
+            "sfzh": sfzh,
+            "mobile": "",
+            "telephone": "",
+        }
+        people.append(item)
+        if sfzh:
+            sfzh_map[sfzh] = item
+
+    if sfzh_map:
+        ids = list(sfzh_map.keys())
+        for i in range(0, len(ids), 100):
+            batch = ids[i:i + 100]
+            ph = ",".join(["%s"] * len(batch))
+            try:
+                phone_rows = db_demo.execute_query(
+                    f"SELECT id_card, mobile, telephone FROM employee_info WHERE id_card IN ({ph})",
+                    tuple(batch),
+                )
+                for pr in phone_rows or []:
+                    p = sfzh_map.get((pr.get("id_card") or "").strip())
+                    if p:
+                        p["mobile"] = (pr.get("mobile") or "").strip()
+                        p["telephone"] = (pr.get("telephone") or "").strip()
+            except Exception as e:
+                logger.warning("查询员工联系方式失败: %s", e)
+    return people
 
 
 def _month_dates(year: int, month: int) -> List[date]:
@@ -432,6 +488,52 @@ async def get_schedule(
     except Exception as e:
         logger.warning("读取 shift_day_lock 失败: %s", e)
 
+    # 公出数据：查本科室已审批通过、且时间段与排班区间有交集的公出单
+    business_trips = {}  # {employee_name: {date_str: xmmc}}
+    try:
+        trip_rows = db.execute_query(
+            "SELECT g.gcr, g.xmmc, g.gclx, "
+            "  COALESCE(g.gcsj, g.yjcfsj) AS trip_start, "
+            "  COALESCE(g.sjfhtime, g.yjfhsj) AS trip_end "
+            "FROM gcsqb g "
+            "JOIN yggl y ON g.gcr = y.name AND COALESCE(y.zaizhi, 0) = 0 "
+            "WHERE y.lsys = %s "
+            "  AND g.bldzt = 2 AND g.szrzt = 2 "
+            "  AND COALESCE(g.gcsj, g.yjcfsj) IS NOT NULL "
+            "  AND COALESCE(g.sjfhtime, g.yjfhsj) IS NOT NULL "
+            "  AND DATE(COALESCE(g.gcsj, g.yjcfsj)) <= %s "
+            "  AND DATE(COALESCE(g.sjfhtime, g.yjfhsj)) >= %s",
+            (department, ds_hi, ds_lo),
+        )
+        for tr in trip_rows or []:
+            name = (tr.get("gcr") or "").strip()
+            xmmc = (tr.get("xmmc") or "").strip()
+            ts = tr.get("trip_start")
+            te = tr.get("trip_end")
+            if not name or not ts or not te:
+                continue
+            if hasattr(ts, "date"):
+                ts = ts.date() if not isinstance(ts, date) else ts
+            elif isinstance(ts, str):
+                ts = datetime.strptime(ts[:10], "%Y-%m-%d").date()
+            else:
+                continue
+            if hasattr(te, "date"):
+                te = te.date() if not isinstance(te, date) else te
+            elif isinstance(te, str):
+                te = datetime.strptime(te[:10], "%Y-%m-%d").date()
+            else:
+                continue
+            # 只展示与当前排班区间有交集的天
+            d_cur = max(ts, dates[0])
+            d_end = min(te, dates[-1])
+            while d_cur <= d_end:
+                ds = d_cur.strftime("%Y-%m-%d")
+                business_trips.setdefault(name, {})[ds] = xmmc or "公出"
+                d_cur += timedelta(days=1)
+    except Exception as e:
+        logger.warning("查询公出数据失败: %s", e)
+
     return {
         "success": True,
         "employees": employees,
@@ -440,6 +542,7 @@ async def get_schedule(
         "dates": date_info,
         "dayPlans": day_plans,
         "openDates": open_dates,
+        "businessTrips": business_trips,
     }
 
 
@@ -886,14 +989,34 @@ async def clear_schedule(req: ClearScheduleRequest):
 @router.get("/departments")
 async def get_departments():
     """获取所有科室列表"""
-    rows = db.execute_query(
-        "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
-        "AND RIGHT(TRIM(lsys),1) != '1' AND TRIM(lsys) != '部办' "
-        "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
-        "AND COALESCE(zaizhi,0) = 0 ORDER BY lsys"
-    )
-    depts = [(r.get("lsys") or "").strip() for r in rows if (r.get("lsys") or "").strip()]
-    return {"success": True, "departments": depts}
+    return {"success": True, "departments": _get_shift_departments()}
+
+
+@router.get("/holiday-options")
+async def get_shift_holiday_options(year: int = Query(...)):
+    """返回某年可导出的假期选项，按 holiday.festival 分组。"""
+    grouped = {}
+    for r in load_holidays_for_year(str(year)):
+        ds = _normalize_date_key(r.get("date"))
+        if not ds:
+            continue
+        ht = (r.get("type") or "").strip()
+        if "班" in ht or ("假" not in ht and "休" not in ht):
+            continue
+        festival = (r.get("festival") or "").strip() or "未命名假期"
+        item = grouped.setdefault(festival, {"name": festival, "dates": []})
+        item["dates"].append(ds)
+    options = []
+    for item in grouped.values():
+        dates_sorted = sorted(set(item["dates"]))
+        options.append({
+            "name": item["name"],
+            "startDate": dates_sorted[0],
+            "endDate": dates_sorted[-1],
+            "days": len(dates_sorted),
+        })
+    options.sort(key=lambda x: x["startDate"])
+    return {"success": True, "year": year, "options": options}
 
 
 # ==================== 导出排班 Excel ====================
@@ -902,9 +1025,11 @@ async def get_departments():
 async def export_schedule_excel(
     department: str = Query(...),
     year: int = Query(...),
-    month: int = Query(..., ge=1, le=12),
+    month: Optional[int] = Query(None, ge=1, le=12),
+    export_format: str = Query("month", alias="format"),
+    holiday: str = Query("", description="format=holiday 时的假期名称"),
 ):
-    """导出科室月排班表 Excel（两个 Sheet：表格 + 日历）"""
+    """导出科室排班表 Excel。format=holiday 时按节假日值班表样式导出。"""
     try:
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
@@ -913,14 +1038,39 @@ async def export_schedule_excel(
         raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
 
     _ensure_tables()
-    employees = _get_dept_employees(department)
-    dates = _month_dates(year, month)
-    if not dates:
-        raise HTTPException(status_code=400, detail="无效月份")
+    fmt = (export_format or "").strip().lower()
+    is_holiday_export = fmt in ("holiday", "festival", "duty")
 
     years_set = {year}
     holiday_by_date = _holiday_map_for_years(years_set)
     holidays = {k: v["type"] for k, v in holiday_by_date.items()}
+
+    if is_holiday_export:
+        holiday_name = (holiday or "").strip()
+        if not holiday_name:
+            raise HTTPException(status_code=400, detail="请选择要导出的假期")
+        selected_dates = []
+        for ds, h in sorted(holiday_by_date.items()):
+            if (h.get("festival") or "").strip() != holiday_name:
+                continue
+            ht = (h.get("type") or "").strip()
+            if "班" in ht:
+                continue
+            if "假" in ht or "休" in ht:
+                d = _parse_iso_date(ds)
+                if d:
+                    selected_dates.append(d)
+        dates = selected_dates
+        employees = _get_dept_employees(department) if department and department != "__ALL__" else []
+    else:
+        if month is None:
+            raise HTTPException(status_code=400, detail="请选择月份")
+        if not department or department == "__ALL__":
+            raise HTTPException(status_code=400, detail="月排班表请选择具体科室")
+        employees = _get_dept_employees(department)
+        dates = _month_dates(year, month)
+    if not dates:
+        raise HTTPException(status_code=400, detail="未找到可导出的日期")
 
     date_info = []
     for d in dates:
@@ -970,6 +1120,258 @@ async def export_schedule_excel(
                 day_plans[pds] = (pr.get("content") or "").strip()
     except Exception:
         pass
+
+    def _phone_text(person: Optional[dict]) -> str:
+        if not person:
+            return ""
+        phone = (person.get("mobile") or person.get("telephone") or "").strip()
+        return f"{person.get('name') or ''}\n{phone}" if phone else (person.get("name") or "")
+
+    def _festival_export_name(selected_dates: List[dict]) -> str:
+        festivals = []
+        for di in selected_dates:
+            fest = (di.get("holidayFestival") or "").strip()
+            if fest and fest not in festivals:
+                festivals.append(fest)
+        if festivals:
+            return "、".join(festivals[:2])
+        return f"{month}月节假日"
+
+    def _compact_plan(plan: str) -> str:
+        plan = (plan or "").strip()
+        if plan:
+            return plan
+        return "按当日生产、技术准备、工地服务及专项工作安排执行。"
+
+    def _format_group_lines(title: str, names: List[str], people_by_name: dict) -> str:
+        if not names:
+            return ""
+        body = "、".join(names)
+        phones = []
+        for name in names:
+            person = people_by_name.get(name)
+            phone = (person or {}).get("telephone") or (person or {}).get("mobile") or ""
+            if phone:
+                phones.append(phone)
+        if phones:
+            return f"{title}\n{body}\n{'、'.join(phones)}"
+        return f"{title}\n{body}"
+
+    def _is_duty_contact_candidate(person: Optional[dict]) -> bool:
+        jb = ((person or {}).get("jb") or "").strip()
+        return ("主任" in jb) or ("组长" in jb)
+
+    def _export_holiday_duty_excel():
+        """按参考表样式导出节假日期间值班值宿人员安排表。"""
+        holiday_dates = date_info
+        scoped_departments = _get_shift_departments() if department == "__ALL__" else [department]
+        scoped_departments = [d for d in scoped_departments if d]
+        if not scoped_departments:
+            raise HTTPException(status_code=400, detail="未找到可导出的科室")
+
+        ds_lo = holiday_dates[0]["date"]
+        ds_hi = holiday_dates[-1]["date"]
+        dept_cache = {}
+        for dept_name in scoped_departments:
+            people = _get_dept_people(dept_name)
+            employees_local = [p["name"] for p in people]
+            people_by_name = {p["name"]: p for p in people}
+            managers = [
+                p for p in people
+                if ("主任" in (p.get("jb") or "")) or ("组长" in (p.get("jb") or ""))
+            ]
+            if not managers:
+                managers = people[:2]
+
+            dept_schedule = {}
+            dept_locations = {}
+            if employees_local:
+                ph = ",".join(["%s"] * len(employees_local))
+                rows_local = db.execute_query(
+                    f"SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
+                    f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s AND employee_name IN ({ph})",
+                    (dept_name, ds_lo, ds_hi) + tuple(employees_local),
+                )
+                for r in rows_local or []:
+                    name = (r.get("employee_name") or "").strip()
+                    sd = r.get("shift_date")
+                    sd = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
+                    st = (r.get("shift_type") or "").strip()
+                    sl = (r.get("shift_location") or "").strip()
+                    if name and sd:
+                        dept_schedule.setdefault(name, {})[sd] = st
+                        if sl:
+                            dept_locations.setdefault(name, {})[sd] = sl
+
+            dept_plans = {}
+            plan_rows_local = db.execute_query(
+                "SELECT plan_date, content FROM shift_day_plan WHERE department = %s AND plan_date >= %s AND plan_date <= %s",
+                (dept_name, ds_lo, ds_hi),
+            )
+            for pr in plan_rows_local or []:
+                pd = pr.get("plan_date")
+                pds = pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10]
+                if pds:
+                    dept_plans[pds] = (pr.get("content") or "").strip()
+
+            dept_cache[dept_name] = {
+                "employees": employees_local,
+                "peopleByName": people_by_name,
+                "managers": managers,
+                "schedule": dept_schedule,
+                "locations": dept_locations,
+                "plans": dept_plans,
+            }
+
+        wb_h = Workbook()
+        ws = wb_h.active
+        sheet_name = "全部门汇总" if department == "__ALL__" else department
+        ws.title = sheet_name[:31] if sheet_name else "节假日值班表"
+        ws.sheet_properties.tabColor = "C00000"
+
+        title_font = Font(name="宋体", size=18, bold=True)
+        unit_font = Font(name="宋体", size=12, bold=True)
+        header_font = Font(name="宋体", size=11, bold=True)
+        body_font = Font(name="宋体", size=10)
+        small_font = Font(name="宋体", size=9)
+        red_fill = PatternFill("solid", fgColor="F4CCCC")
+        grey_fill = PatternFill("solid", fgColor="D9EAD3")
+        border = Border(
+            left=Side(style="thin", color="000000"),
+            right=Side(style="thin", color="000000"),
+            top=Side(style="thin", color="000000"),
+            bottom=Side(style="thin", color="000000"),
+        )
+        center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        left_top = Alignment(horizontal="left", vertical="top", wrap_text=True)
+
+        festival_name = _festival_export_name(holiday_dates)
+        ws.merge_cells("A1:H1")
+        ws["A1"] = f"{year}年{festival_name}期间科室（专业）值班值宿人员安排表"
+        ws["A1"].font = title_font
+        ws["A1"].alignment = center
+        ws.row_dimensions[1].height = 32
+
+        ws.merge_cells("A2:H2")
+        unit_name = "全部门（所有科室）" if department == "__ALL__" else department
+        ws["A2"] = f"单位：{unit_name}"
+        ws["A2"].font = unit_font
+        ws["A2"].alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[2].height = 28
+
+        headers = ["时    间", "值班领导\n联系方式", "值班负责人\n联系方式", "准备组值班人员\n联系方式", "服务组值班人员\n联系方式", "工作内容(包括技术准备和生产服务)", "", "当日出勤人数"]
+        headers[2] = "值班联系人\n联系方式"
+        for col, header in enumerate(headers, start=1):
+            cell = ws.cell(3, col, header)
+            cell.font = header_font
+            cell.alignment = center
+            cell.fill = red_fill
+            cell.border = border
+        ws.merge_cells("F3:G3")
+        ws.row_dimensions[3].height = 40
+
+        for col, width in {"A": 17.5, "B": 20, "C": 20, "D": 42, "E": 42, "F": 58, "G": 12, "H": 14}.items():
+            ws.column_dimensions[col].width = width
+
+        current_row = 4
+        contact_rotation = []
+        for dept_name in scoped_departments:
+            contact_rotation.extend((dept_cache.get(dept_name) or {}).get("managers") or [])
+
+        for idx, di in enumerate(holiday_dates):
+            ds = di["date"]
+            date_obj = datetime.strptime(ds, "%Y-%m-%d").date()
+            date_label = f"{date_obj.month}月{date_obj.day}日\n星期{di['label']}"
+            if di.get("holidayMark"):
+                date_label += f"\n{di['holidayMark']}"
+            date_start_row = current_row
+
+            daily_contact = None
+            for dept_name in scoped_departments:
+                cached = dept_cache.get(dept_name) or {}
+                people_by_name = cached.get("peopleByName") or {}
+                dept_schedule = cached.get("schedule") or {}
+                for emp in cached.get("employees") or []:
+                    if dept_schedule.get(emp, {}).get(ds, ""):
+                        person = people_by_name.get(emp)
+                        if _is_duty_contact_candidate(person):
+                            daily_contact = person
+                            break
+                if daily_contact:
+                    break
+            if not daily_contact and contact_rotation:
+                daily_contact = contact_rotation[idx % len(contact_rotation)]
+
+            for dept_index, dept_name in enumerate(scoped_departments):
+                cached = dept_cache.get(dept_name) or {}
+                employees_local = cached.get("employees") or []
+                people_by_name = cached.get("peopleByName") or {}
+                managers = cached.get("managers") or []
+                dept_schedule = cached.get("schedule") or {}
+                dept_locations = cached.get("locations") or {}
+                dept_plans = cached.get("plans") or {}
+
+                day_shift = []
+                night_shift = []
+                prepare_names = []
+                service_names = []
+                for emp in employees_local:
+                    st = dept_schedule.get(emp, {}).get(ds, "")
+                    loc = dept_locations.get(emp, {}).get(ds, "")
+                    if st:
+                        if loc == "准备组":
+                            prepare_names.append(emp)
+                        elif loc == "服务组":
+                            service_names.append(emp)
+                        elif st == "白班":
+                            prepare_names.append(emp)
+                        elif st == "夜班":
+                            service_names.append(emp)
+                        if st == "白班":
+                            day_shift.append(emp)
+                        elif st == "夜班":
+                            night_shift.append(emp)
+
+                attendance_count = len(set(day_shift + night_shift))
+
+                values = [
+                    date_label,
+                    "",
+                    _phone_text(daily_contact),
+                    _format_group_lines(dept_name, prepare_names, people_by_name),
+                    _format_group_lines(dept_name, service_names, people_by_name),
+                    _compact_plan(dept_plans.get(ds, "")),
+                    "",
+                    attendance_count,
+                ]
+                for col, value in enumerate(values, start=1):
+                    cell = ws.cell(current_row, col, value)
+                    cell.font = small_font if col in (4, 5, 6) else body_font
+                    cell.alignment = left_top if col in (4, 5, 6) else center
+                    cell.border = border
+                    if col == 8:
+                        cell.fill = grey_fill
+                ws.merge_cells(start_row=current_row, start_column=6, end_row=current_row, end_column=7)
+                ws.row_dimensions[current_row].height = 120
+                current_row += 1
+
+            if current_row - date_start_row > 1:
+                for merge_col in (1, 2, 3):
+                    ws.merge_cells(start_row=date_start_row, start_column=merge_col, end_row=current_row - 1, end_column=merge_col)
+                    ws.cell(date_start_row, merge_col).alignment = center
+
+        ws.freeze_panes = "A4"
+        bio_h = BytesIO()
+        wb_h.save(bio_h)
+        fname_h = f"{unit_name}_{year}年{festival_name}期间值班值宿人员安排表.xlsx"
+        return Response(
+            content=bio_h.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname_h)}"},
+        )
+
+    if (export_format or "").strip().lower() in ("holiday", "festival", "duty"):
+        return _export_holiday_duty_excel()
 
     # ---- 公用样式 ----
     thin_side = Side(style="thin", color="B0B0B0")
