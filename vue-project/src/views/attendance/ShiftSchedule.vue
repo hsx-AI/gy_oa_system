@@ -272,7 +272,7 @@
                 @click="openPlanEditor(d)"
               >
                 <span v-if="dayPlans[d.date] || tripSummaryForDate(d.date)" class="plan-preview">{{ planPreview(d.date) }}</span>
-                <span v-else class="plan-empty-dot">+</span>
+                <span class="plan-add-hint" :class="{ 'plan-add-hint--sole': !dayPlans[d.date] && !tripSummaryForDate(d.date) }">+</span>
               </th>
             </tr>
             <tr class="summary-head-row">
@@ -474,6 +474,7 @@
           <div class="cal-legend">
             <span class="cal-legend-item"><span class="cal-dot cal-dot-day"></span>白班</span>
             <span class="cal-legend-item"><span class="cal-dot cal-dot-night"></span>夜班</span>
+            <span class="cal-legend-item"><span class="cal-dot cal-dot-trip"></span>公出</span>
             <span class="cal-legend-item"><span class="cal-dot cal-dot-off"></span>不值班</span>
           </div>
           <div class="cal-grid">
@@ -503,7 +504,13 @@
                     <span class="cal-shift-names">{{ calDayData[d.date].night.join('、') }}</span>
                   </div>
                 </template>
-                <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length" class="cal-shift-empty">无排班</div>
+                <template v-if="calDayData[d.date]?.trip?.length">
+                  <div class="cal-shift-row cal-shift-trip">
+                    <span class="cal-shift-label">出</span>
+                    <span class="cal-shift-names">{{ calDayData[d.date].trip.join('、') }}</span>
+                  </div>
+                </template>
+                <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length && !calDayData[d.date]?.trip?.length" class="cal-shift-empty">无排班</div>
               </div>
               <div v-if="moDayPlans[d.date]" class="cal-plan-popover">
                 <div class="cal-plan-title">值班计划</div>
@@ -705,14 +712,16 @@ const calDayData = computed(() => {
   for (const d of monthOverviewDates.value) {
     const dayList = []
     const nightList = []
+    const tripList = []
     for (const emp of monthOverviewEmployees.value) {
       const v = moSchedule[emp]?.[d.date] || ''
       const loc = moLocations[emp]?.[d.date] || ''
       const locTag = loc ? `(${loc === '准备组' ? '准' : loc === '服务组' ? '服' : loc})` : ''
       if (v === '白班') dayList.push(emp + locTag)
       else if (v === '夜班') nightList.push(emp + locTag)
+      else if (moBusinessTrips[emp]?.[d.date]) tripList.push(emp)
     }
-    result[d.date] = { day: dayList, night: nightList }
+    result[d.date] = { day: dayList, night: nightList, trip: tripList }
   }
   return result
 })
@@ -1776,12 +1785,38 @@ async function handleExportExcel() {
   padding: 2px 1px;
   cursor: pointer;
 }
-.plan-empty-dot {
-  display: block;
-  font-size: 14px;
-  color: #cbd5e1;
+.plan-cell { position: relative; }
+.plan-add-hint {
+  position: absolute;
+  top: 1px;
+  right: 2px;
+  width: 14px;
+  height: 14px;
+  line-height: 14px;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #94a3b8;
+  background: #e2e8f0;
+  border-radius: 3px;
   cursor: pointer;
-  line-height: 1;
+}
+.plan-cell:hover .plan-add-hint { color: #3b82f6; background: #bfdbfe; }
+.plan-add-hint--sole {
+  position: static;
+  display: block;
+  margin: 0 auto;
+  width: 18px;
+  height: 18px;
+  line-height: 18px;
+  font-size: 14px;
+  color: #94a3b8;
+  background: #e2e8f0;
+  border-radius: 4px;
+}
+.plan-cell:hover .plan-add-hint--sole {
+  color: #3b82f6;
+  background: #bfdbfe;
 }
 .plan-has {
   background: #eff6ff !important;
@@ -2305,6 +2340,7 @@ thead tr:first-child .sticky-col2 {
 }
 .cal-dot-day { background: #3b82f6; }
 .cal-dot-night { background: #f59e0b; }
+.cal-dot-trip { background: #10b981; }
 .cal-dot-off { background: #e5e7eb; }
 
 .cal-grid {
@@ -2395,6 +2431,7 @@ thead tr:first-child .sticky-col2 {
 }
 .cal-shift-day .cal-shift-label { background: #3b82f6; }
 .cal-shift-night .cal-shift-label { background: #f59e0b; }
+.cal-shift-trip .cal-shift-label { background: #10b981; }
 .cal-shift-names {
   font-size: 11px;
   color: #334155;
