@@ -29,16 +29,6 @@ function readUserName() {
   }
 }
 
-function readUserJb() {
-  try {
-    const s = localStorage.getItem('userInfo')
-    const u = s ? JSON.parse(s) : {}
-    return (u.jb || '').trim()
-  } catch {
-    return ''
-  }
-}
-
 function formatRelativeTime(dtStr) {
   if (!dtStr) return ''
   const d = new Date(dtStr.replace(/-/g, '/'))
@@ -418,9 +408,6 @@ async function fetchFeedbackTodos() {
     feedbackWallAssignedList.value = []
     return
   }
-  const jb = readUserJb()
-  const isLeader = /经理|副经理/.test(jb)
-
   let isAdmin = false
   try {
     const cfg = await getUploadConfig()
@@ -435,17 +422,15 @@ async function fetchFeedbackTodos() {
       .catch(() => { feedbackWallAssignedList.value = [] })
   )
 
-  if (isLeader || isAdmin) {
-    tasks.push(
-      getLeaderInbox({ current_user: userName })
-        .then(res => {
-          feedbackLeaderCount.value = (res?.data || []).filter(m => m.status === 0).length
-        })
-        .catch(() => { feedbackLeaderCount.value = 0 })
-    )
-  } else {
-    feedbackLeaderCount.value = 0
-  }
+  // 与后端待办邮件 _query_manager_todos 一致：按 target_leader 汇总，不限「经理/副经理」职务。
+  // 此前仅用 /经理|副经理/ 判断会导致部长/主任/副主任等被点名领导的待办不计入首页数字。
+  tasks.push(
+    getLeaderInbox({ current_user: userName })
+      .then(res => {
+        feedbackLeaderCount.value = (res?.data || []).filter(m => m.status === 0).length
+      })
+      .catch(() => { feedbackLeaderCount.value = 0 })
+  )
 
   if (isAdmin) {
     tasks.push(

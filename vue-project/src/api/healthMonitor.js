@@ -9,3 +9,8 @@ export function getHealthMonitorPermission(params) {
 export function getHealthOverview(params) {
   return request({ url: '/health-monitor/overview', method: 'get', params })
 }
+
+/** 手动触发一次管理人员待办邮件提醒（仅 admin1） */
+export function runTodoReminder(params) {
+  return request({ url: '/email/run-todo-reminder', method: 'post', params })
+}

@@ -193,6 +193,10 @@
               <li>点击下方按钮，填写您的企业邮箱地址和 IMAP 授权码</li>
               <li>在企业邮箱客户端中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong>，系统将自动同步并由 AI 提取待办任务</li>
             </ol>
+            <div class="ai-task-unconfigured__img-wrap">
+              <img src="/assets/images/imap-auth-code-guide.png" alt="如何获取授权码" class="ai-task-unconfigured__img" />
+              <span class="ai-task-unconfigured__img-caption">图示：网易企业邮箱客户端授权码获取位置</span>
+            </div>
             <router-link to="/admin/inbox-emails?tab=emails" class="ai-task-unconfigured__link">
               前往配置邮箱 →
             </router-link>
@@ -1885,6 +1889,26 @@ async function navigateTo(feature) {
 .ai-task-unconfigured__link:hover {
   transform: translateY(-1px);
   box-shadow: 0 4px 12px rgba(245, 158, 11, 0.35);
+}
+.ai-task-unconfigured__img-wrap {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0;
+  max-width: 100%;
+}
+.ai-task-unconfigured__img {
+  max-width: 520px;
+  width: 100%;
+  height: auto;
+  border-radius: 8px;
+  border: 1px solid #fcd34d;
+  box-shadow: 0 2px 8px rgba(245, 158, 11, 0.15);
+}
+.ai-task-unconfigured__img-caption {
+  font-size: 0.78rem;
+  color: #92400e;
 }
 
 /* 快捷入口文件夹 */

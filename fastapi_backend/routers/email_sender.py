@@ -852,6 +852,16 @@ async def get_auto_reminder_log_api(current_user: str = Query(...)):
     return {"success": True, "log": cfg.get("log", [])}
 
 
+@router.post("/run-todo-reminder")
+async def run_todo_reminder_api(current_user: str = Query(...)):
+    """手动触发一次管理人员待办邮件提醒（调试用，仅 admin1 可用）。"""
+    _require_admin(current_user)
+    recipients = _get_todo_reminder_recipients()
+    result = await run_todo_email_reminder_once()
+    result["_debug_recipients_sample"] = [r["name"] for r in recipients[:5]]
+    return {"success": True, "result": result}
+
+
 async def _execute_auto_send(year: int, month: int, trigger_label: str):
     """执行一次自动发送（与手动 send_attendance_reminder 正式模式相同逻辑）"""
     log_entry = {
@@ -1248,7 +1258,7 @@ def _query_manager_todos(name: str) -> List[Dict]:
             r.get("apply_time"),
         )
 
-    # 匿名意见待回复（经理/副经理等被点名领导）
+    # 匿名意见待回复（按 target_leader 匹配，不限「经理/副经理」职务）
     rows = db.execute_query(
         """
         SELECT content, created_at
@@ -1261,6 +1271,95 @@ def _query_manager_todos(name: str) -> List[Dict]:
     for r in rows:
         desc = (r.get("content") or "").strip()
         _append_todo(items, "匿名意见待回复", "意见与建议", desc[:120], r.get("created_at"))
+
+    # 换休票入账（未读）
+    rows = db.execute_query(
+        """
+        SELECT id, sl, sj, ly
+        FROM hxp
+        WHERE name = %s AND (is_read IS NULL OR is_read = 0) AND sl > 0
+        ORDER BY sj DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        _append_todo(
+            items,
+            "换休票入账",
+            "本人",
+            f"获得 {r.get('sl') or 0} 张换休票（来源：{(r.get('ly') or '').strip() or '系统自动'}）",
+            r.get("sj"),
+        )
+
+    # 待用印（已通过审批但尚未标记已用印）
+    rows = db.execute_query(
+        """
+        SELECT seal_type, reason, apply_time, approve_time
+        FROM seal_apply
+        WHERE applicant = %s AND status = 1 AND COALESCE(used_stamp, 0) = 0
+        ORDER BY approve_time DESC, apply_time DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        _append_todo(
+            items,
+            "待用印",
+            "本人",
+            f"用印申请已通过（{r.get('seal_type') or '部门公章'}），请完成盖章后标记「已用印」",
+            r.get("approve_time") or r.get("apply_time"),
+        )
+
+    # 吐槽问题处理（被指派且尚未解决）
+    rows = db.execute_query(
+        """
+        SELECT content, assigned_by, assigned_at, created_at
+        FROM feedback_wall
+        WHERE status = 1 AND assignee = %s AND COALESCE(resolved, 0) <> 3
+        ORDER BY assigned_at DESC, created_at DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        content = (r.get("content") or "").strip()
+        assigner = (r.get("assigned_by") or "").strip()
+        _append_todo(
+            items,
+            "吐槽问题处理",
+            f"指派人：{assigner}" if assigner else "吐槽墙",
+            f"请处理：{content[:120]}",
+            r.get("assigned_at") or r.get("created_at"),
+        )
+
+    # 吐槽墙待审核 & 系统建议待回复（仅 admin1）
+    try:
+        admin1 = _get_admin1()
+        if admin1 and n == admin1:
+            wall_pending_rows = db.execute_query(
+                "SELECT id, content, created_at FROM feedback_wall WHERE status = 0 ORDER BY created_at DESC"
+            ) or []
+            if wall_pending_rows:
+                _append_todo(
+                    items,
+                    "吐槽墙待审核",
+                    "意见与建议",
+                    f"您有 {len(wall_pending_rows)} 条吐槽待审核上墙",
+                    wall_pending_rows[0].get("created_at") if len(wall_pending_rows) == 1 else None,
+                )
+
+            sys_pending_rows = db.execute_query(
+                "SELECT id, content, created_at FROM feedback_system WHERE status != 1 ORDER BY created_at DESC"
+            ) or []
+            if sys_pending_rows:
+                _append_todo(
+                    items,
+                    "系统建议待回复",
+                    "意见与建议",
+                    f"您有 {len(sys_pending_rows)} 条系统功能建议待回复",
+                    sys_pending_rows[0].get("created_at") if len(sys_pending_rows) == 1 else None,
+                )
+    except Exception:
+        pass
 
     return sorted(items, key=lambda x: x.get("applyTime") or "", reverse=True)
 
@@ -1399,15 +1498,15 @@ async def run_todo_email_reminder_once() -> dict:
     cfg = _get_email_config()
     sender_addr = cfg["address"]
     password = cfg["auth_code"]
-    if not sender_addr or not password:
-        logger.info("[TodoReminder] 邮箱未配置，跳过待办提醒")
-        return {"checked": 0, "sent": 0, "message": "邮箱未配置"}
+    email_configured = bool(sender_addr and password)
 
     now = datetime.now()
     recipients = _get_todo_reminder_recipients()
     checked = 0
     messages = []
     skipped_over_threshold = 0
+    # 调试模式：仅展示扫描结果，不发邮件
+    debug_over_threshold = []
 
     for user in recipients:
         name = user["name"]
@@ -1421,22 +1520,26 @@ async def run_todo_email_reminder_once() -> dict:
         if not _should_send_todo_reminder(name, now):
             skipped_over_threshold += 1
             continue
-        subject = f"您有 {count} 条 OA 待办事项待处理（系统自动提醒）"
-        body = _build_todo_reminder_body(name, count, todos)
-        msg = _build_email_message(sender_addr, [user["email"]], [], subject, body, "plain")
-        messages.append({
-            "name": name,
-            "count": count,
-            "recipients": [user["email"]],
-            "message": msg,
-        })
+        if email_configured:
+            subject = f"您有 {count} 条 OA 待办事项待处理（系统自动提醒）"
+            body = _build_todo_reminder_body(name, count, todos)
+            msg = _build_email_message(sender_addr, [user["email"]], [], subject, body, "plain")
+            messages.append({
+                "name": name,
+                "count": count,
+                "recipients": [user["email"]],
+                "message": msg,
+            })
+        else:
+            debug_over_threshold.append({"name": name, "count": count, "email": user.get("email", "")})
 
     if not messages:
         return {
             "checked": checked,
             "sent": 0,
             "skippedOverThreshold": skipped_over_threshold,
-            "message": "无需要发送的待办提醒",
+            "message": "邮箱未配置（仅展示扫描结果）" if not email_configured else "无需要发送的待办提醒",
+            "_debugOverThreshold": debug_over_threshold,
         }
 
     try:

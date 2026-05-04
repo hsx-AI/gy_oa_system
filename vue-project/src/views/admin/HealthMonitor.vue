@@ -12,6 +12,10 @@
               <span v-if="loading">检测中…</span>
               <span v-else>刷新</span>
             </button>
+            <button type="button" class="btn btn-secondary" :disabled="todoReminderLoading" @click="triggerTodoReminder">
+              <span v-if="todoReminderLoading">发送中…</span>
+              <span v-else>触发待办提醒</span>
+            </button>
           </div>
         </div>
       </header>
@@ -38,6 +42,39 @@
             <p class="status-message">{{ item.message || '—' }}</p>
           </div>
         </div>
+        <div v-if="todoReminderResult" class="card todo-reminder-result">
+          <div class="status-header">
+            <span class="status-name">待办提醒执行结果</span>
+            <span class="status-badge" :class="todoReminderResult.error ? 'badge-error' : 'badge-ok'">
+              {{ todoReminderResult.error ? '失败' : '成功' }}
+            </span>
+          </div>
+          <pre v-if="todoReminderResult.error" class="status-message">{{ todoReminderResult.error }}</pre>
+          <div v-else class="status-message">
+            <p><strong>状态：</strong>{{ todoReminderResult.message || '—' }}</p>
+            <p>检查人数：{{ todoReminderResult.checked || 0 }}</p>
+            <p>发送邮件：{{ todoReminderResult.sent || 0 }} 封</p>
+            <p v-if="todoReminderResult.skippedOverThreshold">跳过（3天内已发）：{{ todoReminderResult.skippedOverThreshold }} 人</p>
+            <p v-if="todoReminderResult.failures?.length">
+              失败：{{ todoReminderResult.failures.map(f => f.name).join('、') }}
+            </p>
+            <div v-if="todoReminderResult._debugOverThreshold?.length" class="debug-list">
+              <p><strong>调试（邮箱未配置，待发送）：</strong></p>
+              <table class="debug-table">
+                <thead>
+                  <tr><th>姓名</th><th>待办数</th><th>邮箱</th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="item in todoReminderResult._debugOverThreshold" :key="item.name">
+                    <td>{{ item.name }}</td>
+                    <td>{{ item.count }}</td>
+                    <td>{{ item.email || '—' }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
         <p class="update-hint">最后更新：{{ lastUpdateText }}</p>
       </template>
     </div>
@@ -47,13 +84,15 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getHealthMonitorPermission, getHealthOverview } from '@/api/healthMonitor'
+import { getHealthMonitorPermission, getHealthOverview, runTodoReminder } from '@/api/healthMonitor'
 
 const router = useRouter()
 const canAccess = ref(false)
 const loading = ref(false)
 const items = ref([])
 const lastUpdate = ref(null)
+const todoReminderLoading = ref(false)
+const todoReminderResult = ref(null)
 
 const lastUpdateText = computed(() => {
   if (!lastUpdate.value) return '—'
@@ -85,6 +124,22 @@ async function fetchOverview() {
     items.value = []
   } finally {
     loading.value = false
+  }
+}
+
+async function triggerTodoReminder() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (user.name || user.userName || '').trim()
+  if (!name) return
+  todoReminderLoading.value = true
+  todoReminderResult.value = null
+  try {
+    const res = await runTodoReminder({ current_user: name })
+    todoReminderResult.value = res?.result || res
+  } catch (e) {
+    todoReminderResult.value = { error: e?.response?.data?.detail || e?.message || '请求失败' }
+  } finally {
+    todoReminderLoading.value = false
   }
 }
 
@@ -199,5 +254,51 @@ onMounted(async () => {
   margin-top: var(--spacing-xl);
   font-size: 0.85rem;
   color: var(--color-text-tertiary);
+}
+
+/* 触发待办提醒按钮 */
+.btn-secondary {
+  color: var(--color-text-primary);
+  background-color: var(--color-bg-container);
+  border-color: var(--color-border-base);
+}
+.btn-secondary:hover:not(:disabled) {
+  background-color: var(--color-bg-layout);
+}
+
+/* 执行结果卡片 */
+.todo-reminder-result {
+  margin-top: var(--spacing-lg);
+  padding: var(--spacing-lg);
+}
+.todo-reminder-result pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 0.875rem;
+}
+.todo-reminder-result p {
+  margin: 2px 0;
+  font-size: 0.875rem;
+}
+.debug-list {
+  margin-top: 8px;
+}
+.debug-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.82rem;
+  margin-top: 4px;
+}
+.debug-table th,
+.debug-table td {
+  border: 1px solid var(--color-border-base);
+  padding: 4px 8px;
+  text-align: left;
+}
+.debug-table th {
+  background: var(--color-bg-layout);
+  font-weight: 600;
 }
 </style>
