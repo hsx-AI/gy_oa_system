@@ -238,6 +238,12 @@ const routes = [
     name: 'Contacts',
     component: () => import('@/views/Contacts.vue'),
     meta: { title: '部门通讯录' }
+  },
+  {
+    path: '/seal/apply',
+    name: 'SealApply',
+    component: () => import('@/views/seal/SealApply.vue'),
+    meta: { title: '部门用印申请' }
   }
   // 未来可以添加更多路由：
   // {

@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email, feedback, contacts
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email, feedback, contacts, seal_apply
 import logging
 import time
 
@@ -82,6 +82,7 @@ app.include_router(tech_problem.router, prefix=settings.API_PREFIX)  # 工艺技
 app.include_router(inbox_email.router, prefix=settings.API_PREFIX)  # 共用邮箱收件箱（仅 admin1）
 app.include_router(feedback.router, prefix=settings.API_PREFIX)  # 意见与建议
 app.include_router(contacts.router, prefix=settings.API_PREFIX)  # 部门通讯录
+app.include_router(seal_apply.router, prefix=settings.API_PREFIX)  # 部门用印申请
 
 @app.on_event("startup")
 async def startup_event():
@@ -117,8 +118,9 @@ async def startup_event():
             print(f"[System] 警告: 定时拉取打卡报表任务未启用: {e}")
     # 考勤异常提醒自动发送后台任务
     import asyncio as _asyncio
-    from routers.email_sender import auto_reminder_background_loop
+    from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop
     _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
+    _asyncio.get_event_loop().create_task(todo_reminder_background_loop())
     # 共用邮箱自动拉取后台任务
     from routers.inbox_email import inbox_email_background_loop, inbox_email_analysis_background_loop
     _asyncio.get_event_loop().create_task(inbox_email_background_loop())
@@ -152,4 +154,3 @@ if __name__ == "__main__":
         log_level="info",
         access_log=True,
     )
-

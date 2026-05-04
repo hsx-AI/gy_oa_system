@@ -26,7 +26,7 @@
           打卡纪律大数据检测
         </h2>
         <p class="section-desc">
-          基于打卡数据，自动检测踩点上班（8:00 前 N 分钟内打卡）和踩点下班（17:00 后 N 分钟内打卡）的情况。
+          基于打卡数据，自动检测踩点上班（8:00 前 N 分钟内打卡）和踩点下班（17:00 后 N 分钟内打卡）的情况。阈值可选 2～5 分钟及 10 / 20 / 30 分钟、1 小时。
         </p>
 
         <div class="filter-bar">
@@ -53,13 +53,17 @@
           <div class="form-item">
             <label class="form-label">踩点上班阈值</label>
             <select v-model="clockInMinutes" class="form-select form-select-sm">
-              <option v-for="n in [2,3,4,5]" :key="'ci'+n" :value="n">8:00 前 {{ n }} 分钟</option>
+              <option v-for="n in DISCIPLINE_MINUTE_OPTIONS" :key="'ci'+n" :value="n">
+                {{ disciplineMinuteOptionText('8:00 前', n) }}
+              </option>
             </select>
           </div>
           <div class="form-item">
             <label class="form-label">踩点下班阈值</label>
             <select v-model="clockOutMinutes" class="form-select form-select-sm">
-              <option v-for="n in [2,3,4,5]" :key="'co'+n" :value="n">17:00 后 {{ n }} 分钟</option>
+              <option v-for="n in DISCIPLINE_MINUTE_OPTIONS" :key="'co'+n" :value="n">
+                {{ disciplineMinuteOptionText('17:00 后', n) }}
+              </option>
             </select>
           </div>
           <div class="form-item">
@@ -344,6 +348,13 @@ import {
   getPersonScatterData,
   getStatisticsEmployees,
 } from '@/api/attendance'
+
+/** 与后端 `/discipline/clock-in-stats` 白名单一致 */
+const DISCIPLINE_MINUTE_OPTIONS = Object.freeze([2, 3, 4, 5, 10, 20, 30, 60])
+
+function disciplineMinuteOptionText(prefix, n) {
+  return n === 60 ? `${prefix} 1 小时` : `${prefix} ${n} 分钟`
+}
 
 const filterYear = ref(new Date().getFullYear())
 const filterMonth = ref(0)

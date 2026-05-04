@@ -91,7 +91,7 @@
               @click="openDetail(card.id)"
             >
               <span :class="['wcard-badge', `wb-${card.resolved || 0}`]">
-                {{ card.resolved === 2 ? '已回复' : card.resolved === 1 ? '处理中' : '未处理' }}
+                {{ wallResolveLabel(card.resolved) }}
               </span>
               <p class="wcard-body">{{ card.content }}</p>
               <div v-if="card.replies?.length" class="wcard-reply-hint">
@@ -196,7 +196,7 @@
               <div class="all-wall-meta">
                 <span class="like-info">👍 {{ w.likeCount || 0 }}</span>
                 <span :class="['resolve-tag', `resolve-${w.resolved || 0}`]">
-                  {{ w.resolved === 2 ? '已解决' : w.resolved === 1 ? '处理中' : '未处理' }}
+                  {{ wallResolveLabel(w.resolved) }}
                 </span>
                 <span class="time-info">{{ w.createdAt }}</span>
               </div>
@@ -222,9 +222,13 @@
                   👍 {{ detailData.likeCount || 0 }}
                 </span>
                 <span :class="['resolve-tag', `resolve-${detailData.resolved || 0}`]">
-                  {{ detailData.resolved === 2 ? '已解决' : detailData.resolved === 1 ? '处理中' : '未处理' }}
+                  {{ wallResolveLabel(detailData.resolved) }}
                 </span>
                 <span class="time-info">{{ detailData.createdAt }}</span>
+              </div>
+              <div v-if="detailData.assignee" class="assignee-info">
+                负责人：{{ detailData.assignee }}
+                <span v-if="detailData.assignedBy">（{{ detailData.assignedBy }} 指派）</span>
               </div>
               <div class="detail-replies">
                 <h4>领导回复（{{ detailData.replies?.length || 0 }}）</h4>
@@ -235,14 +239,30 @@
                   <span class="reply-time">{{ rp.createdAt }}</span>
                 </div>
               </div>
-              <div v-if="isLeader" class="detail-leader-actions">
-                <div class="detail-reply-form">
-                  <textarea v-model="detailReplyDraft" rows="2" placeholder="回复该吐槽…" class="textarea textarea-sm"></textarea>
+              <div v-if="canHandleWallDetail" class="detail-leader-actions">
+                <div v-if="isLeader" class="assignee-picker">
+                  <label>指定负责人</label>
+                  <select v-model="detailAssignee">
+                    <option value="">不指定负责人</option>
+                    <option v-for="p in assigneeOptions" :key="p.name" :value="p.name">
+                      {{ p.name }}{{ p.department ? `（${p.department}）` : '' }}
+                    </option>
+                  </select>
+                </div>
+                <div v-if="isLeader" class="detail-reply-form">
+                  <textarea
+                    ref="detailReplyTextareaRef"
+                    v-model="detailReplyDraft"
+                    rows="2"
+                    placeholder="回复该吐槽…"
+                    class="textarea textarea-sm textarea-auto-grow"
+                    @input="(e) => fitTextareaHeight(e.target)"
+                  ></textarea>
                   <button class="btn-sm btn-primary" @click="doReplyWall" :disabled="detailReplying">回复</button>
                 </div>
-                <div class="detail-resolve-actions" v-if="detailData.resolved !== 2">
+                <div class="detail-resolve-actions" v-if="detailData.resolved !== 3">
                   <button v-if="detailData.resolved !== 1" class="btn-sm btn-processing" @click="doResolve(1)">标记为处理中</button>
-                  <button class="btn-sm btn-resolved" @click="doResolve(2)">标记为已解决</button>
+                  <button class="btn-sm btn-resolved" @click="doResolve(3)">标记为已解决</button>
                 </div>
                 <div v-else class="resolved-badge">✅ 已由 {{ detailData.resolvedBy }} 标记为已解决</div>
               </div>
@@ -297,7 +317,13 @@
               <strong>我的回复：</strong>{{ msg.reply }}
             </div>
             <div v-else class="inbox-reply-form">
-              <textarea v-model="msg._draft" rows="2" placeholder="回复该意见…" class="textarea textarea-sm"></textarea>
+              <textarea
+                v-model="msg._draft"
+                rows="2"
+                placeholder="回复该意见…"
+                class="textarea textarea-sm textarea-auto-grow"
+                @input="(e) => fitTextareaHeight(e.target)"
+              ></textarea>
               <button class="btn-sm btn-primary" @click="doReplyLeader(msg)" :disabled="msg._replying">回复</button>
             </div>
           </div>
@@ -369,7 +395,13 @@
               <span class="reply-meta">— {{ item.replyBy }} · {{ item.replyAt }}</span>
             </div>
             <div v-else-if="isAdmin1" class="inbox-reply-form">
-              <textarea v-model="item._draft" rows="2" placeholder="回复该建议…" class="textarea textarea-sm"></textarea>
+              <textarea
+                v-model="item._draft"
+                rows="2"
+                placeholder="回复该建议…"
+                class="textarea textarea-sm textarea-auto-grow"
+                @input="(e) => fitTextareaHeight(e.target)"
+              ></textarea>
               <button class="btn-sm btn-primary" @click="doReplySystem(item)" :disabled="item._replying">回复</button>
             </div>
           </div>
@@ -388,6 +420,8 @@ import {
   getLeaderTargets, submitLeaderMsg, getLeaderInbox, replyLeaderMsg, getLeaderPublic,
   submitSystemFeedback, getSystemList, replySystemFeedback, systemImageUrl
 } from '@/api/feedback'
+import { getContacts } from '@/api/contacts'
+import { refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 
 const route = useRoute()
 const tabs = [
@@ -407,11 +441,31 @@ const userName = userInfo.name || userInfo.userName || ''
 const userDept = userInfo.dept || userInfo.lsys || ''
 const userJb = (userInfo.jb || '').trim()
 
+/** 回复框随内容增高，超出约 14 行后出现纵向滚动条 */
+function fitTextareaHeight(el, minLines = 2) {
+  if (!el || el.tagName !== 'TEXTAREA') return
+  const cs = window.getComputedStyle(el)
+  const lh = parseFloat(cs.lineHeight)
+  const lineHeight = Number.isFinite(lh) && lh > 0 ? lh : parseFloat(cs.fontSize || '14') * 1.45
+  const padY = parseFloat(cs.paddingTop) + parseFloat(cs.paddingBottom)
+  const borderY = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth)
+  const minH = lineHeight * minLines + padY + borderY
+  const maxH = lineHeight * 14 + padY + borderY
+  el.style.height = 'auto'
+  const next = Math.min(Math.max(el.scrollHeight, minH), maxH)
+  el.style.height = `${next}px`
+  el.style.overflowY = el.scrollHeight > maxH ? 'auto' : 'hidden'
+}
+
 const isAdmin1 = ref(false)
 const isLeader = computed(() => {
   const j = userJb
   return /经理|副经理/.test(j) || isAdmin1.value
 })
+
+function wallResolveLabel(v) {
+  return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
+}
 
 onMounted(async () => {
   try {
@@ -420,12 +474,22 @@ onMounted(async () => {
     const a1 = (res?.admin1 || '').trim()
     isAdmin1.value = !!(a1 && userName === a1)
   } catch { /* ignore */ }
-  loadWall()
+  await loadWall()
+  openRouteWallDetail()
+  loadAssigneeOptions()
   loadLeaderTargets()
   loadLeaderPublic()
   loadSystemList()
   if (isLeader.value) loadLeaderInbox()
 })
+
+watch(
+  () => route.query,
+  (q) => {
+    if (validTabs.includes(q.tab)) currentTab.value = q.tab
+    openRouteWallDetail()
+  }
+)
 
 // ==================== 吐槽墙 ====================
 const stageRef = ref(null)
@@ -464,7 +528,7 @@ async function loadWall() {
   startBarrageLoop()
 }
 
-const barragePool = computed(() => wallList.value.filter(w => w.resolved !== 2))
+const barragePool = computed(() => wallList.value.filter(w => w.resolved !== 3))
 
 function startBarrageLoop() {
   stopBarrageLoop()
@@ -614,7 +678,8 @@ const resolveFilterOptions = [
   { value: 'all', label: '全部' },
   { value: 0, label: '未处理' },
   { value: 1, label: '处理中' },
-  { value: 2, label: '已解决' },
+  { value: 2, label: '已回复' },
+  { value: 3, label: '已解决' },
 ]
 
 const filteredWallList = computed(() => {
@@ -643,7 +708,7 @@ const wallStats = computed(() => {
   const list = wallList.value
   const total = list.length
   const processing = list.filter(w => w.resolved === 1).length
-  const resolved = list.filter(w => w.resolved === 2).length
+  const resolved = list.filter(w => w.resolved === 3).length
   const now = new Date()
   const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
   const thisWeek = list.filter(w => w.createdAt && new Date(w.createdAt) >= weekAgo).length
@@ -685,14 +750,48 @@ const displayCards = computed(() => {
 const showDetail = ref(false)
 const detailData = ref(null)
 const detailReplyDraft = ref('')
+const detailReplyTextareaRef = ref(null)
 const detailReplying = ref(false)
+const detailAssignee = ref('')
+const assigneeOptions = ref([])
+const canHandleWallDetail = computed(() => isLeader.value || detailData.value?.assignee === userName)
+let openedRouteWallId = ''
+
+async function loadAssigneeOptions() {
+  try {
+    const res = await getContacts()
+    const members = (res?.departments || []).flatMap(d =>
+      (d.members || []).map(m => ({ ...m, department: m.department || d.name || '' }))
+    )
+    const seen = new Set()
+    assigneeOptions.value = members.filter((m) => {
+      const name = (m.name || '').trim()
+      if (!name || seen.has(name)) return false
+      seen.add(name)
+      return true
+    })
+  } catch {
+    assigneeOptions.value = []
+  }
+}
+
+function openRouteWallDetail() {
+  const wallId = String(route.query.wallId || '').trim()
+  if (!wallId || openedRouteWallId === wallId) return
+  openedRouteWallId = wallId
+  currentTab.value = 'wall'
+  nextTick(() => openDetail(wallId))
+}
 
 async function openDetail(wallId) {
   try {
     const res = await getWallDetail(wallId, { current_user: userName })
     if (res.success) {
       detailData.value = res.data
+      detailAssignee.value = res.data?.assignee || ''
       showDetail.value = true
+      await nextTick()
+      if (detailReplyTextareaRef.value) fitTextareaHeight(detailReplyTextareaRef.value)
     }
   } catch { /* ignore */ }
 }
@@ -716,13 +815,20 @@ async function doReplyWall() {
   try {
     const res = await replyWall(detailData.value.id, {
       reply_content: detailReplyDraft.value.trim(),
-      current_user: userName
+      current_user: userName,
+      assignee: detailAssignee.value || ''
     })
     if (res.success) {
       detailReplyDraft.value = ''
+      await nextTick()
+      if (detailReplyTextareaRef.value) fitTextareaHeight(detailReplyTextareaRef.value)
       const fresh = await getWallDetail(detailData.value.id, { current_user: userName })
-      if (fresh.success) detailData.value = fresh.data
+      if (fresh.success) {
+        detailData.value = fresh.data
+        detailAssignee.value = fresh.data?.assignee || ''
+      }
       loadWall()
+      refreshWorkplaceTodos()
     } else {
       alert(res.message || '回复失败')
     }
@@ -744,6 +850,7 @@ async function doResolve(level) {
         item.resolved = level
         item.resolvedBy = userName
       }
+      refreshWorkplaceTodos()
     }
   } catch (e) {
     alert(e.response?.data?.detail || '操作失败')
@@ -1053,7 +1160,8 @@ async function doReplySystem(item) {
 .cd-all { background: #9ca3af; }
 .cd-0   { background: #ef5350; }
 .cd-1   { background: #ffa726; }
-.cd-2   { background: #66bb6a; }
+.cd-2   { background: #4096ff; }
+.cd-3   { background: #66bb6a; }
 .tb-chip.active .cd-all { background: #3a5cc1; }
 .tb-sort {
   padding: 6px 14px;
@@ -1139,7 +1247,8 @@ async function doReplySystem(item) {
 }
 .wb-0 { background: #fff1f0; color: #cf1322; }
 .wb-1 { background: #fff7e6; color: #d46b08; }
-.wb-2 { background: #e6f7e9; color: #389e0d; }
+.wb-2 { background: #e6f4ff; color: #1677ff; }
+.wb-3 { background: #e6f7e9; color: #389e0d; }
 .wcard-body {
   font-size: 14px; line-height: 1.5; margin: 0; opacity: .95;
   display: -webkit-box;
@@ -1304,6 +1413,11 @@ async function doReplySystem(item) {
 }
 .textarea:focus { border-color: #3a5cc1; }
 .textarea-sm { font-size: 13px; padding: 8px 10px; }
+.textarea.textarea-auto-grow {
+  resize: none;
+  min-height: 3.25em;
+  max-height: none;
+}
 .char-count {
   text-align: right; font-size: 12px;
   color: #9ca3af; margin: 4px 0 8px;
@@ -1483,7 +1597,8 @@ async function doReplySystem(item) {
 }
 .resolve-tag.resolve-0 { background: #fff1f0; color: #cf1322; }
 .resolve-tag.resolve-1 { background: #fff7e6; color: #d46b08; }
-.resolve-tag.resolve-2 { background: #e6f7e9; color: #389e0d; }
+.resolve-tag.resolve-2 { background: #e6f4ff; color: #1677ff; }
+.resolve-tag.resolve-3 { background: #e6f7e9; color: #389e0d; }
 .pagination {
   display: flex; align-items: center; justify-content: center;
   gap: 12px; padding: 12px 0 4px;
@@ -1509,6 +1624,13 @@ async function doReplySystem(item) {
   display: flex; align-items: center; gap: 12px;
   padding: 10px 0;
   border-bottom: 1px solid #f0f0f0;
+}
+.assignee-info {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f0f5ff;
+  color: #3a5cc1;
+  font-size: 13px;
 }
 .detail-replies { padding-top: 8px; }
 .detail-replies h4 {
@@ -1538,6 +1660,26 @@ async function doReplySystem(item) {
   display: flex; gap: 8px; align-items: flex-start;
 }
 .detail-reply-form .textarea { flex: 1; }
+.assignee-picker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.assignee-picker label {
+  font-size: 13px;
+  color: #374151;
+  flex-shrink: 0;
+}
+.assignee-picker select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  font-size: 13px;
+  outline: none;
+}
+.assignee-picker select:focus { border-color: #3a5cc1; }
 .detail-resolve-actions { display: flex; gap: 8px; }
 .btn-processing, .btn-sm.btn-processing {
   background: #fff7e6; color: #d46b08; border-color: #ffd591;

@@ -15,9 +15,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 from email.header import Header
-from typing import Optional, List
+from typing import Optional, List, Dict
 from io import BytesIO
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -1042,3 +1042,434 @@ async def auto_reminder_background_loop():
         except Exception as e:
             logger.error(f"[AutoReminder] 循环异常: {e}")
             await asyncio.sleep(300)
+
+
+# ==================== 管理人员待办邮件提醒 ====================
+
+TODO_REMINDER_THRESHOLD = 10
+TODO_REMINDER_INTERVAL_DAYS = 3
+TODO_REMINDER_CHECK_SECONDS = TODO_REMINDER_INTERVAL_DAYS * 24 * 3600
+
+
+def _is_todo_reminder_role(jb: str) -> bool:
+    """需要待办提醒的管理角色：经理/副经理/主任/主任责/副主任/班组长/组长。"""
+    try:
+        from routers.approvers import _jb_match
+        return (
+            _jb_match(jb, "部长")
+            or _jb_match(jb, "副部长")
+            or _jb_match(jb, "主任")
+            or _jb_match(jb, "副主任")
+            or _jb_match(jb, "组长")
+        )
+    except Exception:
+        j = (jb or "").strip()
+        return any(k in j for k in ("经理", "主任", "主任责", "副主任", "班组长", "组长"))
+
+
+def _ensure_todo_reminder_table():
+    try:
+        db.execute_update(
+            """
+            CREATE TABLE IF NOT EXISTS todo_email_reminder_log (
+                recipient_name VARCHAR(50) PRIMARY KEY,
+                last_sent_at DATETIME NULL,
+                last_todo_count INT DEFAULT 0,
+                last_error VARCHAR(500) DEFAULT '',
+                updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='待办事项邮件提醒发送记录'
+            """,
+            (),
+        )
+    except Exception as e:
+        logger.warning("[TodoReminder] 建表失败: %s", e)
+
+
+def _fmt_todo_dt(v) -> str:
+    if not v:
+        return ""
+    if hasattr(v, "strftime"):
+        return v.strftime("%Y-%m-%d %H:%M:%S")
+    return str(v)[:19]
+
+
+def _append_todo(items: List[Dict], type_: str, applicant: str, description: str, apply_time=None):
+    items.append({
+        "type": type_,
+        "applicant": (applicant or "").strip() or "-",
+        "description": (description or "").strip(),
+        "applyTime": _fmt_todo_dt(apply_time),
+    })
+
+
+def _query_manager_todos(name: str) -> List[Dict]:
+    """直接汇总首页中管理人员需要处理的 OA 待办明细。"""
+    n = (name or "").strip()
+    if not n:
+        return []
+    items: List[Dict] = []
+
+    # 请假审批
+    rows = db.execute_query(
+        """
+        SELECT xm, qjfs, timefrom, timeto, qjtime, qjzt
+        FROM qj
+        WHERE (qjzt = 1 AND spr = %s) OR (qjzt = 3 AND spr2 = %s)
+        ORDER BY qjtime DESC
+        """,
+        (n, n),
+    ) or []
+    for r in rows:
+        level = "一级审批" if int(r.get("qjzt") or 0) == 1 else "二级审批"
+        _append_todo(
+            items,
+            "请假审批",
+            r.get("xm"),
+            f"{r.get('qjfs') or '请假'}，{_fmt_todo_dt(r.get('timefrom'))} 至 {_fmt_todo_dt(r.get('timeto'))}，{level}",
+            r.get("qjtime"),
+        )
+
+    # 加班审批
+    rows = list(db.execute_query(
+        """
+        SELECT xm, jb, timedate, timefrom, timeto, jiabantime, jiabanzt, hx
+        FROM jiaban
+        WHERE (jiabanzt IN (0, 1) AND spr = %s) OR (jiabanzt = 3 AND spr2 = %s)
+        ORDER BY jiabantime DESC
+        """,
+        (n, n),
+    ) or [])
+    try:
+        dakaman = _get_dakaman_for_todo()
+        if dakaman and dakaman == n:
+            rows.extend(db.execute_query(
+                """
+                SELECT xm, jb, timedate, timefrom, timeto, jiabantime, jiabanzt, hx
+                FROM jiaban
+                WHERE jiabanzt = 5
+                ORDER BY jiabantime DESC
+                """,
+                (),
+            ) or [])
+    except Exception:
+        pass
+    for r in rows:
+        zt = int(r.get("jiabanzt") or 0)
+        level = "打卡管理员审批" if zt == 5 else ("二级审批" if zt == 3 else "一级审批")
+        _append_todo(
+            items,
+            "加班审批",
+            r.get("xm"),
+            f"{r.get('jb') or '加班'}，{str(r.get('timedate') or '')[:10]} {_fmt_todo_dt(r.get('timefrom'))[-8:]} 至 {_fmt_todo_dt(r.get('timeto'))[-8:]}，换休票：{r.get('hx') or '否'}，{level}",
+            r.get("jiabantime"),
+        )
+
+    # 公出审批
+    rows = db.execute_query(
+        """
+        SELECT gcr, gclx, gcdd, yjcfsj, yjfhsj, szrzt, bldzt, sqsj
+        FROM gcsqb
+        WHERE (szrzt = 1 AND szr = %s) OR (szrzt = 2 AND bldzt = 1 AND bld = %s)
+        ORDER BY sqsj DESC
+        """,
+        (n, n),
+    ) or []
+    for r in rows:
+        level = "室主任审批" if int(r.get("szrzt") or 0) == 1 else "部领导审批"
+        _append_todo(
+            items,
+            "公出审批",
+            r.get("gcr"),
+            f"{r.get('gclx') or '公出'}，{r.get('gcdd') or ''}，{_fmt_todo_dt(r.get('yjcfsj'))} 至 {_fmt_todo_dt(r.get('yjfhsj'))}，{level}",
+            r.get("sqsj"),
+        )
+
+    # 公出节假日换休票审批
+    rows = db.execute_query(
+        """
+        SELECT xm, date_from, date_to, days, hxp_count, status, apply_time
+        FROM holiday_exchange
+        WHERE (status = 0 AND spr = %s) OR (status = 1 AND spr2 = %s)
+        ORDER BY apply_time DESC
+        """,
+        (n, n),
+    ) or []
+    for r in rows:
+        level = "一级审批" if int(r.get("status") or 0) == 0 else "二级审批"
+        _append_todo(
+            items,
+            "节假日换休票审批",
+            r.get("xm"),
+            f"{r.get('date_from') or ''} 至 {r.get('date_to') or ''}，{r.get('days') or 0}天，{r.get('hxp_count') or 0}张，{level}",
+            r.get("apply_time"),
+        )
+
+    # 换休票管理审批
+    rows = db.execute_query(
+        """
+        SELECT applicant, action, amount, ly, names_json, apply_time
+        FROM hxp_approval
+        WHERE approver = %s AND status = 0
+        ORDER BY apply_time DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        try:
+            names = json.loads(r.get("names_json") or "[]")
+        except Exception:
+            names = []
+        action_text = "增加" if (r.get("action") or "") == "add" else "减少"
+        target_text = "、".join(names[:5]) + ("等" if len(names) > 5 else "")
+        _append_todo(
+            items,
+            "换休票管理审批",
+            r.get("applicant"),
+            f"为{len(names)}人{action_text}{r.get('amount') or 0}张换休票（{target_text or '未列明人员'}），原因：{r.get('ly') or ''}",
+            r.get("apply_time"),
+        )
+
+    # 用印审批
+    rows = db.execute_query(
+        """
+        SELECT applicant, seal_type, reason, apply_time
+        FROM seal_apply
+        WHERE approver = %s AND status = 0
+        ORDER BY apply_time DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        _append_todo(
+            items,
+            "用印审批",
+            r.get("applicant"),
+            f"{r.get('seal_type') or '用印'}，事由：{r.get('reason') or ''}",
+            r.get("apply_time"),
+        )
+
+    # 匿名意见待回复（经理/副经理等被点名领导）
+    rows = db.execute_query(
+        """
+        SELECT content, created_at
+        FROM feedback_leader_inbox
+        WHERE target_leader = %s AND status = 0
+        ORDER BY created_at DESC
+        """,
+        (n,),
+    ) or []
+    for r in rows:
+        desc = (r.get("content") or "").strip()
+        _append_todo(items, "匿名意见待回复", "意见与建议", desc[:120], r.get("created_at"))
+
+    return sorted(items, key=lambda x: x.get("applyTime") or "", reverse=True)
+
+
+def _get_dakaman_for_todo() -> str:
+    try:
+        rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
+        return (rows[0].get("dakaman") or "").strip() if rows else ""
+    except Exception:
+        return ""
+
+
+def _build_todo_reminder_body(name: str, count: int, todos: List[Dict]) -> str:
+    lines = [
+        f"{name}您好",
+        "",
+        "我是工艺部智能办公助手。",
+        "",
+        f"系统检测到您当前有 {count} 条待办事项未处理，已超过 {TODO_REMINDER_THRESHOLD} 条，请登录 OA 系统及时处理。",
+        "",
+        "待办明细：",
+    ]
+    for idx, item in enumerate(todos, 1):
+        time_part = f"；申请时间：{item['applyTime']}" if item.get("applyTime") else ""
+        lines.append(
+            f"{idx}. 【{item.get('type') or '待办'}】{item.get('applicant') or '-'}：{item.get('description') or ''}{time_part}"
+        )
+    lines.extend([
+        "",
+        "系统地址：http://10.42.60.230",
+        "",
+        f"本提醒每 {TODO_REMINDER_INTERVAL_DAYS} 天检查一次；如待办数仍超过 {TODO_REMINDER_THRESHOLD} 条，将继续提醒。",
+        "此邮件由系统自动发送，请勿直接回复。",
+    ])
+    return "\n".join(lines)
+
+
+def _parse_last_sent_at(v) -> Optional[datetime]:
+    if not v:
+        return None
+    if isinstance(v, datetime):
+        return v
+    try:
+        return datetime.strptime(str(v)[:19], "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _should_send_todo_reminder(name: str, now: datetime) -> bool:
+    _ensure_todo_reminder_table()
+    rows = db.execute_query(
+        "SELECT last_sent_at FROM todo_email_reminder_log WHERE recipient_name = %s LIMIT 1",
+        ((name or "").strip(),),
+    ) or []
+    if not rows:
+        return True
+    last = _parse_last_sent_at(rows[0].get("last_sent_at"))
+    if not last:
+        return True
+    return now - last >= timedelta(days=TODO_REMINDER_INTERVAL_DAYS)
+
+
+def _record_todo_reminder_result(name: str, sent_at: Optional[datetime], count: int, error: str = ""):
+    _ensure_todo_reminder_table()
+    db.execute_update(
+        """
+        INSERT INTO todo_email_reminder_log (recipient_name, last_sent_at, last_todo_count, last_error, updated_at)
+        VALUES (%s, %s, %s, %s, %s)
+        ON DUPLICATE KEY UPDATE
+          last_sent_at = COALESCE(VALUES(last_sent_at), last_sent_at),
+          last_todo_count = VALUES(last_todo_count),
+          last_error = VALUES(last_error),
+          updated_at = VALUES(updated_at)
+        """,
+        (
+            (name or "").strip(),
+            sent_at.strftime("%Y-%m-%d %H:%M:%S") if sent_at else None,
+            int(count or 0),
+            (error or "")[:500],
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+
+
+def _smtp_send_todo_messages(sender: str, password: str, messages: List[Dict]):
+    """单次 SMTP 连接发送待办提醒，返回成功的用户与失败信息。"""
+    smtp_obj = None
+    sent = []
+    failures = []
+    try:
+        smtp_obj = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=30)
+        smtp_obj.login(sender, password)
+        for item in messages:
+            try:
+                smtp_obj.sendmail(sender, item["recipients"], item["message"].as_string())
+                sent.append({"name": item["name"], "count": item["count"]})
+            except Exception as e:
+                failures.append({"name": item["name"], "error": str(e)[:200]})
+                logger.warning("[TodoReminder] 邮件发送失败 -> %s: %s", item["name"], e)
+    finally:
+        if smtp_obj:
+            try:
+                smtp_obj.quit()
+            except Exception:
+                pass
+    return sent, failures
+
+
+def _get_todo_reminder_recipients() -> List[Dict]:
+    rows = db.execute_query(
+        """
+        SELECT name, lsys, jb, enterprise_email
+        FROM yggl
+        WHERE COALESCE(zaizhi,0)=0
+          AND name IS NOT NULL AND TRIM(name) != ''
+          AND enterprise_email IS NOT NULL AND TRIM(enterprise_email) != ''
+        ORDER BY lsys, jb, name
+        """,
+        (),
+    ) or []
+    result = []
+    for r in rows:
+        jb = (r.get("jb") or "").strip()
+        if _is_todo_reminder_role(jb):
+            result.append({
+                "name": (r.get("name") or "").strip(),
+                "dept": (r.get("lsys") or "").strip(),
+                "jb": jb,
+                "email": (r.get("enterprise_email") or "").strip(),
+            })
+    return result
+
+
+async def run_todo_email_reminder_once() -> dict:
+    """扫描管理人员待办，超过阈值且距离上次提醒已满 3 天则发送邮件。"""
+    cfg = _get_email_config()
+    sender_addr = cfg["address"]
+    password = cfg["auth_code"]
+    if not sender_addr or not password:
+        logger.info("[TodoReminder] 邮箱未配置，跳过待办提醒")
+        return {"checked": 0, "sent": 0, "message": "邮箱未配置"}
+
+    now = datetime.now()
+    recipients = _get_todo_reminder_recipients()
+    checked = 0
+    messages = []
+    skipped_over_threshold = 0
+
+    for user in recipients:
+        name = user["name"]
+        if not name:
+            continue
+        checked += 1
+        todos = _query_manager_todos(name)
+        count = len(todos)
+        if count <= TODO_REMINDER_THRESHOLD:
+            continue
+        if not _should_send_todo_reminder(name, now):
+            skipped_over_threshold += 1
+            continue
+        subject = f"您有 {count} 条 OA 待办事项待处理（系统自动提醒）"
+        body = _build_todo_reminder_body(name, count, todos)
+        msg = _build_email_message(sender_addr, [user["email"]], [], subject, body, "plain")
+        messages.append({
+            "name": name,
+            "count": count,
+            "recipients": [user["email"]],
+            "message": msg,
+        })
+
+    if not messages:
+        return {
+            "checked": checked,
+            "sent": 0,
+            "skippedOverThreshold": skipped_over_threshold,
+            "message": "无需要发送的待办提醒",
+        }
+
+    try:
+        sent, failures = _smtp_send_todo_messages(sender_addr, password, messages)
+        sent_at = datetime.now()
+        for item in sent:
+            _record_todo_reminder_result(item["name"], sent_at, item["count"])
+        for item in failures:
+            _record_todo_reminder_result(item["name"], None, 0, item["error"])
+        if failures:
+            logger.warning("[TodoReminder] 部分待办提醒发送失败: %s", failures[:3])
+        logger.info("[TodoReminder] 已发送 %s 封待办提醒，检查 %s 人", len(sent), checked)
+        return {
+            "checked": checked,
+            "sent": len(sent),
+            "failures": failures,
+            "message": f"已发送 {len(sent)} 封待办提醒",
+        }
+    except Exception as e:
+        logger.error("[TodoReminder] 发送待办提醒失败: %s", e)
+        for item in messages:
+            _record_todo_reminder_result(item["name"], None, item["count"], str(e))
+        return {"checked": checked, "sent": 0, "error": str(e)}
+
+
+async def todo_reminder_background_loop():
+    """后台循环：每 3 天检查一次，单人 3 天内最多提醒一次。"""
+    logger.info("[TodoReminder] 管理人员待办邮件提醒后台任务已启动")
+    print("[System] 管理人员待办邮件提醒后台任务已启动")
+    await asyncio.sleep(300)
+    while True:
+        try:
+            await run_todo_email_reminder_once()
+        except Exception as e:
+            logger.error("[TodoReminder] 循环异常: %s", e)
+        await asyncio.sleep(TODO_REMINDER_CHECK_SECONDS)

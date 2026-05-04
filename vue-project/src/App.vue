@@ -272,7 +272,7 @@
                         <div class="todo-popover-item__bottom">
                           <span class="todo-popover-item__meta">{{ task.applicant }}{{ task.time ? ' · ' + task.time : '' }}</span>
                           <button type="button" class="todo-popover-item__btn" @click="onHeaderTodoAction(task)">
-                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? '去处理' : (task.isReturnReminder ? '去登记' : (task.btnLabel || '处理'))))) }}
+                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
                           </button>
                         </div>
                       </li>
@@ -790,8 +790,8 @@ function openAllTodos() {
   router.push('/attendance/pending-tasks')
 }
 
-function onHeaderTodoAction(task) {
-  handleTodoAction(task)
+async function onHeaderTodoAction(task) {
+  await handleTodoAction(task)
   todoPopoverOpen.value = false
 }
 

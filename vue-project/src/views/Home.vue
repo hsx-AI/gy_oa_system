@@ -27,7 +27,7 @@
                 <div class="todo-item__bottom">
                   <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
                   <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
-                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.btnLabel || '处理'))))) }}
+                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
                   </button>
                 </div>
               </li>
@@ -498,6 +498,7 @@ import {
   getBusinessTripList,
   getUploadConfig,
 } from '@/api/attendance'
+import { getMySealApplications } from '@/api/seal'
 import { getLeaderBriefing } from '@/api/admin'
 import { getWallList, likeWall, wallImageUrl } from '@/api/feedback'
 import { getDbManagerPermission } from '@/api/dbManager'
@@ -561,7 +562,7 @@ const wallDisplayCards = computed(() => {
 })
 
 function wallResolveLabel(v) {
-  return v === 2 ? '已回复' : v === 1 ? '处理中' : '未处理'
+  return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
 }
 
 function getWallImgSrc(filename) {
@@ -950,6 +951,15 @@ const rawFeatureGroups = [
         iconPath: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 100 8 4 4 0 000-8zM23 21v-2a4 4 0 00-3-3.87M16 3.13a4 4 0 010 7.75'
       },
       {
+        id: 'seal-apply',
+        title: '部门用印申请',
+        description: '提交用印申请、审批用印、查看用印记录',
+        path: '/seal/apply',
+        color: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
+        tag: '新功能',
+        iconPath: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'
+      },
+      {
         id: 'feedback',
         title: '意见与建议',
         description: '部门吐槽墙、领导匿名信箱、系统功能建议',
@@ -1290,6 +1300,10 @@ function goMyApplications() {
 }
 
 function goMyApplication(req) {
+  if (req.source === 'seal') {
+    router.push({ path: '/seal/apply', query: { tab: 'mine' } })
+    return
+  }
   const path = req.source === 'leave' ? '/attendance/leave'
     : req.source === 'overtime' ? '/attendance/overtime'
     : '/attendance/business-trip'
@@ -1320,11 +1334,11 @@ async function fetchRequestList() {
   }
   requestLoading.value = true
   try {
-    // 拉取全部年份的未通过申请
-    const [leaveRes, overtimeRes, btRes] = await Promise.all([
+    const [leaveRes, overtimeRes, btRes, sealRes] = await Promise.all([
       getLeaveList({ name, status: 'all', all_years: true }),
       getOvertimeList({ name, status: 'all', all_years: true }),
-      getBusinessTripList({ name, all_years: true })
+      getBusinessTripList({ name, all_years: true }),
+      getMySealApplications({ name }),
     ])
     const items = []
     // ---------- 跳转筛选一律用业务时间，禁止用登记/申请时间 ----------
@@ -1385,6 +1399,31 @@ async function fetchRequestList() {
         time: (r.startTime || r.assignTime || '').slice(0, 10),
         businessTimeLabel,
         source: 'business-trip'
+      })
+    })
+    const seals = (sealRes?.data || []).filter((r) => {
+      if (r.status !== 1) return true
+      return Number(r.used_stamp) !== 1
+    })
+    seals.forEach(r => {
+      const applyDate = (r.apply_time || '').slice(0, 10)
+      let statusText = r.status === 0 ? '待审批' : r.status === 2 ? '已驳回' : '—'
+      let statusCls = r.status === 0 ? 'status-processing' : r.status === 2 ? 'status-rejected' : 'status-processing'
+      if (r.status === 1) {
+        statusText = `${r.approval_status_text || '已通过'}（${r.seal_used_text || '未用印'}）`
+        statusCls = 'status-approved'
+      }
+      items.push({
+        uniqueId: `seal-${r.id}`,
+        id: `YY${r.id}`,
+        recordId: r.id,
+        year: applyDate ? applyDate.slice(0, 4) : '',
+        title: `${r.seal_type || '用印'}申请`,
+        status: statusText,
+        statusClass: statusCls,
+        time: applyDate,
+        businessTimeLabel: applyDate ? `申请时间：${applyDate}` : '',
+        source: 'seal',
       })
     })
     items.sort((a, b) => (b.time || '').localeCompare(a.time || ''))
@@ -2721,7 +2760,8 @@ async function navigateTo(feature) {
 }
 
 .wmb-1 { background: rgba(251, 191, 36, 0.5); }
-.wmb-2 { background: rgba(74, 222, 128, 0.5); }
+.wmb-2 { background: rgba(96, 165, 250, 0.5); }
+.wmb-3 { background: rgba(74, 222, 128, 0.5); }
 
 .wall-mini-body {
   margin: 0;

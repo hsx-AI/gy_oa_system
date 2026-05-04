@@ -8,6 +8,7 @@
 import uuid
 import json
 import logging
+import re
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, List
@@ -73,9 +74,12 @@ def _ensure_tables():
         for col, spec in [
             ("image_url", "VARCHAR(200) NULL"),
             ("like_count", "INT DEFAULT 0"),
-            ("resolved", "TINYINT DEFAULT 0 COMMENT '0=未解决 1=处理中 2=已解决'"),
+            ("resolved", "TINYINT DEFAULT 0 COMMENT '0=未处理 1=处理中 2=已回复 3=已解决'"),
             ("resolved_by", "VARCHAR(50) NULL"),
             ("resolved_at", "DATETIME NULL"),
+            ("assignee", "VARCHAR(50) NULL COMMENT '吐槽问题负责人'"),
+            ("assigned_by", "VARCHAR(50) NULL COMMENT '指派人'"),
+            ("assigned_at", "DATETIME NULL COMMENT '指派时间'"),
         ]:
             try:
                 db.execute_update(f"ALTER TABLE feedback_wall ADD COLUMN {col} {spec}")
@@ -201,6 +205,9 @@ def _build_wall_items(rows):
             "likeCount": r.get("like_count") or 0,
             "resolved": r.get("resolved") or 0,
             "resolvedBy": r.get("resolved_by") or "",
+            "assignee": r.get("assignee") or "",
+            "assignedBy": r.get("assigned_by") or "",
+            "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
             "replies": reply_map.get(r["id"], []),
             "createdAt": str(r.get("created_at") or "")[:19],
         }
@@ -213,8 +220,25 @@ async def wall_list():
     """获取已通过的弹幕列表（全员可见）"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, resolved, resolved_by, created_at "
+        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
         "FROM feedback_wall WHERE status = 1 ORDER BY created_at DESC"
+    )
+    return {"success": True, "data": _build_wall_items(rows)}
+
+
+@router.get("/wall/assigned")
+async def wall_assigned(current_user: str = Query(...)):
+    """当前用户被指派处理、且尚未解决的吐槽问题（首页待办使用）"""
+    _ensure_tables()
+    name = (current_user or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="缺少用户信息")
+    rows = db.execute_query(
+        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
+        "FROM feedback_wall "
+        "WHERE status = 1 AND assignee = %s AND COALESCE(resolved, 0) <> 3 "
+        "ORDER BY assigned_at DESC, created_at DESC",
+        (name,),
     )
     return {"success": True, "data": _build_wall_items(rows)}
 
@@ -311,7 +335,7 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
     """获取单条吐槽的详情（含全部领导回复和当前用户是否已点赞）"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, resolved, resolved_by, created_at "
+        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
         "FROM feedback_wall WHERE id = %s AND status = 1",
         (item_id,),
     )
@@ -340,6 +364,9 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
             "likeCount": r.get("like_count") or 0,
             "resolved": r.get("resolved") or 0,
             "resolvedBy": r.get("resolved_by") or "",
+            "assignee": r.get("assignee") or "",
+            "assignedBy": r.get("assigned_by") or "",
+            "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
             "liked": liked,
             "createdAt": str(r.get("created_at") or "")[:19],
             "replies": [
@@ -358,6 +385,7 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
 class WallReplyReq(BaseModel):
     reply_content: str
     current_user: str
+    assignee: Optional[str] = ""
 
 
 @router.post("/wall/{item_id}/reply")
@@ -366,6 +394,7 @@ async def wall_reply(item_id: str, req: WallReplyReq):
     _ensure_tables()
     name = (req.current_user or "").strip()
     reply_content = (req.reply_content or "").strip()
+    assignee = (req.assignee or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="缺少用户信息")
     if not reply_content:
@@ -373,17 +402,40 @@ async def wall_reply(item_id: str, req: WallReplyReq):
     rows = db.execute_query("SELECT id FROM feedback_wall WHERE id = %s AND status = 1", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
+    if assignee:
+        user_rows = db.execute_query(
+            "SELECT name FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (assignee,),
+        )
+        if not user_rows:
+            raise HTTPException(status_code=400, detail="负责人不存在或已离职")
     new_id = uuid.uuid4().hex
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     db.execute_update(
         "INSERT INTO feedback_wall_replies (id, wall_id, reply_by, reply_content, created_at) "
         "VALUES (%s, %s, %s, %s, %s)",
-        (new_id, item_id, name, reply_content, datetime.now().strftime("%Y-%m-%d %H:%M:%S")),
+        (new_id, item_id, name, reply_content, now),
     )
+    if assignee:
+        db.execute_update(
+            "UPDATE feedback_wall "
+            "SET assignee = %s, assigned_by = %s, assigned_at = %s, "
+            "resolved = 1 "
+            "WHERE id = %s",
+            (assignee, name, now, item_id),
+        )
+    else:
+        db.execute_update(
+            "UPDATE feedback_wall "
+            "SET resolved = CASE WHEN COALESCE(resolved, 0) = 0 THEN 2 ELSE resolved END "
+            "WHERE id = %s",
+            (item_id,),
+        )
     return {"success": True, "message": "回复成功"}
 
 
 class WallResolve(BaseModel):
-    resolved: int  # 1=处理中 2=已解决
+    resolved: int  # 1=处理中 2=已回复 3=已解决
     current_user: str
 
 
@@ -394,17 +446,29 @@ async def wall_resolve(item_id: str, req: WallResolve):
     name = (req.current_user or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="缺少用户信息")
-    if req.resolved not in (1, 2):
-        raise HTTPException(status_code=400, detail="resolved 须为 1 或 2")
-    rows = db.execute_query("SELECT id FROM feedback_wall WHERE id = %s AND status = 1", (item_id,))
+    if req.resolved not in (1, 2, 3):
+        raise HTTPException(status_code=400, detail="resolved 须为 1、2 或 3")
+    rows = db.execute_query("SELECT id, assignee FROM feedback_wall WHERE id = %s AND status = 1", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
+    if req.resolved == 3:
+        user_rows = db.execute_query(
+            "SELECT jb FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (name,),
+        )
+        jb = (user_rows[0].get("jb") if user_rows else "") or ""
+        admin1 = _get_admin1()
+        is_leader = bool(admin1 and name == admin1) or bool(re.search(r"经理|副经理", jb))
+        is_assignee = name == ((rows[0].get("assignee") or "").strip())
+        if not (is_leader or is_assignee):
+            raise HTTPException(status_code=403, detail="仅领导或当前负责人可标记已解决")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     db.execute_update(
         "UPDATE feedback_wall SET resolved = %s, resolved_by = %s, resolved_at = %s WHERE id = %s",
         (req.resolved, name, now, item_id),
     )
-    return {"success": True, "message": "处理中" if req.resolved == 1 else "已标记为已解决"}
+    message_map = {1: "处理中", 2: "已标记为已回复", 3: "已标记为已解决"}
+    return {"success": True, "message": message_map.get(req.resolved, "操作成功")}
 
 
 @router.get("/wall/image")

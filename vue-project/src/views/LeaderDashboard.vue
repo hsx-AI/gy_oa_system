@@ -168,7 +168,7 @@
                     </svg>
                   </div>
                 </div>
-                <div class="dashboard-meta">共 {{ overtimeStats.personCount ?? 0 }} 人</div>
+                <div class="dashboard-meta">共 {{ overtimeStats.personCount ?? 0 }} 人 <span class="meta-sub">· {{ overtimeStats.totalTimes ?? 0 }} 次</span></div>
                 <div v-if="showNetOvertime" class="ot-net-hint">加班时长 − 换休请假时长</div>
                 <div v-if="overtimeStats.list?.length" class="dashboard-list">
                   <div class="list-title">按人明细</div>
@@ -1251,6 +1251,7 @@ onMounted(async () => {
 .total-unit { font-size: var(--font-size-md); color: var(--color-text-secondary); }
 
 .dashboard-meta { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-bottom: var(--spacing-lg); }
+.meta-sub { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }
 
 .dashboard-list { margin-top: var(--spacing-md); padding-top: var(--spacing-md); border-top: 1px solid var(--color-border-lighter); }
 

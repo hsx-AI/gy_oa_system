@@ -15,6 +15,9 @@ export function getWallList() {
 export function getWallPending(params) {
   return request({ url: `${P}/wall/pending`, method: 'get', params })
 }
+export function getWallAssigned(params) {
+  return request({ url: `${P}/wall/assigned`, method: 'get', params })
+}
 export function reviewWall(id, data) {
   return request({ url: `${P}/wall/${id}/review`, method: 'post', data })
 }

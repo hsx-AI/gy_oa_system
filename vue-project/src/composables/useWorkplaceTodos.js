@@ -16,7 +16,8 @@ import {
 } from '@/api/attendance'
 import { getPendingHxpApprovals } from '@/api/admin'
 import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
-import { getLeaderInbox, getWallPending, getSystemList } from '@/api/feedback'
+import { getLeaderInbox, getWallPending, getWallAssigned, getSystemList } from '@/api/feedback'
+import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
 
 function readUserName() {
   try {
@@ -62,9 +63,12 @@ const personnelNeedAudit = ref(0)
 const hxpUnreadList = ref([])
 const hxpApprovalPendingList = ref([])
 const todoRealTotal = ref(0)
+const sealPendingList = ref([])
+const sealUsePendingList = ref([])
 const feedbackLeaderCount = ref(0)
 const feedbackWallPendingCount = ref(0)
 const feedbackSystemPendingCount = ref(0)
+const feedbackWallAssignedList = ref([])
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -126,6 +130,29 @@ const displayTodoList = computed(() => {
       isHxpApproval: true,
     })
   }
+  for (const item of sealPendingList.value) {
+    list.push({
+      uniqueId: `seal-${item.id}`,
+      type: '用印审批',
+      description: `${item.applicant}的用印申请（${item.seal_type || '用印'}）`,
+      applicant: item.applicant,
+      time: formatRelativeTime(item.apply_time),
+      applyTime: item.apply_time || '',
+      isSealApproval: true,
+    })
+  }
+  for (const item of sealUsePendingList.value) {
+    list.push({
+      uniqueId: `seal-use-${item.id}`,
+      type: '待用印',
+      description: `您的用印申请已通过，请完成盖章后点击「已用印」（${item.seal_type || '部门公章'}）`,
+      applicant: '本人',
+      time: formatRelativeTime(item.approve_time || item.apply_time),
+      applyTime: item.approve_time || item.apply_time || '',
+      isSealUsePending: true,
+      sealUseId: item.id,
+    })
+  }
   if (feedbackLeaderCount.value > 0) {
     list.push({
       uniqueId: 'feedback-leader-inbox',
@@ -150,6 +177,21 @@ const displayTodoList = computed(() => {
       btnLabel: '去审核',
     })
   }
+  for (const item of feedbackWallAssignedList.value) {
+    const content = (item.content || '').replace(/\s+/g, ' ')
+    list.push({
+      uniqueId: `feedback-wall-assigned-${item.id}`,
+      type: '吐槽问题处理',
+      description: content.length > 34 ? `请处理：${content.slice(0, 34)}…` : `请处理：${content}`,
+      applicant: item.assignedBy ? `指派人：${item.assignedBy}` : '吐槽墙',
+      time: formatRelativeTime(item.assignedAt || item.createdAt),
+      applyTime: item.assignedAt || item.createdAt || '',
+      isFeedback: true,
+      feedbackTab: 'wall',
+      feedbackWallId: item.id,
+      btnLabel: '去处理',
+    })
+  }
   if (feedbackSystemPendingCount.value > 0) {
     list.push({
       uniqueId: 'feedback-system-pending',
@@ -172,8 +214,11 @@ const totalBadgeCount = computed(() => {
   count += Math.max(0, Number(personnelNeedAudit.value) || 0)
   count += hxpUnreadList.value.length
   count += hxpApprovalPendingList.value.length
+  count += sealPendingList.value.length
+  count += sealUsePendingList.value.length
   if (feedbackLeaderCount.value > 0) count += 1
   if (feedbackWallPendingCount.value > 0) count += 1
+  count += feedbackWallAssignedList.value.length
   if (feedbackSystemPendingCount.value > 0) count += 1
   return count
 })
@@ -336,12 +381,41 @@ async function fetchTripReturnPending() {
   }
 }
 
+async function fetchSealPending() {
+  const name = readUserName()
+  if (!name) {
+    sealPendingList.value = []
+    return
+  }
+  try {
+    const res = await getPendingSeal({ approver: name })
+    sealPendingList.value = res?.data || []
+  } catch {
+    sealPendingList.value = []
+  }
+}
+
+async function fetchSealUsePending() {
+  const name = readUserName()
+  if (!name) {
+    sealUsePendingList.value = []
+    return
+  }
+  try {
+    const res = await getPendingSealUse({ applicant: name })
+    sealUsePendingList.value = res?.data || []
+  } catch {
+    sealUsePendingList.value = []
+  }
+}
+
 async function fetchFeedbackTodos() {
   const userName = readUserName()
   if (!userName) {
     feedbackLeaderCount.value = 0
     feedbackWallPendingCount.value = 0
     feedbackSystemPendingCount.value = 0
+    feedbackWallAssignedList.value = []
     return
   }
   const jb = readUserJb()
@@ -354,6 +428,12 @@ async function fetchFeedbackTodos() {
   } catch { /* ignore */ }
 
   const tasks = []
+
+  tasks.push(
+    getWallAssigned({ current_user: userName })
+      .then(res => { feedbackWallAssignedList.value = res?.data || [] })
+      .catch(() => { feedbackWallAssignedList.value = [] })
+  )
 
   if (isLeader || isAdmin) {
     tasks.push(
@@ -396,6 +476,8 @@ export async function refreshWorkplaceTodos() {
     fetchPersonnelPending(),
     fetchUnreadHxp(),
     fetchHxpApprovalPending(),
+    fetchSealPending(),
+    fetchSealUsePending(),
     fetchFeedbackTodos(),
   ])
 }
@@ -444,7 +526,7 @@ export function useWorkplaceTodos() {
     }
   }
 
-  function handleTodoAction(task) {
+  async function handleTodoAction(task) {
     if (task.isHxpNotice) {
       handleHxpRead(task)
       return
@@ -465,8 +547,26 @@ export function useWorkplaceTodos() {
       router.push('/attendance/business-trip')
       return
     }
+    if (task.isSealUsePending) {
+      const name = readUserName()
+      if (!name || !task.sealUseId) return
+      try {
+        await markSealUsed({ id: task.sealUseId, applicant: name })
+        await fetchSealUsePending()
+      } catch (e) {
+        const msg = e?.response?.data?.detail || e?.message || '标记失败'
+        alert(typeof msg === 'string' ? msg : '标记失败')
+      }
+      return
+    }
+    if (task.isSealApproval) {
+      router.push({ path: '/seal/apply', query: { tab: 'pending' } })
+      return
+    }
     if (task.isFeedback) {
-      router.push({ path: '/feedback', query: { tab: task.feedbackTab || 'wall' } })
+      const query = { tab: task.feedbackTab || 'wall' }
+      if (task.feedbackWallId) query.wallId = task.feedbackWallId
+      router.push({ path: '/feedback', query })
       return
     }
     goApprove(task)

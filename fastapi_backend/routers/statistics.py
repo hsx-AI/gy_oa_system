@@ -575,7 +575,7 @@ async def get_dept_overtime_stats(
         if month:
             month_str = f"{year}-{month:02d}"
             query = f"""
-                SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                SELECT TRIM(jiaban.xm) AS name, COUNT(1) AS times, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                 FROM jiaban {join_cond}
                 WHERE jiaban.jiabanzt = 4
                 AND (jiaban.timedate LIKE %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s)
@@ -594,7 +594,7 @@ async def get_dept_overtime_stats(
                 else:
                     mon_cond = "MONTH(jiaban.timedate) BETWEEN 10 AND 12"
                 query = f"""
-                    SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                    SELECT TRIM(jiaban.xm) AS name, COUNT(1) AS times, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                     FROM jiaban {join_cond}
                     WHERE jiaban.jiabanzt = 4
                     AND YEAR(jiaban.timedate) = %s AND {mon_cond}
@@ -604,7 +604,7 @@ async def get_dept_overtime_stats(
                 rows = db.execute_query(query, join_param + (year,))
             else:
                 query = f"""
-                    SELECT TRIM(jiaban.xm) AS name, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
+                    SELECT TRIM(jiaban.xm) AS name, COUNT(1) AS times, SUM(CAST(COALESCE(jiaban.tian1, 0) AS DECIMAL(10,2))) AS hours
                     FROM jiaban {join_cond}
                     WHERE jiaban.jiabanzt = 4
                     AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)
@@ -614,10 +614,12 @@ async def get_dept_overtime_stats(
                 rows = db.execute_query(query, join_param + (f"{year}%", year))
 
         ot_map = {}
+        times_map = {}
         for r in rows:
             n = (r.get("name") or "").strip()
             if n:
                 ot_map[n] = float(r.get("hours") or 0)
+                times_map[n] = int(r.get("times") or 0)
 
         hx_map: Dict[str, float] = {}
         if net:
@@ -633,14 +635,18 @@ async def get_dept_overtime_stats(
 
         list_data = []
         total_hours = 0
+        total_times = 0
         for n in all_names:
             h = round(ot_map[n] - hx_map.get(n, 0), 2) if net else round(ot_map[n], 2)
-            list_data.append({"name": n, "hours": h})
+            t = int(times_map.get(n, 0))
+            list_data.append({"name": n, "hours": h, "times": t})
             total_hours += h
+            total_times += t
 
         return {
             "success": True,
             "totalHours": round(total_hours, 2),
+            "totalTimes": total_times,
             "personCount": len(list_data),
             "list": list_data
         }
@@ -1900,14 +1906,26 @@ def _load_non_workday_set(start_date: str, end_date: str) -> set:
     return non_work
 
 
+_DISCIPLINE_MINUTE_WHITELIST = frozenset((2, 3, 4, 5, 10, 20, 30, 60))
+
+
+def _normalize_discipline_minutes(v, default: int = 2) -> int:
+    """踩点阈值仅允许白名单分钟数，非法值回退为 default。"""
+    try:
+        n = int(v)
+    except (TypeError, ValueError):
+        return default
+    return n if n in _DISCIPLINE_MINUTE_WHITELIST else default
+
+
 @router.get("/discipline/clock-in-stats")
 async def get_clock_in_discipline_stats(
     year: int = Query(...),
     month: Optional[int] = Query(None),
     lsys: Optional[str] = Query(None),
     dimension: str = Query("person", description="聚合维度: person / month / dept"),
-    clock_in_minutes: int = Query(2, description="踩点上班阈值：8:00 前 N 分钟，2-5"),
-    clock_out_minutes: int = Query(2, description="踩点下班阈值：17:00 后 N 分钟，2-5"),
+    clock_in_minutes: int = Query(2, description="踩点上班阈值：8:00 前 N 分钟，可选 2/3/4/5/10/20/30/60"),
+    clock_out_minutes: int = Query(2, description="踩点下班阈值：17:00 后 N 分钟，可选 2/3/4/5/10/20/30/60"),
     exclude_holidays: bool = Query(False, description="是否排除节假日（周末+法定假日）"),
 ):
     """
@@ -1917,8 +1935,8 @@ async def get_clock_in_discipline_stats(
     clock_out_minutes: 17:00后N分钟为踩点下班区间，默认2（即17:00-17:02）
     """
     try:
-        ci_min = max(2, min(5, clock_in_minutes))
-        co_min = max(2, min(5, clock_out_minutes))
+        ci_min = _normalize_discipline_minutes(clock_in_minutes)
+        co_min = _normalize_discipline_minutes(clock_out_minutes)
 
         ci_start_hour, ci_start_min = divmod(60 * 8 - ci_min, 60)
         ci_lo = f"{ci_start_hour:02d}:{ci_start_min:02d}"

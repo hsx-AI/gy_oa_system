@@ -490,7 +490,8 @@ async def get_business_trip_records(
 async def get_monthly_summary(
     name: Optional[str] = Query(None, description="员工姓名，不传或空且传 lsys 时为科室全员汇总"),
     lsys: Optional[str] = Query(None, description="隶属科室，全员汇总时必传"),
-    year: Optional[int] = Query(None, description="年份")
+    year: Optional[int] = Query(None, description="年份"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份(1-12)，不传为全年")
 ):
     """
     获取员工月度汇总统计。传 name 为单人；不传 name 且传 lsys 时为该科室全员加和汇总。
@@ -649,7 +650,9 @@ async def get_monthly_summary(
         
         # 转换为列表并四舍五入
         monthly_list = []
-        for month_key in sorted(monthly_data.keys()):
+        # 传 month 时仅返回该月；不传返回全年 12 个月
+        month_keys = [f"{year}-{month:02d}"] if month else sorted(monthly_data.keys())
+        for month_key in month_keys:
             data = monthly_data[month_key]
             data["overtime"]["hours"] = round(data["overtime"]["hours"], 2)
             data["leave"]["days"] = round(data["leave"]["days"], 2)

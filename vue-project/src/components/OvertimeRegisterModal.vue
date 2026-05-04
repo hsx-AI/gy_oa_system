@@ -35,7 +35,7 @@
           </div>
           <div class="form-group half">
             <label>是否要换休票</label>
-            <select v-model="form.needExchangeTicket" name="needExchangeTicket" autocomplete="on" :disabled="form.level === '平时加班'">
+            <select v-model="form.needExchangeTicket" name="needExchangeTicket" autocomplete="on" :disabled="needExchangeTicketDisabled">
               <option value="是">是</option>
               <option value="否">否</option>
             </select>
@@ -104,6 +104,8 @@ import { ref, reactive, computed, watch } from 'vue'
 import { getApprovers, getOvertimeWebconfig, submitOvertimeRegister, getHolidays } from '@/api/attendance'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
+import { validateOvertimeShiftTicket } from '@/utils/overtimeShiftValidation'
+import { canChooseExchangeTicketWhenNormalOvertime, getOvertimeUserMeta, shouldLockExchangeTicketToYes } from '@/utils/overtimeLeaderRules'
 
 const props = defineProps({
   visible: Boolean,
@@ -117,6 +119,8 @@ const form = reactive({
   department: userInfo.dept || userInfo.department || '技术部',
   name: userInfo.name || userInfo.userName || '',
   gender: userInfo.xbie || userInfo.gender || '男',
+  jb: userInfo.jb || '',
+  lsys: userInfo.lsys || userInfo.dept || userInfo.department || '',
   level: '平时加班',
   registerMethod: '书面',
   needExchangeTicket: '否',
@@ -133,6 +137,20 @@ const loadingApprovers = ref(false)
 const zhibanfei = ref(15)
 /** 从智能建议入口进入时锁定日期与时间，不可编辑 */
 const timeLocked = computed(() => !!props.prefill?.locked)
+const overtimeUserMeta = computed(() => getOvertimeUserMeta(form))
+const managerExchangeTicketLocked = computed(() => shouldLockExchangeTicketToYes(overtimeUserMeta.value))
+const bubanCanChooseNormalOvertimeTicket = computed(() => canChooseExchangeTicketWhenNormalOvertime(overtimeUserMeta.value))
+const needExchangeTicketDisabled = computed(() =>
+  managerExchangeTicketLocked.value || (form.level === '平时加班' && !bubanCanChooseNormalOvertimeTicket.value)
+)
+
+function applyExchangeTicketRoleRule() {
+  if (managerExchangeTicketLocked.value) {
+    form.needExchangeTicket = '是'
+  } else if (form.level === '平时加班' && !bubanCanChooseNormalOvertimeTicket.value) {
+    form.needExchangeTicket = '否'
+  }
+}
 
 const SPECIAL_FESTIVALS = new Set(['春节', '国庆节', '高温防暑休假'])
 const SPECIAL_DAY_PAY = 200
@@ -259,10 +277,12 @@ function onPasteTime(e, field) {
   }
 }
 
-// 平时加班时锁定「是否要换休票」为否
-watch(() => form.level, (level) => {
-  if (level === '平时加班') form.needExchangeTicket = '否'
-})
+// 普通员工平时加班锁定为否；经理/副经理/经理助理锁定为是；部办其他人员可自行选择
+watch(
+  () => [form.level, form.jb, form.lsys, form.department],
+  () => applyExchangeTicketRoleRule(),
+  { immediate: true }
+)
 
 watch(() => form.date, (newDate) => {
   if (newDate) {
@@ -289,6 +309,9 @@ watch(() => props.visible, (v) => {
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
     if (!(form.department || '').trim()) form.department = userInfo.dept || userInfo.department || '技术部'
     if (!(form.name || '').trim()) form.name = userInfo.name || userInfo.userName || ''
+    form.jb = userInfo.jb || form.jb || ''
+    form.lsys = userInfo.lsys || userInfo.dept || userInfo.department || form.lsys || form.department || ''
+    applyExchangeTicketRoleRule()
     getOvertimeWebconfig().then((res) => {
       if (res.success && res.zhibanfei != null) zhibanfei.value = Number(res.zhibanfei)
     }).catch(() => {})
@@ -336,6 +359,7 @@ function resetForm() {
   form.needExchangeTicket = '否'
   form.content = ''
   form.approver = ''
+  applyExchangeTicketRoleRule()
 }
 
 async function handleSubmit() {
@@ -344,6 +368,15 @@ async function handleSubmit() {
   try {
     const st = (form.startTime || '08:00').length <= 5 ? form.startTime + ':00' : form.startTime
     const et = (form.endTime || '17:00').length <= 5 ? form.endTime + ':00' : form.endTime
+    const shiftCheck = await validateOvertimeShiftTicket({
+      ...form,
+      startTime: st,
+      endTime: et,
+    })
+    if (!shiftCheck.valid) {
+      alert(shiftCheck.message || '排班校验未通过')
+      return
+    }
     const res = await submitOvertimeRegister({
       department: form.department,
       name: form.name,

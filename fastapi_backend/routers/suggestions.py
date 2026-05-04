@@ -9,7 +9,7 @@ from models import SuggestionResponse, Suggestion
 from attendance_db import attendance_db
 from database import db
 from utils.helpers import normalize_date_str, time_to_decimal, format_time
-from utils.holiday_loader import load_holidays_dict
+from utils.holiday_loader import load_holidays_dict, load_holidays_for_year
 from datetime import datetime, timedelta, date, time as dt_time
 import math
 import os
@@ -18,6 +18,49 @@ import logging
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/suggestions", tags=["智能建议"])
+
+
+INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}
+
+
+def _normalize_ymd(val: Any) -> str:
+    """将日期规范为 YYYY-MM-DD，兼容 holiday 表中 2025-5-1 这类写法。"""
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):
+        return val.strftime("%Y-%m-%d")
+    s = str(val).strip()
+    if not s:
+        return ""
+    s = s.replace("/", "-")[:10]
+    parts = s.split("-")
+    if len(parts) >= 3:
+        try:
+            return f"{int(parts[0]):04d}-{int(parts[1]):02d}-{int(parts[2]):02d}"
+        except (TypeError, ValueError):
+            return s
+    return s
+
+
+def _load_holiday_festival_map(year: int) -> Dict[str, str]:
+    """加载 日期 -> festival，用于识别春节/国庆/高温防暑休假等单日奖励假期。"""
+    try:
+        rows = load_holidays_for_year(str(year))
+        return {
+            _normalize_ymd(r.get("date")): (r.get("festival") or "").strip()
+            for r in rows
+            if r.get("date")
+        }
+    except Exception as e:
+        logger.debug(f"读取假期节日名称失败 year={year}: {e}")
+        return {}
+
+
+def _is_incentive_festival(date_obj: datetime, holiday_festival_map: Optional[Dict[str, str]]) -> bool:
+    if not date_obj or not holiday_festival_map:
+        return False
+    festival = (holiday_festival_map.get(date_obj.strftime("%Y-%m-%d")) or "").strip()
+    return festival in INCENTIVE_FESTIVALS
 
 
 
@@ -920,12 +963,44 @@ def _generate_segment_suggestion(
     return results
 
 
-def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
+def _gap_fully_within_lunch(prev_out, next_in, noon_start: float, noon_end: float) -> bool:
+    """仅当两段之间的离岗缺口完全落在午休内，才允许合并为同一条加班建议。"""
+    prev_val = time_to_decimal(prev_out)
+    next_val = time_to_decimal(next_in)
+    return prev_val >= noon_start and next_val <= noon_end and prev_val < next_val
+
+
+def _group_restday_pairs_for_suggestion(
+    pairs: List[tuple],
+    noon_start: float,
+    noon_end: float,
+    merge_lunch_gap: bool,
+) -> List[List[tuple]]:
+    """
+    普通休息日保持逐段建议；特殊奖励假期可把午休内离岗再返回的上下班记录合并为一条。
+    """
+    if not pairs:
+        return []
+    if not merge_lunch_gap:
+        return [[pair] for pair in pairs]
+
+    groups: List[List[tuple]] = [[pairs[0]]]
+    for pair in pairs[1:]:
+        prev = groups[-1][-1]
+        if _gap_fully_within_lunch(prev[1], pair[0], noon_start, noon_end):
+            groups[-1].append(pair)
+        else:
+            groups.append([pair])
+    return groups
+
+
+def analyze_restday(record: dict, date_obj: datetime, is_incentive_holiday: bool = False) -> List[dict]:
     """
     分析休息日/假期打卡记录，生成建议。返回 List[dict] 含 start_time, end_time, status=0, message。
     逻辑：
     - 根据进/出标记配对构建进出区间。
-    - 各区间独立生成建议。
+    - 普通休息日各区间独立生成建议。
+    - 春节/国庆节/高温防暑休假这类奖励假期，若两段之间的离岗完全在午休内，则合并成一条建议，避免拆成两张加班单。
     - 段内若存在「午休前离岗、午休后返岗」则按子段分别建议；否则合并为一段，跨午休扣除实际重叠。
     """
     suggestions: List[dict] = []
@@ -950,9 +1025,12 @@ def analyze_restday(record: dict, date_obj: datetime) -> List[dict]:
     if not pairs:
         return suggestions
 
-    for pair in pairs:
+    pair_groups = _group_restday_pairs_for_suggestion(
+        pairs, NOON_START, NOON_END, merge_lunch_gap=is_incentive_holiday
+    )
+    for pair_group in pair_groups:
         seg_results = _generate_segment_suggestion(
-            [pair], date_obj, NOON_START, NOON_END, OT_START_HOUR, RESTDAY_OVERTIME_MIN_HOURS
+            pair_group, date_obj, NOON_START, NOON_END, OT_START_HOUR, RESTDAY_OVERTIME_MIN_HOURS
         )
         if seg_results:
             suggestions.extend(seg_results)
@@ -982,10 +1060,13 @@ def _parse_record_date(date_obj):
 def generate_suggestions_for_month_with_records(
         name: str, dept: str, year: int, month: int,
         records: List[Dict], holidays: Dict[str, str],
-        cutoff_date_str: Optional[str] = None) -> List[Dict]:
+        cutoff_date_str: Optional[str] = None,
+        holiday_festival_map: Optional[Dict[str, str]] = None) -> List[Dict]:
     """同 generate_suggestions_for_month，但直接接受已查好的 records 和 holidays，避免重复查库。
     cutoff_date_str: 形如 'YYYY-MM-DD'，当月仅生成截止到此日期的建议；为 None 时用 today。"""
     start_date = f"{year}-{month:02d}-01"
+    if holiday_festival_map is None:
+        holiday_festival_map = _load_holiday_festival_map(year)
     existing_dates = set()
     for record in records:
         dt = _parse_record_date(record.get("attendance_date"))
@@ -1029,7 +1110,15 @@ def generate_suggestions_for_month_with_records(
         if date_obj > check_end_date:
             continue
         is_work, is_weekend, is_hol, holiday_type = is_workday(date_obj, holidays)
-        record_suggestions = analyze_workday(record, date_obj) if is_work else analyze_restday(record, date_obj)
+        record_suggestions = (
+            analyze_workday(record, date_obj)
+            if is_work
+            else analyze_restday(
+                record,
+                date_obj,
+                is_incentive_holiday=_is_incentive_festival(date_obj, holiday_festival_map),
+            )
+        )
         day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
         date_str = date_obj.strftime("%Y-%m-%d")
         for item in record_suggestions:
@@ -1073,6 +1162,7 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
         holidays = load_holidays(year_str)
         if holidays_cache is not None:
             holidays_cache[year_str] = holidays
+    holiday_festival_map = _load_holiday_festival_map(year)
     data_year, data_month = year, month
     first_day_of_month = datetime(data_year, data_month, 1)
     if data_month == 12:
@@ -1113,7 +1203,15 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
         if date_obj > check_end_date:
             continue
         is_work, is_weekend, is_holiday, holiday_type = is_workday(date_obj, holidays)
-        record_suggestions = analyze_workday(record, date_obj) if is_work else analyze_restday(record, date_obj)
+        record_suggestions = (
+            analyze_workday(record, date_obj)
+            if is_work
+            else analyze_restday(
+                record,
+                date_obj,
+                is_incentive_holiday=_is_incentive_festival(date_obj, holiday_festival_map),
+            )
+        )
         day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
         date_str = date_obj.strftime("%Y-%m-%d")
         for item in record_suggestions:
@@ -1278,4 +1376,3 @@ async def get_suggestions(
         import traceback
         traceback.print_exc()
         return SuggestionResponse(success=False, suggestions=[])
-

@@ -254,7 +254,7 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
     t0 = _time.time()
     try:
         from routers.suggestions import (generate_suggestions_for_month_with_records,
-                                         load_holidays, _parse_record_date)
+                                         load_holidays, _load_holiday_festival_map, _parse_record_date)
         attendance_db.ensure_suggestions_table()
 
         seen = set()
@@ -305,6 +305,7 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
             attendance_db.delete_suggestions_batch(key_list[i : i + _chunk])
 
         holidays_cache: dict = {}
+        holiday_festival_cache: dict = {}
         month_records: dict = {}
         for (y, m) in months:
             start_date = f"{y}-{m:02d}-01"
@@ -324,14 +325,18 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
             year_str = str(y)
             if year_str not in holidays_cache:
                 holidays_cache[year_str] = load_holidays(year_str)
+            if year_str not in holiday_festival_cache:
+                holiday_festival_cache[year_str] = _load_holiday_festival_map(y)
 
         for (name, dept, y, m) in keys_to_process:
             try:
                 person_records = month_records.get((y, m), {}).get((name, dept), [])
                 holidays = holidays_cache[str(y)]
+                holiday_festival_map = holiday_festival_cache[str(y)]
                 suggestions_list = generate_suggestions_for_month_with_records(
                     name, dept, y, m, person_records, holidays,
-                    cutoff_date_str=cutoff_date_str)
+                    cutoff_date_str=cutoff_date_str,
+                    holiday_festival_map=holiday_festival_map)
                 attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
             except Exception as e:
                 logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
@@ -1166,5 +1171,4 @@ async def dakaman_process_exception(req: DakamanProcessRequest):
         "message": f"已处理 {len(created_ids)} 条异常记录",
         "ids": created_ids,
     }
-
 
