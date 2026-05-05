@@ -322,6 +322,7 @@
                       <th>已出勤</th>
                       <th>出勤率</th>
                       <th>出勤人员占比</th>
+                      <th>出勤人员占比（含境内公出）</th>
                       <th>迟到</th>
                       <th>早退</th>
                       <th>缺勤</th>
@@ -334,12 +335,13 @@
                       <td>{{ d.attended }}</td>
                       <td>{{ percentText(d.attendanceRate) }}</td>
                       <td>{{ d.attendedPeople || 0 }} / {{ d.memberTotal || 0 }}（{{ percentText(d.memberAttendanceRate) }}）</td>
+                      <td>{{ d.attendedPeopleWithTrip || 0 }} / {{ d.memberTotal || 0 }}（{{ percentText(d.memberAttendanceRateWithTrip) }}）</td>
                       <td>{{ d.late }}</td>
                       <td>{{ d.earlyLeave }}</td>
                       <td>{{ d.absent }}</td>
                     </tr>
                     <tr v-if="!dutyByDate.length">
-                      <td colspan="8" class="table-empty-cell">所选范围暂无值班排班</td>
+                      <td colspan="9" class="table-empty-cell">所选范围暂无值班排班</td>
                     </tr>
                   </tbody>
                 </table>

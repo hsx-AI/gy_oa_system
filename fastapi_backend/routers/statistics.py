@@ -2285,6 +2285,8 @@ async def get_holiday_duty_attendance(
             "earlyLeave": 0,
             "absent": 0,
             "_attendedPeople": set(),
+            "_attendedPeopleWithTrip": set(),
+            "_domesticTripPeople": set(),
         })
         by_dept = defaultdict(lambda: {
             "dept": "",
@@ -2295,6 +2297,8 @@ async def get_holiday_duty_attendance(
             "earlyLeave": 0,
             "absent": 0,
             "_attendedPeople": set(),
+            "_attendedPeopleWithTrip": set(),
+            "_domesticTripPeople": set(),
         })
 
         totals = {
@@ -2307,6 +2311,8 @@ async def get_holiday_duty_attendance(
         }
         scheduled_people = set()
         attended_people = set()
+        attended_people_with_trip = set()
+        domestic_trip_people = set()
 
         for row in rows or []:
             shift_type = (row.get("shift_type") or "").strip()
@@ -2357,6 +2363,7 @@ async def get_holiday_duty_attendance(
             scheduled_people.add(name)
             if is_attended:
                 attended_people.add(name)
+                attended_people_with_trip.add(name)
 
             for bucket in (by_date[shift_date], by_dept[dept]):
                 if "date" in bucket:
@@ -2371,6 +2378,7 @@ async def get_holiday_duty_attendance(
                 bucket["absent"] += 1 if is_absent else 0
                 if is_attended:
                     bucket["_attendedPeople"].add(name)
+                    bucket["_attendedPeopleWithTrip"].add(name)
 
             detail_rows.append({
                 "date": shift_date,
@@ -2389,10 +2397,70 @@ async def get_holiday_duty_attendance(
                 "statusText": status_text,
             })
 
+        trip_sql = """
+            SELECT
+                TRIM(g.gcr) AS name,
+                TRIM(y.lsys) AS dept,
+                COALESCE(g.gcsj, g.yjcfsj) AS trip_start,
+                COALESCE(g.sjfhtime, g.yjfhsj) AS trip_end
+            FROM gcsqb g
+            INNER JOIN yggl y
+                ON TRIM(g.gcr) = TRIM(y.name)
+               AND COALESCE(y.zaizhi, 0) = 0
+               AND RIGHT(TRIM(y.name), 1) != '1'
+               AND RIGHT(TRIM(y.lsys), 1) != '1'
+               AND TRIM(y.lsys) != %s
+               AND TRIM(y.lsys) NOT IN ('其他部门员工','其他部门成员')
+            WHERE RIGHT(TRIM(g.gcr), 1) != '1'
+              AND g.bldzt = 2
+              AND g.szrzt = 2
+              AND COALESCE(NULLIF(TRIM(g.gclx), ''), '境内公出') = '境内公出'
+              AND COALESCE(g.gcsj, g.yjcfsj) <= %s
+              AND COALESCE(g.sjfhtime, g.yjfhsj) >= %s
+        """
+        trip_params: list = [
+            LEADER_EXCLUDE_LSYS,
+            d1.strftime("%Y-%m-%d 23:59:59"),
+            d0.strftime("%Y-%m-%d 00:00:00"),
+        ]
+        if lsys:
+            trip_sql += " AND TRIM(y.lsys) = %s"
+            trip_params.append(lsys.strip())
+
+        try:
+            trip_rows = db.execute_query(trip_sql, tuple(trip_params))
+        except Exception as e:
+            logger.warning("查询境内公出人数失败: %s", e)
+            trip_rows = []
+
+        from datetime import timedelta
+        for tr in trip_rows or []:
+            trip_name = (tr.get("name") or "").strip()
+            trip_dept = (tr.get("dept") or "").strip()
+            trip_start = _parse_date(tr.get("trip_start"))
+            trip_end = _parse_date(tr.get("trip_end"))
+            if not trip_name or not trip_dept or not trip_start or not trip_end:
+                continue
+            cur = max(trip_start, d0)
+            end_cur = min(trip_end, d1)
+            while cur <= end_cur:
+                ds = cur.strftime("%Y-%m-%d")
+                if ds in by_date:
+                    by_date[ds]["_domesticTripPeople"].add(trip_name)
+                    by_date[ds]["_attendedPeopleWithTrip"].add(trip_name)
+                if trip_dept in by_dept:
+                    by_dept[trip_dept]["_domesticTripPeople"].add(trip_name)
+                    by_dept[trip_dept]["_attendedPeopleWithTrip"].add(trip_name)
+                domestic_trip_people.add(trip_name)
+                attended_people_with_trip.add(trip_name)
+                cur += timedelta(days=1)
+
         def finalize_bucket(item: dict) -> dict:
             scheduled = item.get("scheduled") or 0
             attended = item.get("attended") or 0
             attended_people_count = len(item.pop("_attendedPeople", set()))
+            attended_people_with_trip_count = len(item.pop("_attendedPeopleWithTrip", set()))
+            domestic_trip_people_count = len(item.pop("_domesticTripPeople", set()))
             dept_key = (item.get("dept") or "").strip()
             member_total = dept_member_counts.get(dept_key, 0) if dept_key else scope_member_count
             item["attendanceRate"] = _rate(attended, scheduled)
@@ -2402,6 +2470,9 @@ async def get_holiday_duty_attendance(
             item["memberTotal"] = member_total
             item["attendedPeople"] = attended_people_count
             item["memberAttendanceRate"] = _rate(attended_people_count, member_total)
+            item["domesticTripPeople"] = domestic_trip_people_count
+            item["attendedPeopleWithTrip"] = attended_people_with_trip_count
+            item["memberAttendanceRateWithTrip"] = _rate(attended_people_with_trip_count, member_total)
             return item
 
         date_rows = [finalize_bucket(v) for _k, v in sorted(by_date.items(), key=lambda kv: kv[0])]
@@ -2410,7 +2481,10 @@ async def get_holiday_duty_attendance(
             **totals,
             "scheduledPeople": len(scheduled_people),
             "attendancePersonRate": _rate(len(attended_people), len(scheduled_people)),
+            "domesticTripPeople": len(domestic_trip_people),
             "_attendedPeople": set(attended_people),
+            "_attendedPeopleWithTrip": set(attended_people_with_trip),
+            "_domesticTripPeople": set(domestic_trip_people),
         })
 
         return {
@@ -2493,11 +2567,11 @@ async def export_holiday_duty_attendance(
 
     ws = wb.active
     ws.title = "按日期汇总"
-    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
     ws.cell(1, 1, title)
     summary = data.get("summary") or {}
     ws.append([])
-    ws.append(["日期", "应出勤", "已出勤", "出勤率", "出勤人员占比", "迟到", "早退", "缺勤"])
+    ws.append(["日期", "应出勤", "已出勤", "出勤率", "出勤人员占比", "出勤人员占比（含境内公出）", "迟到", "早退", "缺勤"])
     for item in data.get("byDate") or []:
         ws.append([
             item.get("date", ""),
@@ -2505,6 +2579,7 @@ async def export_holiday_duty_attendance(
             item.get("attended", 0),
             pct(item.get("attendanceRate")),
             f"{item.get('attendedPeople', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRate'))})",
+            f"{item.get('attendedPeopleWithTrip', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRateWithTrip'))})",
             item.get("late", 0),
             item.get("earlyLeave", 0),
             item.get("absent", 0),
@@ -2516,6 +2591,7 @@ async def export_holiday_duty_attendance(
         summary.get("attended", 0),
         pct(summary.get("attendanceRate")),
         f"{summary.get('attendedPeople', 0)} / {summary.get('memberTotal', 0)} ({pct(summary.get('memberAttendanceRate'))})",
+        f"{summary.get('attendedPeopleWithTrip', 0)} / {summary.get('memberTotal', 0)} ({pct(summary.get('memberAttendanceRateWithTrip'))})",
         summary.get("late", 0),
         summary.get("earlyLeave", 0),
         summary.get("absent", 0),
@@ -2523,10 +2599,10 @@ async def export_holiday_duty_attendance(
     style_range(ws)
 
     ws_dept = wb.create_sheet("科室汇总")
-    ws_dept.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws_dept.merge_cells(start_row=1, start_column=1, end_row=1, end_column=9)
     ws_dept.cell(1, 1, title)
     ws_dept.append([])
-    ws_dept.append(["科室", "应出勤", "已出勤", "出勤率", "出勤人员占比", "迟到", "早退", "缺勤"])
+    ws_dept.append(["科室", "应出勤", "已出勤", "出勤率", "出勤人员占比", "出勤人员占比（含境内公出）", "迟到", "早退", "缺勤"])
     for item in data.get("byDept") or []:
         ws_dept.append([
             item.get("dept", ""),
@@ -2534,6 +2610,7 @@ async def export_holiday_duty_attendance(
             item.get("attended", 0),
             pct(item.get("attendanceRate")),
             f"{item.get('attendedPeople', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRate'))})",
+            f"{item.get('attendedPeopleWithTrip', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRateWithTrip'))})",
             item.get("late", 0),
             item.get("earlyLeave", 0),
             item.get("absent", 0),
