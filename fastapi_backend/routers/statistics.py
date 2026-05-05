@@ -152,28 +152,36 @@ def _merge_intervals_days(intervals: List[Tuple[date, date]]) -> float:
     return sum((e - s).days + 1 for s, e in _merge_intervals(intervals))
 
 
-def _merge_intervals_split_workdays(intervals: List[Tuple[date, date]], year: int) -> Tuple[float, float]:
+def _merge_intervals_split_workdays(intervals: List[Tuple[date, date]]) -> Tuple[float, float]:
     """
     将公出区间合并后，分别统计其中的工作日天数和非工作日（节假日+周末）天数。
     返回 (total_days, holiday_days)，其中 holiday_days 是公出期间的非工作日天数。
+    跨年时按各日所属年份加载节假日字典。
     """
     merged = _merge_intervals(intervals)
     if not merged:
         return 0.0, 0.0
 
-    try:
-        from utils.holiday_loader import load_holidays_dict
-        holidays = load_holidays_dict(str(year))
-    except Exception:
-        holidays = {}
+    from datetime import timedelta
+
+    holiday_cache: Dict[int, dict] = {}
+
+    def _holidays_for_year(y: int) -> dict:
+        if y not in holiday_cache:
+            try:
+                from utils.holiday_loader import load_holidays_dict
+                holiday_cache[y] = load_holidays_dict(str(y))
+            except Exception:
+                holiday_cache[y] = {}
+        return holiday_cache[y]
 
     total = 0
     holiday_count = 0
-    from datetime import timedelta
     for s, e in merged:
         d = s
         while d <= e:
             total += 1
+            holidays = _holidays_for_year(d.year)
             date_str = d.strftime("%Y-%m-%d")
             is_weekend = d.weekday() in [5, 6]
             is_holiday = False
@@ -338,6 +346,50 @@ def _count_workdays_in_month_until(year: int, month: int, end_day: int) -> int:
             is_holiday = False
         if not is_weekend and not is_holiday:
             count += 1
+    return count
+
+
+def _count_workdays_between(d_start: date, d_end: date) -> int:
+    """计算闭区间 [d_start, d_end] 内应出勤工作日数（含调休），与按月统计规则一致。"""
+    if d_end < d_start:
+        return 0
+    try:
+        from utils.holiday_loader import load_holidays_dict
+    except Exception:
+        load_holidays_dict = None  # type: ignore
+
+    holiday_cache: Dict[int, dict] = {}
+
+    def _holidays_for_year(y: int) -> dict:
+        if y not in holiday_cache:
+            if load_holidays_dict:
+                try:
+                    holiday_cache[y] = load_holidays_dict(str(y))
+                except Exception:
+                    holiday_cache[y] = {}
+            else:
+                holiday_cache[y] = {}
+        return holiday_cache[y]
+
+    count = 0
+    d = d_start
+    from datetime import timedelta
+    while d <= d_end:
+        holidays = _holidays_for_year(d.year)
+        date_str = d.strftime("%Y-%m-%d")
+        weekday = d.weekday()
+        is_weekend = weekday in [5, 6]
+        is_holiday = False
+        if date_str in holidays:
+            t = holidays[date_str] or ""
+            if "假" in t or "休" in t:
+                is_holiday = True
+        if date_str in holidays and holidays[date_str] and "班" in holidays[date_str]:
+            is_weekend = False
+            is_holiday = False
+        if not is_weekend and not is_holiday:
+            count += 1
+        d += timedelta(days=1)
     return count
 
 
@@ -1835,9 +1887,13 @@ def _parse_time_str(val) -> Optional[str]:
         h, rem = divmod(total, 3600)
         m, s = divmod(rem, 60)
         return f"{h:02d}:{m:02d}:{s:02d}"
+    if hasattr(val, "strftime"):
+        return val.strftime("%H:%M:%S")
     s = str(val).strip()
     if not s:
         return None
+    if " " in s:
+        s = s.split()[-1]
     parts = s.split(":")
     if len(parts) >= 3:
         return f"{parts[0].zfill(2)}:{parts[1].zfill(2)}:{parts[2].zfill(2)}"
@@ -1863,6 +1919,25 @@ def _get_last_time(row: dict) -> Optional[str]:
         if t:
             return t
     return None
+
+
+def _get_first_time(row: dict) -> Optional[str]:
+    """Return the first valid punch time in a merged attendance row."""
+    for i in range(1, 11):
+        t = _parse_time_str(row.get(f"time_{i}"))
+        if t:
+            return t
+    return None
+
+
+def _count_valid_times(row: dict) -> int:
+    return sum(1 for i in range(1, 11) if _parse_time_str(row.get(f"time_{i}")))
+
+
+def _rate(numerator: int, denominator: int) -> float:
+    if denominator <= 0:
+        return 0.0
+    return round(numerator / denominator, 4)
 
 
 def _load_non_workday_set(start_date: str, end_date: str) -> set:
@@ -2104,6 +2179,222 @@ async def get_person_scatter(
 #  工作强度统计  A = 加班时长 / (应出勤时长 - 公出时长)
 # ============================================================
 
+@router.get("/discipline/holiday-duty-attendance")
+async def get_holiday_duty_attendance(
+    start_date: str = Query(..., description="Start date, YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date, YYYY-MM-DD"),
+    lsys: Optional[str] = Query(None, description="Department filter"),
+):
+    """
+    Check duty attendance by shift schedule.
+
+    Day shift: 08:00-17:00. Night shift: 17:00-22:00.
+    The first punch is used as arrival time and the last punch as leave time.
+    For night shift with only one same-day punch, leave time is treated as 24:00.
+    """
+    try:
+        try:
+            d0 = datetime.strptime(str(start_date)[:10], "%Y-%m-%d").date()
+            d1 = datetime.strptime(str(end_date)[:10], "%Y-%m-%d").date()
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+        if d1 < d0:
+            raise HTTPException(status_code=400, detail="结束日期不能早于开始日期")
+        if (d1 - d0).days > 92:
+            raise HTTPException(status_code=400, detail="单次最多查询 93 天")
+
+        expected_ranges = {
+            "白班": ("08:00:00", "17:00:00"),
+            "夜班": ("17:00:00", "22:00:00"),
+        }
+
+        sql = """
+            SELECT
+                s.department,
+                s.employee_name,
+                s.shift_date,
+                s.shift_type,
+                a.time_1, a.time_2, a.time_3, a.time_4, a.time_5,
+                a.time_6, a.time_7, a.time_8, a.time_9, a.time_10
+            FROM shift_schedule s
+            INNER JOIN yggl y
+                ON TRIM(y.name) = TRIM(s.employee_name)
+               AND TRIM(y.lsys) = TRIM(s.department)
+               AND COALESCE(y.zaizhi, 0) = 0
+               AND RIGHT(TRIM(y.name), 1) != '1'
+               AND RIGHT(TRIM(y.lsys), 1) != '1'
+               AND TRIM(y.lsys) != %s
+               AND TRIM(y.lsys) NOT IN ('其他部门员工','其他部门成员')
+            LEFT JOIN attendance_records a
+                ON TRIM(a.employee_name) = TRIM(s.employee_name)
+               AND DATE(a.attendance_date) = s.shift_date
+            WHERE s.shift_date >= %s
+              AND s.shift_date <= %s
+              AND s.shift_type IN (%s, %s)
+        """
+        params: list = [
+            LEADER_EXCLUDE_LSYS,
+            d0.strftime("%Y-%m-%d"),
+            d1.strftime("%Y-%m-%d"),
+            "白班",
+            "夜班",
+        ]
+        if lsys:
+            sql += " AND s.department = %s"
+            params.append(lsys.strip())
+        sql += " ORDER BY s.shift_date, s.department, s.employee_name"
+
+        rows = db.execute_query(sql, tuple(params))
+
+        detail_rows = []
+        by_date = defaultdict(lambda: {
+            "date": "",
+            "scheduled": 0,
+            "attended": 0,
+            "normal": 0,
+            "late": 0,
+            "earlyLeave": 0,
+            "absent": 0,
+        })
+        by_dept = defaultdict(lambda: {
+            "dept": "",
+            "scheduled": 0,
+            "attended": 0,
+            "normal": 0,
+            "late": 0,
+            "earlyLeave": 0,
+            "absent": 0,
+        })
+
+        totals = {
+            "scheduled": 0,
+            "attended": 0,
+            "normal": 0,
+            "late": 0,
+            "earlyLeave": 0,
+            "absent": 0,
+        }
+        scheduled_people = set()
+        attended_people = set()
+
+        for row in rows or []:
+            shift_type = (row.get("shift_type") or "").strip()
+            if shift_type not in expected_ranges:
+                continue
+
+            dept = (row.get("department") or "").strip()
+            name = (row.get("employee_name") or "").strip()
+            shift_date = str(row.get("shift_date") or "")[:10]
+            expected_start, expected_end = expected_ranges[shift_type]
+
+            first_time = _get_first_time(row)
+            last_time = _get_last_time(row)
+            punch_count = _count_valid_times(row)
+
+            is_absent = not first_time
+            if shift_type == "夜班" and first_time and punch_count <= 1:
+                last_time = "24:00:00"
+
+            is_late = bool(first_time and first_time > expected_start)
+            is_early = bool(first_time and last_time and last_time < expected_end)
+            is_attended = bool(first_time)
+            is_normal = is_attended and not is_late and not is_early
+
+            if is_absent:
+                status = "absent"
+                status_text = "缺勤"
+            elif is_late and is_early:
+                status = "late_early"
+                status_text = "迟到、早退"
+            elif is_late:
+                status = "late"
+                status_text = "迟到"
+            elif is_early:
+                status = "early_leave"
+                status_text = "早退"
+            else:
+                status = "normal"
+                status_text = "正常"
+
+            totals["scheduled"] += 1
+            totals["attended"] += 1 if is_attended else 0
+            totals["normal"] += 1 if is_normal else 0
+            totals["late"] += 1 if is_late else 0
+            totals["earlyLeave"] += 1 if is_early else 0
+            totals["absent"] += 1 if is_absent else 0
+
+            scheduled_people.add(name)
+            if is_attended:
+                attended_people.add(name)
+
+            for bucket in (by_date[shift_date], by_dept[dept]):
+                if "date" in bucket:
+                    bucket["date"] = shift_date
+                if "dept" in bucket:
+                    bucket["dept"] = dept
+                bucket["scheduled"] += 1
+                bucket["attended"] += 1 if is_attended else 0
+                bucket["normal"] += 1 if is_normal else 0
+                bucket["late"] += 1 if is_late else 0
+                bucket["earlyLeave"] += 1 if is_early else 0
+                bucket["absent"] += 1 if is_absent else 0
+
+            detail_rows.append({
+                "date": shift_date,
+                "dept": dept,
+                "name": name,
+                "shiftType": shift_type,
+                "expectedStart": expected_start[:5],
+                "expectedEnd": expected_end[:5],
+                "firstIn": first_time[:5] if first_time else "",
+                "lastOut": last_time[:5] if last_time else "",
+                "punchCount": punch_count,
+                "late": is_late,
+                "earlyLeave": is_early,
+                "absent": is_absent,
+                "status": status,
+                "statusText": status_text,
+            })
+
+        def finalize_bucket(item: dict) -> dict:
+            scheduled = item.get("scheduled") or 0
+            attended = item.get("attended") or 0
+            item["attendanceRate"] = _rate(attended, scheduled)
+            item["absentRate"] = _rate(item.get("absent") or 0, scheduled)
+            item["lateRate"] = _rate(item.get("late") or 0, scheduled)
+            item["earlyLeaveRate"] = _rate(item.get("earlyLeave") or 0, scheduled)
+            return item
+
+        date_rows = [finalize_bucket(v) for _k, v in sorted(by_date.items(), key=lambda kv: kv[0])]
+        dept_rows = [finalize_bucket(v) for _k, v in sorted(by_dept.items(), key=lambda kv: kv[0])]
+        summary = finalize_bucket({
+            **totals,
+            "scheduledPeople": len(scheduled_people),
+            "attendedPeople": len(attended_people),
+            "attendancePersonRate": _rate(len(attended_people), len(scheduled_people)),
+        })
+
+        return {
+            "success": True,
+            "startDate": d0.strftime("%Y-%m-%d"),
+            "endDate": d1.strftime("%Y-%m-%d"),
+            "summary": summary,
+            "byDate": date_rows,
+            "byDept": dept_rows,
+            "details": detail_rows,
+            "rules": {
+                "dayShift": "08:00-17:00",
+                "nightShift": "17:00-22:00",
+                "nightMissingLeaveAs": "24:00",
+            },
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"值班出勤核查失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
     """按人汇总加班小时 {name: hours}，仅已通过(jiabanzt=4)"""
     all_staff = not (lsys and lsys.strip())
@@ -2198,7 +2489,84 @@ def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str
 
     result = {}
     for gcr, intervals in by_person.items():
-        total_days, holiday_days = _merge_intervals_split_workdays(intervals, year)
+        total_days, holiday_days = _merge_intervals_split_workdays(intervals)
+        if total_days > 0:
+            result[gcr] = {
+                "tripDays": round(total_days, 2),
+                "holidayTripDays": round(holiday_days, 2),
+            }
+    return result
+
+
+def _get_overtime_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> dict:
+    """按人汇总加班小时 {name: hours}，日期区间 [d0,d1]（闭区间），仅已通过(jiabanzt=4)"""
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        join_cond = ("INNER JOIN yggl ON jiaban.xm = yggl.name "
+                     "AND RIGHT(TRIM(yggl.name),1)!='1' AND RIGHT(TRIM(yggl.lsys),1)!='1' "
+                     f"AND TRIM(yggl.lsys)!=%s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)")
+        join_param = (LEADER_EXCLUDE_LSYS,)
+    else:
+        join_cond = ("INNER JOIN yggl ON jiaban.xm = yggl.name "
+                     "AND yggl.lsys=%s AND RIGHT(TRIM(yggl.name),1)!='1' "
+                     "AND RIGHT(TRIM(yggl.lsys),1)!='1' AND (COALESCE(yggl.zaizhi,0)=0)")
+        join_param = (lsys,)
+
+    sql = f"""
+        SELECT TRIM(jiaban.xm) AS name,
+               SUM(CAST(COALESCE(jiaban.tian1,0) AS DECIMAL(10,2))) AS hours
+        FROM jiaban {join_cond}
+        WHERE jiaban.jiabanzt=4
+          AND DATE(jiaban.timedate) >= %s AND DATE(jiaban.timedate) <= %s
+        GROUP BY TRIM(jiaban.xm)
+    """
+    rows = db.execute_query(sql, join_param + (d0.strftime("%Y-%m-%d"), d1.strftime("%Y-%m-%d")))
+
+    result = {}
+    for r in (rows or []):
+        n = (r.get("name") or "").strip()
+        if n:
+            result[n] = float(r.get("hours") or 0)
+    return result
+
+
+def _get_trip_days_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> dict:
+    """按人汇总公出天数与节假日公出天数，区间与按月逻辑一致，裁剪到 [d0, min(d1,today)]"""
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        jc = ("gcsqb INNER JOIN yggl ON gcsqb.gcr=yggl.name "
+              "AND RIGHT(TRIM(yggl.name),1)!='1' AND RIGHT(TRIM(yggl.lsys),1)!='1' "
+              "AND TRIM(yggl.lsys)!=%s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)")
+        jp = (LEADER_EXCLUDE_LSYS,)
+    else:
+        jc = ("gcsqb INNER JOIN yggl ON gcsqb.gcr=yggl.name "
+              "AND yggl.lsys=%s AND RIGHT(TRIM(yggl.name),1)!='1' "
+              "AND RIGHT(TRIM(yggl.lsys),1)!='1' AND (COALESCE(yggl.zaizhi,0)=0)")
+        jp = (lsys,)
+
+    sql = f"""
+        SELECT gcsqb.gcr, gcsqb.gcsj, gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.yjcfsj
+        FROM {jc}
+        WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
+          AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+          AND COALESCE(gcsqb.gcsj,gcsqb.yjcfsj)<=%s
+          AND COALESCE(gcsqb.sjfhtime,gcsqb.yjfhsj)>=%s
+    """
+    rows = db.execute_query(sql, jp + (d1.strftime("%Y-%m-%d"), d0.strftime("%Y-%m-%d")))
+    clip_start = d0
+    clip_end = min(d1, date.today())
+
+    by_person: dict = defaultdict(list)
+    for row in (rows or []):
+        gcr = (row.get("gcr") or "").strip()
+        s = _parse_date(row.get("gcsj") or row.get("yjcfsj"))
+        e = _parse_date(row.get("sjfhtime") or row.get("yjfhsj"))
+        if s and e and e >= s:
+            by_person[gcr].append((max(s, clip_start), min(e, clip_end)))
+
+    result = {}
+    for gcr, intervals in by_person.items():
+        total_days, holiday_days = _merge_intervals_split_workdays(intervals)
         if total_days > 0:
             result[gcr] = {
                 "tripDays": round(total_days, 2),
@@ -2229,26 +2597,60 @@ def _get_staff_with_dept(lsys: Optional[str]) -> list:
 
 @router.get("/leader/work-intensity")
 async def get_work_intensity(
-    year: int = Query(..., description="年份"),
-    month: Optional[int] = Query(None, description="月份，不传则全年"),
+    year: int = Query(..., description="年份（日期区间模式仍需传入以保持兼容）"),
+    month: Optional[int] = Query(None, description="月份，不传则全年；与 date_from/date_to 互斥"),
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
 ):
     """
     工作强度统计 A = 加班时长 / 实际在岗时长
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
     时长单位统一为小时（天数×8）。
     返回：全部门A、各科室A、每个人的A。
+    传入 date_from + date_to 时按自定义日期区间统计（忽略 month），区间结束日晚于今天时按今天截断。
     """
     try:
         HOURS_PER_DAY = 8
 
         today = date.today()
-        if month:
+        range_meta: Dict = {}
+
+        if date_from or date_to:
+            if not date_from or not date_to:
+                raise HTTPException(status_code=400, detail="date_from 与 date_to 需同时传入")
+            ds = _parse_date(date_from)
+            de = _parse_date(date_to)
+            if not ds or not de:
+                raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD")
+            if de < ds:
+                ds, de = de, ds
+            d_end_eff = min(de, today)
+            if ds > d_end_eff:
+                workdays = 0
+            else:
+                workdays = _count_workdays_between(ds, d_end_eff)
+            expected_hours = workdays * HOURS_PER_DAY
+            staff = _get_staff_with_dept(lsys)
+            ot_map = _get_overtime_by_person_range(ds, d_end_eff, lsys)
+            trip_map = _get_trip_days_by_person_range(ds, de, lsys)
+            range_meta = {
+                "rangeMode": True,
+                "dateFrom": ds.isoformat(),
+                "dateTo": de.isoformat(),
+                "effectiveDateTo": d_end_eff.isoformat(),
+            }
+        elif month:
             # 当统计“当前年月”时，应出勤只统计到今天，避免按整月放大分母
             if year == today.year and month == today.month:
                 workdays = _count_workdays_in_month_until(year, month, today.day)
             else:
                 workdays = _count_workdays_in_month(year, month)
+            expected_hours = workdays * HOURS_PER_DAY
+            staff = _get_staff_with_dept(lsys)
+            ot_map = _get_overtime_by_person(year, month, lsys)
+            trip_map = _get_trip_days_by_person(year, month, lsys)
+            range_meta = {"rangeMode": False}
         else:
             # 统计全年时：当年仅统计到今天，历史年份统计整年
             if year == today.year:
@@ -2256,11 +2658,11 @@ async def get_work_intensity(
                 workdays += _count_workdays_in_month_until(year, today.month, today.day)
             else:
                 workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
-
-        expected_hours = workdays * HOURS_PER_DAY
-        staff = _get_staff_with_dept(lsys)
-        ot_map = _get_overtime_by_person(year, month, lsys)
-        trip_map = _get_trip_days_by_person(year, month, lsys)
+            expected_hours = workdays * HOURS_PER_DAY
+            staff = _get_staff_with_dept(lsys)
+            ot_map = _get_overtime_by_person(year, None, lsys)
+            trip_map = _get_trip_days_by_person(year, None, lsys)
+            range_meta = {"rangeMode": False}
 
         person_list = []
         dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0})
@@ -2324,7 +2726,10 @@ async def get_work_intensity(
             "overallIntensity": overall_intensity,
             "byDept": dept_list,
             "byPerson": person_list,
+            **range_meta,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"工作强度统计失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

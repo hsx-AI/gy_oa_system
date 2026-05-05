@@ -373,9 +373,35 @@
         <div v-if="hasFetched && workIntensity.totalPeople" class="section card wi-section">
           <h2 class="section-title">
             <span>工作强度统计</span>
-            <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
+            <span class="section-sub">{{ wiSectionSubtitle }}</span>
           </h2>
           <p class="section-desc">工作强度 A = 加班时长 ÷ 实际在岗时长；实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。</p>
+
+          <div class="wi-range-toolbar">
+            <label class="wi-range-check">
+              <input v-model="wiUseDateRange" type="checkbox" @change="onWiRangeToggle" />
+              自定义日期区间
+            </label>
+            <template v-if="wiUseDateRange">
+              <div class="wi-range-inputs">
+                <input v-model="wiDateFrom" type="date" class="form-input wi-date-input" />
+                <span class="wi-range-sep">至</span>
+                <input v-model="wiDateTo" type="date" class="form-input wi-date-input" />
+              </div>
+              <button type="button" class="btn btn-primary wi-range-apply" :disabled="loading || !wiDateFrom || !wiDateTo" @click="fetchWorkIntensityOnly">
+                按区间重算
+              </button>
+            </template>
+            <button
+              type="button"
+              class="btn btn-outline wi-export-btn"
+              :disabled="!canExportWorkIntensity"
+              @click="exportWorkIntensityTable"
+            >
+              导出表格
+            </button>
+            <p v-if="wiUseDateRange && wiRangeError" class="wi-range-error">{{ wiRangeError }}</p>
+          </div>
 
           <div class="wi-summary">
             <div class="wi-summary-item">
@@ -390,7 +416,7 @@
               <span class="wi-label">全员工作强度</span>
               <span class="wi-value">{{ (workIntensity.overallIntensity * 100).toFixed(1) }}%</span>
             </div>
-            <div v-if="!filterMonth && wiMonthly.length >= 2" class="wi-sparkline-wrap">
+            <div v-if="!filterMonth && !wiUseDateRange && wiMonthly.length >= 2" class="wi-sparkline-wrap">
               <span class="wi-label">月度趋势</span>
               <svg class="wi-sparkline" viewBox="0 0 280 68" preserveAspectRatio="none">
                 <path :d="wiSparklinePoints" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
@@ -476,6 +502,7 @@
 <script setup>
 import { ref, computed, onMounted, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
+import * as XLSX from 'xlsx'
 import {
   getStatisticsPermission,
   getDeptLsysList,
@@ -566,6 +593,10 @@ const trendOvertime = computed(() => _buildTrendChart(monthlyOvertime.value, '�
 const trendTrip = computed(() => _buildTrendChart(monthlyTrip.value, '天'))
 
 const workIntensity = ref({})
+const wiUseDateRange = ref(false)
+const wiDateFrom = ref('')
+const wiDateTo = ref('')
+const wiRangeError = ref('')
 const wiViewMode = ref('dept')
 const wiMonthly = ref([])
 const wiSortKey = ref('intensity')
@@ -609,21 +640,191 @@ const wiSparklineDots = computed(() => {
   })
 })
 
+const wiSectionSubtitle = computed(() => {
+  const wi = workIntensity.value
+  if (wi?.rangeMode && wi.dateFrom && wi.dateTo) {
+    const line = `${wi.dateFrom} ~ ${wi.dateTo}`
+    if (wi.effectiveDateTo && wi.effectiveDateTo !== wi.dateTo) {
+      return `${line}（统计截止 ${wi.effectiveDateTo}）`
+    }
+    return line
+  }
+  return `${filterYear.value}年${filterMonth.value ? filterMonth.value + '月' : '全年'}`
+})
+
+const canExportWorkIntensity = computed(() => {
+  const wi = workIntensity.value || {}
+  return !!(wi.totalPeople && ((wi.byDept || []).length || (wi.byPerson || []).length))
+})
+
+function roundForExport(value, digits = 2) {
+  const n = Number(value || 0)
+  return Number(n.toFixed(digits))
+}
+
+function percentForExport(value) {
+  return `${roundForExport(Number(value || 0) * 100, 1)}%`
+}
+
+function workIntensityDeptActualHours(row) {
+  const expected = Number(workIntensity.value?.expectedHoursPerPerson || 0)
+  const count = Number(row?.personCount || 0)
+  const tripDays = Number(row?.tripDays || 0)
+  const holidayTripDays = Number(row?.tripHolidayDays || 0)
+  return roundForExport(expected * count - tripDays * 8 + holidayTripDays * 8)
+}
+
+function appendAoASheet(wb, name, rows, widths = []) {
+  const sheet = XLSX.utils.aoa_to_sheet(rows)
+  if (widths.length) {
+    sheet['!cols'] = widths.map(wch => ({ wch }))
+  }
+  XLSX.utils.book_append_sheet(wb, sheet, name)
+}
+
+function formatWiExportFileName() {
+  const scope = ((permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员').replace(/[\\/:*?"<>|]+/g, '_')
+  const range = wiSectionSubtitle.value.replace(/[\\/:*?"<>|()\s]+/g, '_').replace(/^_+|_+$/g, '')
+  return `工作强度统计_${scope}_${range || filterYear.value}.xlsx`
+}
+
+function exportWorkIntensityTable() {
+  if (!canExportWorkIntensity.value) {
+    alert('暂无可导出的工作强度数据')
+    return
+  }
+
+  const wi = workIntensity.value || {}
+  const deptRows = (wi.byDept || []).map((row, idx) => [
+    idx + 1,
+    row.lsys || '',
+    row.personCount ?? 0,
+    roundForExport(row.overtimeHours),
+    roundForExport(row.tripDays),
+    roundForExport(row.tripHolidayDays),
+    workIntensityDeptActualHours(row),
+    percentForExport(row.intensity),
+  ])
+  const personRows = wiByPersonSorted.value.map((row, idx) => [
+    idx + 1,
+    row.name || '',
+    row.lsys || '',
+    roundForExport(row.overtimeHours),
+    roundForExport(row.tripDays),
+    roundForExport(row.tripHolidayDays),
+    roundForExport(row.actualHours),
+    percentForExport(row.intensity),
+  ])
+  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[6] || 0), 0)
+  const totalOvertimeHours = personRows.reduce((sum, row) => sum + Number(row[3] || 0), 0)
+
+  const wb = XLSX.utils.book_new()
+  appendAoASheet(wb, '统计概览', [
+    ['统计项', '数值'],
+    ['统计范围', wiSectionSubtitle.value],
+    ['导出范围', (permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员'],
+    ['应出勤工作日（天）', wi.workdays ?? 0],
+    ['应出勤时长/人（h）', wi.expectedHoursPerPerson ?? 0],
+    ['统计人数（人）', wi.totalPeople ?? 0],
+    ['全员加班（h）', roundForExport(totalOvertimeHours)],
+    ['全员实际在岗（h）', roundForExport(totalActualHours)],
+    ['全员工作强度', percentForExport(wi.overallIntensity)],
+    ['计算口径', '工作强度 = 加班时长 ÷ 实际在岗时长；实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长'],
+  ], [24, 48])
+  appendAoASheet(wb, '按科室', [
+    ['序号', '科室', '人数', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
+    ...deptRows,
+  ], [8, 24, 10, 12, 12, 20, 14, 12])
+  appendAoASheet(wb, '按个人', [
+    ['序号', '姓名', '科室', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
+    ...personRows,
+  ], [8, 14, 24, 12, 12, 20, 14, 12])
+  XLSX.writeFile(wb, formatWiExportFileName())
+}
+
+function pad2(n) {
+  return String(n).padStart(2, '0')
+}
+
+function syncWiRangeDefaultsFromFilter() {
+  const y = filterYear.value
+  const m = filterMonth.value ? parseInt(filterMonth.value, 10) : null
+  const today = new Date()
+  const ty = today.getFullYear()
+  const tm = today.getMonth() + 1
+  const td = today.getDate()
+  if (m) {
+    wiDateFrom.value = `${y}-${pad2(m)}-01`
+    const lastDay = new Date(y, m, 0).getDate()
+    wiDateTo.value = `${y}-${pad2(m)}-${pad2(lastDay)}`
+  } else {
+    wiDateFrom.value = `${y}-01-01`
+    if (y < ty) wiDateTo.value = `${y}-12-31`
+    else if (y === ty) wiDateTo.value = `${y}-${pad2(tm)}-${pad2(td)}`
+    else wiDateTo.value = `${y}-12-31`
+  }
+}
+
+function onWiRangeToggle() {
+  wiRangeError.value = ''
+  if (wiUseDateRange.value) syncWiRangeDefaultsFromFilter()
+}
+
+async function fetchWorkIntensityOnly() {
+  wiRangeError.value = ''
+  if (!wiDateFrom.value || !wiDateTo.value) {
+    wiRangeError.value = '请选择开始日期与结束日期'
+    return
+  }
+  const lsysToUse = permLevel.value === 3 ? selectedLsys.value : lsys.value
+  if (permLevel.value !== 3 && !lsysToUse) return
+  loading.value = true
+  try {
+    const wiParams = {
+      year: filterYear.value,
+      date_from: wiDateFrom.value,
+      date_to: wiDateTo.value,
+    }
+    if (lsysToUse) wiParams.lsys = lsysToUse
+    const wiRes = await getLeaderWorkIntensity(wiParams)
+    if (wiRes?.success) workIntensity.value = wiRes
+    wiMonthly.value = []
+  } catch (e) {
+    console.error('工作强度加载失败:', e)
+    wiRangeError.value = '加载失败，请稍后重试'
+  } finally {
+    loading.value = false
+  }
+}
+
 const wiByPersonSorted = computed(() => {
   const list = [...(workIntensity.value?.byPerson || [])]
   const key = wiSortKey.value
   const desc = wiSortOrder.value === 'desc'
+
+  /** 主键相同（尤其工作强度同为 0）时：实际在岗更高的靠前，实际在岗为 0 的沉底 */
+  function tieBreakActualHours(a, b) {
+    const aah = Number(a?.actualHours ?? 0)
+    const bah = Number(b?.actualHours ?? 0)
+    if (aah !== bah) return bah - aah
+    return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-CN')
+  }
+
   list.sort((a, b) => {
     const av = a?.[key]
     const bv = b?.[key]
     if (key === 'name') {
-      return desc
+      const c = desc
         ? String(bv || '').localeCompare(String(av || ''), 'zh-CN')
         : String(av || '').localeCompare(String(bv || ''), 'zh-CN')
+      if (c !== 0) return c
+      return tieBreakActualHours(a, b)
     }
     const na = Number(av || 0)
     const nb = Number(bv || 0)
-    return desc ? nb - na : na - nb
+    const primary = desc ? nb - na : na - nb
+    if (primary !== 0) return primary
+    return tieBreakActualHours(a, b)
   })
   return list
 })
@@ -956,13 +1157,20 @@ const fetchData = async () => {
     }
 
     try {
+      wiRangeError.value = ''
       const wiParams = { year }
-      if (month) wiParams.month = month
       if (lsysToUse) wiParams.lsys = lsysToUse
+      const useWiRange = wiUseDateRange.value && wiDateFrom.value && wiDateTo.value
+      if (useWiRange) {
+        wiParams.date_from = wiDateFrom.value
+        wiParams.date_to = wiDateTo.value
+      } else if (month) {
+        wiParams.month = month
+      }
       const wiRes = await getLeaderWorkIntensity(wiParams)
       if (wiRes?.success) workIntensity.value = wiRes
 
-      if (!month) {
+      if (!month && !useWiRange) {
         const today = new Date()
         const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
         const monthPromises = []
@@ -1159,7 +1367,16 @@ onMounted(async () => {
 
 .btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
 
-.btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
+.btn-primary:disabled,
+.btn:disabled { opacity: 0.7; cursor: not-allowed; }
+
+.btn-outline {
+  background: var(--color-bg-container);
+  color: var(--color-primary);
+  border: 1px solid var(--color-primary);
+}
+
+.btn-outline:hover:not(:disabled) { background: var(--color-primary-lightest); }
 
 .loading-icon { width: 18px; height: 18px; }
 
@@ -1536,6 +1753,58 @@ onMounted(async () => {
 }
 /* ====== 工作强度统计 ====== */
 .wi-section { overflow: visible; }
+
+.wi-range-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-lg);
+  padding: var(--spacing-md) var(--spacing-lg);
+  background: var(--color-bg-spotlight);
+  border-radius: var(--radius-md);
+  border: 1px solid var(--color-border-lighter);
+}
+.wi-range-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-primary);
+  cursor: pointer;
+  user-select: none;
+}
+.wi-range-inputs {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+}
+.wi-date-input {
+  width: auto;
+  min-width: 140px;
+  font-size: var(--font-size-sm);
+}
+.wi-range-sep {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.wi-range-apply {
+  padding: 6px 16px;
+  font-size: var(--font-size-sm);
+}
+.wi-export-btn {
+  height: 34px;
+  padding: 0 16px;
+  font-size: var(--font-size-sm);
+  margin-left: auto;
+}
+.wi-range-error {
+  flex-basis: 100%;
+  margin: 0;
+  font-size: var(--font-size-sm);
+  color: var(--color-error, #dc2626);
+}
 
 .wi-summary {
   display: flex;

@@ -779,8 +779,12 @@ export function getClockInDisciplineStats(params) {
   return request({ url: '/discipline/clock-in-stats', method: 'get', params })
 }
 
+/** 假期值班出勤核查：按排班表与打卡记录判定迟到/早退/缺勤 */
+export function getHolidayDutyAttendanceCheck(params) {
+  return request({ url: '/discipline/holiday-duty-attendance', method: 'get', params })
+}
+
 /** 个人打卡散点图数据：逐日上班/下班时间 */
 export function getPersonScatterData(params) {
   return request({ url: '/discipline/person-scatter', method: 'get', params })
 }
-
