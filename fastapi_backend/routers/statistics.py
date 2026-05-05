@@ -2990,3 +2990,358 @@ async def get_work_intensity(
     except Exception as e:
         logger.error(f"工作强度统计失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================
+#  考勤表 Word 导出
+# ============================================================
+
+import math
+from io import BytesIO
+from fastapi.responses import StreamingResponse
+
+_LEAVE_TYPE_COLS = [
+    "事假", "病假", "工伤", "生育", "探亲", "丧假", "婚假", "旷工", "职工假",
+]
+_HX_TYPES = {"换休", "员工换休票", "书面请假换休", "书面申请领取"}
+
+_LEAVE_TYPE_MAP = {
+    "事假": "事假",
+    "书面请假": "事假",
+    "书面申请": "事假",
+    "病假": "病假",
+    "工伤": "工伤",
+    "产假": "生育",
+    "哺乳假": "生育",
+    "护理假": "生育",
+    "探亲假": "探亲",
+    "丧假": "丧假",
+    "婚假": "婚假",
+    "旷工": "旷工",
+    "带薪休假": "职工假",
+    "带薪休年假": "职工假",
+    "带薪年休假": "职工假",
+    "换休": "换休",
+    "员工换休票": "换休",
+    "书面请假换休": "换休",
+    "书面申请领取": "换休",
+    "异常打卡": None,
+}
+
+
+def _ceil_quarter(val: float) -> float:
+    """向上取整到 0.25 的整数倍。"""
+    if val <= 0:
+        return 0.0
+    return math.ceil(val * 4) / 4
+
+
+def _fmt_days(val: float) -> str:
+    """格式化天数：整数不带小数点，否则去除尾部多余零。如 1.0→'1', 0.5→'0.5', 0.25→'0.25'"""
+    if val == int(val):
+        return str(int(val))
+    s = f"{val:.2f}".rstrip("0").rstrip(".")
+    return s
+
+
+@router.get("/leader/attendance-report-export")
+async def attendance_report_export(
+    year: int = Query(...),
+    month: int = Query(..., ge=1, le=12),
+    lsys: Optional[str] = Query(None, description="科室，不传则按全部科室分别生成"),
+):
+    """
+    根据模版生成 Word 考勤表。
+    返回：每科室一份 sheet 数据，前端据此填充 Word；
+    或直接生成 .docx 文件流返回下载。
+    """
+    import calendar
+    from docx import Document
+    from docx.oxml.ns import qn
+    from docx.oxml import OxmlElement
+    from copy import deepcopy
+
+    try:
+        _, last_day = calendar.monthrange(year, month)
+        workdays = _count_workdays_in_month(year, month)
+
+        # 确定科室列表
+        if lsys and lsys.strip():
+            dept_list = [lsys.strip()]
+        else:
+            rows = db.execute_query(
+                "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
+                "WHERE lsys IS NOT NULL AND lsys!='' AND RIGHT(TRIM(lsys),1)!='1' "
+                "AND TRIM(lsys)!=%s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
+                "AND (COALESCE(zaizhi,0)=0) ORDER BY lsys",
+                (LEADER_EXCLUDE_LSYS,)
+            )
+            dept_list = [r["lsys"] for r in (rows or []) if r.get("lsys")]
+
+        period_start = date(year, month, 1)
+        period_end = date(year, month, last_day)
+        pe_str = period_end.strftime("%Y-%m-%d")
+        ps_str = period_start.strftime("%Y-%m-%d")
+        ov = _leave_overlap_sql_bounds()
+
+        # 加载模版
+        import os
+        template_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                                     "智能制造技术室XXX年XX月份考勤表模版.docx")
+        if not os.path.exists(template_path):
+            raise HTTPException(status_code=500, detail="考勤表模版文件不存在")
+
+        from docx.shared import Pt, Cm
+        from docx.enum.text import WD_ALIGN_PARAGRAPH
+
+        FONT_CJK = "宋体"
+        FONT_LATIN = "Times New Roman"
+
+        def _set_run_font(run, size=None, bold=False):
+            """统一 run 字体：中文宋体，数字/英文 Times New Roman"""
+            run.font.name = FONT_LATIN
+            rpr = run._element.get_or_add_rPr()
+            rfonts = rpr.get_or_add_rFonts()
+            rfonts.set(qn('w:ascii'), FONT_LATIN)
+            rfonts.set(qn('w:hAnsi'), FONT_LATIN)
+            rfonts.set(qn('w:eastAsia'), FONT_CJK)
+            if size:
+                run.font.size = size
+            run.font.bold = bold
+
+        def _set_cell_font(cell, size=Pt(9)):
+            """遍历单元格所有段落所有 run，统一字体"""
+            for p in cell.paragraphs:
+                for run in p.runs:
+                    _set_run_font(run, size=size)
+
+        base_doc = Document(template_path)
+        out_doc = Document()
+        # 继承模版页面设置
+        out_sec = out_doc.sections[0]
+        tmpl_sec = base_doc.sections[0]
+        out_sec.page_width = tmpl_sec.page_width
+        out_sec.page_height = tmpl_sec.page_height
+        out_sec.left_margin = tmpl_sec.left_margin
+        out_sec.right_margin = tmpl_sec.right_margin
+        out_sec.top_margin = tmpl_sec.top_margin
+        out_sec.bottom_margin = tmpl_sec.bottom_margin
+        out_sec.orientation = tmpl_sec.orientation
+
+        is_first_dept = True
+
+        for dept_name in dept_list:
+            # 获取该科室在职人员
+            staff_rows = db.execute_query(
+                "SELECT TRIM(name) AS name FROM yggl WHERE lsys=%s AND name IS NOT NULL AND name!='' "
+                "AND RIGHT(TRIM(name),1)!='1' AND (COALESCE(zaizhi,0)=0) ORDER BY name",
+                (dept_name,)
+            )
+            staff_names = [r["name"] for r in (staff_rows or []) if r.get("name")]
+            if not staff_names:
+                continue
+
+            # 查该科室请假数据
+            leave_sql = f"""
+                SELECT TRIM(xm) AS name, TRIM(qjfs) AS qjfs,
+                       timefrom, timeto, timefromdate,
+                       CAST(tian AS DECIMAL(10,2)) AS tian
+                FROM qj
+                WHERE lsys=%s AND qjzt=4
+                  AND RIGHT(TRIM(xm),1)!='1'
+                  {ov}
+                ORDER BY xm
+            """
+            leave_rows = db.execute_query(leave_sql, (dept_name, pe_str, ps_str))
+
+            # 按人按模板列类型汇总（通过 _LEAVE_TYPE_MAP 映射原始 qjfs）
+            person_leave: Dict[str, Dict[str, float]] = defaultdict(lambda: defaultdict(float))
+            for r in (leave_rows or []):
+                nm = (r.get("name") or "").strip()
+                qjfs = (r.get("qjfs") or "").strip()
+                if not nm or not qjfs:
+                    continue
+                mapped = _LEAVE_TYPE_MAP.get(qjfs)
+                if mapped is None:
+                    continue
+                ls_d, le_d = _qj_leave_date_bounds(r)
+                if not ls_d or not le_d:
+                    continue
+                try:
+                    tian_f = float(r.get("tian") or 0)
+                except (TypeError, ValueError):
+                    tian_f = 0.0
+                alloc = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, period_start, period_end)
+                if alloc > 0:
+                    person_leave[nm][mapped] += alloc
+
+            # 查该科室加班数据
+            ot_map = _get_overtime_by_person(year, month, dept_name)
+
+            # 查该科室排班数据：值班(白班)天数、夜班天数
+            shift_sql = """
+                SELECT employee_name,
+                       SUM(CASE WHEN shift_type='白班' THEN 1 ELSE 0 END) AS day_count,
+                       SUM(CASE WHEN shift_type='夜班' THEN 1 ELSE 0 END) AS night_count
+                FROM shift_schedule
+                WHERE department=%s AND year=%s AND month=%s
+                GROUP BY employee_name
+            """
+            shift_rows = db.execute_query(shift_sql, (dept_name, year, month))
+            shift_day_map: Dict[str, int] = {}
+            shift_night_map: Dict[str, int] = {}
+            for r in (shift_rows or []):
+                en = (r.get("employee_name") or "").strip()
+                if en:
+                    dc = int(r.get("day_count") or 0)
+                    nc = int(r.get("night_count") or 0)
+                    if dc > 0:
+                        shift_day_map[en] = dc
+                    if nc > 0:
+                        shift_night_map[en] = nc
+
+            # 从模版复制表格结构
+            tmpl_table1 = base_doc.tables[1]
+
+            if not is_first_dept:
+                # 分页
+                run = out_doc.add_paragraph().add_run()
+                br = OxmlElement('w:br')
+                br.set(qn('w:type'), 'page')
+                run._element.append(br)
+
+            # ---- 标题：居中大号加粗段落 ----
+            title_p = out_doc.add_paragraph()
+            title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            title_run = title_p.add_run(f"{year}年{month}月份考勤表")
+            _set_run_font(title_run, size=Pt(16), bold=True)
+            title_p.space_after = Pt(6)
+
+            # ---- Table 1: 主体考勤表 ----
+            new_tbl1 = deepcopy(tmpl_table1._tbl)
+            out_doc.element.body.append(new_tbl1)
+            tbl1_obj = out_doc.tables[-1]
+
+            def _cell_set_text(cell, text):
+                """清除单元格所有段落内容，在第一段写入文本并设字体。"""
+                for p in cell.paragraphs:
+                    p.clear()
+                run = cell.paragraphs[0].add_run(text)
+                _set_run_font(run, size=Pt(9))
+
+            # 修改表头 Row0 中的科室和月/日/天信息
+            hdr_cells = tbl1_obj.rows[0].cells
+            _cell_set_text(hdr_cells[2], dept_name)
+            _cell_set_text(hdr_cells[8], f"{month}月")
+            _cell_set_text(hdr_cells[14], f" {month}月")
+            _cell_set_text(hdr_cells[16], f"{last_day}日计")
+            _cell_set_text(hdr_cells[19], f"{workdays}天）")
+
+            # 统一表头 Row0 和 Row1 中原有 run 的字体
+            for ri in range(min(2, len(tbl1_obj.rows))):
+                for cell in tbl1_obj.rows[ri].cells:
+                    _set_cell_font(cell, size=Pt(9))
+
+            # 删除模版数据行（保留 row0=表头区域, row1=列标题）
+            data_rows_to_remove = list(tbl1_obj.rows[2:])
+            for row in data_rows_to_remove:
+                tbl1_obj._tbl.remove(row._tr)
+
+            # 为每位员工添加一行
+            template_data_row_tr = tmpl_table1.rows[2]._tr  # 用作格式模版
+            from docx.table import _Row
+
+            for idx, name in enumerate(staff_names, 1):
+                new_tr = deepcopy(template_data_row_tr)
+                tbl1_obj._tbl.append(new_tr)
+                row_obj = _Row(new_tr, tbl1_obj)
+                cells = row_obj.cells
+
+                def _data_cell(cell, text):
+                    cell.paragraphs[0].clear()
+                    run = cell.paragraphs[0].add_run(text)
+                    _set_run_font(run, size=Pt(9))
+
+                # Col0: 编号
+                _data_cell(cells[0], str(idx))
+                # Col1 (gridSpan=2): 姓名
+                _data_cell(cells[1], name)
+                # Col3: 基本工资（留空）
+                _data_cell(cells[3], "")
+
+                # 获取该人的请假数据（已映射到模板列名）
+                pl = person_leave.get(name, {})
+
+                # 判断出勤：除"换休"列外有任何假别即非全勤
+                non_hx_leave = sum(v for k, v in pl.items() if k != "换休")
+                # Col4: 出勤
+                _data_cell(cells[4], "全勤" if non_hx_leave <= 0 else "")
+
+                # 各假别列映射 (col_index, leave_type)
+                leave_col_map = [
+                    (5, "事假"),
+                    (6, "病假"),
+                    (7, "工伤"),
+                    (9, "生育"),
+                    (11, "探亲"),
+                    (12, "丧假"),
+                    (13, "婚假"),
+                    (15, "旷工"),
+                ]
+                for ci, lt in leave_col_map:
+                    val = pl.get(lt, 0)
+                    _data_cell(cells[ci], _fmt_days(_ceil_quarter(val)) if val > 0 else "")
+
+                # Col17: 值班（白班天数）
+                day_shifts = shift_day_map.get(name, 0)
+                _data_cell(cells[17], str(day_shifts) if day_shifts > 0 else "")
+
+                # Col18 (gridSpan=2): 加班 - 小时转天
+                ot_hours = ot_map.get(name, 0)
+                if ot_hours > 0:
+                    ot_days = _ceil_quarter(ot_hours / 8.0)
+                    _data_cell(cells[18], _fmt_days(ot_days))
+                else:
+                    _data_cell(cells[18], "")
+
+                # Col20: 夜班天数
+                night_shifts = shift_night_map.get(name, 0)
+                _data_cell(cells[20], str(night_shifts) if night_shifts > 0 else "")
+
+                # Col21 (gridSpan=2): 职工假
+                zgj = pl.get("职工假", 0)
+                _data_cell(cells[21], _fmt_days(_ceil_quarter(zgj)) if zgj > 0 else "")
+
+                # Col23: 换休（已映射合并为 "换休" 键）
+                hx_total = pl.get("换休", 0)
+                _data_cell(cells[23], _fmt_days(_ceil_quarter(hx_total)) if hx_total > 0 else "0")
+
+            # 底部签名段落
+            footer_p = out_doc.add_paragraph()
+            footer_p.space_before = Pt(12)
+            footer_run = footer_p.add_run("主    管                                   考 勤 员:")
+            _set_run_font(footer_run, size=Pt(11))
+
+            is_first_dept = False
+
+        # 输出文件
+        buf = BytesIO()
+        out_doc.save(buf)
+        buf.seek(0)
+        month_str = f"{month:02d}"
+        fname = f"考勤表_{year}年{month}月"
+        if lsys and lsys.strip():
+            fname += f"_{lsys.strip()}"
+        fname += ".docx"
+
+        from urllib.parse import quote
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"考勤表导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))

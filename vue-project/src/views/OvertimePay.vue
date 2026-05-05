@@ -69,9 +69,18 @@
                 <span v-if="fullAttendanceExportLoading">生成中...</span>
                 <span v-else>导出满勤名单</span>
               </button>
+              <button
+                type="button"
+                class="btn btn-outline"
+                :disabled="!filterMonth || attendanceReportLoading"
+                @click="downloadAttendanceReportWord"
+              >
+                <span v-if="attendanceReportLoading">生成中...</span>
+                <span v-else>下载考勤表(Word)</span>
+              </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。</p>
+          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。下载考勤表(Word)按所选科室和月份自动填充人员及各假别天数（换休不影响全勤，最小0.25天进位）。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -153,7 +162,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import * as XLSX from 'xlsx'
-import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getFullAttendanceExport } from '@/api/attendance'
+import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getFullAttendanceExport, downloadAttendanceReport } from '@/api/attendance'
 
 const router = useRouter()
 const canView = ref(false)
@@ -167,6 +176,7 @@ const filterMonth = ref('')
 const loading = ref(false)
 const exportLoading = ref(false)
 const fullAttendanceExportLoading = ref(false)
+const attendanceReportLoading = ref(false)
 const hasFetched = ref(false)
 const overtimePayByMonth = ref([])
 const overtimePayByEmployee = ref([])
@@ -241,6 +251,33 @@ async function downloadExcel() {
     alert('下载失败，请稍后重试')
   } finally {
     exportLoading.value = false
+  }
+}
+
+async function downloadAttendanceReportWord() {
+  if (!filterMonth.value) {
+    alert('请先选择月份后再下载考勤表')
+    return
+  }
+  attendanceReportLoading.value = true
+  try {
+    const params = { year: filterYear.value, month: Number(filterMonth.value) }
+    if (scope.value !== 'self' && selectedLsys.value) params.lsys = selectedLsys.value
+    const blob = await downloadAttendanceReport(params)
+    const url = window.URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]))
+    const a = document.createElement('a')
+    a.href = url
+    const lsysLabel = selectedLsys.value ? `_${selectedLsys.value}` : ''
+    a.download = `考勤表_${filterYear.value}年${filterMonth.value}月${lsysLabel}.docx`
+    document.body.appendChild(a)
+    a.click()
+    document.body.removeChild(a)
+    window.URL.revokeObjectURL(url)
+  } catch (e) {
+    console.error(e)
+    alert('下载考勤表失败，请稍后重试')
+  } finally {
+    attendanceReportLoading.value = false
   }
 }
 

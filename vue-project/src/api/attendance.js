@@ -434,6 +434,11 @@ export function getFullAttendanceExport(params) {
   return request({ url: '/leader/full-attendance-export', method: 'get', params })
 }
 
+/** 考勤表 Word 导出（返回文件流） */
+export function downloadAttendanceReport(params) {
+  return request({ url: '/leader/attendance-report-export', method: 'get', params, responseType: 'blob' })
+}
+
 /** 领导人看板：科室横向对比（加班/请假/公出总数及人均） */
 export function getLeaderDeptComparison(params) {
   return request({ url: '/leader/dept-comparison', method: 'get', params })
