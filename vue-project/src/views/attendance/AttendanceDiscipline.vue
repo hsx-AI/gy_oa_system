@@ -275,6 +275,9 @@
               </svg>
               {{ dutyLoading ? '核查中...' : '核查' }}
             </button>
+            <button class="btn btn-outline-duty" type="button" @click="exportDutyAttendance" :disabled="dutyExporting || dutyLoading">
+              {{ dutyExporting ? '导出中...' : '导出 Excel' }}
+            </button>
           </div>
         </div>
 
@@ -318,6 +321,7 @@
                       <th>应出勤</th>
                       <th>已出勤</th>
                       <th>出勤率</th>
+                      <th>出勤人员占比</th>
                       <th>迟到</th>
                       <th>早退</th>
                       <th>缺勤</th>
@@ -329,12 +333,13 @@
                       <td>{{ d.scheduled }}</td>
                       <td>{{ d.attended }}</td>
                       <td>{{ percentText(d.attendanceRate) }}</td>
+                      <td>{{ d.attendedPeople || 0 }} / {{ d.memberTotal || 0 }}（{{ percentText(d.memberAttendanceRate) }}）</td>
                       <td>{{ d.late }}</td>
                       <td>{{ d.earlyLeave }}</td>
                       <td>{{ d.absent }}</td>
                     </tr>
                     <tr v-if="!dutyByDate.length">
-                      <td colspan="7" class="table-empty-cell">所选范围暂无值班排班</td>
+                      <td colspan="8" class="table-empty-cell">所选范围暂无值班排班</td>
                     </tr>
                   </tbody>
                 </table>
@@ -468,6 +473,7 @@ import {
   getDeptLsysList,
   getClockInDisciplineStats,
   getHolidayDutyAttendanceCheck,
+  exportHolidayDutyAttendanceCheck,
   getPersonScatterData,
   getStatisticsEmployees,
 } from '@/api/attendance'
@@ -520,6 +526,7 @@ const dutyLsys = ref('')
 const dutyStartDate = ref(defaultDutyRange.start)
 const dutyEndDate = ref(defaultDutyRange.end)
 const dutyLoading = ref(false)
+const dutyExporting = ref(false)
 const dutyFetched = ref(false)
 const dutySummary = ref({})
 const dutyByDate = ref([])
@@ -607,6 +614,34 @@ async function fetchDutyAttendance() {
     dutyDetails.value = []
   } finally {
     dutyLoading.value = false
+  }
+}
+
+async function exportDutyAttendance() {
+  if (!dutyStartDate.value || !dutyEndDate.value) return
+  dutyExporting.value = true
+  try {
+    const params = {
+      start_date: dutyStartDate.value,
+      end_date: dutyEndDate.value,
+    }
+    if (dutyLsys.value) params.lsys = dutyLsys.value
+    const blob = await exportHolidayDutyAttendanceCheck(params)
+    if (blob instanceof Blob) {
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      const scope = dutyLsys.value || '全部科室'
+      a.download = `${scope}_${dutyStartDate.value}_${dutyEndDate.value}_假期值班出勤核查.xlsx`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+    }
+  } catch (e) {
+    console.error('假期值班出勤核查导出失败:', e)
+  } finally {
+    dutyExporting.value = false
   }
 }
 
@@ -1111,6 +1146,19 @@ async function loadCustomScatterData() {
 .btn-primary { background: var(--color-primary); color: white; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.05); }
 .btn-primary:disabled { opacity: 0.7; cursor: not-allowed; }
+
+.btn-outline-duty {
+  color: var(--color-primary);
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-primary);
+}
+.btn-outline-duty:hover:not(:disabled) {
+  background: var(--color-primary-lightest, #eef2ff);
+}
+.btn-outline-duty:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
 
 .loading-icon { width: 16px; height: 16px; }
 

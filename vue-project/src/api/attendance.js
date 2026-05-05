@@ -784,6 +784,16 @@ export function getHolidayDutyAttendanceCheck(params) {
   return request({ url: '/discipline/holiday-duty-attendance', method: 'get', params })
 }
 
+/** 导出假期值班出勤核查表格 */
+export function exportHolidayDutyAttendanceCheck(params) {
+  return request({
+    url: '/discipline/holiday-duty-attendance/export',
+    method: 'get',
+    params,
+    responseType: 'blob'
+  })
+}
+
 /** 个人打卡散点图数据：逐日上班/下班时间 */
 export function getPersonScatterData(params) {
   return request({ url: '/discipline/person-scatter', method: 'get', params })

@@ -9,6 +9,9 @@
 - 领导人看板统计中不参与：科室「部办」
 """
 from fastapi import APIRouter, HTTPException, Query
+from fastapi.responses import Response
+from io import BytesIO
+from urllib.parse import quote
 
 # 领导人看板中不参与统计的科室（不计算人数、不参与排序与横向对比）
 LEADER_EXCLUDE_LSYS = "部办"
@@ -2246,6 +2249,32 @@ async def get_holiday_duty_attendance(
 
         rows = db.execute_query(sql, tuple(params))
 
+        staff_sql = """
+            SELECT TRIM(lsys) AS dept, COUNT(DISTINCT TRIM(name)) AS cnt
+            FROM yggl
+            WHERE name IS NOT NULL
+              AND TRIM(name) != ''
+              AND lsys IS NOT NULL
+              AND TRIM(lsys) != ''
+              AND COALESCE(zaizhi, 0) = 0
+              AND RIGHT(TRIM(name), 1) != '1'
+              AND RIGHT(TRIM(lsys), 1) != '1'
+              AND TRIM(lsys) != %s
+              AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员')
+        """
+        staff_params: list = [LEADER_EXCLUDE_LSYS]
+        if lsys:
+            staff_sql += " AND TRIM(lsys) = %s"
+            staff_params.append(lsys.strip())
+        staff_sql += " GROUP BY TRIM(lsys)"
+        staff_rows = db.execute_query(staff_sql, tuple(staff_params))
+        dept_member_counts = {
+            (r.get("dept") or "").strip(): int(r.get("cnt") or 0)
+            for r in (staff_rows or [])
+            if (r.get("dept") or "").strip()
+        }
+        scope_member_count = sum(dept_member_counts.values())
+
         detail_rows = []
         by_date = defaultdict(lambda: {
             "date": "",
@@ -2255,6 +2284,7 @@ async def get_holiday_duty_attendance(
             "late": 0,
             "earlyLeave": 0,
             "absent": 0,
+            "_attendedPeople": set(),
         })
         by_dept = defaultdict(lambda: {
             "dept": "",
@@ -2264,6 +2294,7 @@ async def get_holiday_duty_attendance(
             "late": 0,
             "earlyLeave": 0,
             "absent": 0,
+            "_attendedPeople": set(),
         })
 
         totals = {
@@ -2338,6 +2369,8 @@ async def get_holiday_duty_attendance(
                 bucket["late"] += 1 if is_late else 0
                 bucket["earlyLeave"] += 1 if is_early else 0
                 bucket["absent"] += 1 if is_absent else 0
+                if is_attended:
+                    bucket["_attendedPeople"].add(name)
 
             detail_rows.append({
                 "date": shift_date,
@@ -2359,10 +2392,16 @@ async def get_holiday_duty_attendance(
         def finalize_bucket(item: dict) -> dict:
             scheduled = item.get("scheduled") or 0
             attended = item.get("attended") or 0
+            attended_people_count = len(item.pop("_attendedPeople", set()))
+            dept_key = (item.get("dept") or "").strip()
+            member_total = dept_member_counts.get(dept_key, 0) if dept_key else scope_member_count
             item["attendanceRate"] = _rate(attended, scheduled)
             item["absentRate"] = _rate(item.get("absent") or 0, scheduled)
             item["lateRate"] = _rate(item.get("late") or 0, scheduled)
             item["earlyLeaveRate"] = _rate(item.get("earlyLeave") or 0, scheduled)
+            item["memberTotal"] = member_total
+            item["attendedPeople"] = attended_people_count
+            item["memberAttendanceRate"] = _rate(attended_people_count, member_total)
             return item
 
         date_rows = [finalize_bucket(v) for _k, v in sorted(by_date.items(), key=lambda kv: kv[0])]
@@ -2370,8 +2409,8 @@ async def get_holiday_duty_attendance(
         summary = finalize_bucket({
             **totals,
             "scheduledPeople": len(scheduled_people),
-            "attendedPeople": len(attended_people),
             "attendancePersonRate": _rate(len(attended_people), len(scheduled_people)),
+            "_attendedPeople": set(attended_people),
         })
 
         return {
@@ -2393,6 +2432,147 @@ async def get_holiday_duty_attendance(
     except Exception as e:
         logger.error(f"值班出勤核查失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/discipline/holiday-duty-attendance/export")
+async def export_holiday_duty_attendance(
+    start_date: str = Query(..., description="Start date, YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date, YYYY-MM-DD"),
+    lsys: Optional[str] = Query(None, description="Department filter"),
+):
+    """Export holiday duty attendance check tables to Excel."""
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except Exception:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
+
+    data = await get_holiday_duty_attendance(start_date=start_date, end_date=end_date, lsys=lsys)
+
+    def pct(rate) -> str:
+        try:
+            return f"{float(rate or 0) * 100:.1f}%"
+        except (TypeError, ValueError):
+            return "0.0%"
+
+    wb = Workbook()
+    header_fill = PatternFill("solid", fgColor="E5E7EB")
+    title_fill = PatternFill("solid", fgColor="DBEAFE")
+    thin = Side(style="thin", color="D1D5DB")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    title_font = Font(name="Microsoft YaHei", size=14, bold=True, color="1F2937")
+    header_font = Font(name="Microsoft YaHei", size=10, bold=True, color="111827")
+    body_font = Font(name="Microsoft YaHei", size=10, color="111827")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    left = Alignment(horizontal="left", vertical="center", wrap_text=True)
+
+    def style_range(ws):
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.border = border
+                cell.alignment = center
+                cell.font = body_font
+        for cell in ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for cell in ws[3]:
+            cell.font = header_font
+            cell.fill = header_fill
+        for col in range(1, ws.max_column + 1):
+            max_len = 10
+            for row in range(1, ws.max_row + 1):
+                v = ws.cell(row=row, column=col).value
+                if v is not None:
+                    max_len = max(max_len, min(len(str(v)) + 2, 36))
+            ws.column_dimensions[get_column_letter(col)].width = max_len
+        ws.freeze_panes = "A4"
+
+    scope_name = (lsys or "全部科室").strip()
+    title = f"{scope_name} {data.get('startDate')} 至 {data.get('endDate')} 假期值班出勤核查"
+
+    ws = wb.active
+    ws.title = "按日期汇总"
+    ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws.cell(1, 1, title)
+    summary = data.get("summary") or {}
+    ws.append([])
+    ws.append(["日期", "应出勤", "已出勤", "出勤率", "出勤人员占比", "迟到", "早退", "缺勤"])
+    for item in data.get("byDate") or []:
+        ws.append([
+            item.get("date", ""),
+            item.get("scheduled", 0),
+            item.get("attended", 0),
+            pct(item.get("attendanceRate")),
+            f"{item.get('attendedPeople', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRate'))})",
+            item.get("late", 0),
+            item.get("earlyLeave", 0),
+            item.get("absent", 0),
+        ])
+    ws.append([])
+    ws.append([
+        "合计",
+        summary.get("scheduled", 0),
+        summary.get("attended", 0),
+        pct(summary.get("attendanceRate")),
+        f"{summary.get('attendedPeople', 0)} / {summary.get('memberTotal', 0)} ({pct(summary.get('memberAttendanceRate'))})",
+        summary.get("late", 0),
+        summary.get("earlyLeave", 0),
+        summary.get("absent", 0),
+    ])
+    style_range(ws)
+
+    ws_dept = wb.create_sheet("科室汇总")
+    ws_dept.merge_cells(start_row=1, start_column=1, end_row=1, end_column=8)
+    ws_dept.cell(1, 1, title)
+    ws_dept.append([])
+    ws_dept.append(["科室", "应出勤", "已出勤", "出勤率", "出勤人员占比", "迟到", "早退", "缺勤"])
+    for item in data.get("byDept") or []:
+        ws_dept.append([
+            item.get("dept", ""),
+            item.get("scheduled", 0),
+            item.get("attended", 0),
+            pct(item.get("attendanceRate")),
+            f"{item.get('attendedPeople', 0)} / {item.get('memberTotal', 0)} ({pct(item.get('memberAttendanceRate'))})",
+            item.get("late", 0),
+            item.get("earlyLeave", 0),
+            item.get("absent", 0),
+        ])
+    style_range(ws_dept)
+
+    ws_detail = wb.create_sheet("异常明细")
+    ws_detail.merge_cells(start_row=1, start_column=1, end_row=1, end_column=10)
+    ws_detail.cell(1, 1, title)
+    ws_detail.append([])
+    ws_detail.append(["日期", "科室", "姓名", "班次", "应到", "应离", "首入", "末出", "打卡次数", "状态"])
+    for item in data.get("details") or []:
+        if item.get("status") == "normal":
+            continue
+        ws_detail.append([
+            item.get("date", ""),
+            item.get("dept", ""),
+            item.get("name", ""),
+            item.get("shiftType", ""),
+            item.get("expectedStart", ""),
+            item.get("expectedEnd", ""),
+            item.get("firstIn", ""),
+            item.get("lastOut", ""),
+            item.get("punchCount", 0),
+            item.get("statusText", ""),
+        ])
+    style_range(ws_detail)
+    for row in ws_detail.iter_rows(min_row=4, min_col=2, max_col=3):
+        for cell in row:
+            cell.alignment = left
+
+    bio = BytesIO()
+    wb.save(bio)
+    fname = f"{scope_name}_{data.get('startDate')}_{data.get('endDate')}_假期值班出勤核查.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
 
 
 def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
