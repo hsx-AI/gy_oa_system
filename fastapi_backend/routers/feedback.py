@@ -150,6 +150,22 @@ def _require_admin1(current_user: str):
         raise HTTPException(status_code=403, detail="仅系统管理员可操作")
 
 
+def _is_wall_privileged_user(current_user: str) -> bool:
+    """吐槽墙全记录权限：管理员或经理/副经理/经理助理/部长/副部长。"""
+    name = (current_user or "").strip()
+    if not name:
+        return False
+    admin1 = _get_admin1()
+    if admin1 and name == admin1:
+        return True
+    rows = db.execute_query(
+        "SELECT jb FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+        (name,),
+    )
+    jb = (rows[0].get("jb") if rows else "") or ""
+    return bool(re.search(r"经理助理|副经理|经理|副部长|部长", jb))
+
+
 # ==================== 1. 部门吐槽墙 ====================
 
 class WallReview(BaseModel):
@@ -180,6 +196,15 @@ async def wall_submit(
     return {"success": True, "message": "已提交，待管理员审核"}
 
 
+def _wall_resolved_int(val) -> int:
+    try:
+        if val is None:
+            return 0
+        return int(val)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _build_wall_items(rows):
     """为 wall 列表构建含 replies 信息的数据"""
     if not rows:
@@ -197,17 +222,22 @@ def _build_wall_items(rows):
             "replyBy": rr["reply_by"],
             "replyContent": rr["reply_content"],
         })
+    status_label_map = {0: "正在审核", 1: "已上墙", 2: "已驳回"}
     return [
         {
             "id": r["id"],
             "content": r["content"],
             "imageUrl": r.get("image_url") or "",
             "likeCount": r.get("like_count") or 0,
-            "resolved": r.get("resolved") or 0,
+            "status": r.get("status") if r.get("status") is not None else 1,
+            "statusLabel": status_label_map.get(r.get("status") if r.get("status") is not None else 1, "未知"),
+            "resolved": _wall_resolved_int(r.get("resolved")),
             "resolvedBy": r.get("resolved_by") or "",
             "assignee": r.get("assignee") or "",
             "assignedBy": r.get("assigned_by") or "",
             "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
+            "reviewedBy": r.get("reviewed_by") or "",
+            "reviewedAt": str(r.get("reviewed_at") or "")[:19] if r.get("reviewed_at") else "",
             "replies": reply_map.get(r["id"], []),
             "createdAt": str(r.get("created_at") or "")[:19],
         }
@@ -216,13 +246,39 @@ def _build_wall_items(rows):
 
 
 @router.get("/wall/list")
-async def wall_list():
-    """获取已通过的弹幕列表（全员可见）"""
+async def wall_list(include_all: bool = Query(False), current_user: str = Query("")):
+    """获取吐槽墙列表。
+
+    默认返回已通过且未解决；include_all=true 时，管理员/领导可看全部，
+    普通用户仅可看 status=1 的已上墙记录。
+    """
     _ensure_tables()
-    rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
-        "FROM feedback_wall WHERE status = 1 ORDER BY created_at DESC"
+    select_sql = (
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "reviewed_by, reviewed_at, created_at FROM feedback_wall "
     )
+    if include_all:
+        if _is_wall_privileged_user(current_user):
+            rows = db.execute_query(select_sql + "ORDER BY created_at DESC")
+        else:
+            rows = db.execute_query(select_sql + "WHERE status = 1 ORDER BY created_at DESC")
+    else:
+        rows = db.execute_query(select_sql + "WHERE status = 1 AND COALESCE(resolved, 0) <> 3 ORDER BY created_at DESC")
+    return {"success": True, "data": _build_wall_items(rows)}
+
+
+@router.get("/wall/records")
+async def wall_records(current_user: str = Query("")):
+    """获取吐槽墙记录。管理员/领导可看全部，普通用户仅可看已上墙记录。"""
+    _ensure_tables()
+    select_sql = (
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "reviewed_by, reviewed_at, created_at FROM feedback_wall "
+    )
+    if _is_wall_privileged_user(current_user):
+        rows = db.execute_query(select_sql + "ORDER BY created_at DESC")
+    else:
+        rows = db.execute_query(select_sql + "WHERE status = 1 ORDER BY created_at DESC")
     return {"success": True, "data": _build_wall_items(rows)}
 
 
@@ -299,6 +355,12 @@ async def wall_like(item_id: str, req: WallLike):
     name = (req.current_user or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="缺少用户信息")
+    wall_rows = db.execute_query(
+        "SELECT id FROM feedback_wall WHERE id = %s AND status = 1",
+        (item_id,),
+    )
+    if not wall_rows:
+        raise HTTPException(status_code=404, detail="记录不存在或尚未上墙")
     existing = db.execute_query(
         "SELECT id FROM feedback_wall_likes WHERE wall_id = %s AND user_name = %s",
         (item_id, name),
@@ -335,13 +397,17 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
     """获取单条吐槽的详情（含全部领导回复和当前用户是否已点赞）"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
-        "FROM feedback_wall WHERE id = %s AND status = 1",
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "reviewed_by, reviewed_at, created_at "
+        "FROM feedback_wall WHERE id = %s",
         (item_id,),
     )
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     r = rows[0]
+    status_val = r.get("status") if r.get("status") is not None else 1
+    if int(status_val) != 1 and not _is_wall_privileged_user(current_user):
+        raise HTTPException(status_code=403, detail="无权查看该吐槽记录")
     replies = db.execute_query(
         "SELECT id, reply_by, reply_content, created_at FROM feedback_wall_replies "
         "WHERE wall_id = %s ORDER BY created_at ASC",
@@ -362,11 +428,15 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
             "content": r["content"],
             "imageUrl": r.get("image_url") or "",
             "likeCount": r.get("like_count") or 0,
-            "resolved": r.get("resolved") or 0,
+            "status": r.get("status") if r.get("status") is not None else 1,
+            "statusLabel": {0: "正在审核", 1: "已上墙", 2: "已驳回"}.get(r.get("status") if r.get("status") is not None else 1, "未知"),
+            "resolved": _wall_resolved_int(r.get("resolved")),
             "resolvedBy": r.get("resolved_by") or "",
             "assignee": r.get("assignee") or "",
             "assignedBy": r.get("assigned_by") or "",
             "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
+            "reviewedBy": r.get("reviewed_by") or "",
+            "reviewedAt": str(r.get("reviewed_at") or "")[:19] if r.get("reviewed_at") else "",
             "liked": liked,
             "createdAt": str(r.get("created_at") or "")[:19],
             "replies": [

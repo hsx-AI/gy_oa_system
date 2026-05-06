@@ -228,6 +228,12 @@ const routes = [
     meta: { title: '考勤纪律审查' }
   },
   {
+    path: '/attendance/holiday-duty-check',
+    name: 'HolidayDutyCheck',
+    component: () => import('@/views/attendance/HolidayDutyCheck.vue'),
+    meta: { title: '假期值班出勤核查' }
+  },
+  {
     path: '/feedback',
     name: 'FeedbackCenter',
     component: () => import('@/views/feedback/FeedbackCenter.vue'),
@@ -327,6 +333,28 @@ router.beforeEach(async (to, _from, next) => {
       const allowedByJb = isMinisterLevel(jb)
       const allowedByZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
       if (allowedByAdmin1 || allowedByJb || allowedByZhjsDirector) next()
+      else next('/')
+    } catch {
+      next('/')
+    }
+    return
+  }
+  if (to.path === '/attendance/holiday-duty-check') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) {
+        next('/login')
+        return
+      }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const jb = (user.jb || '').trim()
+      const lsys = (user.dept || user.lsys || '').trim()
+      const res = await getUploadConfig()
+      const admin2 = (res && res.admin2 != null ? res.admin2 : '').trim()
+      const allowedByAdmin2 = admin2 && name === admin2
+      const allowedZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
+      if (allowedByAdmin2 || allowedZhjsDirector) next()
       else next('/')
     } catch {
       next('/')

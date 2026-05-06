@@ -1,5 +1,14 @@
 import request from '@/utils/request'
 
+function currentUserNameForDiscipline() {
+  try {
+    const u = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    return (u.name || u.userName || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 /**
  * 用户登录
  */
@@ -404,22 +413,22 @@ export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })
 }
 
-/** 全部科室列表（领导人看板部长/副部长下拉用） */
+/** 全部科室列表（管理驾驶舱部长/副部长下拉用） */
 export function getDeptLsysList() {
   return request({ url: '/dept/lsys-list', method: 'get' })
 }
 
-/** 领导人看板：满勤率（指定月全员或科室） */
+/** 管理驾驶舱：满勤率（指定月全员或科室） */
 export function getLeaderFullAttendance(params) {
   return request({ url: '/leader/full-attendance', method: 'get', params })
 }
 
-/** 领导人看板：满勤率（全年全员或科室） */
+/** 管理驾驶舱：满勤率（全年全员或科室） */
 export function getLeaderFullAttendanceYear(params) {
   return request({ url: '/leader/full-attendance-year', method: 'get', params })
 }
 
-/** 领导人看板：按月考勤满勤人数（横轴月，纵轴满勤人数，可筛科室） */
+/** 管理驾驶舱：按月考勤满勤人数（横轴月，纵轴满勤人数，可筛科室） */
 export function getLeaderFullAttendanceByMonth(params) {
   return request({ url: '/leader/full-attendance-by-month', method: 'get', params })
 }
@@ -429,7 +438,7 @@ export function getPersonFullAttendance(params) {
   return request({ url: '/person/full-attendance', method: 'get', params })
 }
 
-/** 满勤名单导出（与领导人看板满勤统计同一逻辑，返回各科室 fullNames） */
+/** 满勤名单导出（与管理驾驶舱满勤统计同一逻辑，返回各科室 fullNames） */
 export function getFullAttendanceExport(params) {
   return request({ url: '/leader/full-attendance-export', method: 'get', params })
 }
@@ -439,17 +448,17 @@ export function downloadAttendanceReport(params) {
   return request({ url: '/leader/attendance-report-export', method: 'get', params, responseType: 'blob' })
 }
 
-/** 领导人看板：科室横向对比（加班/请假/公出总数及人均） */
+/** 管理驾驶舱：科室横向对比（加班/请假/公出总数及人均） */
 export function getLeaderDeptComparison(params) {
   return request({ url: '/leader/dept-comparison', method: 'get', params })
 }
 
-/** 领导人看板：全体员工排序（加班/请假/公出） */
+/** 管理驾驶舱：全体员工排序（加班/请假/公出） */
 export function getLeaderRankings(params) {
   return request({ url: '/leader/rankings', method: 'get', params })
 }
 
-/** 领导人看板：工作强度统计 */
+/** 管理驾驶舱：工作强度统计 */
 export function getLeaderWorkIntensity(params) {
   return request({ url: '/leader/work-intensity', method: 'get', params })
 }
@@ -786,15 +795,21 @@ export function getClockInDisciplineStats(params) {
 
 /** 假期值班出勤核查：按排班表与打卡记录判定迟到/早退/缺勤 */
 export function getHolidayDutyAttendanceCheck(params) {
-  return request({ url: '/discipline/holiday-duty-attendance', method: 'get', params })
+  const name = currentUserNameForDiscipline()
+  return request({
+    url: '/discipline/holiday-duty-attendance',
+    method: 'get',
+    params: { ...params, name },
+  })
 }
 
 /** 导出假期值班出勤核查表格 */
 export function exportHolidayDutyAttendanceCheck(params) {
+  const name = currentUserNameForDiscipline()
   return request({
     url: '/discipline/holiday-duty-attendance/export',
     method: 'get',
-    params,
+    params: { ...params, name },
     responseType: 'blob'
   })
 }

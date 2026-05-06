@@ -57,7 +57,7 @@
         <div class="wall-toolbar">
           <div class="tb-left">
             <button
-              v-for="opt in resolveFilterOptions"
+              v-for="opt in wallResolveFilterOptions"
               :key="opt.value"
               :class="['tb-chip', { active: wallFilterResolved === opt.value }]"
               @click="wallFilterResolved = opt.value"
@@ -105,7 +105,7 @@
               </div>
             </div>
           </div>
-          <div v-if="!wallList.length && !wallLoading" class="ws-empty">暂无吐槽，快来发一条吧</div>
+          <div v-if="!displayCards.length && !wallLoading" class="ws-empty">暂无可展示吐槽</div>
           <div class="ws-deco ws-deco-1"></div>
           <div class="ws-deco ws-deco-2"></div>
         </div>
@@ -113,7 +113,7 @@
         <!-- 底部操作按钮 -->
         <div class="wall-bottom">
           <button class="wb-btn wb-primary" @click="showWallInput = true">✏️ 发一条吐槽</button>
-          <button class="wb-btn wb-secondary" @click="showAllWall = true">📋 查看全部</button>
+          <button class="wb-btn wb-secondary" @click="openAllWallRecords">📋 查看全部记录</button>
           <button v-if="isAdmin1" class="wb-btn wb-outline" @click="openWallReview">
             ⚙️ 审核管理 <span v-if="wallPendingCount" class="badge">{{ wallPendingCount }}</span>
           </button>
@@ -163,14 +163,15 @@
         <!-- 查看全部弹窗 -->
         <div v-if="showAllWall" class="modal-overlay" @click.self="showAllWall = false">
           <div class="modal-content modal-lg">
-            <h3>全部吐槽 <span class="all-wall-count">{{ filteredWallList.length }} 条</span></h3>
+            <h3>全部吐槽记录 <span class="all-wall-count">{{ filteredWallList.length }} 条</span></h3>
             <div class="all-wall-toolbar">
               <div class="toolbar-filters">
                 <button
-                  v-for="opt in resolveFilterOptions"
-                  :key="opt.value"
-                  :class="['filter-btn', { active: wallFilterResolved === opt.value }]"
-                  @click="wallFilterResolved = opt.value"
+                  v-for="opt in visibleRecordFilterOptions"
+                  :key="String(opt.value)"
+                  type="button"
+                  :class="['filter-btn', { active: wallRecordFilterActive(opt.value) }]"
+                  @click="wallRecordFilter = opt.value"
                 >{{ opt.label }}</button>
               </div>
               <div class="toolbar-sort">
@@ -195,9 +196,13 @@
               </div>
               <div class="all-wall-meta">
                 <span class="like-info">👍 {{ w.likeCount || 0 }}</span>
-                <span :class="['resolve-tag', `resolve-${w.resolved || 0}`]">
+                <span :class="['audit-tag', `audit-${wallStatusNorm(w)}`]">
+                  {{ wallStatusLabel(w) }}
+                </span>
+                <span v-if="wallStatusNorm(w) === 1" :class="['resolve-tag', `resolve-${wallResolvedNorm(w)}`]">
                   {{ wallResolveLabel(w.resolved) }}
                 </span>
+                <span v-if="wallStatusNorm(w) !== 0 && w.reviewedAt" class="review-info">{{ w.reviewedAt }}</span>
                 <span class="time-info">{{ w.createdAt }}</span>
               </div>
             </div>
@@ -221,10 +226,16 @@
                 <span class="like-info" :class="{ liked: detailData.liked }" @click="doLikeDetail">
                   👍 {{ detailData.likeCount || 0 }}
                 </span>
-                <span :class="['resolve-tag', `resolve-${detailData.resolved || 0}`]">
+                <span v-if="wallStatusNorm(detailData) === 1" :class="['resolve-tag', `resolve-${wallResolvedNorm(detailData)}`]">
                   {{ wallResolveLabel(detailData.resolved) }}
                 </span>
+                <span :class="['audit-tag', `audit-${wallStatusNorm(detailData)}`]">
+                  {{ wallStatusLabel(detailData) }}
+                </span>
                 <span class="time-info">{{ detailData.createdAt }}</span>
+              </div>
+              <div v-if="wallStatusNorm(detailData) !== 1" class="review-state-info">
+                {{ wallStatusLabel(detailData) }}<span v-if="detailData.reviewedAt">：{{ detailData.reviewedAt }}</span>
               </div>
               <div v-if="detailData.assignee" class="assignee-info">
                 负责人：{{ detailData.assignee }}
@@ -415,7 +426,7 @@
 import { ref, reactive, computed, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import { useRoute } from 'vue-router'
 import {
-  submitWall, getWallList, getWallPending, reviewWall,
+  submitWall, getWallList, getWallRecords, getWallPending, reviewWall,
   likeWall, getWallDetail, replyWall, resolveWall, wallImageUrl, leaderImageUrl,
   getLeaderTargets, submitLeaderMsg, getLeaderInbox, replyLeaderMsg, getLeaderPublic,
   submitSystemFeedback, getSystemList, replySystemFeedback, systemImageUrl
@@ -460,11 +471,33 @@ function fitTextareaHeight(el, minLines = 2) {
 const isAdmin1 = ref(false)
 const isLeader = computed(() => {
   const j = userJb
-  return /经理|副经理/.test(j) || isAdmin1.value
+  return /经理助理|副经理|经理|副部长|部长/.test(j) || isAdmin1.value
 })
+const canViewPrivateWallRecords = computed(() => isLeader.value || isAdmin1.value)
 
 function wallResolveLabel(v) {
   return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
+}
+
+function wallStatusNorm(w) {
+  if (typeof w !== 'object' || w === null) {
+    const n = Number(w)
+    return Number.isFinite(n) ? n : 1
+  }
+  const raw = w.status
+  if (raw !== null && raw !== undefined && raw !== '') {
+    const n = Number(raw)
+    if (Number.isFinite(n)) return n
+  }
+  const label = String(w.statusLabel || '').trim()
+  if (label.includes('审核')) return 0
+  if (label.includes('驳回') || label.includes('拒绝')) return 2
+  return 1
+}
+
+function wallStatusLabel(w) {
+  const n = wallStatusNorm(w)
+  return n === 0 ? '正在审核' : n === 2 ? '已驳回' : '已上墙'
 }
 
 onMounted(async () => {
@@ -494,6 +527,7 @@ watch(
 // ==================== 吐槽墙 ====================
 const stageRef = ref(null)
 const wallList = ref([])
+const allWallList = ref([])
 const wallLoading = ref(false)
 const activeBarrages = ref([])
 let barrageTimer = null
@@ -523,9 +557,27 @@ async function loadWall() {
   try {
     const res = await getWallList()
     if (res.success) wallList.value = res.data || []
+    await loadWallRecords()
   } catch { /* ignore */ }
   wallLoading.value = false
   startBarrageLoop()
+}
+
+async function loadWallRecords() {
+  try {
+    const res = await getWallRecords({ current_user: userName })
+    if (res.success) {
+      const rows = Array.isArray(res.data) ? res.data : []
+      allWallList.value = rows
+      wallPendingCount.value = rows.filter(w => wallStatusNorm(w) === 0).length
+      return
+    }
+  } catch (e) {
+    console.warn('加载全部吐槽记录失败（将降级为当前上墙列表，不含已解决等）:', e)
+  }
+  if (!allWallList.value.length && wallList.value.length) {
+    allWallList.value = wallList.value.map(w => ({ ...w }))
+  }
 }
 
 const barragePool = computed(() => wallList.value.filter(w => w.resolved !== 3))
@@ -610,6 +662,7 @@ async function doSubmitWall() {
       wallDraft.value = ''
       removeWallImage()
       showWallInput.value = false
+      loadWallRecords()
     } else {
       alert(res.message || '提交失败')
     }
@@ -639,7 +692,7 @@ async function doReview(id, action) {
     if (res.success) {
       wallPendingList.value = wallPendingList.value.filter(p => p.id !== id)
       wallPendingCount.value = wallPendingList.value.length
-      if (action === 'approve') loadWall()
+      await loadWall()
     } else {
       alert(res.message || '操作失败')
     }
@@ -657,6 +710,8 @@ async function doLike(wallId, barrageItem) {
       const delta = res.liked ? 1 : -1
       const item = wallList.value.find(w => w.id === wallId)
       if (item) item.likeCount = Math.max((item.likeCount || 0) + delta, 0)
+      const record = allWallList.value.find(w => w.id === wallId)
+      if (record) record.likeCount = Math.max((record.likeCount || 0) + delta, 0)
       activeBarrages.value.forEach(b => {
         if (b._wallId === wallId) {
           b.likeCount = Math.max((b.likeCount || 0) + delta, 0)
@@ -671,26 +726,69 @@ async function doLike(wallId, barrageItem) {
 // -- 查看全部 --
 const showAllWall = ref(false)
 const wallFilterResolved = ref('all')
+const wallRecordFilter = ref('all')
 const wallSortOrder = ref('desc')
 const wallPage = ref(1)
 const WALL_PAGE_SIZE = 8
-const resolveFilterOptions = [
+const wallResolveFilterOptions = [
   { value: 'all', label: '全部' },
+  { value: 0, label: '未处理' },
+  { value: 1, label: '处理中' },
+  { value: 2, label: '已回复' },
+]
+const recordFilterOptions = [
+  { value: 'all', label: '全部记录' },
   { value: 0, label: '未处理' },
   { value: 1, label: '处理中' },
   { value: 2, label: '已回复' },
   { value: 3, label: '已解决' },
 ]
+const visibleRecordFilterOptions = computed(() => {
+  const privateFilters = canViewPrivateWallRecords.value
+    ? [{ value: 'pending', label: '正在审核' }, { value: 'rejected', label: '已驳回' }]
+    : []
+  return [recordFilterOptions[0], ...privateFilters, ...recordFilterOptions.slice(1)]
+})
+
+/** 与后端 tinyint 一致，避免字符串/undefined 导致筛选恒不匹配 */
+function wallResolvedNorm(w) {
+  const v = w?.resolved
+  if (v === null || v === undefined || v === '') return 0
+  const n = Number(v)
+  return Number.isFinite(n) ? n : 0
+}
+
+function wallRecordFilterActive(optVal) {
+  const rf = wallRecordFilter.value
+  if (typeof optVal === 'number') return Number(rf) === optVal
+  return rf === optVal
+}
 
 const filteredWallList = computed(() => {
-  let list = [...wallList.value]
-  if (wallFilterResolved.value !== 'all') {
-    list = list.filter(w => (w.resolved || 0) === wallFilterResolved.value)
+  let list = [...allWallList.value]
+  const rf = wallRecordFilter.value
+
+  if (!canViewPrivateWallRecords.value) {
+    list = list.filter(w => wallStatusNorm(w) === 1)
   }
+
+  if (rf === 'pending') {
+    list = list.filter(w => wallStatusNorm(w) === 0)
+  } else if (rf === 'rejected') {
+    list = list.filter(w => wallStatusNorm(w) === 2)
+  } else if (rf !== 'all') {
+    const target = Number(rf)
+    if (!Number.isNaN(target)) {
+      list = list.filter(w => wallStatusNorm(w) === 1 && wallResolvedNorm(w) === target)
+    }
+  }
+
   if (wallSortOrder.value === 'asc') {
     list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''))
   } else if (wallSortOrder.value === 'likes') {
     list.sort((a, b) => (b.likeCount || 0) - (a.likeCount || 0))
+  } else {
+    list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
   }
   return list
 })
@@ -701,14 +799,23 @@ const pagedWallList = computed(() => {
   return filteredWallList.value.slice(start, start + WALL_PAGE_SIZE)
 })
 
-watch([wallFilterResolved, wallSortOrder], () => { wallPage.value = 1 })
+watch([wallRecordFilter, wallSortOrder], () => { wallPage.value = 1 })
+
+async function openAllWallRecords() {
+  await loadWallRecords()
+  if (!canViewPrivateWallRecords.value && ['pending', 'rejected'].includes(wallRecordFilter.value)) {
+    wallRecordFilter.value = 'all'
+  }
+  wallPage.value = 1
+  showAllWall.value = true
+}
 
 // -- 统计数据 --
 const wallStats = computed(() => {
-  const list = wallList.value
+  const list = allWallList.value.length ? allWallList.value : wallList.value
   const total = list.length
-  const processing = list.filter(w => w.resolved === 1).length
-  const resolved = list.filter(w => w.resolved === 3).length
+  const processing = list.filter(w => wallStatusNorm(w) === 1 && wallResolvedNorm(w) === 1).length
+  const resolved = list.filter(w => wallStatusNorm(w) === 1 && wallResolvedNorm(w) === 3).length
   const now = new Date()
   const weekAgo = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 7)
   const thisWeek = list.filter(w => w.createdAt && new Date(w.createdAt) >= weekAgo).length
@@ -726,9 +833,9 @@ const CARD_BG = [
 const CARD_ROT = [-2, 1.5, -1, 2, -1.5, 1, -0.5, 1.8]
 
 const displayCards = computed(() => {
-  let list = [...wallList.value]
+  let list = wallList.value.filter(w => wallStatusNorm(w) === 1 && wallResolvedNorm(w) !== 3)
   if (wallFilterResolved.value !== 'all') {
-    list = list.filter(w => (w.resolved || 0) === wallFilterResolved.value)
+    list = list.filter(w => wallResolvedNorm(w) === wallFilterResolved.value)
   }
   if (wallSearchQuery.value.trim()) {
     const q = wallSearchQuery.value.trim().toLowerCase()
@@ -754,7 +861,7 @@ const detailReplyTextareaRef = ref(null)
 const detailReplying = ref(false)
 const detailAssignee = ref('')
 const assigneeOptions = ref([])
-const canHandleWallDetail = computed(() => isLeader.value || detailData.value?.assignee === userName)
+const canHandleWallDetail = computed(() => wallStatusNorm(detailData.value) === 1 && (isLeader.value || detailData.value?.assignee === userName))
 let openedRouteWallId = ''
 
 async function loadAssigneeOptions() {
@@ -797,7 +904,7 @@ async function openDetail(wallId) {
 }
 
 async function doLikeDetail() {
-  if (!detailData.value || !userName) return
+  if (!detailData.value || !userName || wallStatusNorm(detailData.value) !== 1) return
   try {
     const res = await likeWall(detailData.value.id, { current_user: userName })
     if (res.success) {
@@ -805,6 +912,8 @@ async function doLikeDetail() {
       detailData.value.likeCount = (detailData.value.likeCount || 0) + (res.liked ? 1 : -1)
       const item = wallList.value.find(w => w.id === detailData.value.id)
       if (item) item.likeCount = detailData.value.likeCount
+      const record = allWallList.value.find(w => w.id === detailData.value.id)
+      if (record) record.likeCount = detailData.value.likeCount
     }
   } catch { /* ignore */ }
 }
@@ -828,6 +937,7 @@ async function doReplyWall() {
         detailAssignee.value = fresh.data?.assignee || ''
       }
       loadWall()
+      loadWallRecords()
       refreshWorkplaceTodos()
     } else {
       alert(res.message || '回复失败')
@@ -850,6 +960,12 @@ async function doResolve(level) {
         item.resolved = level
         item.resolvedBy = userName
       }
+      const record = allWallList.value.find(w => w.id === detailData.value.id)
+      if (record) {
+        record.resolved = level
+        record.resolvedBy = userName
+      }
+      if (level === 3) loadWall()
       refreshWorkplaceTodos()
     }
   } catch (e) {
@@ -1585,6 +1701,10 @@ async function doReplySystem(item) {
   margin-top: 10px; padding-top: 8px;
   border-top: 1px solid #f5f5f5;
 }
+.review-info {
+  font-size: 12px;
+  color: #9ca3af;
+}
 .like-info {
   font-size: 13px; cursor: pointer;
   color: #6b7280; transition: color .2s;
@@ -1599,6 +1719,15 @@ async function doReplySystem(item) {
 .resolve-tag.resolve-1 { background: #fff7e6; color: #d46b08; }
 .resolve-tag.resolve-2 { background: #e6f4ff; color: #1677ff; }
 .resolve-tag.resolve-3 { background: #e6f7e9; color: #389e0d; }
+.audit-tag {
+  padding: 2px 8px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 500;
+}
+.audit-tag.audit-0 { background: #fff7e6; color: #d46b08; }
+.audit-tag.audit-1 { background: #eef2ff; color: #3a5cc1; }
+.audit-tag.audit-2 { background: #fff1f0; color: #cf1322; }
 .pagination {
   display: flex; align-items: center; justify-content: center;
   gap: 12px; padding: 12px 0 4px;
@@ -1630,6 +1759,13 @@ async function doReplySystem(item) {
   border-radius: 8px;
   background: #f0f5ff;
   color: #3a5cc1;
+  font-size: 13px;
+}
+.review-state-info {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #6b7280;
   font-size: 13px;
 }
 .detail-replies { padding-top: 8px; }

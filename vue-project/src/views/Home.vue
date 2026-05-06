@@ -297,7 +297,7 @@
               </svg>
             </span>
             <span class="dashboard-card__title-text">吐槽墙</span>
-            <span class="dashboard-card__badge" v-if="wallList.length">{{ wallList.length }}</span>
+            <span class="dashboard-card__badge" v-if="visibleWallList.length">{{ visibleWallList.length }}</span>
           </h2>
           <div class="wall-preview-actions">
             <button type="button" class="wall-preview-refresh" title="刷新" @click="loadWallList">
@@ -557,8 +557,12 @@ const WALL_CARD_BG = [
 ]
 const WALL_CARD_ROT = [-2, 1.5, -1, 2, -1.5, 1]
 
+const visibleWallList = computed(() => {
+  return (wallList.value || []).filter(w => Number(w.resolved || 0) !== 3)
+})
+
 const wallDisplayCards = computed(() => {
-  return (wallList.value || []).slice(0, 6).map((w, i) => ({
+  return visibleWallList.value.slice(0, 6).map((w, i) => ({
     ...w,
     _bg: WALL_CARD_BG[i % WALL_CARD_BG.length],
     _rotate: WALL_CARD_ROT[i % WALL_CARD_ROT.length],
@@ -865,7 +869,7 @@ const rawFeatureGroups = [
     items: [
       {
         id: 'leader-dashboard',
-        title: '领导人看板',
+        title: '管理驾驶舱',
         description: '部长/副部长查看科室加班、请假、公出等汇总看板',
         path: '/leader-dashboard',
         permission: 'leaderDashboard',

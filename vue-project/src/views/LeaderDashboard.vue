@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-content">
         <div class="header-info">
-          <h1 class="header-title">领导人看板</h1>
+          <h1 class="header-title">管理驾驶舱</h1>
           <p class="header-subtitle">本科室请假、加班、公出汇总，按人查看</p>
         </div>
         <router-link to="/attendance/discipline" class="btn btn-discipline">
@@ -1187,7 +1187,7 @@ const fetchData = async () => {
       console.error('工作强度加载失败:', e)
     }
   } catch (error) {
-    console.error('领导人看板数据加载失败:', error)
+    console.error('管理驾驶舱数据加载失败:', error)
   } finally {
     loading.value = false
   }

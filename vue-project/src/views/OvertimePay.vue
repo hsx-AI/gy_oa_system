@@ -80,7 +80,7 @@
               </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与领导人看板一致（根据打卡数据识别，无异常建议即满勤）。下载考勤表(Word)按所选科室和月份自动填充人员及各假别天数（换休不影响全勤，最小0.25天进位）。</p>
+          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与管理驾驶舱一致（根据打卡数据识别，无异常建议即满勤）。下载考勤表(Word)按所选科室和月份自动填充人员及各假别天数（换休不影响全勤，最小0.25天进位）。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">

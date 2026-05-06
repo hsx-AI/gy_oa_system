@@ -204,7 +204,7 @@
         </div>
       </div>
 
-      <!-- 月度趋势图表：与领导人看板科室横向对比同形式，按类型筛选展示 -->
+      <!-- 月度趋势图表：与管理驾驶舱科室横向对比同形式，按类型筛选展示 -->
       <div v-if="monthlyData.length > 0" class="chart-section card">
         <h2 class="section-title">
           <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -246,7 +246,7 @@
         </div>
       </div>
 
-      <!-- 科室成员横向对比：仅班组长/主任/副主任可见，参考领导人看板科室横向对比 -->
+      <!-- 科室成员横向对比：仅班组长/主任/副主任可见，参考管理驾驶舱科室横向对比 -->
       <div v-if="permLevel === 2 && permLsys && memberComparisonList.length > 0 && yearTotal" class="chart-section card">
         <h2 class="section-title">
           <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -552,7 +552,7 @@ const maxBusinessTripDays = computed(() => {
   return max || 1
 })
 
-// 月度趋势图：筛选展示加班/请假/公出其一（与领导人看板科室横向对比同形式）
+// 月度趋势图：筛选展示加班/请假/公出其一（与管理驾驶舱科室横向对比同形式）
 const trendChartType = ref('overtime')
 const trendChartTypes = [
   { type: 'overtime', label: '加班', unit: '(小时)' },

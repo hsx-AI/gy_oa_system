@@ -79,7 +79,7 @@
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
               <polyline points="9 22 9 12 15 12 15 22" />
             </svg>
-            <span>领导人看板</span>
+            <span>管理驾驶舱</span>
           </router-link>
           <router-link v-if="canShowUpload" to="/upload" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -388,7 +388,7 @@
         <div class="intro-modal-body">
           <section class="intro-section">
             <h3>系统功能简介</h3>
-            <p>本平台集成考勤智能填报、公出管理、加班/请假审批、统计汇总、领导人看板、文件编号、制度查询、思想汇报与人事档案入口等功能，便于部门统一办公与考勤管理。</p>
+            <p>本平台集成考勤智能填报、公出管理、加班/请假审批、统计汇总、管理驾驶舱、文件编号、制度查询、思想汇报与人事档案入口等功能，便于部门统一办公与考勤管理。</p>
           </section>
           <section class="intro-section intro-notice">
             <h3>重要提醒</h3>
@@ -849,7 +849,7 @@ const canManageHxp = computed(() => {
   return isMinisterLevel(jb)
 })
 
-// 是否显示领导人看板（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）
+// 是否显示管理驾驶舱（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）
 const canSeeLeaderDashboard = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   const a1 = (admin1.value || '').trim()

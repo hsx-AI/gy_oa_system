@@ -67,6 +67,14 @@
         >
           月览
         </button>
+        <router-link
+          v-if="showHolidayDutyCheckLink"
+          to="/attendance/holiday-duty-check"
+          class="btn btn-outline btn-sm"
+          title="按排班与打卡核对假期值班出勤（人事管理员与综合技术室主任职级）"
+        >
+          值班出勤核查
+        </router-link>
       </div>
       <div class="toolbar-right">
         <template v-if="isManager">
@@ -532,7 +540,8 @@
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
 import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions } from '@/api/shift'
-import { isDeptLeader } from '@/utils/roleMatch'
+import { getUploadConfig } from '@/api/attendance'
+import { isDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
 const PERIOD_DAYS = 14
 
@@ -863,6 +872,23 @@ const isManager = computed(() => {
   } catch { return false }
 })
 
+/** webconfig.admin2，用于值班出勤核查入口 */
+const admin2NameForDuty = ref('')
+
+const showHolidayDutyCheckLink = computed(() => {
+  try {
+    const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    const name = (info.name || info.userName || '').trim()
+    const jb = (info.jb || '').trim()
+    const myDept = (info.dept || info.lsys || '').trim()
+    const a2 = (admin2NameForDuty.value || '').trim()
+    if (a2 && name === a2) return true
+    return myDept === '综合技术室' && isDirectorLevel(jb)
+  } catch {
+    return false
+  }
+})
+
 const isSameDept = computed(() => {
   try {
     const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
@@ -905,6 +931,10 @@ function planCellTitle(d) {
 }
 
 onMounted(async () => {
+  try {
+    const cfg = await getUploadConfig()
+    if (cfg?.admin2 != null) admin2NameForDuty.value = cfg.admin2 || ''
+  } catch { /* ignore */ }
   try {
     const res = await getDepartments()
     departments.value = res?.departments || []

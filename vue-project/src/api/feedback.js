@@ -9,8 +9,11 @@ export function submitWall(data) {
   if (data.image) fd.append('image', data.image)
   return request({ url: `${P}/wall/submit`, method: 'post', data: fd })
 }
-export function getWallList() {
-  return request({ url: `${P}/wall/list`, method: 'get' })
+export function getWallList(params) {
+  return request({ url: `${P}/wall/list`, method: 'get', params })
+}
+export function getWallRecords(params) {
+  return getWallList({ include_all: true, ...(params || {}) })
 }
 export function getWallPending(params) {
   return request({ url: `${P}/wall/pending`, method: 'get', params })

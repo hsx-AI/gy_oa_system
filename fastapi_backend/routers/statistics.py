@@ -29,6 +29,41 @@ from collections import defaultdict
 logger = logging.getLogger(__name__)
 
 
+def _can_access_holiday_duty_attendance(name: Optional[str]) -> bool:
+    """
+    假期值班出勤核查：部长/副部长、系统管理员 admin1、综合技术室主任/副主任（含主任责等主任职级）、人事管理员 admin2。
+    与考勤纪律审查页、排班管理入口的可用范围一致。
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        wc = db.execute_query("SELECT admin1, admin2 FROM webconfig WHERE id = 1 LIMIT 1")
+        if wc:
+            row = wc[0]
+            a1 = (row.get("admin1") or "").strip()
+            a2 = (row.get("admin2") or "").strip()
+            if a1 and n == a1:
+                return True
+            if a2 and n == a2:
+                return True
+    except Exception:
+        pass
+    try:
+        from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
+    except Exception:
+        return False
+    user = _get_user_info(n)
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return True
+    if is_zonghe_tech_director(user):
+        return True
+    return False
+
+
 INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}
 
 
@@ -2184,6 +2219,7 @@ async def get_person_scatter(
 
 @router.get("/discipline/holiday-duty-attendance")
 async def get_holiday_duty_attendance(
+    name: str = Query(..., description="当前登录用户姓名，用于鉴权"),
     start_date: str = Query(..., description="Start date, YYYY-MM-DD"),
     end_date: str = Query(..., description="End date, YYYY-MM-DD"),
     lsys: Optional[str] = Query(None, description="Department filter"),
@@ -2196,6 +2232,8 @@ async def get_holiday_duty_attendance(
     For night shift with only one same-day punch, leave time is treated as 24:00.
     """
     try:
+        if not _can_access_holiday_duty_attendance(name):
+            raise HTTPException(status_code=403, detail="无假期值班出勤核查权限")
         try:
             d0 = datetime.strptime(str(start_date)[:10], "%Y-%m-%d").date()
             d1 = datetime.strptime(str(end_date)[:10], "%Y-%m-%d").date()
@@ -2510,19 +2548,22 @@ async def get_holiday_duty_attendance(
 
 @router.get("/discipline/holiday-duty-attendance/export")
 async def export_holiday_duty_attendance(
+    name: str = Query(..., description="当前登录用户姓名，用于鉴权"),
     start_date: str = Query(..., description="Start date, YYYY-MM-DD"),
     end_date: str = Query(..., description="End date, YYYY-MM-DD"),
     lsys: Optional[str] = Query(None, description="Department filter"),
 ):
     """Export holiday duty attendance check tables to Excel."""
     try:
+        if not _can_access_holiday_duty_attendance(name):
+            raise HTTPException(status_code=403, detail="无假期值班出勤核查权限")
         from openpyxl import Workbook
         from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
         from openpyxl.utils import get_column_letter
     except Exception:
         raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
 
-    data = await get_holiday_duty_attendance(start_date=start_date, end_date=end_date, lsys=lsys)
+    data = await get_holiday_duty_attendance(name=name, start_date=start_date, end_date=end_date, lsys=lsys)
 
     def pct(rate) -> str:
         try:
