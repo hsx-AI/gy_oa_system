@@ -580,7 +580,7 @@ async function loadWallRecords() {
   }
 }
 
-const barragePool = computed(() => wallList.value.filter(w => w.resolved !== 3))
+const barragePool = computed(() => wallList.value)
 
 function startBarrageLoop() {
   stopBarrageLoop()
@@ -833,7 +833,8 @@ const CARD_BG = [
 const CARD_ROT = [-2, 1.5, -1, 2, -1.5, 1, -0.5, 1.8]
 
 const displayCards = computed(() => {
-  let list = wallList.value.filter(w => wallStatusNorm(w) === 1 && wallResolvedNorm(w) !== 3)
+  // 公开列表由接口控制：已解决仅保留 resolved_at 起算若干天内
+  let list = wallList.value.filter(w => wallStatusNorm(w) === 1)
   if (wallFilterResolved.value !== 'all') {
     list = list.filter(w => wallResolvedNorm(w) === wallFilterResolved.value)
   }

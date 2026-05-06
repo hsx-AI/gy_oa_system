@@ -29,6 +29,19 @@ WALL_UPLOAD_DIR = _BASE / settings.UPLOAD_DIR / "feedback_wall_images"
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
 
+# 已解决吐槽在公开吐槽墙仍保留的天数（从 resolved_at 起算）
+WALL_RESOLVED_PUBLIC_VISIBLE_DAYS = 15
+
+
+def _wall_public_list_where_sql() -> str:
+    days = int(WALL_RESOLVED_PUBLIC_VISIBLE_DAYS)
+    return (
+        "WHERE status = 1 AND (COALESCE(resolved, 0) <> 3 OR ("
+        "COALESCE(resolved, 0) = 3 AND resolved_at IS NOT NULL AND "
+        f"resolved_at >= DATE_SUB(NOW(), INTERVAL {days} DAY))) "
+    )
+
+
 # ==================== 建表（启动时自动创建） ====================
 
 _INIT_DONE = False
@@ -205,6 +218,12 @@ def _wall_resolved_int(val) -> int:
         return 0
 
 
+def _resolved_at_display(val) -> str:
+    if not val:
+        return ""
+    return str(val)[:19]
+
+
 def _build_wall_items(rows):
     """为 wall 列表构建含 replies 信息的数据"""
     if not rows:
@@ -233,6 +252,7 @@ def _build_wall_items(rows):
             "statusLabel": status_label_map.get(r.get("status") if r.get("status") is not None else 1, "未知"),
             "resolved": _wall_resolved_int(r.get("resolved")),
             "resolvedBy": r.get("resolved_by") or "",
+            "resolvedAt": _resolved_at_display(r.get("resolved_at")),
             "assignee": r.get("assignee") or "",
             "assignedBy": r.get("assigned_by") or "",
             "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
@@ -249,36 +269,38 @@ def _build_wall_items(rows):
 async def wall_list(include_all: bool = Query(False), current_user: str = Query("")):
     """获取吐槽墙列表。
 
-    默认返回已通过且未解决；include_all=true 时，管理员/领导可看全部，
-    普通用户仅可看 status=1 的已上墙记录。
+    默认返回已通过：未解决始终展示；已解决自 resolved_at 起保留 WALL_RESOLVED_PUBLIC_VISIBLE_DAYS 天，超时不再出现在公开列表。
+    include_all=true 时，管理员/领导可看全部，普通用户仅可看 status=1 的已上墙记录。
     """
     _ensure_tables()
     select_sql = (
-        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, resolved_at, assignee, assigned_by, assigned_at, "
         "reviewed_by, reviewed_at, created_at FROM feedback_wall "
     )
+    public_where = _wall_public_list_where_sql()
     if include_all:
         if _is_wall_privileged_user(current_user):
             rows = db.execute_query(select_sql + "ORDER BY created_at DESC")
         else:
-            rows = db.execute_query(select_sql + "WHERE status = 1 ORDER BY created_at DESC")
+            rows = db.execute_query(select_sql + public_where + "ORDER BY created_at DESC")
     else:
-        rows = db.execute_query(select_sql + "WHERE status = 1 AND COALESCE(resolved, 0) <> 3 ORDER BY created_at DESC")
+        rows = db.execute_query(select_sql + public_where + "ORDER BY created_at DESC")
     return {"success": True, "data": _build_wall_items(rows)}
 
 
 @router.get("/wall/records")
 async def wall_records(current_user: str = Query("")):
-    """获取吐槽墙记录。管理员/领导可看全部，普通用户仅可看已上墙记录。"""
+    """获取吐槽墙记录。管理员/领导可看全部，普通用户与公开列表一致（已解决仅保留 resolved_at 起算若干天内）。"""
     _ensure_tables()
     select_sql = (
-        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, resolved_at, assignee, assigned_by, assigned_at, "
         "reviewed_by, reviewed_at, created_at FROM feedback_wall "
     )
+    public_where = _wall_public_list_where_sql()
     if _is_wall_privileged_user(current_user):
         rows = db.execute_query(select_sql + "ORDER BY created_at DESC")
     else:
-        rows = db.execute_query(select_sql + "WHERE status = 1 ORDER BY created_at DESC")
+        rows = db.execute_query(select_sql + public_where + "ORDER BY created_at DESC")
     return {"success": True, "data": _build_wall_items(rows)}
 
 
@@ -290,7 +312,7 @@ async def wall_assigned(current_user: str = Query(...)):
     if not name:
         raise HTTPException(status_code=400, detail="缺少用户信息")
     rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, resolved, resolved_by, assignee, assigned_by, assigned_at, created_at "
+        "SELECT id, content, image_url, like_count, resolved, resolved_by, resolved_at, assignee, assigned_by, assigned_at, created_at "
         "FROM feedback_wall "
         "WHERE status = 1 AND assignee = %s AND COALESCE(resolved, 0) <> 3 "
         "ORDER BY assigned_at DESC, created_at DESC",
@@ -397,7 +419,7 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
     """获取单条吐槽的详情（含全部领导回复和当前用户是否已点赞）"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, assignee, assigned_by, assigned_at, "
+        "SELECT id, content, image_url, like_count, status, resolved, resolved_by, resolved_at, assignee, assigned_by, assigned_at, "
         "reviewed_by, reviewed_at, created_at "
         "FROM feedback_wall WHERE id = %s",
         (item_id,),
@@ -432,6 +454,7 @@ async def wall_detail(item_id: str, current_user: str = Query("")):
             "statusLabel": {0: "正在审核", 1: "已上墙", 2: "已驳回"}.get(r.get("status") if r.get("status") is not None else 1, "未知"),
             "resolved": _wall_resolved_int(r.get("resolved")),
             "resolvedBy": r.get("resolved_by") or "",
+            "resolvedAt": _resolved_at_display(r.get("resolved_at")),
             "assignee": r.get("assignee") or "",
             "assignedBy": r.get("assigned_by") or "",
             "assignedAt": str(r.get("assigned_at") or "")[:19] if r.get("assigned_at") else "",
