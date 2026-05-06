@@ -8,10 +8,11 @@
 - 统计与筛选中排除：名字末尾为1、科室(lsys)末尾为1（视为已离职人员/组织）
 - 领导人看板统计中不参与：科室「部办」
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import Response
 from io import BytesIO
 from urllib.parse import quote
+from decimal import Decimal, ROUND_HALF_UP
 
 # 领导人看板中不参与统计的科室（不计算人数、不参与排序与横向对比）
 LEADER_EXCLUDE_LSYS = "部办"
@@ -20,11 +21,29 @@ OTHER_DEPT_NAMES = ("其他部门员工", "其他部门成员")
 # SQL 片段：用于 WHERE 条件中排除虚拟科室（拼接在已有 != 部办 之后）
 _EXCL_OTHER = "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
 _EXCL_OTHER_YGGL = "AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') "
-from typing import Optional, List, Tuple, Dict
+from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime, date
 from database import db
 import logging
+import re
 from collections import defaultdict
+from utils.helpers import time_to_decimal, format_time
+from utils.holiday_loader import load_holidays_dict
+
+try:
+    from routers.suggestions import (
+        collect_valid_times_with_marks,
+        build_intervals_from_marks,
+        _load_holiday_festival_map,
+        _is_incentive_festival,
+        is_workday,
+    )
+except Exception:  # pragma: no cover - import fallback for unusual startup order
+    collect_valid_times_with_marks = None
+    build_intervals_from_marks = None
+    _load_holiday_festival_map = None
+    _is_incentive_festival = None
+    is_workday = None
 
 logger = logging.getLogger(__name__)
 
@@ -60,6 +79,44 @@ def _can_access_holiday_duty_attendance(name: Optional[str]) -> bool:
     if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
         return True
     if is_zonghe_tech_director(user):
+        return True
+    return False
+
+
+def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
+    """
+    领导加班统计权限：
+    - 部长/副部长
+    - 系统管理员 admin1、人事管理员 admin2
+    - 综合技术室主任（不含副主任）
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        wc = db.execute_query("SELECT admin1, admin2 FROM webconfig WHERE id = 1 LIMIT 1")
+        if wc:
+            row = wc[0]
+            a1 = (row.get("admin1") or "").strip()
+            a2 = (row.get("admin2") or "").strip()
+            if a1 and n == a1:
+                return True
+            if a2 and n == a2:
+                return True
+    except Exception:
+        pass
+    try:
+        from routers.approvers import _get_user_info, _jb_match
+    except Exception:
+        return False
+    user = _get_user_info(n)
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return True
+    lsys = (user.get("lsys") or "").strip()
+    if lsys == "综合技术室" and _jb_match(jb, "主任"):
         return True
     return False
 
@@ -443,6 +500,492 @@ def _get_lsysjm_list(lsys: str) -> List[str]:
     if not result and lsys:
         result = [lsys]  # 若无映射则用 lsys 本身
     return result
+
+
+# ==================== 部办打卡加班统计（领导高亮） ====================
+
+LEADER_OVERTIME_JB_RE = r"经理助理|副经理|经理|副部长|部长"
+LEADER_OVERTIME_BASELINE_YEAR = 2025
+LEADER_OVERTIME_BASELINE_DAYS: Tuple[float, ...] = (
+    23.53, 20.80, 20.51, 16.67, 15.09, 14.89, 14.89, 14.41, 14.27, 14.22,
+    13.45, 13.15, 12.98, 12.80, 12.45, 12.43, 12.32, 12.20, 11.89, 11.59,
+    11.44, 11.27, 11.04, 11.02, 10.75, 10.64, 10.51, 10.34, 10.33, 10.21,
+    10.15, 10.03, 9.75, 9.69, 9.60, 9.59, 9.41, 9.32, 9.31, 9.26,
+    9.10, 9.10, 9.06, 9.00, 8.81, 8.75, 8.74, 8.66, 8.65, 8.64,
+    8.62, 8.60, 8.59, 8.47, 8.33, 8.15, 7.86, 7.85, 7.78, 7.69,
+    7.67, 7.59, 7.51, 7.43, 7.41, 7.41, 7.39, 7.25, 6.99, 6.94,
+    6.85, 6.71, 6.58, 6.53, 6.52, 6.49, 6.48, 6.47, 6.41, 6.39,
+    6.38, 6.27, 6.23, 6.21, 6.08, 5.98, 5.83, 5.77, 5.73, 5.68,
+    5.55, 5.43, 5.38, 5.32, 5.23, 5.12, 4.97, 4.93, 4.89, 4.84,
+    4.37, 4.29, 4.28, 4.20, 4.05, 3.37, 3.22, 2.64, 2.31, 2.23,
+    2.01, 1.90, 1.71, 1.63, 1.54, 1.36, 1.35, 1.29, 0.88, 0.82,
+    0.75, 0.00, 0.00, 0.00, 0.00, 0.00,
+)
+
+
+def _round_01_half_up(value: float) -> float:
+    return float(Decimal(str(value or 0)).quantize(Decimal("0.1"), rounding=ROUND_HALF_UP))
+
+
+def _round_02_half_up(value: float) -> float:
+    return float(Decimal(str(value or 0)).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+
+
+def _ensure_leader_overtime_baseline() -> None:
+    db.execute_update(
+        """
+        CREATE TABLE IF NOT EXISTS leader_overtime_rank_baseline (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            baseline_year INT NOT NULL,
+            rank_no INT NOT NULL,
+            monthly_avg_days DECIMAL(6,2) NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uk_leader_overtime_rank (baseline_year, rank_no)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='中层领导干部月均加班天数排名基准'
+        """,
+        (),
+    )
+    rows = db.execute_query(
+        "SELECT COUNT(*) AS cnt FROM leader_overtime_rank_baseline WHERE baseline_year = %s",
+        (LEADER_OVERTIME_BASELINE_YEAR,),
+    )
+    count = int((rows[0] or {}).get("cnt") or 0) if rows else 0
+    if count == len(LEADER_OVERTIME_BASELINE_DAYS):
+        return
+    params = [
+        (LEADER_OVERTIME_BASELINE_YEAR, idx, value)
+        for idx, value in enumerate(LEADER_OVERTIME_BASELINE_DAYS, start=1)
+    ]
+    db.execute_many(
+        """
+        INSERT INTO leader_overtime_rank_baseline (baseline_year, rank_no, monthly_avg_days)
+        VALUES (%s, %s, %s)
+        ON DUPLICATE KEY UPDATE monthly_avg_days = VALUES(monthly_avg_days)
+        """,
+        params,
+    )
+
+
+def _resolve_leader_overtime_baseline_year(query_year: Optional[int] = None) -> int:
+    _ensure_leader_overtime_baseline()
+    try:
+        if query_year:
+            rows = db.execute_query(
+                "SELECT MAX(baseline_year) AS y FROM leader_overtime_rank_baseline WHERE baseline_year < %s",
+                (int(query_year),),
+            )
+            year_val = (rows[0] or {}).get("y") if rows else None
+            if year_val:
+                return int(year_val)
+        rows = db.execute_query(
+            "SELECT MAX(baseline_year) AS y FROM leader_overtime_rank_baseline",
+            (),
+        )
+        year_val = (rows[0] or {}).get("y") if rows else None
+        return int(year_val or LEADER_OVERTIME_BASELINE_YEAR)
+    except Exception as e:
+        logger.error(f"解析领导加班排名基准年份失败: {str(e)}")
+        return LEADER_OVERTIME_BASELINE_YEAR
+
+
+def _get_leader_overtime_baseline(query_year: Optional[int] = None, baseline_year: Optional[int] = None) -> Tuple[int, List[float]]:
+    try:
+        _ensure_leader_overtime_baseline()
+        target_year = int(baseline_year) if baseline_year else _resolve_leader_overtime_baseline_year(query_year)
+        rows = db.execute_query(
+            "SELECT monthly_avg_days FROM leader_overtime_rank_baseline "
+            "WHERE baseline_year = %s ORDER BY rank_no ASC",
+            (target_year,),
+        )
+        values = [float(r.get("monthly_avg_days") or 0) for r in rows or []]
+        return target_year, values or list(LEADER_OVERTIME_BASELINE_DAYS)
+    except Exception as e:
+        logger.error(f"读取领导加班排名基准失败: {str(e)}")
+        return LEADER_OVERTIME_BASELINE_YEAR, list(LEADER_OVERTIME_BASELINE_DAYS)
+
+
+def _save_leader_overtime_baseline_values(year: int, values: List[float]) -> int:
+    _ensure_leader_overtime_baseline()
+    normalized = sorted([_round_02_half_up(v) for v in values], reverse=True)
+    db.execute_update(
+        "DELETE FROM leader_overtime_rank_baseline WHERE baseline_year = %s",
+        (year,),
+    )
+    params = [(year, idx, value) for idx, value in enumerate(normalized, start=1)]
+    return db.execute_many(
+        """
+        INSERT INTO leader_overtime_rank_baseline (baseline_year, rank_no, monthly_avg_days)
+        VALUES (%s, %s, %s)
+        """,
+        params,
+    )
+
+
+def _estimate_leader_overtime_rank(monthly_avg_days: float, baseline_values: List[float]) -> Optional[int]:
+    if not baseline_values:
+        return None
+    return min(sum(1 for v in baseline_values if float(v) > monthly_avg_days) + 1, len(baseline_values))
+
+
+def _period_month_count(start: date, end: date, explicit_month: Optional[int]) -> float:
+    if explicit_month:
+        return 1.0
+    import calendar
+    if start.day == 1 and end.day == calendar.monthrange(end.year, end.month)[1]:
+        return float((end.year - start.year) * 12 + end.month - start.month + 1)
+    days = (end - start).days + 1
+    return max(days / 30.0, 1 / 30.0)
+
+
+def _parse_attendance_date(val: Any) -> Optional[datetime]:
+    if not val:
+        return None
+    if isinstance(val, datetime):
+        return val
+    if isinstance(val, date):
+        return datetime.combine(val, datetime.min.time())
+    s = str(val).strip().replace("/", "-")[:10]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d")
+    except Exception:
+        return None
+
+
+def _lunch_overlap_hours(start_h: float, end_h: float) -> float:
+    return max(0.0, min(end_h, 13.0) - max(start_h, 12.0))
+
+
+def _leader_workday_overtime_hours(record: Dict, date_obj: datetime) -> Tuple[float, List[Dict]]:
+    """工作日：8点前早到 + 17点后晚走，合计满 1 小时记加班。"""
+    if not collect_valid_times_with_marks or not build_intervals_from_marks:
+        return 0.0, []
+    intervals = build_intervals_from_marks(collect_valid_times_with_marks(record))
+    segments: List[Dict] = []
+    total = 0.0
+    for t_in, t_out in intervals:
+        a = time_to_decimal(t_in)
+        b = time_to_decimal(t_out)
+        if b <= a:
+            continue
+
+        early_start = max(a, 0.0)
+        early_end = min(b, 8.0)
+        if early_end > early_start:
+            h = early_end - early_start
+            total += h
+            early_end_dt = t_out if b <= 8.0 else t_in.replace(hour=8, minute=0, second=0, microsecond=0)
+            segments.append({
+                "start": format_time(t_in),
+                "end": format_time(early_end_dt),
+                "hours": _round_01_half_up(h),
+                "type": "早到",
+            })
+
+        late_start = max(a, 17.0)
+        late_end = min(b, 24.0)
+        if late_end > late_start:
+            start_dt = date_obj.replace(hour=17, minute=0, second=0, microsecond=0) if a < 17.0 else t_in
+            h = late_end - late_start
+            total += h
+            segments.append({
+                "start": format_time(start_dt),
+                "end": format_time(t_out),
+                "hours": _round_01_half_up(h),
+                "type": "晚走",
+            })
+
+    if total < 1.0:
+        return 0.0, []
+    return total, segments
+
+
+def _leader_restday_overtime_hours(record: Dict, date_obj: datetime, is_incentive_holiday: bool) -> Tuple[float, List[Dict]]:
+    """休息日/假期：复用智能建议口径，8点后计、跨午休扣 12:00-13:00，单段/合并段满 1 小时。"""
+    if not collect_valid_times_with_marks or not build_intervals_from_marks:
+        return 0.0, []
+    intervals = build_intervals_from_marks(collect_valid_times_with_marks(record))
+    pairs = []
+    for t_in, t_out in intervals:
+        a = time_to_decimal(t_in)
+        b = time_to_decimal(t_out)
+        if b > a and b - a >= 1.0:
+            pairs.append((t_in, t_out))
+    if not pairs:
+        return 0.0, []
+
+    groups: List[List[Tuple[Any, Any]]] = []
+    if is_incentive_holiday:
+        groups = [[pairs[0]]]
+        for pair in pairs[1:]:
+            prev_out = time_to_decimal(groups[-1][-1][1])
+            next_in = time_to_decimal(pair[0])
+            if prev_out >= 12.0 and next_in <= 13.0 and prev_out < next_in:
+                groups[-1].append(pair)
+            else:
+                groups.append([pair])
+    else:
+        groups = [[p] for p in pairs]
+
+    total = 0.0
+    segments: List[Dict] = []
+    for group in groups:
+        if not group:
+            continue
+        start = group[0][0]
+        end = group[-1][1]
+        s_val = time_to_decimal(start)
+        e_val = time_to_decimal(end)
+        if e_val <= s_val:
+            continue
+        eff_start = max(s_val, 8.0)
+        if 12.0 <= eff_start < 13.0:
+            eff_start = 13.0
+        eff_end = e_val
+        if 12.0 < eff_end <= 13.0:
+            eff_end = 12.0
+        if eff_end <= eff_start:
+            continue
+        hours = eff_end - eff_start - _lunch_overlap_hours(eff_start, eff_end)
+        if hours < 1.0:
+            continue
+        total += hours
+        start_label = "08:00:00" if s_val < 8.0 else format_time(start)
+        if 12.0 <= eff_start < 13.01:
+            start_label = "13:00:00"
+        segments.append({
+            "start": start_label,
+            "end": format_time(end),
+            "hours": _round_01_half_up(hours),
+            "type": "休息日",
+        })
+    return total, segments
+
+
+def _leader_overtime_for_record(record: Dict, holidays: Dict[str, str], holiday_festival_map: Dict[str, str]) -> Tuple[float, List[Dict], str]:
+    date_obj = _parse_attendance_date(record.get("attendance_date"))
+    if not date_obj or not is_workday:
+        return 0.0, [], ""
+    is_work, is_weekend, is_holiday, _holiday_type = is_workday(date_obj, holidays)
+    day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
+    if is_work:
+        hours, segments = _leader_workday_overtime_hours(record, date_obj)
+    else:
+        incentive = bool(_is_incentive_festival and _is_incentive_festival(date_obj, holiday_festival_map))
+        hours, segments = _leader_restday_overtime_hours(record, date_obj, incentive)
+    return hours, segments, day_type
+
+
+@router.get("/dept/leader-overtime")
+async def get_leader_overtime_from_attendance(
+    year: int = Query(..., description="年份"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD，与 date_to 同时传入时按日期区间统计"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传入时按日期区间统计"),
+    current_user: Optional[str] = Query(None, description="当前用户，用于权限校验"),
+):
+    """
+    部办人员加班统计：从 attendance_records 打卡数据临时识别，领导岗位单独标记。
+    识别口径参考智能建议：工作日计 17:00 后加班，并额外计 8:00 前早到；
+    休息日/假期按智能建议休息日逻辑扣午休。最小精确到 0.1 小时，四舍五入。
+    """
+    try:
+        if not (current_user or "").strip() or not _can_access_leader_overtime_stats(current_user):
+            raise HTTPException(status_code=403, detail="无权查看领导加班统计")
+
+        import calendar
+        if date_from or date_to:
+            if not date_from or not date_to:
+                raise HTTPException(status_code=400, detail="date_from 与 date_to 需同时传入")
+            start = _parse_date(date_from)
+            end = _parse_date(date_to)
+            if not start or not end:
+                raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD")
+            if end < start:
+                start, end = end, start
+            # 该接口按年度假期配置识别加班类型，暂不支持跨年区间
+            if start.year != end.year:
+                raise HTTPException(status_code=400, detail="日期区间暂不支持跨年，请在同一年内查询")
+            year = start.year
+            month = None
+        else:
+            start = date(year, int(month), 1) if month else date(year, 1, 1)
+            end = date(year, int(month), calendar.monthrange(year, int(month))[1]) if month else date(year, 12, 31)
+            # 查询“当年全年”时，仅统计到今天，避免把未来日期纳入统计区间
+            if not month and year == date.today().year:
+                end = date.today()
+
+        members = db.execute_query(
+            "SELECT TRIM(name) AS name, TRIM(jb) AS jb, TRIM(lsys) AS lsys "
+            "FROM yggl WHERE TRIM(lsys) = %s AND COALESCE(zaizhi,0)=0 "
+            "AND name IS NOT NULL AND TRIM(name) != '' AND RIGHT(TRIM(name),1) != '1'",
+            (LEADER_EXCLUDE_LSYS,),
+        )
+        members = [r for r in (members or []) if r.get("name")]
+        names = [r["name"] for r in members]
+        if not names:
+            return {
+                "success": True,
+                "year": year,
+                "month": month,
+                "totalHours": 0,
+                "personCount": 0,
+                "rankBaselineYear": _resolve_leader_overtime_baseline_year(year),
+                "rankTotal": len(LEADER_OVERTIME_BASELINE_DAYS),
+                "list": [],
+                "details": [],
+            }
+
+        ph = ",".join(["%s"] * len(names))
+        rows = db.execute_query(
+            f"SELECT * FROM attendance_records WHERE employee_name IN ({ph}) "
+            "AND attendance_date >= %s AND attendance_date <= %s "
+            "ORDER BY attendance_date DESC, employee_name",
+            tuple(names) + (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
+        )
+
+        holidays = load_holidays_dict(str(year))
+        holiday_festival_map = _load_holiday_festival_map(year) if _load_holiday_festival_map else {}
+        baseline_year, baseline_values = _get_leader_overtime_baseline(query_year=year)
+        rank_total = len(baseline_values)
+        period_months = _period_month_count(start, end, month)
+        by_name: Dict[str, Dict] = {
+            r["name"]: {
+                "name": r["name"],
+                "jb": r.get("jb") or "",
+                "lsys": r.get("lsys") or LEADER_EXCLUDE_LSYS,
+                "isLeader": bool(re.search(LEADER_OVERTIME_JB_RE, r.get("jb") or "")),
+                "hoursRaw": 0.0,
+                "days": 0,
+            }
+            for r in members
+        }
+        details: List[Dict] = []
+        for row in rows or []:
+            name = (row.get("employee_name") or "").strip()
+            if name not in by_name:
+                continue
+            hours, segments, day_type = _leader_overtime_for_record(row, holidays, holiday_festival_map)
+            if hours <= 0:
+                continue
+            rounded = _round_01_half_up(hours)
+            by_name[name]["hoursRaw"] += hours
+            by_name[name]["days"] += 1
+            details.append({
+                "name": name,
+                "isLeader": bool(by_name[name].get("isLeader")),
+                "date": str(row.get("attendance_date") or "")[:10],
+                "dayType": day_type,
+                "hours": rounded,
+                "segments": segments,
+            })
+
+        list_data = []
+        for item in by_name.values():
+            h = _round_01_half_up(item.pop("hoursRaw", 0.0))
+            item["hours"] = h
+            monthly_avg_days = _round_02_half_up(h / 8 / period_months)
+            item["monthlyAvgDays"] = monthly_avg_days
+            item["estimatedRank"] = _estimate_leader_overtime_rank(monthly_avg_days, baseline_values) if item.get("isLeader") else None
+            item["rankTotal"] = rank_total if item.get("isLeader") else None
+            list_data.append(item)
+        list_data.sort(key=lambda x: (-x["hours"], x.get("name") or ""))
+
+        return {
+            "success": True,
+            "year": year,
+            "month": month,
+            "range": {"start": start.strftime("%Y-%m-%d"), "end": end.strftime("%Y-%m-%d")},
+            "periodMonths": _round_02_half_up(period_months),
+            "rankBaselineYear": baseline_year,
+            "rankTotal": rank_total,
+            "totalHours": _round_01_half_up(sum(i["hours"] for i in list_data)),
+            "personCount": len(list_data),
+            "list": list_data,
+            "details": details,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"领导加班统计失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dept/leader-overtime-baseline")
+async def get_leader_overtime_rank_baseline(
+    year: Optional[int] = Query(None, description="基准年份，不传默认上一年"),
+    current_user: Optional[str] = Query(None, description="当前用户，用于权限校验"),
+):
+    """读取中层领导干部月均加班天数排名基准。"""
+    try:
+        if not (current_user or "").strip() or not _can_access_leader_overtime_stats(current_user):
+            raise HTTPException(status_code=403, detail="无权查看领导加班排名基准")
+        target_year = int(year or (date.today().year - 1))
+        _ensure_leader_overtime_baseline()
+        rows = db.execute_query(
+            "SELECT monthly_avg_days FROM leader_overtime_rank_baseline "
+            "WHERE baseline_year = %s ORDER BY rank_no ASC",
+            (target_year,),
+        )
+        values = [float(r.get("monthly_avg_days") or 0) for r in rows or []]
+        return {
+            "success": True,
+            "year": target_year,
+            "count": len(values),
+            "values": values,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"读取领导加班排名基准失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/dept/leader-overtime-baseline")
+async def save_leader_overtime_rank_baseline(payload: Dict[str, Any] = Body(...)):
+    """保存中层领导干部月均加班天数排名基准，一次覆盖指定年份。"""
+    try:
+        current_user = (payload.get("current_user") or "").strip()
+        if not current_user or not _can_access_leader_overtime_stats(current_user):
+            raise HTTPException(status_code=403, detail="无权维护领导加班排名基准")
+        try:
+            year = int(payload.get("year"))
+        except Exception:
+            raise HTTPException(status_code=400, detail="请填写有效年份")
+        if year < 2000 or year > 2100:
+            raise HTTPException(status_code=400, detail="年份范围无效")
+
+        raw_values = payload.get("values") or []
+        if not isinstance(raw_values, list) or not raw_values:
+            raise HTTPException(status_code=400, detail="请录入月均加班天数")
+        if len(raw_values) > 1000:
+            raise HTTPException(status_code=400, detail="录入数量过多")
+
+        values: List[float] = []
+        for raw in raw_values:
+            try:
+                value = float(raw)
+            except Exception:
+                raise HTTPException(status_code=400, detail=f"存在无效数字：{raw}")
+            if value < 0:
+                raise HTTPException(status_code=400, detail="月均加班天数不能为负数")
+            values.append(value)
+
+        affected = _save_leader_overtime_baseline_values(year, values)
+        if affected < 0:
+            raise HTTPException(status_code=500, detail="保存失败")
+        _, saved_values = _get_leader_overtime_baseline(baseline_year=year)
+        return {
+            "success": True,
+            "year": year,
+            "count": len(saved_values),
+            "values": saved_values,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"保存领导加班排名基准失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 # ==================== 科室列表（部长/副部长可选任意科室） ====================

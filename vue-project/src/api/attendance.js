@@ -408,6 +408,20 @@ export function getDeptOvertimePayByEmployee(params) {
   return request({ url: '/dept/overtime-pay-by-employee', method: 'get', params })
 }
 
+/** 部办人员加班统计（基于打卡数据临时识别，领导高亮） */
+export function getLeaderOvertimeStats(params) {
+  return request({ url: '/dept/leader-overtime', method: 'get', params })
+}
+
+/** 中层领导月均加班天数排名基准 */
+export function getLeaderOvertimeBaseline(params) {
+  return request({ url: '/dept/leader-overtime-baseline', method: 'get', params })
+}
+
+export function saveLeaderOvertimeBaseline(data) {
+  return request({ url: '/dept/leader-overtime-baseline', method: 'post', data })
+}
+
 /** 其他绩效激励按月导出（全员+各科室，用于 Excel 工资报表） */
 export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })

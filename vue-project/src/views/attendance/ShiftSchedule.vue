@@ -242,7 +242,7 @@
                   class="th-holiday"
                   :class="holidayThClass(d)"
                 >{{ d.holidayMark }}</div>
-                <template v-if="d.date >= todayStr">
+                <template v-if="d.date >= editableFromStr">
                   <div
                     v-if="isManager"
                     class="th-lock-btn"
@@ -328,7 +328,7 @@
                 v-for="(d, di) in dates"
                 :key="d.date"
                 class="col-day cell"
-                :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= todayStr && isSelfRow(emp), 'col-past': d.date < todayStr }, scheduleHlClass(2 + di, 3 + ei)]"
+                :class="[cellClass(emp, d), { 'cell-readonly': !canEditShiftCell(emp, d.date), 'col-open': openDates[d.date] && !isManager && d.date >= editableFromStr && isSelfRow(emp), 'col-past': d.date < editableFromStr }, scheduleHlClass(2 + di, 3 + ei)]"
                 :title="cellTripTitle(emp, d.date)"
                 @mouseenter="scheduleSetHover(2 + di, 3 + ei)"
                 @click="onCellClick(emp, d.date, $event)"
@@ -393,7 +393,7 @@
           class="plan-editor-textarea"
           :readonly="!canEditCurrentPlan"
           maxlength="2000"
-          :placeholder="canEditCurrentPlan ? '请输入当天的值班工作安排、注意事项等…' : '该日未解锁或已过期，仅可查看；请管理人员解锁当日后本科室可协同编辑'"
+          :placeholder="canEditCurrentPlan ? '请输入当天的值班工作安排、注意事项等…' : '该日未解锁或已过期（仅可改昨天及之后），仅可查看；请管理人员解锁可编辑日期后本科室可协同编辑'"
           @input="plansDirty = true"
         ></textarea>
         <div class="plan-editor-footer">
@@ -567,6 +567,11 @@ function mondayOf(d) {
 const now = new Date()
 const rangeStartStr = ref(toYMD(mondayOf(now)))
 const todayStr = toYMD(now)
+const editableFromStr = (() => {
+  const d = new Date(now.getFullYear(), now.getMonth(), now.getDate())
+  d.setDate(d.getDate() - 1)
+  return toYMD(d)
+})()
 
 const periodEndStr = computed(() => {
   const x = parseYMD(rangeStartStr.value)
@@ -903,14 +908,14 @@ const hasAnyOpenDate = computed(() => Object.values(openDates).some(Boolean))
 
 /** 解锁日 + 本科室：成员均可编辑当日工作计划（协同）；管理员始终可编辑（未过期日期） */
 function canEditPlanDate(dateStr) {
-  if (dateStr < todayStr) return false
+  if (dateStr < editableFromStr) return false
   if (isManager.value) return true
   return isSameDept.value && !!openDates[dateStr]
 }
 
 /** 班次格子：成员仅可编辑本人所在行；管理员可编辑全部 */
 function canEditShiftCell(emp, dateStr) {
-  if (dateStr < todayStr) return false
+  if (dateStr < editableFromStr) return false
   if (isManager.value) return true
   if (!isSameDept.value || !openDates[dateStr]) return false
   return isSelfRow(emp)

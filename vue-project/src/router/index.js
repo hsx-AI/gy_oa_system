@@ -8,7 +8,7 @@ import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -52,6 +52,12 @@ const routes = [
     path: '/leader-dashboard',
     name: 'LeaderDashboard',
     component: LeaderDashboard
+  },
+  {
+    path: '/leader-overtime-statistics',
+    name: 'LeaderOvertimeStats',
+    component: () => import('../views/LeaderOvertimeStats.vue'),
+    meta: { title: '领导加班统计' }
   },
   {
     path: '/overtime-pay',
@@ -316,6 +322,31 @@ router.beforeEach(async (to, _from, next) => {
   } catch { /* ignore */ }
 
   // 以下为各页面单独权限校验
+  if (to.path === '/leader-overtime-statistics') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) {
+        next('/login')
+        return
+      }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const jb = (user.jb || '').trim()
+      const lsys = (user.dept || user.lsys || '').trim()
+      const res = await getUploadConfig()
+      const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
+      const admin2 = (res && res.admin2 != null ? res.admin2 : '').trim()
+      const allowedByAdmin = (admin1 && name === admin1) || (admin2 && name === admin2)
+      const allowedByJb = isMinisterLevel(jb)
+      const allowedByZhjsDirectorOnly = lsys === '综合技术室' && jbMatch(jb, '主任')
+      if (allowedByAdmin || allowedByJb || allowedByZhjsDirectorOnly) next()
+      else next('/')
+    } catch {
+      next('/')
+    }
+    return
+  }
+
   if (to.path === '/leader-dashboard' || to.path === '/attendance/discipline') {
     try {
       const raw = localStorage.getItem('userInfo')
@@ -527,7 +558,6 @@ router.beforeEach(async (to, _from, next) => {
 })
 
 export default router
-
 
 
 

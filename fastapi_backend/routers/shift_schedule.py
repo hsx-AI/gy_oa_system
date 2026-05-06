@@ -586,6 +586,7 @@ async def save_schedule(req: SaveScheduleRequest):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     is_mgr = _is_manager_of_dept(req.current_user, req.department)
     today_d = date.today()
+    editable_from_d = today_d - timedelta(days=1)
     caller = (req.current_user or "").strip()
     if not is_mgr and not _is_dept_member(req.current_user, req.department):
         raise HTTPException(status_code=403, detail="仅本科室成员可保存排班")
@@ -620,7 +621,7 @@ async def save_schedule(req: SaveScheduleRequest):
             ds = d.strftime("%Y-%m-%d")
             if open_set is not None and ds not in open_set:
                 continue
-            if not is_mgr and d < today_d:
+            if d < editable_from_d:
                 continue
             y, m = d.year, d.month
             loc = (loc_map.get(en, {}).get(ds) or "").strip()
@@ -657,6 +658,7 @@ async def save_day_plans(req: SaveDayPlansRequest):
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     is_mgr = _is_manager_of_dept(req.current_user, req.department)
+    editable_from_d = date.today() - timedelta(days=1)
     open_set = None
     if not is_mgr:
         if not _is_dept_member(req.current_user, req.department):
@@ -686,6 +688,8 @@ async def save_day_plans(req: SaveDayPlansRequest):
     for date_str, raw in (req.plans or {}).items():
         d = _parse_iso_date(str(date_str))
         if not d:
+            continue
+        if d < editable_from_d:
             continue
         ds = d.strftime("%Y-%m-%d")
         if open_set is not None and ds not in open_set:

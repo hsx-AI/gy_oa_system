@@ -6,12 +6,21 @@
           <h1 class="header-title">管理驾驶舱</h1>
           <p class="header-subtitle">本科室请假、加班、公出汇总，按人查看</p>
         </div>
-        <router-link to="/attendance/discipline" class="btn btn-discipline">
-          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-            <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-          </svg>
-          考勤纪律审查
-        </router-link>
+        <div class="header-actions">
+          <router-link v-if="canAccessLeaderOvertimeEntry" to="/leader-overtime-statistics" class="btn btn-leader-ot">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="10"/>
+              <path d="M12 6v6l4 2"/>
+            </svg>
+            领导加班统计
+          </router-link>
+          <router-link to="/attendance/discipline" class="btn btn-discipline">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+            </svg>
+            考勤纪律审查
+          </router-link>
+        </div>
       </div>
     </div>
 
@@ -514,9 +523,28 @@ import {
   getLeaderFullAttendanceByMonth,
   getLeaderDeptComparison,
   getLeaderWorkIntensity,
+  getUploadConfig,
 } from '@/api/attendance'
+import { isMinisterLevel, jbMatch } from '@/utils/roleMatch'
 
 const router = useRouter()
+const leaderOtAdmin1 = ref('')
+const leaderOtAdmin2 = ref('')
+const canAccessLeaderOvertimeEntry = computed(() => {
+  try {
+    const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    const name = (info.name || info.userName || '').trim()
+    const jb = (info.jb || '').trim()
+    const dept = (info.dept || info.lsys || '').trim()
+    const a1 = (leaderOtAdmin1.value || '').trim()
+    const a2 = (leaderOtAdmin2.value || '').trim()
+    if ((a1 && name === a1) || (a2 && name === a2)) return true
+    if (isMinisterLevel(jb)) return true
+    return dept === '综合技术室' && jbMatch(jb, '主任')
+  } catch {
+    return false
+  }
+})
 const lsys = ref('')
 const permLevel = ref(1)
 /** 部长/副部长可选任意科室；组长/主任仅本科室，与 lsys 一致 */
@@ -1225,6 +1253,14 @@ async function toggleNetOvertime() {
 }
 
 onMounted(async () => {
+  try {
+    const cfg = await getUploadConfig()
+    leaderOtAdmin1.value = cfg?.admin1 || ''
+    leaderOtAdmin2.value = cfg?.admin2 || ''
+  } catch {
+    leaderOtAdmin1.value = ''
+    leaderOtAdmin2.value = ''
+  }
   await loadPermission()
   await nextTick()
   if (canViewDept.value && (permLevel.value === 3 ? true : !!lsys.value)) {
@@ -1253,7 +1289,15 @@ onMounted(async () => {
 
 .header-info { flex: 1; min-width: 200px; }
 
-.btn-discipline {
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn-discipline,
+.btn-leader-ot {
   display: inline-flex;
   align-items: center;
   gap: 6px;
@@ -1267,8 +1311,13 @@ onMounted(async () => {
   transition: filter 0.15s, box-shadow 0.15s;
   white-space: nowrap;
 }
+.btn-leader-ot {
+  background: linear-gradient(135deg, #2563eb 0%, #0f766e 100%);
+}
+.btn-leader-ot:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28); }
 .btn-discipline:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); }
-.btn-discipline .btn-icon { width: 18px; height: 18px; }
+.btn-discipline .btn-icon,
+.btn-leader-ot .btn-icon { width: 18px; height: 18px; }
 
 .leader-dashboard-page .container {
   width: 100%;
