@@ -525,7 +525,7 @@ import {
   getLeaderWorkIntensity,
   getUploadConfig,
 } from '@/api/attendance'
-import { isMinisterLevel, jbMatch } from '@/utils/roleMatch'
+import { isMinisterLevel } from '@/utils/roleMatch'
 
 const router = useRouter()
 const leaderOtAdmin1 = ref('')
@@ -535,12 +535,10 @@ const canAccessLeaderOvertimeEntry = computed(() => {
     const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const name = (info.name || info.userName || '').trim()
     const jb = (info.jb || '').trim()
-    const dept = (info.dept || info.lsys || '').trim()
     const a1 = (leaderOtAdmin1.value || '').trim()
     const a2 = (leaderOtAdmin2.value || '').trim()
     if ((a1 && name === a1) || (a2 && name === a2)) return true
-    if (isMinisterLevel(jb)) return true
-    return dept === '综合技术室' && jbMatch(jb, '主任')
+    return isMinisterLevel(jb)
   } catch {
     return false
   }

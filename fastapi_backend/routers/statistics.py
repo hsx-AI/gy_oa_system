@@ -88,7 +88,7 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     领导加班统计权限：
     - 部长/副部长
     - 系统管理员 admin1、人事管理员 admin2
-    - 综合技术室主任（不含副主任）
+    （不含综合技术室主任/副主任，与驾驶舱其它入口区分）
     """
     n = (name or "").strip()
     if not n:
@@ -114,9 +114,6 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
         return False
     jb = (user.get("jb") or "").strip()
     if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
-        return True
-    lsys = (user.get("lsys") or "").strip()
-    if lsys == "综合技术室" and _jb_match(jb, "主任"):
         return True
     return False
 
