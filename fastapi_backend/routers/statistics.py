@@ -6,7 +6,7 @@
 - 公出: gcsqb 表, lsysjm, 仅已批准 bldzt>=2 and szrzt>=2
 领导人看板扩展：满勤率、科室横向对比、全员排序
 - 统计与筛选中排除：名字末尾为1、科室(lsys)末尾为1（视为已离职人员/组织）
-- 领导人看板统计中不参与：科室「部办」
+- 多数科室汇总接口在全员口径下排除「部办」；工作强度 /leader/work-intensity 全员口径包含「部办」并在按科室列表中展示
 """
 from fastapi import APIRouter, HTTPException, Query, Body
 from fastapi.responses import Response
@@ -14,7 +14,7 @@ from io import BytesIO
 from urllib.parse import quote
 from decimal import Decimal, ROUND_HALF_UP
 
-# 领导人看板中不参与统计的科室（不计算人数、不参与排序与横向对比）
+# 「部办」：请假/加班/公出等科室汇总的全员口径仍排除；工作强度等单独 SQL 可包含
 LEADER_EXCLUDE_LSYS = "部办"
 # 不参与任何考勤/统计的虚拟科室
 OTHER_DEPT_NAMES = ("其他部门员工", "其他部门成员")
@@ -654,7 +654,7 @@ def _lunch_overlap_hours(start_h: float, end_h: float) -> float:
 
 
 def _leader_workday_overtime_hours(record: Dict, date_obj: datetime) -> Tuple[float, List[Dict]]:
-    """工作日：8点前早到 + 17点后晚走，合计满 1 小时记加班。"""
+    """工作日：7:30前早到 + 17:30后晚走，合计满 1 小时记加班。"""
     if not collect_valid_times_with_marks or not build_intervals_from_marks:
         return 0.0, []
     intervals = build_intervals_from_marks(collect_valid_times_with_marks(record))
@@ -667,11 +667,11 @@ def _leader_workday_overtime_hours(record: Dict, date_obj: datetime) -> Tuple[fl
             continue
 
         early_start = max(a, 0.0)
-        early_end = min(b, 8.0)
+        early_end = min(b, 7.5)
         if early_end > early_start:
             h = early_end - early_start
             total += h
-            early_end_dt = t_out if b <= 8.0 else t_in.replace(hour=8, minute=0, second=0, microsecond=0)
+            early_end_dt = t_out if b <= 7.5 else t_in.replace(hour=7, minute=30, second=0, microsecond=0)
             segments.append({
                 "start": format_time(t_in),
                 "end": format_time(early_end_dt),
@@ -679,10 +679,10 @@ def _leader_workday_overtime_hours(record: Dict, date_obj: datetime) -> Tuple[fl
                 "type": "早到",
             })
 
-        late_start = max(a, 17.0)
+        late_start = max(a, 17.5)
         late_end = min(b, 24.0)
         if late_end > late_start:
-            start_dt = date_obj.replace(hour=17, minute=0, second=0, microsecond=0) if a < 17.0 else t_in
+            start_dt = date_obj.replace(hour=17, minute=30, second=0, microsecond=0) if a < 17.5 else t_in
             h = late_end - late_start
             total += h
             segments.append({
@@ -783,7 +783,7 @@ async def get_leader_overtime_from_attendance(
 ):
     """
     部办人员加班统计：从 attendance_records 打卡数据临时识别，领导岗位单独标记。
-    识别口径参考智能建议：工作日计 17:00 后加班，并额外计 8:00 前早到；
+    识别口径参考智能建议：工作日计 17:30 后加班，并额外计 7:30 前早到；
     休息日/假期按智能建议休息日逻辑扣午休。最小精确到 0.1 小时，四舍五入。
     """
     try:
@@ -997,10 +997,8 @@ async def get_dept_lsys_list():
         rows = db.execute_query(
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
             "AND RIGHT(TRIM(lsys), 1) != '1' "
-            "AND TRIM(lsys) != %s "
             "AND TRIM(lsys) NOT IN ('其他部门员工', '其他部门成员') "
             "AND (COALESCE(zaizhi,0)=0) ORDER BY lsys",
-            (LEADER_EXCLUDE_LSYS,)
         )
         list_data = [r["lsys"].strip() for r in rows if r.get("lsys")]
         return {"success": True, "list": list_data}
@@ -3414,23 +3412,69 @@ def _get_trip_days_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> d
 
 
 def _get_staff_with_dept(lsys: Optional[str]) -> list:
-    """返回 [{name, lsys}]，在职员工，排除 '部办' 及测试账号"""
+    """返回 [{name, lsys, jb}]，在职员工。全员（不传 lsys）时包含「部办」，以便工作强度按科室展示部办卡片。"""
     all_staff = not (lsys and lsys.strip())
     if all_staff:
         rows = db.execute_query(
-            "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name!='' "
+            "SELECT name, lsys, jb FROM yggl WHERE name IS NOT NULL AND name!='' "
             "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
-            "AND TRIM(lsys)!=%s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-            (LEADER_EXCLUDE_LSYS,),
+            "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
         )
     else:
         rows = db.execute_query(
-            "SELECT name, lsys FROM yggl WHERE lsys=%s AND name IS NOT NULL AND name!='' "
+            "SELECT name, lsys, jb FROM yggl WHERE lsys=%s AND name IS NOT NULL AND name!='' "
             "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
-            "AND TRIM(lsys)!=%s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-            (lsys, LEADER_EXCLUDE_LSYS),
+            "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
+            (lsys,),
         )
-    return [{"name": (r["name"] or "").strip(), "lsys": (r.get("lsys") or "").strip()} for r in (rows or []) if (r.get("name") or "").strip()]
+    return [{
+        "name": (r["name"] or "").strip(),
+        "lsys": (r.get("lsys") or "").strip(),
+        "jb": (r.get("jb") or "").strip(),
+    } for r in (rows or []) if (r.get("name") or "").strip()]
+
+
+def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, end: date) -> Dict[str, float]:
+    """
+    「领导加班统计」同款口径：从 attendance_records 临时识别加班时长（工作日 7:30 前 + 17:30 后；休息日/假期按休息日逻辑）。
+    返回 { name: raw_hours }，与领导加班页一致：先累加原始小时，最后再统一 round。
+    """
+    if not names:
+        return {}
+    if not collect_valid_times_with_marks or not build_intervals_from_marks or not is_workday:
+        return {n: 0.0 for n in names}
+
+    name_set = set(names)
+    ph = ",".join(["%s"] * len(names))
+    rows = db.execute_query(
+        f"SELECT * FROM attendance_records WHERE employee_name IN ({ph}) "
+        "AND attendance_date >= %s AND attendance_date <= %s "
+        "ORDER BY attendance_date ASC, employee_name",
+        tuple(names) + (start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
+    )
+
+    holidays_by_year: Dict[int, Dict[str, str]] = {}
+    festival_by_year: Dict[int, Dict[str, str]] = {}
+    for y in range(start.year, end.year + 1):
+        holidays_by_year[y] = load_holidays_dict(str(y))
+        festival_by_year[y] = _load_holiday_festival_map(y) if _load_holiday_festival_map else {}
+
+    totals: Dict[str, float] = defaultdict(float)
+    for row in rows or []:
+        name = (row.get("employee_name") or "").strip()
+        if name not in name_set:
+            continue
+        date_obj = _parse_attendance_date(row.get("attendance_date"))
+        if not date_obj:
+            continue
+        y = date_obj.year
+        holidays = holidays_by_year.get(y) or {}
+        festival_map = festival_by_year.get(y) or {}
+        hours, _segments, _day_type = _leader_overtime_for_record(row, holidays, festival_map)
+        if hours > 0:
+            totals[name] += float(hours)
+
+    return {n: float(totals.get(n, 0.0)) for n in names}
 
 
 @router.get("/leader/work-intensity")
@@ -3478,6 +3522,7 @@ async def get_work_intensity(
                 "dateTo": de.isoformat(),
                 "effectiveDateTo": d_end_eff.isoformat(),
             }
+            ot_att_start, ot_att_end = ds, d_end_eff
         elif month:
             # 当统计“当前年月”时，应出勤只统计到今天，避免按整月放大分母
             if year == today.year and month == today.month:
@@ -3489,6 +3534,13 @@ async def get_work_intensity(
             ot_map = _get_overtime_by_person(year, month, lsys)
             trip_map = _get_trip_days_by_person(year, month, lsys)
             range_meta = {"rangeMode": False}
+            import calendar as _cal
+            month_first = date(year, month, 1)
+            month_last = date(year, month, _cal.monthrange(year, month)[1])
+            ot_att_start = month_first
+            ot_att_end = month_last
+            if year == today.year and month == today.month:
+                ot_att_end = min(month_last, today)
         else:
             # 统计全年时：当年仅统计到今天，历史年份统计整年
             if year == today.year:
@@ -3501,6 +3553,16 @@ async def get_work_intensity(
             ot_map = _get_overtime_by_person(year, None, lsys)
             trip_map = _get_trip_days_by_person(year, None, lsys)
             range_meta = {"rangeMode": False}
+            year_first = date(year, 1, 1)
+            year_last = date(year, 12, 31)
+            ot_att_start = year_first
+            ot_att_end = year_last if year < today.year else min(year_last, today)
+
+        ban_names = sorted({s["name"] for s in staff if (s.get("lsys") or "").strip() == LEADER_EXCLUDE_LSYS})
+        if ban_names:
+            att_ot = _leader_style_overtime_hours_from_attendance(ban_names, ot_att_start, ot_att_end)
+            for n in ban_names:
+                ot_map[n] = float(att_ot.get(n, 0.0))
 
         person_list = []
         dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0})
@@ -3508,6 +3570,7 @@ async def get_work_intensity(
         for s in staff:
             name = s["name"]
             dept = s["lsys"]
+            jb = s.get("jb") or ""
             ot = ot_map.get(name, 0)
             trip_d = float((trip_map.get(name) or {}).get("tripDays", 0))
             trip_holiday_d = float((trip_map.get(name) or {}).get("holidayTripDays", 0))
@@ -3519,6 +3582,7 @@ async def get_work_intensity(
             person_list.append({
                 "name": name,
                 "lsys": dept,
+                "jb": jb,
                 "overtimeHours": round(ot, 2),
                 "tripDays": round(trip_d, 2),
                 "tripHolidayDays": round(trip_holiday_d, 2),

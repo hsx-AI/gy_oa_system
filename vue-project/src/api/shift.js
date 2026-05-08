@@ -12,6 +12,10 @@ export function getShiftConfig(params) {
   return request({ url: '/shift/config', method: 'get', params })
 }
 
+export function getShiftCoverageGap(params) {
+  return request({ url: '/shift/coverage-gap', method: 'get', params })
+}
+
 export function saveShiftConfig(data) {
   return request({ url: '/shift/config', method: 'post', data })
 }

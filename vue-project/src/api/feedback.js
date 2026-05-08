@@ -57,6 +57,9 @@ export function leaderImageUrl(filename) {
 export function getLeaderInbox(params) {
   return request({ url: `${P}/leader/inbox`, method: 'get', params })
 }
+export function markLeaderInboxRead(data) {
+  return request({ url: `${P}/leader/mark-read`, method: 'post', data })
+}
 export function replyLeaderMsg(id, data) {
   return request({ url: `${P}/leader/${id}/reply`, method: 'post', data })
 }

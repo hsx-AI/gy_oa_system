@@ -455,6 +455,19 @@
             >按个人</button>
           </div>
 
+          <div v-if="wiViewMode === 'person' && workIntensity.byPerson?.length" class="wi-person-filters">
+            <label class="wi-person-filter-item">
+              <span>职务</span>
+              <select v-model="wiJobFilter" class="form-input wi-job-filter-select">
+                <option value="">全部职务</option>
+                <option :value="WI_JOB_FILTER_ALL_MANAGERS">全体管理人员</option>
+                <option :value="WI_JOB_FILTER_ZHUREN_ZRZE">主任/主任责</option>
+                <option :value="WI_JOB_FILTER_FUZHUREN">副主任</option>
+                <option v-for="jb in wiJobOptions" :key="jb" :value="jb">{{ jb }}</option>
+              </select>
+            </label>
+          </div>
+
           <div v-if="wiViewMode === 'dept' && workIntensity.byDept?.length" class="wi-dept-grid">
             <div v-for="d in workIntensity.byDept" :key="d.lsys" class="wi-dept-card">
               <div class="wi-dept-name">{{ d.lsys }}</div>
@@ -474,6 +487,9 @@
                     姓名 <span class="wi-sort-ind">{{ wiSortIndicator('name') }}</span>
                   </th>
                   <th>科室</th>
+                  <th class="wi-th-sort" @click="toggleWiSort('jb')">
+                    职务 <span class="wi-sort-ind">{{ wiSortIndicator('jb') }}</span>
+                  </th>
                   <th class="wi-th-sort" @click="toggleWiSort('overtimeHours')">
                     加班(h) <span class="wi-sort-ind">{{ wiSortIndicator('overtimeHours') }}</span>
                   </th>
@@ -486,10 +502,11 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(p, idx) in wiByPersonSorted" :key="p.name">
+                <tr v-for="(p, idx) in wiByPersonFilteredSorted" :key="p.name">
                   <td class="td-rank">{{ idx + 1 }}</td>
                   <td>{{ p.name }}</td>
                   <td>{{ p.lsys }}</td>
+                  <td>{{ p.jb || '-' }}</td>
                   <td class="td-num">{{ p.overtimeHours }}</td>
                   <td class="td-num">{{ p.actualHours }}</td>
                   <td class="td-num td-intensity">{{ (p.intensity * 100).toFixed(1) }}%</td>
@@ -627,6 +644,60 @@ const wiViewMode = ref('dept')
 const wiMonthly = ref([])
 const wiSortKey = ref('intensity')
 const wiSortOrder = ref('desc')
+const wiJobFilter = ref('')
+
+/** 工作强度「职务」筛选/展示：合并同类项（与原始 yggl.jb 脱钩展示） */
+const WI_JOB_CATEGORY_ORDER = ['部领导', '总师', '责任工艺师', '主任及副主任', '班组长', '无']
+/** 筛选专用：主任/副主任/班组长等合并类下的全体管理人员 */
+const WI_JOB_FILTER_ALL_MANAGERS = '全体管理人员'
+/** 筛选专用：仅主任或主任责（不含副主任，因「副主任」含「主任」子串） */
+const WI_JOB_FILTER_ZHUREN_ZRZE = '主任/主任责'
+/** 筛选专用：仅副主任 */
+const WI_JOB_FILTER_FUZHUREN = '副主任'
+
+function wiJobMatchesZhurenOrZrze(jbRaw) {
+  const jb = (jbRaw || '').trim()
+  if (!jb || jb.includes('副主任')) return false
+  return jb.includes('主任')
+}
+
+function wiJobMatchesFuzhurenOnly(jbRaw) {
+  return (jbRaw || '').trim().includes('副主任')
+}
+
+function wiJobIsBuLingdao(jb) {
+  const s = jb || ''
+  return (
+    s.includes('副部长')
+    || s.includes('部长')
+    || s.includes('副经理')
+    || s.includes('经理')
+  )
+}
+
+function wiJobDisplayCategory(jbRaw, lsysRaw) {
+  const jb = (jbRaw || '').trim()
+  const dept = (lsysRaw || '').trim()
+  const isBanban = dept === '部办'
+
+  if (isBanban) {
+    if (wiJobIsBuLingdao(jb)) return '部领导'
+    return '总师'
+  }
+
+  if (jb.includes('返聘')) return '无'
+
+  if (jb.includes('责任工艺师') || jb.includes('责任师') || jb.includes('责工师')) return '责任工艺师'
+
+  if (jb.includes('副主任') || jb.includes('主任责') || jb.includes('主任')) return '主任及副主任'
+
+  if (jb.includes('班组长') || jb.includes('组长')) return '班组长'
+
+  if (!jb || jb === '无' || jb.includes('员工')) return '无'
+
+  return '无'
+}
+
 const WI_SPARK_W = 280
 const WI_SPARK_H = 68
 const WI_SPARK_LEFT = 16
@@ -731,18 +802,19 @@ function exportWorkIntensityTable() {
     workIntensityDeptActualHours(row),
     percentForExport(row.intensity),
   ])
-  const personRows = wiByPersonSorted.value.map((row, idx) => [
+  const personRows = wiByPersonFilteredSorted.value.map((row, idx) => [
     idx + 1,
     row.name || '',
     row.lsys || '',
+    row.jb || '',
     roundForExport(row.overtimeHours),
     roundForExport(row.tripDays),
     roundForExport(row.tripHolidayDays),
     roundForExport(row.actualHours),
     percentForExport(row.intensity),
   ])
-  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[6] || 0), 0)
-  const totalOvertimeHours = personRows.reduce((sum, row) => sum + Number(row[3] || 0), 0)
+  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[7] || 0), 0)
+  const totalOvertimeHours = personRows.reduce((sum, row) => sum + Number(row[4] || 0), 0)
 
   const wb = XLSX.utils.book_new()
   appendAoASheet(wb, '统计概览', [
@@ -762,9 +834,9 @@ function exportWorkIntensityTable() {
     ...deptRows,
   ], [8, 24, 10, 12, 12, 20, 14, 12])
   appendAoASheet(wb, '按个人', [
-    ['序号', '姓名', '科室', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
+    ['序号', '姓名', '科室', '职务', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
     ...personRows,
-  ], [8, 14, 24, 12, 12, 20, 14, 12])
+  ], [8, 14, 24, 16, 12, 12, 20, 14, 12])
   XLSX.writeFile(wb, formatWiExportFileName())
 }
 
@@ -837,6 +909,15 @@ const wiByPersonSorted = computed(() => {
   }
 
   list.sort((a, b) => {
+    if (key === 'jb') {
+      const ca = String(a?.jb || '').trim()
+      const cb = String(b?.jb || '').trim()
+      const c = desc
+        ? cb.localeCompare(ca, 'zh-CN')
+        : ca.localeCompare(cb, 'zh-CN')
+      if (c !== 0) return c
+      return tieBreakActualHours(a, b)
+    }
     const av = a?.[key]
     const bv = b?.[key]
     if (key === 'name') {
@@ -855,13 +936,41 @@ const wiByPersonSorted = computed(() => {
   return list
 })
 
+const wiJobOptions = computed(() => {
+  const set = new Set()
+  ;(workIntensity.value?.byPerson || []).forEach((row) => {
+    set.add(wiJobDisplayCategory(row?.jb, row?.lsys))
+  })
+  return WI_JOB_CATEGORY_ORDER.filter(label => set.has(label))
+})
+
+const wiByPersonFilteredSorted = computed(() => {
+  const selected = (wiJobFilter.value || '').trim()
+  if (!selected) return wiByPersonSorted.value
+  if (selected === WI_JOB_FILTER_ALL_MANAGERS) {
+    return wiByPersonSorted.value.filter((row) => {
+      const c = wiJobDisplayCategory(row?.jb, row?.lsys)
+      return c === '主任及副主任' || c === '班组长'
+    })
+  }
+  if (selected === WI_JOB_FILTER_ZHUREN_ZRZE) {
+    return wiByPersonSorted.value.filter(row => wiJobMatchesZhurenOrZrze(row?.jb))
+  }
+  if (selected === WI_JOB_FILTER_FUZHUREN) {
+    return wiByPersonSorted.value.filter(row => wiJobMatchesFuzhurenOnly(row?.jb))
+  }
+  return wiByPersonSorted.value.filter(
+    row => wiJobDisplayCategory(row?.jb, row?.lsys) === selected,
+  )
+})
+
 function toggleWiSort(key) {
   if (wiSortKey.value === key) {
     wiSortOrder.value = wiSortOrder.value === 'desc' ? 'asc' : 'desc'
     return
   }
   wiSortKey.value = key
-  wiSortOrder.value = key === 'name' ? 'asc' : 'desc'
+  wiSortOrder.value = (key === 'name' || key === 'jb') ? 'asc' : 'desc'
 }
 
 function wiSortIndicator(key) {
@@ -1885,6 +1994,25 @@ onMounted(async () => {
   background: var(--color-primary);
   color: white;
   border-color: var(--color-primary);
+}
+
+.wi-person-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin: calc(var(--spacing-lg) * -1 + 2px) 0 var(--spacing-md);
+}
+.wi-person-filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.wi-job-filter-select {
+  min-width: 132px;
+  height: 32px;
+  padding: 0 10px;
 }
 
 .wi-dept-grid {

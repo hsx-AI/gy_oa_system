@@ -5,7 +5,7 @@
       <button class="btn btn-outline" @click="router.push('/attendance/approvals')">进入审批</button>
     </div>
 
-    <template v-if="!canApprove">
+    <template v-if="!canApprove && !displayTodoList.length && !loading">
       <div class="no-permission card">
         <p>您暂无审批权限（员工无审批功能）</p>
       </div>
@@ -39,7 +39,7 @@
                   <td>{{ task.applyTime }}</td>
                   <td>
                     <button type="button" class="btn btn-primary btn-sm" @click="goApprove(task)">
-                      {{ task.isReturnReminder ? '去登记' : '处理' }}
+                      {{ task.isShiftCoverageGap ? '去排班' : (task.isReturnReminder ? '去登记' : '处理') }}
                     </button>
                   </td>
                 </tr>
@@ -69,6 +69,7 @@ import {
   getPendingHolidayExchange,
   getBusinessTripList
 } from '@/api/attendance'
+import { getShiftCoverageGap } from '@/api/shift'
 
 const router = useRouter()
 const canApprove = ref(false)
@@ -76,6 +77,7 @@ const todoList = ref([])
 const loading = ref(false)
 /** 公出已通过但未做返回登记的数量 */
 const tripReturnPendingCount = ref(0)
+const shiftCoverageGap = ref(null)
 
 const userInfo = (() => {
   try {
@@ -91,6 +93,22 @@ const userName = userInfo.name || userInfo.userName || ''
 /** 展示的待办 = 审批待办 + 公出返回登记提醒（若有） */
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
+  if (shiftCoverageGap.value?.hasPending) {
+    const gap = shiftCoverageGap.value
+    const dept = gap.department || '本科室'
+    const range = gap.startDate && gap.endDate ? `${gap.startDate}至${gap.endDate}` : '当前至下周周末'
+    const summary = gap.summary ? `：${gap.summary}` : ''
+    list.push({
+      uniqueId: 'shift-coverage-gap',
+      tabType: 'shift-schedule',
+      type: '日常排班人数不足',
+      typeClass: 'type-shift',
+      description: `${dept}${range}有 ${gap.totalIssues || 0} 天未满足排班人数配置${summary}`,
+      applicant: '排班管理',
+      applyTime: '',
+      isShiftCoverageGap: true
+    })
+  }
   if (tripReturnPendingCount.value > 0) {
     list.push({
       uniqueId: 'trip-return-reminder',
@@ -107,6 +125,10 @@ const displayTodoList = computed(() => {
 })
 
 function goApprove(task) {
+  if (task.isShiftCoverageGap) {
+    router.push('/attendance/shift-schedule')
+    return
+  }
   if (task.isReturnReminder) {
     router.push('/attendance/business-trip')
     return
@@ -120,6 +142,12 @@ async function fetchData() {
   try {
     const res = await checkCanApprove({ name: userName })
     canApprove.value = res.canApprove || false
+    try {
+      const shiftRes = await getShiftCoverageGap({ current_user: userName })
+      shiftCoverageGap.value = shiftRes?.hasPending ? shiftRes : null
+    } catch {
+      shiftCoverageGap.value = null
+    }
     if (canApprove.value) {
       const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
       getPendingLeave({ approver: userName }),
@@ -194,6 +222,7 @@ async function fetchData() {
     }
   } catch (e) {
     todoList.value = []
+    shiftCoverageGap.value = null
   } finally {
     loading.value = false
   }
@@ -312,6 +341,11 @@ onMounted(fetchData)
 .type-he {
   background: #f0f5ff;
   color: #2f54eb;
+}
+
+.type-shift {
+  background: #fff7e6;
+  color: #d46b08;
 }
 
 .btn-primary.btn-sm {

@@ -349,6 +349,23 @@ def _is_manager_of_dept(name: str, department: str) -> bool:
     return ("组长" in jb or "主任" in jb) and dept == department
 
 
+def _get_user_shift_manager_dept(name: str) -> Optional[str]:
+    """返回排班管理人员所在科室；普通员工返回 None。"""
+    if not name:
+        return None
+    rows = db.execute_query(
+        "SELECT jb, lsys FROM yggl WHERE TRIM(name) = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+        (name.strip(),),
+    )
+    if not rows:
+        return None
+    jb = (rows[0].get("jb") or "").strip()
+    dept = (rows[0].get("lsys") or "").strip()
+    if dept and ("组长" in jb or "主任" in jb):
+        return dept
+    return None
+
+
 def _is_dept_member(name: str, department: str) -> bool:
     """是否为该科室在职员工（含管理人员）"""
     if not name or not department:
@@ -422,6 +439,112 @@ async def get_shift_config(department: str = Query(...)):
     if rows:
         return {"success": True, "data": rows[0]}
     return {"success": True, "data": {"workday_day": 2, "workday_night": 2, "weekend_day": 2, "weekend_night": 2}}
+
+
+@router.get("/coverage-gap")
+async def get_shift_coverage_gap(current_user: str = Query(..., description="当前登录人姓名")):
+    """首页待办：检查当前用户所在科室从今天到下周日是否存在日常排班人数缺口。
+
+    只检测普通上班日与公休日；命中系统节假日配置的日期不纳入检测。
+    """
+    _ensure_tables()
+    dept = _get_user_shift_manager_dept(current_user)
+    if not dept:
+        return {"success": True, "hasPending": False, "department": "", "issues": [], "totalIssues": 0}
+
+    today = date.today()
+    end_day = today + timedelta(days=(6 - today.weekday()) + 7)
+    dates = _daterange(today, end_day)
+    years_set = {d.year for d in dates}
+    holiday_by_date = _holiday_map_for_years(years_set)
+
+    config_rows = db.execute_query(
+        "SELECT workday_day, workday_night, weekend_day, weekend_night "
+        "FROM shift_config WHERE department = %s LIMIT 1",
+        (dept,),
+    )
+    cfg = config_rows[0] if config_rows else {
+        "workday_day": 2,
+        "workday_night": 2,
+        "weekend_day": 2,
+        "weekend_night": 2,
+    }
+
+    employees = _get_dept_employees(dept)
+    counts = {}
+    if employees:
+        ph = ",".join(["%s"] * len(employees))
+        rows = db.execute_query(
+            f"SELECT shift_date, shift_type, COUNT(*) AS cnt FROM shift_schedule "
+            f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s "
+            f"AND employee_name IN ({ph}) AND shift_type IN ('白班', '夜班', '白+夜') "
+            f"GROUP BY shift_date, shift_type",
+            (dept, today.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")) + tuple(employees),
+        )
+        for r in rows or []:
+            sd = r.get("shift_date")
+            ds = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else (str(sd)[:10] if sd else "")
+            st = (r.get("shift_type") or "").strip()
+            cnt = int(r.get("cnt") or 0)
+            if not ds:
+                continue
+            day_counts = counts.setdefault(ds, {"day": 0, "night": 0})
+            if st == "白班":
+                day_counts["day"] += cnt
+            elif st == "夜班":
+                day_counts["night"] += cnt
+            elif st == "白+夜":
+                day_counts["day"] += cnt
+                day_counts["night"] += cnt
+
+    issues = []
+    for d in dates:
+        ds = d.strftime("%Y-%m-%d")
+        if ds in holiday_by_date:
+            continue
+        is_workday = d.weekday() < 5
+        req_day = max(0, int(cfg.get("workday_day" if is_workday else "weekend_day") or 0))
+        req_night = max(0, int(cfg.get("workday_night" if is_workday else "weekend_night") or 0))
+        actual = counts.get(ds, {"day": 0, "night": 0})
+        day_missing = max(0, req_day - int(actual.get("day") or 0))
+        night_missing = max(0, req_night - int(actual.get("night") or 0))
+        if day_missing or night_missing:
+            issues.append({
+                "date": ds,
+                "weekday": ["一", "二", "三", "四", "五", "六", "日"][d.weekday()],
+                "dayType": "普通上班日" if is_workday else "公休日",
+                "holidayMark": "",
+                "requiredDay": req_day,
+                "requiredNight": req_night,
+                "actualDay": int(actual.get("day") or 0),
+                "actualNight": int(actual.get("night") or 0),
+                "missingDay": day_missing,
+                "missingNight": night_missing,
+            })
+
+    sample = issues[:5]
+    sample_parts = []
+    for i in sample:
+        missing_parts = []
+        if i["missingDay"]:
+            missing_parts.append(f"白班{i['missingDay']}人")
+        if i["missingNight"]:
+            missing_parts.append(f"夜班{i['missingNight']}人")
+        sample_parts.append(f"{i['date'][5:]}缺{'、'.join(missing_parts)}")
+    sample_text = "；".join(sample_parts)
+    if len(issues) > len(sample):
+        sample_text += f"；另有{len(issues) - len(sample)}天"
+
+    return {
+        "success": True,
+        "hasPending": bool(issues),
+        "department": dept,
+        "startDate": today.strftime("%Y-%m-%d"),
+        "endDate": end_day.strftime("%Y-%m-%d"),
+        "totalIssues": len(issues),
+        "summary": sample_text,
+        "issues": issues,
+    }
 
 
 @router.post("/config")

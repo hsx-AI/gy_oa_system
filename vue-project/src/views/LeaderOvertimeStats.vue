@@ -75,7 +75,7 @@
                 {{ item.jb || '部办人员' }} · {{ calcDaysByHours(item.hours) }} 天 · 月均 {{ formatMonthlyAvgDays(item) }} 天
               </span>
               <p v-if="item.isLeader && item.estimatedRank" class="rank-note">
-                根据{{ rankBaselineShort }}年数据统计您当前月均天数预计排名全体中层领导{{ item.estimatedRank }}位/{{ item.rankTotal || stats.rankTotal || 126 }}
+                预计排名{{ item.estimatedRank }}/{{ item.rankTotal || stats.rankTotal || 126 }}
               </p>
             </div>
             <span class="hours">{{ item.hours }} 小时</span>
@@ -86,23 +86,53 @@
       <article class="panel details-panel">
         <div class="panel-header">
           <h2>每日明细</h2>
+          <div v-if="details.length" class="detail-filters">
+            <input
+              v-model.trim="detailKeyword"
+              type="text"
+              class="detail-filter-input"
+              placeholder="筛选姓名"
+            />
+            <select v-model="detailType" class="detail-filter-select">
+              <option value="">全部类型</option>
+              <option v-for="type in detailTypeOptions" :key="type" :value="type">{{ type }}</option>
+            </select>
+            <label class="detail-filter-check">
+              <input v-model="detailLeaderOnly" type="checkbox" />
+              仅看领导
+            </label>
+            <button type="button" class="btn btn-secondary detail-filter-reset" @click="resetDetailFilters">
+              重置
+            </button>
+          </div>
         </div>
         <div v-if="loading" class="empty">加载中...</div>
         <div v-else-if="!details.length" class="empty">暂无明细</div>
+        <div v-else-if="!filteredDetails.length" class="empty">筛选后暂无数据</div>
         <div v-else class="detail-table-wrap">
           <table class="detail-table">
             <thead>
               <tr>
-                <th>日期</th>
-                <th>姓名</th>
-                <th>类型</th>
-                <th>时段</th>
-                <th>小时</th>
+                <th class="th-sortable" @click="toggleDetailSort('date')">
+                  日期 <span class="sort-ind">{{ detailSortIndicator('date') }}</span>
+                </th>
+                <th class="th-sortable" @click="toggleDetailSort('name')">
+                  姓名 <span class="sort-ind">{{ detailSortIndicator('name') }}</span>
+                </th>
+                <th class="th-sortable" @click="toggleDetailSort('dayType')">
+                  类型 <span class="sort-ind">{{ detailSortIndicator('dayType') }}</span>
+                </th>
+                <th class="th-sortable" @click="toggleDetailSort('segments')">
+                  时段 <span class="sort-ind">{{ detailSortIndicator('segments') }}</span>
+                </th>
+                <th class="th-sortable" @click="toggleDetailSort('hours')">
+                  小时 <span class="sort-ind">{{ detailSortIndicator('hours') }}</span>
+                </th>
               </tr>
             </thead>
             <tbody>
               <tr
-                v-for="row in details"
+                v-for="row in sortedFilteredDetails"
                 :key="`${row.name}-${row.date}`"
                 :class="{ 'detail-row--leader': row.isLeader }"
               >
@@ -167,7 +197,7 @@ import {
 
 const now = new Date()
 const filterYear = ref(now.getFullYear())
-const filterMonth = ref(now.getMonth() + 1)
+const filterMonth = ref('')
 const dateFrom = ref('')
 const dateTo = ref('')
 const loading = ref(false)
@@ -177,6 +207,11 @@ const baselineYear = ref(now.getFullYear() - 1)
 const baselineText = ref('')
 const baselineLoading = ref(false)
 const baselineSaving = ref(false)
+const detailKeyword = ref('')
+const detailType = ref('')
+const detailLeaderOnly = ref(false)
+const detailSortKey = ref('date')
+const detailSortOrder = ref('desc')
 
 const yearOptions = computed(() => {
   const y = now.getFullYear()
@@ -184,6 +219,34 @@ const yearOptions = computed(() => {
 })
 const people = computed(() => stats.value.list || [])
 const details = computed(() => stats.value.details || [])
+const detailTypeOptions = computed(() => {
+  const set = new Set()
+  details.value.forEach((row) => {
+    if (row?.dayType) set.add(row.dayType)
+  })
+  return Array.from(set)
+})
+const filteredDetails = computed(() => {
+  const keyword = detailKeyword.value.trim().toLowerCase()
+  return details.value.filter((row) => {
+    if (detailType.value && row.dayType !== detailType.value) return false
+    if (detailLeaderOnly.value && !row.isLeader) return false
+    if (keyword && !String(row.name || '').toLowerCase().includes(keyword)) return false
+    return true
+  })
+})
+const sortedFilteredDetails = computed(() => {
+  const rows = [...filteredDetails.value]
+  const key = detailSortKey.value
+  const order = detailSortOrder.value === 'asc' ? 1 : -1
+
+  return rows.sort((a, b) => {
+    const aValue = getDetailSortValue(a, key)
+    const bValue = getDetailSortValue(b, key)
+    if (aValue === bValue) return 0
+    return aValue > bValue ? order : -order
+  })
+})
 const isDateRangeMode = computed(() => Boolean(dateFrom.value && dateTo.value))
 const rankBaselineShort = computed(() => String(stats.value.rankBaselineYear || 2025).slice(-2))
 const baselineCount = computed(() => {
@@ -254,6 +317,33 @@ function parseBaselineValues() {
     }
     return value
   })
+}
+
+function resetDetailFilters() {
+  detailKeyword.value = ''
+  detailType.value = ''
+  detailLeaderOnly.value = false
+}
+
+function toggleDetailSort(key) {
+  if (detailSortKey.value === key) {
+    detailSortOrder.value = detailSortOrder.value === 'asc' ? 'desc' : 'asc'
+    return
+  }
+  detailSortKey.value = key
+  detailSortOrder.value = key === 'date' ? 'desc' : 'asc'
+}
+
+function detailSortIndicator(key) {
+  if (detailSortKey.value !== key) return '↕'
+  return detailSortOrder.value === 'asc' ? '↑' : '↓'
+}
+
+function getDetailSortValue(row, key) {
+  if (key === 'hours') return Number(row?.hours) || 0
+  if (key === 'date') return String(row?.date || '')
+  if (key === 'segments') return Array.isArray(row?.segments) ? row.segments.length : 0
+  return String(row?.[key] || '').toLowerCase()
 }
 
 async function openBaselineModal() {
@@ -441,7 +531,45 @@ onMounted(fetchData)
   overflow: hidden;
 }
 .panel-header { padding: 16px 18px; border-bottom: 1px solid #eef0f3; }
+.details-panel .panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
 .panel-header h2 { margin: 0; font-size: 16px; }
+.detail-filters {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.detail-filter-input,
+.detail-filter-select {
+  height: 32px;
+  border: 1px solid #d1d5db;
+  border-radius: 8px;
+  padding: 0 10px;
+  font-size: 12px;
+  background: #fff;
+}
+.detail-filter-input {
+  width: 120px;
+}
+.detail-filter-check {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #4b5563;
+  font-size: 12px;
+}
+.detail-filter-reset {
+  height: 32px;
+  padding: 0 10px;
+  font-size: 12px;
+}
 .empty { color: #9ca3af; text-align: center; padding: 34px 0; }
 .people-list { padding: 8px 12px 12px; }
 .person-row {
@@ -505,6 +633,18 @@ onMounted(fetchData)
 .detail-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .detail-table th, .detail-table td { padding: 10px 12px; border-bottom: 1px solid #eef0f3; text-align: left; vertical-align: top; }
 .detail-table th { background: #f9fafb; color: #4b5563; font-weight: 700; position: sticky; top: 0; }
+.detail-table .th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.detail-table .th-sortable:hover {
+  background: #f3f4f6;
+}
+.sort-ind {
+  margin-left: 4px;
+  font-size: 11px;
+  color: #9ca3af;
+}
 .detail-row--leader td { background: #fff7ed; }
 .segment-chip {
   display: inline-flex;

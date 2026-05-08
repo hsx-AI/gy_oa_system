@@ -1258,19 +1258,19 @@ def _query_manager_todos(name: str) -> List[Dict]:
             r.get("apply_time"),
         )
 
-    # 匿名意见待回复（按 target_leader 匹配，不限「经理/副经理」职务）
+    # 匿名意见待查看（status=0 视为未读；打开信箱后会标记已读）
     rows = db.execute_query(
         """
         SELECT content, created_at
         FROM feedback_leader_inbox
-        WHERE target_leader = %s AND status = 0
+        WHERE target_leader = %s AND COALESCE(status, 0) = 0
         ORDER BY created_at DESC
         """,
         (n,),
     ) or []
     for r in rows:
         desc = (r.get("content") or "").strip()
-        _append_todo(items, "匿名意见待回复", "意见与建议", desc[:120], r.get("created_at"))
+        _append_todo(items, "匿名意见待查看", "意见与建议", desc[:120], r.get("created_at"))
 
     # 换休票入账（未读）
     rows = db.execute_query(

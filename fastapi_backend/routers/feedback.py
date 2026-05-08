@@ -610,6 +610,10 @@ class LeaderReply(BaseModel):
     current_user: str
 
 
+class LeaderMarkRead(BaseModel):
+    current_user: str
+
+
 @router.get("/leader/targets")
 async def leader_targets():
     """获取可选领导列表（yggl.jb 含经理/副经理）"""
@@ -655,7 +659,7 @@ async def leader_submit(
 
 @router.get("/leader/inbox")
 async def leader_inbox(current_user: str = Query(...)):
-    """领导查看收到的匿名意见"""
+    """领导查看收到的匿名意见。status：0=未读，1=已读（历史数据中曾回复过的同为 1）。"""
     _ensure_tables()
     name = (current_user or "").strip()
     if not name:
@@ -682,50 +686,30 @@ async def leader_inbox(current_user: str = Query(...)):
     }
 
 
+@router.post("/leader/mark-read")
+async def leader_mark_read(req: LeaderMarkRead):
+    """将全部匿名意见标记为已读（不再要求回复）。"""
+    _ensure_tables()
+    name = (req.current_user or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="缺少用户信息")
+    db.execute_update(
+        "UPDATE feedback_leader_inbox SET status = 1 WHERE target_leader = %s AND COALESCE(status, 0) = 0",
+        (name,),
+    )
+    return {"success": True, "message": "已标记已读"}
+
+
 @router.post("/leader/{item_id}/reply")
 async def leader_reply(item_id: str, req: LeaderReply):
-    """领导回复匿名意见"""
-    _ensure_tables()
-    reply = (req.reply or "").strip()
-    name = (req.current_user or "").strip()
-    if not reply:
-        raise HTTPException(status_code=400, detail="回复内容不能为空")
-    rows = db.execute_query("SELECT target_leader FROM feedback_leader_inbox WHERE id = %s", (item_id,))
-    if not rows:
-        raise HTTPException(status_code=404, detail="记录不存在")
-    if rows[0]["target_leader"] != name:
-        raise HTTPException(status_code=403, detail="只能回复发给自己的意见")
-    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    db.execute_update(
-        "UPDATE feedback_leader_inbox SET reply = %s, reply_at = %s, status = 1 WHERE id = %s",
-        (reply, now, item_id),
-    )
-    return {"success": True, "message": "回复成功"}
+    """领导匿名信箱禁用回复。"""
+    raise HTTPException(status_code=403, detail="领导匿名信箱已禁用回复")
 
 
 @router.get("/leader/public")
 async def leader_public():
-    """全员可见的已回复列表"""
-    _ensure_tables()
-    rows = db.execute_query(
-        "SELECT id, target_leader, content, image_url, reply, created_at, reply_at "
-        "FROM feedback_leader_inbox WHERE status = 1 ORDER BY reply_at DESC"
-    )
-    return {
-        "success": True,
-        "data": [
-            {
-                "id": r["id"],
-                "targetLeader": r["target_leader"],
-                "content": r["content"],
-                "imageUrl": r.get("image_url") or "",
-                "reply": r["reply"] or "",
-                "createdAt": str(r.get("created_at") or "")[:19],
-                "replyAt": str(r.get("reply_at") or "")[:19] if r.get("reply_at") else "",
-            }
-            for r in rows
-        ],
-    }
+    """领导匿名信箱不再公示，固定返回空列表。"""
+    return {"success": True, "data": []}
 
 
 @router.get("/leader/image")

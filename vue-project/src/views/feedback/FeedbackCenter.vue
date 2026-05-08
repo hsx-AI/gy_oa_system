@@ -321,35 +321,34 @@
           <h3>我的信箱 <span class="badge" v-if="leaderInboxUnread">{{ leaderInboxUnread }}</span></h3>
           <div v-if="!leaderInbox.length" class="empty-hint">暂无匿名意见</div>
           <div v-for="msg in leaderInbox" :key="msg.id" class="inbox-item">
-            <div class="inbox-content">{{ msg.content }}</div>
-            <img v-if="msg.imageUrl" :src="getLeaderImgSrc(msg.imageUrl)" class="inbox-img" />
+            <div class="inbox-content" @click="openLeaderInboxDetail(msg)">{{ msg.content }}</div>
+            <img
+              v-if="msg.imageUrl"
+              :src="getLeaderImgSrc(msg.imageUrl)"
+              class="inbox-img"
+              @click="openLeaderInboxDetail(msg)"
+            />
             <div class="inbox-time">{{ msg.createdAt }}</div>
-            <div v-if="msg.reply" class="inbox-reply">
-              <strong>我的回复：</strong>{{ msg.reply }}
-            </div>
-            <div v-else class="inbox-reply-form">
-              <textarea
-                v-model="msg._draft"
-                rows="2"
-                placeholder="回复该意见…"
-                class="textarea textarea-sm textarea-auto-grow"
-                @input="(e) => fitTextareaHeight(e.target)"
-              ></textarea>
-              <button class="btn-sm btn-primary" @click="doReplyLeader(msg)" :disabled="msg._replying">回复</button>
-            </div>
+            <button type="button" class="btn-sm btn-outline inbox-detail-btn" @click="openLeaderInboxDetail(msg)">
+              查看详情
+            </button>
           </div>
         </div>
 
-        <!-- 公示墙 -->
-        <div class="card public-card">
-          <h3>已回复公示</h3>
-          <div v-if="!leaderPublic.length" class="empty-hint">暂无已回复内容</div>
-          <div v-for="item in leaderPublic" :key="item.id" class="public-item">
-            <div class="public-leader">{{ item.targetLeader }}</div>
-            <div class="public-question">匿名意见：{{ item.content }}</div>
-            <img v-if="item.imageUrl" :src="getLeaderImgSrc(item.imageUrl)" class="public-img" />
-            <div class="public-answer">领导回复：{{ item.reply }}</div>
-            <div class="public-time">{{ item.replyAt }}</div>
+        <div v-if="showLeaderInboxDetail" class="modal-overlay" @click.self="closeLeaderInboxDetail">
+          <div class="modal-content modal-lg leader-inbox-modal">
+            <h3>匿名意见详情</h3>
+            <div v-if="leaderInboxDetail" class="leader-inbox-detail">
+              <div class="leader-inbox-detail-content">{{ leaderInboxDetail.content }}</div>
+              <img
+                v-if="leaderInboxDetail.imageUrl"
+                :src="getLeaderImgSrc(leaderInboxDetail.imageUrl)"
+                class="leader-inbox-detail-img"
+                @click="openLeaderImageOriginal(leaderInboxDetail.imageUrl)"
+              />
+              <div class="leader-inbox-detail-time">{{ leaderInboxDetail.createdAt }}</div>
+            </div>
+            <div class="form-actions"><button @click="closeLeaderInboxDetail">关闭</button></div>
           </div>
         </div>
       </div>
@@ -428,7 +427,7 @@ import { useRoute } from 'vue-router'
 import {
   submitWall, getWallList, getWallRecords, getWallPending, reviewWall,
   likeWall, getWallDetail, replyWall, resolveWall, wallImageUrl, leaderImageUrl,
-  getLeaderTargets, submitLeaderMsg, getLeaderInbox, replyLeaderMsg, getLeaderPublic,
+  getLeaderTargets, submitLeaderMsg, getLeaderInbox, markLeaderInboxRead,
   submitSystemFeedback, getSystemList, replySystemFeedback, systemImageUrl
 } from '@/api/feedback'
 import { getContacts } from '@/api/contacts'
@@ -511,9 +510,11 @@ onMounted(async () => {
   openRouteWallDetail()
   loadAssigneeOptions()
   loadLeaderTargets()
-  loadLeaderPublic()
   loadSystemList()
-  if (isLeader.value) loadLeaderInbox()
+  if (isLeader.value) {
+    if (currentTab.value === 'leader') await syncLeaderInboxRead()
+    else await loadLeaderInbox()
+  }
 })
 
 watch(
@@ -625,9 +626,10 @@ function onBarrageEnd(uid) {
 
 onBeforeUnmount(stopBarrageLoop)
 
-watch(currentTab, (t) => {
+watch(currentTab, async (t) => {
   if (t === 'wall') { nextTick(() => startBarrageLoop()) }
   else { stopBarrageLoop() }
+  if (t === 'leader' && isLeader.value) await syncLeaderInboxRead()
 })
 
 // -- 发布吐槽 --
@@ -979,7 +981,8 @@ const leaderTargets = ref([])
 const leaderForm = reactive({ target: '', content: '' })
 const leaderSubmitting = ref(false)
 const leaderInbox = ref([])
-const leaderPublic = ref([])
+const showLeaderInboxDetail = ref(false)
+const leaderInboxDetail = ref(null)
 const leaderInboxUnread = computed(() => leaderInbox.value.filter(m => m.status === 0).length)
 
 const leaderFileRef = ref(null)
@@ -989,6 +992,22 @@ const leaderImagePreview = ref('')
 function getLeaderImgSrc(filename) {
   return filename ? leaderImageUrl(filename) : ''
 }
+
+function openLeaderInboxDetail(msg) {
+  leaderInboxDetail.value = msg
+  showLeaderInboxDetail.value = true
+}
+
+function closeLeaderInboxDetail() {
+  showLeaderInboxDetail.value = false
+  leaderInboxDetail.value = null
+}
+
+function openLeaderImageOriginal(filename) {
+  const url = getLeaderImgSrc(filename)
+  if (url) window.open(url, '_blank', 'noopener,noreferrer')
+}
+
 function onLeaderImagePick(e) {
   const f = e.target.files?.[0]
   if (!f) return
@@ -1034,34 +1053,17 @@ async function loadLeaderInbox() {
   try {
     const res = await getLeaderInbox({ current_user: userName })
     if (res.success) {
-      leaderInbox.value = (res.data || []).map(m => ({ ...m, _draft: '', _replying: false }))
+      leaderInbox.value = res.data || []
     }
   } catch { /* ignore */ }
 }
 
-async function doReplyLeader(msg) {
-  if (!(msg._draft || '').trim()) { alert('请输入回复内容'); return }
-  msg._replying = true
+async function syncLeaderInboxRead() {
+  if (!isLeader.value || !userName) return
   try {
-    const res = await replyLeaderMsg(msg.id, { reply: msg._draft.trim(), current_user: userName })
-    if (res.success) {
-      msg.reply = msg._draft.trim()
-      msg.status = 1
-      msg._draft = ''
-      loadLeaderPublic()
-    } else {
-      alert(res.message || '回复失败')
-    }
-  } catch (e) {
-    alert(e.response?.data?.detail || '回复失败')
-  }
-  msg._replying = false
-}
-
-async function loadLeaderPublic() {
-  try {
-    const res = await getLeaderPublic()
-    if (res.success) leaderPublic.value = res.data || []
+    await markLeaderInboxRead({ current_user: userName })
+    await loadLeaderInbox()
+    refreshWorkplaceTodos()
   } catch { /* ignore */ }
 }
 
@@ -1847,14 +1849,19 @@ async function doReplySystem(item) {
 }
 .inbox-item:last-child { border-bottom: none; }
 .inbox-content {
-  font-size: 14px; color: #1a1a2e;
+  font-size: 15px; color: #1a1a2e;
   margin-bottom: 6px; line-height: 1.5;
+  cursor: pointer;
 }
+.inbox-content:hover { color: #3a5cc1; }
 .inbox-img {
-  display: block; max-width: 120px;
+  display: block; max-width: 180px; max-height: 120px;
   border-radius: 6px; margin-bottom: 6px;
+  cursor: pointer;
+  object-fit: cover;
 }
 .inbox-time { font-size: 12px; color: #9ca3af; }
+.inbox-detail-btn { margin-top: 8px; }
 .inbox-reply {
   margin-top: 8px; padding: 10px 12px;
   background: #f0f5ff; border-radius: 8px;
@@ -1865,6 +1872,33 @@ async function doReplySystem(item) {
   align-items: flex-start; margin-top: 8px;
 }
 .inbox-reply-form .textarea { flex: 1; }
+.leader-inbox-modal {
+  width: min(760px, 92vw);
+}
+.leader-inbox-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.leader-inbox-detail-content {
+  font-size: 18px;
+  line-height: 1.75;
+  color: #111827;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.leader-inbox-detail-img {
+  max-width: 100%;
+  max-height: 58vh;
+  object-fit: contain;
+  border-radius: 10px;
+  border: 1px solid #e5e7eb;
+  cursor: zoom-in;
+}
+.leader-inbox-detail-time {
+  color: #9ca3af;
+  font-size: 13px;
+}
 .public-item {
   padding: 14px 0;
   border-bottom: 1px solid #f0f0f0;

@@ -18,6 +18,7 @@ import { getPendingHxpApprovals } from '@/api/admin'
 import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
 import { getLeaderInbox, getWallPending, getWallAssigned, getSystemList } from '@/api/feedback'
 import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
+import { getShiftCoverageGap } from '@/api/shift'
 
 function readUserName() {
   try {
@@ -59,6 +60,8 @@ const feedbackLeaderCount = ref(0)
 const feedbackWallPendingCount = ref(0)
 const feedbackSystemPendingCount = ref(0)
 const feedbackWallAssignedList = ref([])
+const shiftCoverageGap = ref(null)
+const shiftCoverageLoading = ref(false)
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -96,6 +99,21 @@ const displayTodoList = computed(() => {
       applicant: '人事档案系统',
       time: '',
       isPersonnel: true,
+    })
+  }
+  if (shiftCoverageGap.value?.hasPending) {
+    const gap = shiftCoverageGap.value
+    const dept = gap.department || '本科室'
+    const range = gap.startDate && gap.endDate ? `${gap.startDate}至${gap.endDate}` : '当前至下周周末'
+    const summary = gap.summary ? `：${gap.summary}` : ''
+    list.push({
+      uniqueId: 'shift-coverage-gap',
+      type: '日常排班人数不足',
+      description: `${dept}${range}有 ${gap.totalIssues || 0} 天未满足排班人数配置${summary}`,
+      applicant: '排班管理',
+      time: '',
+      isShiftCoverageGap: true,
+      btnLabel: '去排班',
     })
   }
   for (const hxp of hxpUnreadList.value) {
@@ -146,13 +164,13 @@ const displayTodoList = computed(() => {
   if (feedbackLeaderCount.value > 0) {
     list.push({
       uniqueId: 'feedback-leader-inbox',
-      type: '匿名意见待回复',
-      description: `您有 ${feedbackLeaderCount.value} 条匿名意见待回复`,
+      type: '匿名意见待查看',
+      description: `您有 ${feedbackLeaderCount.value} 条匿名意见待查看`,
       applicant: '意见与建议',
       time: '',
       isFeedback: true,
       feedbackTab: 'leader',
-      btnLabel: '去回复',
+      btnLabel: '去查看',
     })
   }
   if (feedbackWallPendingCount.value > 0) {
@@ -202,6 +220,7 @@ const totalBadgeCount = computed(() => {
   if (tripReturnPendingCount.value > 0) count += 1
   if (sixianghuibaoTodoTotal.value > 0) count += 1
   count += Math.max(0, Number(personnelNeedAudit.value) || 0)
+  if (shiftCoverageGap.value?.hasPending) count += 1
   count += hxpUnreadList.value.length
   count += hxpApprovalPendingList.value.length
   count += sealPendingList.value.length
@@ -213,7 +232,7 @@ const totalBadgeCount = computed(() => {
   return count
 })
 
-const todoPanelLoading = computed(() => todoLoading.value || tripReturnLoading.value)
+const todoPanelLoading = computed(() => todoLoading.value || tripReturnLoading.value || shiftCoverageLoading.value)
 
 async function fetchTodoList() {
   const userName = readUserName()
@@ -323,6 +342,23 @@ async function fetchPersonnelPending() {
   }
 }
 
+async function fetchShiftCoverageGap() {
+  const name = readUserName()
+  if (!name) {
+    shiftCoverageGap.value = null
+    return
+  }
+  shiftCoverageLoading.value = true
+  try {
+    const res = await getShiftCoverageGap({ current_user: name })
+    shiftCoverageGap.value = res?.hasPending ? res : null
+  } catch {
+    shiftCoverageGap.value = null
+  } finally {
+    shiftCoverageLoading.value = false
+  }
+}
+
 async function fetchUnreadHxp() {
   const name = readUserName()
   if (!name) {
@@ -422,12 +458,10 @@ async function fetchFeedbackTodos() {
       .catch(() => { feedbackWallAssignedList.value = [] })
   )
 
-  // 与后端待办邮件 _query_manager_todos 一致：按 target_leader 汇总，不限「经理/副经理」职务。
-  // 此前仅用 /经理|副经理/ 判断会导致部长/主任/副主任等被点名领导的待办不计入首页数字。
   tasks.push(
     getLeaderInbox({ current_user: userName })
       .then(res => {
-        feedbackLeaderCount.value = (res?.data || []).filter(m => m.status === 0).length
+        feedbackLeaderCount.value = (res?.data || []).filter(m => Number(m.status) === 0).length
       })
       .catch(() => { feedbackLeaderCount.value = 0 })
   )
@@ -459,6 +493,7 @@ export async function refreshWorkplaceTodos() {
     fetchTripReturnPending(),
     fetchSixianghuibaoTodos(),
     fetchPersonnelPending(),
+    fetchShiftCoverageGap(),
     fetchUnreadHxp(),
     fetchHxpApprovalPending(),
     fetchSealPending(),
@@ -528,6 +563,10 @@ export function useWorkplaceTodos() {
       goSixianghuibao()
       return
     }
+    if (task.isShiftCoverageGap) {
+      router.push('/attendance/shift-schedule')
+      return
+    }
     if (task.isReturnReminder) {
       router.push('/attendance/business-trip')
       return
@@ -564,6 +603,7 @@ export function useWorkplaceTodos() {
     tripReturnPendingCount,
     sixianghuibaoTodoTotal,
     personnelNeedAudit,
+    shiftCoverageGap,
     todoRealTotal,
     displayTodoList,
     totalBadgeCount,
