@@ -21,6 +21,10 @@ OTHER_DEPT_NAMES = ("其他部门员工", "其他部门成员")
 # SQL 片段：用于 WHERE 条件中排除虚拟科室（拼接在已有 != 部办 之后）
 _EXCL_OTHER = "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
 _EXCL_OTHER_YGGL = "AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') "
+# 工作强度：公出仅计境内/境外；gclx 空与考勤模块一致视同「境内公出」
+_WI_TRIP_SQL_EXCLUDE_CITY = (
+    "AND COALESCE(NULLIF(TRIM(gcsqb.gclx), ''), '境内公出') != '市内公出'"
+)
 from typing import Optional, List, Tuple, Dict, Any
 from datetime import datetime, date
 from database import db
@@ -2753,6 +2757,7 @@ async def get_person_scatter(
 
 # ============================================================
 #  工作强度统计：口径 A=加班/在岗；口径 B=（加班−请假h）/在岗
+#  公出仅境内/境外（不含市内；gclx 空视同境内）
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
@@ -3276,7 +3281,7 @@ def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]
 
 
 def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
-    """按人汇总公出天数与节假日公出天数 {name: {tripDays, holidayTripDays}}，区间并集去重，仅已批准"""
+    """按人汇总公出天数与节假日公出天数 {name: {tripDays, holidayTripDays}}，区间并集去重，仅已批准；不含市内公出（gclx 空视同境内）。"""
     import calendar as _cal
     all_staff = not (lsys and lsys.strip())
     if all_staff:
@@ -3298,6 +3303,7 @@ def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str
             FROM {jc}
             WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
               AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+              {_WI_TRIP_SQL_EXCLUDE_CITY}
               AND COALESCE(gcsqb.gcsj,gcsqb.yjcfsj)<=%s
               AND COALESCE(gcsqb.sjfhtime,gcsqb.yjfhsj)>=%s
         """
@@ -3309,6 +3315,7 @@ def _get_trip_days_by_person(year: int, month: Optional[int], lsys: Optional[str
             FROM {jc}
             WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
               AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+              {_WI_TRIP_SQL_EXCLUDE_CITY}
               AND YEAR(COALESCE(gcsqb.gcsj,gcsqb.yjcfsj))=%s
         """
         rows = db.execute_query(sql, jp + (year,))
@@ -3367,7 +3374,7 @@ def _get_overtime_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> di
 
 
 def _get_trip_days_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> dict:
-    """按人汇总公出天数与节假日公出天数，区间与按月逻辑一致，裁剪到 [d0, min(d1,today)]"""
+    """按人汇总公出天数与节假日公出天数，区间与按月逻辑一致，裁剪到 [d0, min(d1,today)]；不含市内公出（gclx 空视同境内）。"""
     all_staff = not (lsys and lsys.strip())
     if all_staff:
         jc = ("gcsqb INNER JOIN yggl ON gcsqb.gcr=yggl.name "
@@ -3385,6 +3392,7 @@ def _get_trip_days_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> d
         FROM {jc}
         WHERE RIGHT(TRIM(gcsqb.gcr),1)!='1'
           AND gcsqb.bldzt=2 AND gcsqb.szrzt=2
+          {_WI_TRIP_SQL_EXCLUDE_CITY}
           AND COALESCE(gcsqb.gcsj,gcsqb.yjcfsj)<=%s
           AND COALESCE(gcsqb.sjfhtime,gcsqb.yjfhsj)>=%s
     """
@@ -3535,7 +3543,7 @@ async def get_work_intensity(
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
         "a",
-        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。请假小时=统计期内已通过请假按天重叠分摊×8",
+        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
     ),
 ):
     """
@@ -3543,6 +3551,7 @@ async def get_work_intensity(
     口径 A = 加班时长 / 实际在岗时长
     口径 B =（加班时长 − 请假时间）/ 实际在岗时长；请假时间为统计期内已通过请假（qjzt=4）按天重叠分摊后×8 小时，与请假汇总卡片一致。
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
+    公出时长仅含境内/境外公出（不含市内公出；gclx 空视同境内公出）。
     时长单位统一为小时（天数×8）。
     返回：全员、各科室、每个人的 intensity 及 intensityFormula。
     传入 date_from + date_to 时按自定义日期区间统计（忽略 month），区间结束日晚于今天时按今天截断。

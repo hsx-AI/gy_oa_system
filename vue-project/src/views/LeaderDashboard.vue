@@ -488,7 +488,7 @@
               <div class="wi-dept-name">{{ d.lsys }}</div>
               <div class="wi-dept-intensity">{{ (d.intensity * 100).toFixed(1) }}%</div>
               <div class="wi-dept-meta">
-                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h<span v-if="wiIsFormulaB"> · 请假{{ d.leaveHours ?? 0 }}h</span> · 公出{{ d.tripDays }}天
+                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h<span v-if="wiIsFormulaB"> · 请假{{ d.leaveHours ?? 0 }}h</span> · 境内境外公出{{ d.tripDays }}天
               </div>
             </div>
           </div>
@@ -689,12 +689,12 @@ const wiFormulaDesc = computed(() => {
   const full = canSeeWiFormulaDetail.value
   if (wiIntensityFormula.value === 'b') {
     if (full) {
-      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。' + WI_FORMULA_CONFIDENTIAL_NOTE
+      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
     }
     return '口径 B：在统计期内，按「加班相对在岗」并兼顾已通过请假影响折算的强度指标；具体核算方式内部掌握。'
   }
   if (full) {
-    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
   }
   return '口径 A：在统计期内，按加班时长相对实际在岗时长的强度指标；具体核算方式内部掌握。'
 })
@@ -987,12 +987,12 @@ function exportWorkIntensityTable() {
   appendAoASheet(wb, '统计概览', overviewRows, [24, 48])
   const deptHead = ['序号', '科室', '人数', '加班（h）']
   if (b) deptHead.push('请假（h）')
-  deptHead.push('公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度')
+  deptHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
   const deptColW = [8, 24, 10, 12, ...(b ? [12] : []), 12, 20, 14, 12]
   appendAoASheet(wb, '按科室', [deptHead, ...deptRows], deptColW)
   const personHead = ['序号', '姓名', '科室', '职务', '加班（h）']
   if (b) personHead.push('请假（h）')
-  personHead.push('公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度')
+  personHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
   const personColW = [8, 14, 24, 16, 12, ...(b ? [12] : []), 12, 20, 14, 12]
   appendAoASheet(wb, '按个人', [personHead, ...personRows], personColW)
   XLSX.writeFile(wb, formatWiExportFileName())
