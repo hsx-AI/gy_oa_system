@@ -2752,7 +2752,7 @@ async def get_person_scatter(
 
 
 # ============================================================
-#  工作强度统计  A = 加班时长 / (应出勤时长 - 公出时长)
+#  工作强度统计：口径 A=加班/在岗；口径 B=（加班−请假h）/在岗
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
@@ -3411,6 +3411,55 @@ def _get_trip_days_by_person_range(d0: date, d1: date, lsys: Optional[str]) -> d
     return result
 
 
+def _get_leave_days_by_person_period(period_start: date, period_end: date, lsys: Optional[str]) -> Dict[str, float]:
+    """
+    qjzt=4 已通过请假，与 /dept/leave 相同的天数重叠分摊逻辑；统计期闭区间 [period_start, period_end]。
+    员工范围与工作强度一致（yggl 在职、含部办）。返回 { 姓名: 分摊后天数 }。
+    """
+    pe_str = period_end.strftime("%Y-%m-%d")
+    ps_str = period_start.strftime("%Y-%m-%d")
+    ov = _leave_overlap_sql_bounds()
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        query = f"""
+            SELECT TRIM(qj.xm) AS name, qj.timefrom, qj.timeto, qj.timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian
+            FROM qj INNER JOIN yggl ON TRIM(qj.xm) = TRIM(yggl.name)
+            WHERE qj.qjzt = 4
+              AND RIGHT(TRIM(yggl.name),1) != '1' AND RIGHT(TRIM(yggl.lsys),1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND (COALESCE(yggl.zaizhi,0) = 0)
+            {ov}
+        """
+        rows = db.execute_query(query, (pe_str, ps_str))
+    else:
+        query = f"""
+            SELECT TRIM(qj.xm) AS name, qj.timefrom, qj.timeto, qj.timefromdate, CAST(qj.tian AS DECIMAL(10,2)) AS tian
+            FROM qj INNER JOIN yggl ON TRIM(qj.xm) = TRIM(yggl.name) AND TRIM(yggl.lsys) = %s
+            WHERE qj.qjzt = 4
+              AND RIGHT(TRIM(yggl.name),1) != '1' AND RIGHT(TRIM(yggl.lsys),1) != '1'
+              AND (COALESCE(yggl.zaizhi,0) = 0)
+            {ov}
+        """
+        rows = db.execute_query(query, (lsys.strip(), pe_str, ps_str))
+
+    by_name: Dict[str, float] = defaultdict(float)
+    for r in rows or []:
+        name = (r.get("name") or "").strip()
+        if not name:
+            continue
+        ls_d, le_d = _qj_leave_date_bounds(r)
+        if not ls_d or not le_d:
+            continue
+        try:
+            tian_f = float(r.get("tian") or 0)
+        except (TypeError, ValueError):
+            tian_f = 0.0
+        alloc = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, period_start, period_end)
+        if alloc > 0:
+            by_name[name] += alloc
+    return dict(by_name)
+
+
 def _get_staff_with_dept(lsys: Optional[str]) -> list:
     """返回 [{name, lsys, jb}]，在职员工。全员（不传 lsys）时包含「部办」，以便工作强度按科室展示部办卡片。"""
     all_staff = not (lsys and lsys.strip())
@@ -3484,12 +3533,18 @@ async def get_work_intensity(
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
+    intensity_formula: str = Query(
+        "a",
+        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。请假小时=统计期内已通过请假按天重叠分摊×8",
+    ),
 ):
     """
-    工作强度统计 A = 加班时长 / 实际在岗时长
+    工作强度统计：
+    口径 A = 加班时长 / 实际在岗时长
+    口径 B =（加班时长 − 请假时间）/ 实际在岗时长；请假时间为统计期内已通过请假（qjzt=4）按天重叠分摊后×8 小时，与请假汇总卡片一致。
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
     时长单位统一为小时（天数×8）。
-    返回：全部门A、各科室A、每个人的A。
+    返回：全员、各科室、每个人的 intensity 及 intensityFormula。
     传入 date_from + date_to 时按自定义日期区间统计（忽略 month），区间结束日晚于今天时按今天截断。
     """
     try:
@@ -3523,6 +3578,7 @@ async def get_work_intensity(
                 "effectiveDateTo": d_end_eff.isoformat(),
             }
             ot_att_start, ot_att_end = ds, d_end_eff
+            leave_ps, leave_pe = ds, d_end_eff
         elif month:
             # 当统计“当前年月”时，应出勤只统计到今天，避免按整月放大分母
             if year == today.year and month == today.month:
@@ -3541,6 +3597,7 @@ async def get_work_intensity(
             ot_att_end = month_last
             if year == today.year and month == today.month:
                 ot_att_end = min(month_last, today)
+            leave_ps, leave_pe = month_first, month_last
         else:
             # 统计全年时：当年仅统计到今天，历史年份统计整年
             if year == today.year:
@@ -3557,6 +3614,8 @@ async def get_work_intensity(
             year_last = date(year, 12, 31)
             ot_att_start = year_first
             ot_att_end = year_last if year < today.year else min(year_last, today)
+            leave_ps = year_first
+            leave_pe = year_last if year < today.year else min(year_last, today)
 
         ban_names = sorted({s["name"] for s in staff if (s.get("lsys") or "").strip() == LEADER_EXCLUDE_LSYS})
         if ban_names:
@@ -3564,8 +3623,17 @@ async def get_work_intensity(
             for n in ban_names:
                 ot_map[n] = float(att_ot.get(n, 0.0))
 
+        formula = (intensity_formula or "a").strip().lower()
+        if formula not in ("a", "b"):
+            formula = "a"
+        leave_days_map: Dict[str, float] = (
+            _get_leave_days_by_person_period(leave_ps, leave_pe, lsys) if formula == "b" else {}
+        )
+
         person_list = []
-        dept_agg = defaultdict(lambda: {"ot": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0})
+        dept_agg = defaultdict(
+            lambda: {"ot": 0.0, "leave_h": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0}
+        )
 
         for s in staff:
             name = s["name"]
@@ -3577,9 +3645,11 @@ async def get_work_intensity(
             trip_h = trip_d * HOURS_PER_DAY
             trip_holiday_h = trip_holiday_d * HOURS_PER_DAY
             actual_h = expected_hours - trip_h + trip_holiday_h
-            intensity = round(ot / actual_h, 4) if actual_h > 0 else 0
+            leave_h = float(leave_days_map.get(name, 0.0)) * HOURS_PER_DAY if formula == "b" else 0.0
+            ot_net = ot - leave_h if formula == "b" else ot
+            intensity = round(ot_net / actual_h, 4) if actual_h > 0 else 0
 
-            person_list.append({
+            row_p = {
                 "name": name,
                 "lsys": dept,
                 "jb": jb,
@@ -3588,10 +3658,15 @@ async def get_work_intensity(
                 "tripHolidayDays": round(trip_holiday_d, 2),
                 "actualHours": round(actual_h, 2),
                 "intensity": intensity,
-            })
+            }
+            if formula == "b":
+                row_p["leaveHours"] = round(leave_h, 2)
+            person_list.append(row_p)
 
             da = dept_agg[dept]
             da["ot"] += ot
+            if formula == "b":
+                da["leave_h"] += leave_h
             da["trip_days"] += trip_d
             da["trip_holiday_days"] += trip_holiday_d
             da["count"] += 1
@@ -3599,25 +3674,36 @@ async def get_work_intensity(
         person_list.sort(key=lambda x: -x["intensity"])
 
         total_ot = sum(p["overtimeHours"] for p in person_list)
+        total_leave_h = sum(float(p.get("leaveHours") or 0) for p in person_list) if formula == "b" else 0.0
         total_trip_d = sum(p["tripDays"] for p in person_list)
         total_trip_holiday_d = sum(p.get("tripHolidayDays", 0) for p in person_list)
         total_trip_h = total_trip_d * HOURS_PER_DAY
         total_trip_holiday_h = total_trip_holiday_d * HOURS_PER_DAY
         total_actual = expected_hours * len(staff) - total_trip_h + total_trip_holiday_h
-        overall_intensity = round(total_ot / total_actual, 4) if total_actual > 0 else 0
+        if formula == "b":
+            overall_intensity = round((total_ot - total_leave_h) / total_actual, 4) if total_actual > 0 else 0
+        else:
+            overall_intensity = round(total_ot / total_actual, 4) if total_actual > 0 else 0
 
         dept_list = []
         for dept_name, da in dept_agg.items():
             dept_actual = expected_hours * da["count"] - da["trip_days"] * HOURS_PER_DAY + da["trip_holiday_days"] * HOURS_PER_DAY
-            dept_i = round(da["ot"] / dept_actual, 4) if dept_actual > 0 else 0
-            dept_list.append({
+            if formula == "b":
+                dept_ot_net = da["ot"] - da["leave_h"]
+                dept_i = round(dept_ot_net / dept_actual, 4) if dept_actual > 0 else 0
+            else:
+                dept_i = round(da["ot"] / dept_actual, 4) if dept_actual > 0 else 0
+            row_d = {
                 "lsys": dept_name,
                 "personCount": da["count"],
                 "overtimeHours": round(da["ot"], 2),
                 "tripDays": round(da["trip_days"], 2),
                 "tripHolidayDays": round(da["trip_holiday_days"], 2),
                 "intensity": dept_i,
-            })
+            }
+            if formula == "b":
+                row_d["leaveHours"] = round(da["leave_h"], 2)
+            dept_list.append(row_d)
         dept_list.sort(key=lambda x: -x["intensity"])
 
         return {
@@ -3626,6 +3712,7 @@ async def get_work_intensity(
             "expectedHoursPerPerson": expected_hours,
             "totalPeople": len(staff),
             "overallIntensity": overall_intensity,
+            "intensityFormula": formula,
             "byDept": dept_list,
             "byPerson": person_list,
             **range_meta,

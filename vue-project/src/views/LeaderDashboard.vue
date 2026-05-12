@@ -384,7 +384,22 @@
             <span>工作强度统计</span>
             <span class="section-sub">{{ wiSectionSubtitle }}</span>
           </h2>
-          <p class="section-desc">工作强度 A = 加班时长 ÷ 实际在岗时长；实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。</p>
+          <p class="section-desc">{{ wiFormulaDesc }}</p>
+          <div class="wi-formula-bar">
+            <span class="wi-formula-label">口径</span>
+            <button
+              type="button"
+              class="wi-formula-btn"
+              :class="{ active: wiIntensityFormula === 'a' }"
+              @click="setWiIntensityFormula('a')"
+            >A</button>
+            <button
+              type="button"
+              class="wi-formula-btn"
+              :class="{ active: wiIntensityFormula === 'b' }"
+              @click="setWiIntensityFormula('b')"
+            >B</button>
+          </div>
 
           <div class="wi-range-toolbar">
             <label class="wi-range-check">
@@ -455,7 +470,7 @@
             >按个人</button>
           </div>
 
-          <div v-if="wiViewMode === 'person' && workIntensity.byPerson?.length" class="wi-person-filters">
+          <div v-if="wiViewMode === 'person' && wiByPersonRawScoped.length" class="wi-person-filters">
             <label class="wi-person-filter-item">
               <span>职务</span>
               <select v-model="wiJobFilter" class="form-input wi-job-filter-select">
@@ -468,17 +483,17 @@
             </label>
           </div>
 
-          <div v-if="wiViewMode === 'dept' && workIntensity.byDept?.length" class="wi-dept-grid">
-            <div v-for="d in workIntensity.byDept" :key="d.lsys" class="wi-dept-card">
+          <div v-if="wiViewMode === 'dept' && wiByDeptScoped.length" class="wi-dept-grid">
+            <div v-for="d in wiByDeptScoped" :key="d.lsys" class="wi-dept-card">
               <div class="wi-dept-name">{{ d.lsys }}</div>
               <div class="wi-dept-intensity">{{ (d.intensity * 100).toFixed(1) }}%</div>
               <div class="wi-dept-meta">
-                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h · 公出{{ d.tripDays }}天
+                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h<span v-if="wiIsFormulaB"> · 请假{{ d.leaveHours ?? 0 }}h</span> · 公出{{ d.tripDays }}天
               </div>
             </div>
           </div>
 
-          <div v-if="wiViewMode === 'person' && workIntensity.byPerson?.length" class="wi-person-table-wrap">
+          <div v-if="wiViewMode === 'person' && wiByPersonRawScoped.length" class="wi-person-table-wrap">
             <table class="wi-person-table">
               <thead>
                 <tr>
@@ -492,6 +507,9 @@
                   </th>
                   <th class="wi-th-sort" @click="toggleWiSort('overtimeHours')">
                     加班(h) <span class="wi-sort-ind">{{ wiSortIndicator('overtimeHours') }}</span>
+                  </th>
+                  <th v-if="wiIsFormulaB" class="wi-th-sort" @click="toggleWiSort('leaveHours')">
+                    请假(h) <span class="wi-sort-ind">{{ wiSortIndicator('leaveHours') }}</span>
                   </th>
                   <th class="wi-th-sort" @click="toggleWiSort('actualHours')">
                     实际在岗(h) <span class="wi-sort-ind">{{ wiSortIndicator('actualHours') }}</span>
@@ -508,6 +526,7 @@
                   <td>{{ p.lsys }}</td>
                   <td>{{ p.jb || '-' }}</td>
                   <td class="td-num">{{ p.overtimeHours }}</td>
+                  <td v-if="wiIsFormulaB" class="td-num">{{ p.leaveHours ?? 0 }}</td>
                   <td class="td-num">{{ p.actualHours }}</td>
                   <td class="td-num td-intensity">{{ (p.intensity * 100).toFixed(1) }}%</td>
                 </tr>
@@ -542,7 +561,7 @@ import {
   getLeaderWorkIntensity,
   getUploadConfig,
 } from '@/api/attendance'
-import { isMinisterLevel } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOnly } from '@/utils/roleMatch'
 
 const router = useRouter()
 const leaderOtAdmin1 = ref('')
@@ -636,6 +655,8 @@ const trendOvertime = computed(() => _buildTrendChart(monthlyOvertime.value, '�
 const trendTrip = computed(() => _buildTrendChart(monthlyTrip.value, '天'))
 
 const workIntensity = ref({})
+/** 工作强度请求序号：快速切换科室/口径时丢弃过期响应，避免列表与当前筛选不一致 */
+let workIntensityFetchSeq = 0
 const wiUseDateRange = ref(false)
 const wiDateFrom = ref('')
 const wiDateTo = ref('')
@@ -645,8 +666,41 @@ const wiMonthly = ref([])
 const wiSortKey = ref('intensity')
 const wiSortOrder = ref('desc')
 const wiJobFilter = ref('')
+const wiIntensityFormula = ref('a')
 
-/** 工作强度「职务」筛选/展示：合并同类项（与原始 yggl.jb 脱钩展示） */
+/** 工作强度口径 B：与后端 /leader/work-intensity intensity_formula=b 一致 */
+const wiIsFormulaB = computed(() => wiIntensityFormula.value === 'b')
+
+/** 与 yggl.jb 一致：仅正职部长/经理可看详细公式（不含副职、不含经理助理等） */
+const canSeeWiFormulaDetail = computed(() => {
+  try {
+    const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    const jb = (info.jb || '').trim()
+    if (!jb) return false
+    if (!isMinisterOnly(jb)) return false
+    if (jb.includes('助理')) return false
+    return true
+  } catch {
+    return false
+  }
+})
+
+const WI_FORMULA_CONFIDENTIAL_NOTE = '（本公示仅正职经理/部长可见）'
+
+const wiFormulaDesc = computed(() => {
+  const full = canSeeWiFormulaDetail.value
+  if (wiIntensityFormula.value === 'b') {
+    if (full) {
+      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    }
+    return '口径 B：在统计期内，按「加班相对在岗」并兼顾已通过请假影响折算的强度指标；具体核算方式内部掌握。'
+  }
+  if (full) {
+    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长。' + WI_FORMULA_CONFIDENTIAL_NOTE
+  }
+  return '口径 A：在统计期内，按加班时长相对实际在岗时长的强度指标；具体核算方式内部掌握。'
+})
+
 const WI_JOB_CATEGORY_ORDER = ['部领导', '总师', '责任工艺师', '主任及副主任', '班组长', '无']
 /** 筛选专用：主任/副主任/班组长等合并类下的全体管理人员 */
 const WI_JOB_FILTER_ALL_MANAGERS = '全体管理人员'
@@ -749,9 +803,26 @@ const wiSectionSubtitle = computed(() => {
   return `${filterYear.value}年${filterMonth.value ? filterMonth.value + '月' : '全年'}`
 })
 
+/** 部长在筛选里选中具体科室时，仅展示该科室行，防止请求竞态导致混入其他科室人员 */
+function wiSelectedDeptTrim() {
+  if (permLevel.value === 3) return (selectedLsys.value || '').trim()
+  return (lsys.value || '').trim()
+}
+
+function filterWiRowsBySelectedDept(rows) {
+  const scope = wiSelectedDeptTrim()
+  if (!scope || !Array.isArray(rows)) return rows || []
+  return rows.filter((r) => (r?.lsys || '').trim() === scope)
+}
+
+const wiByPersonRawScoped = computed(() => filterWiRowsBySelectedDept(workIntensity.value?.byPerson || []))
+const wiByDeptScoped = computed(() => filterWiRowsBySelectedDept(workIntensity.value?.byDept || []))
+
 const canExportWorkIntensity = computed(() => {
   const wi = workIntensity.value || {}
-  return !!(wi.totalPeople && ((wi.byDept || []).length || (wi.byPerson || []).length))
+  const byD = filterWiRowsBySelectedDept(wi.byDept || [])
+  const byP = filterWiRowsBySelectedDept(wi.byPerson || [])
+  return !!(wi.totalPeople && (byD.length || byP.length))
 })
 
 function roundForExport(value, digits = 2) {
@@ -782,7 +853,71 @@ function appendAoASheet(wb, name, rows, widths = []) {
 function formatWiExportFileName() {
   const scope = ((permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员').replace(/[\\/:*?"<>|]+/g, '_')
   const range = wiSectionSubtitle.value.replace(/[\\/:*?"<>|()\s]+/g, '_').replace(/^_+|_+$/g, '')
-  return `工作强度统计_${scope}_${range || filterYear.value}.xlsx`
+  const suf = wiIntensityFormula.value === 'b' ? '口径B' : '口径A'
+  return `工作强度统计_${scope}_${range || filterYear.value}_${suf}.xlsx`
+}
+
+async function loadLeaderWorkIntensity(lsysToUse) {
+  const seq = ++workIntensityFetchSeq
+  wiRangeError.value = ''
+  const wiParams = {
+    year: filterYear.value,
+    intensity_formula: wiIntensityFormula.value,
+  }
+  if (lsysToUse) wiParams.lsys = lsysToUse
+  const useWiRange = wiUseDateRange.value && wiDateFrom.value && wiDateTo.value
+  if (useWiRange) {
+    wiParams.date_from = wiDateFrom.value
+    wiParams.date_to = wiDateTo.value
+  } else if (filterMonth.value) {
+    wiParams.month = parseInt(filterMonth.value, 10)
+  }
+  const wiRes = await getLeaderWorkIntensity(wiParams)
+  if (seq !== workIntensityFetchSeq) return
+  if (wiRes?.success) {
+    workIntensity.value = wiRes
+  } else {
+    throw new Error('工作强度接口未返回成功')
+  }
+
+  const month = filterMonth.value ? parseInt(filterMonth.value, 10) : undefined
+  if (!month && !useWiRange) {
+    const today = new Date()
+    const year = filterYear.value
+    const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
+    const monthPromises = []
+    for (let m = 1; m <= maxM; m++) {
+      const mp = { year, month: m, intensity_formula: wiIntensityFormula.value }
+      if (lsysToUse) mp.lsys = lsysToUse
+      monthPromises.push(
+        getLeaderWorkIntensity(mp).then(r => ({ month: m, intensity: r?.overallIntensity ?? 0 })).catch(() => ({ month: m, intensity: 0 })),
+      )
+    }
+    const monthly = await Promise.all(monthPromises)
+    if (seq !== workIntensityFetchSeq) return
+    wiMonthly.value = monthly
+  } else {
+    if (seq !== workIntensityFetchSeq) return
+    wiMonthly.value = []
+  }
+}
+
+async function setWiIntensityFormula(v) {
+  const x = v === 'b' ? 'b' : 'a'
+  if (wiIntensityFormula.value === x) return
+  wiIntensityFormula.value = x
+  if (!hasFetched.value) return
+  const lsysToUse = permLevel.value === 3 ? selectedLsys.value : lsys.value
+  if (permLevel.value !== 3 && !lsysToUse) return
+  loading.value = true
+  try {
+    await loadLeaderWorkIntensity(lsysToUse)
+  } catch (e) {
+    console.error('工作强度加载失败:', e)
+    if (wiUseDateRange.value) wiRangeError.value = '加载失败，请稍后重试'
+  } finally {
+    loading.value = false
+  }
 }
 
 function exportWorkIntensityTable() {
@@ -792,32 +927,45 @@ function exportWorkIntensityTable() {
   }
 
   const wi = workIntensity.value || {}
-  const deptRows = (wi.byDept || []).map((row, idx) => [
-    idx + 1,
-    row.lsys || '',
-    row.personCount ?? 0,
-    roundForExport(row.overtimeHours),
-    roundForExport(row.tripDays),
-    roundForExport(row.tripHolidayDays),
-    workIntensityDeptActualHours(row),
-    percentForExport(row.intensity),
-  ])
-  const personRows = wiByPersonFilteredSorted.value.map((row, idx) => [
-    idx + 1,
-    row.name || '',
-    row.lsys || '',
-    row.jb || '',
-    roundForExport(row.overtimeHours),
-    roundForExport(row.tripDays),
-    roundForExport(row.tripHolidayDays),
-    roundForExport(row.actualHours),
-    percentForExport(row.intensity),
-  ])
-  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[7] || 0), 0)
+  const b = wiIntensityFormula.value === 'b'
+  const deptRows = filterWiRowsBySelectedDept(wi.byDept || []).map((row, idx) => {
+    const cells = [
+      idx + 1,
+      row.lsys || '',
+      row.personCount ?? 0,
+      roundForExport(row.overtimeHours),
+    ]
+    if (b) cells.push(roundForExport(row.leaveHours ?? 0))
+    cells.push(
+      roundForExport(row.tripDays),
+      roundForExport(row.tripHolidayDays),
+      workIntensityDeptActualHours(row),
+      percentForExport(row.intensity),
+    )
+    return cells
+  })
+  const personRows = wiByPersonFilteredSorted.value.map((row, idx) => {
+    const cells = [
+      idx + 1,
+      row.name || '',
+      row.lsys || '',
+      row.jb || '',
+      roundForExport(row.overtimeHours),
+    ]
+    if (b) cells.push(roundForExport(row.leaveHours ?? 0))
+    cells.push(
+      roundForExport(row.tripDays),
+      roundForExport(row.tripHolidayDays),
+      roundForExport(row.actualHours),
+      percentForExport(row.intensity),
+    )
+    return cells
+  })
+  const actualIdx = b ? 8 : 7
+  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[actualIdx] || 0), 0)
   const totalOvertimeHours = personRows.reduce((sum, row) => sum + Number(row[4] || 0), 0)
 
-  const wb = XLSX.utils.book_new()
-  appendAoASheet(wb, '统计概览', [
+  const overviewRows = [
     ['统计项', '数值'],
     ['统计范围', wiSectionSubtitle.value],
     ['导出范围', (permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员'],
@@ -825,18 +973,30 @@ function exportWorkIntensityTable() {
     ['应出勤时长/人（h）', wi.expectedHoursPerPerson ?? 0],
     ['统计人数（人）', wi.totalPeople ?? 0],
     ['全员加班（h）', roundForExport(totalOvertimeHours)],
+  ]
+  if (b) {
+    const leaveIdx = 5
+    const totalLeaveH = personRows.reduce((sum, row) => sum + Number(row[leaveIdx] || 0), 0)
+    overviewRows.push(['全员请假（h）', roundForExport(totalLeaveH)])
+    overviewRows.push(['全员（加班−请假）（h）', roundForExport(totalOvertimeHours - totalLeaveH)])
+  }
+  overviewRows.push(
     ['全员实际在岗（h）', roundForExport(totalActualHours)],
     ['全员工作强度', percentForExport(wi.overallIntensity)],
-    ['计算口径', '工作强度 = 加班时长 ÷ 实际在岗时长；实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长'],
-  ], [24, 48])
-  appendAoASheet(wb, '按科室', [
-    ['序号', '科室', '人数', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
-    ...deptRows,
-  ], [8, 24, 10, 12, 12, 20, 14, 12])
-  appendAoASheet(wb, '按个人', [
-    ['序号', '姓名', '科室', '职务', '加班（h）', '公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度'],
-    ...personRows,
-  ], [8, 14, 24, 16, 12, 12, 20, 14, 12])
+  )
+
+  const wb = XLSX.utils.book_new()
+  appendAoASheet(wb, '统计概览', overviewRows, [24, 48])
+  const deptHead = ['序号', '科室', '人数', '加班（h）']
+  if (b) deptHead.push('请假（h）')
+  deptHead.push('公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度')
+  const deptColW = [8, 24, 10, 12, ...(b ? [12] : []), 12, 20, 14, 12]
+  appendAoASheet(wb, '按科室', [deptHead, ...deptRows], deptColW)
+  const personHead = ['序号', '姓名', '科室', '职务', '加班（h）']
+  if (b) personHead.push('请假（h）')
+  personHead.push('公出（天）', '公出期间节假日（天）', '实际在岗（h）', '工作强度')
+  const personColW = [8, 14, 24, 16, 12, ...(b ? [12] : []), 12, 20, 14, 12]
+  appendAoASheet(wb, '按个人', [personHead, ...personRows], personColW)
   XLSX.writeFile(wb, formatWiExportFileName())
 }
 
@@ -878,15 +1038,7 @@ async function fetchWorkIntensityOnly() {
   if (permLevel.value !== 3 && !lsysToUse) return
   loading.value = true
   try {
-    const wiParams = {
-      year: filterYear.value,
-      date_from: wiDateFrom.value,
-      date_to: wiDateTo.value,
-    }
-    if (lsysToUse) wiParams.lsys = lsysToUse
-    const wiRes = await getLeaderWorkIntensity(wiParams)
-    if (wiRes?.success) workIntensity.value = wiRes
-    wiMonthly.value = []
+    await loadLeaderWorkIntensity(lsysToUse)
   } catch (e) {
     console.error('工作强度加载失败:', e)
     wiRangeError.value = '加载失败，请稍后重试'
@@ -896,7 +1048,7 @@ async function fetchWorkIntensityOnly() {
 }
 
 const wiByPersonSorted = computed(() => {
-  const list = [...(workIntensity.value?.byPerson || [])]
+  const list = [...wiByPersonRawScoped.value]
   const key = wiSortKey.value
   const desc = wiSortOrder.value === 'desc'
 
@@ -938,7 +1090,7 @@ const wiByPersonSorted = computed(() => {
 
 const wiJobOptions = computed(() => {
   const set = new Set()
-  ;(workIntensity.value?.byPerson || []).forEach((row) => {
+  wiByPersonRawScoped.value.forEach((row) => {
     set.add(wiJobDisplayCategory(row?.jb, row?.lsys))
   })
   return WI_JOB_CATEGORY_ORDER.filter(label => set.has(label))
@@ -1293,31 +1445,7 @@ const fetchData = async () => {
 
     try {
       wiRangeError.value = ''
-      const wiParams = { year }
-      if (lsysToUse) wiParams.lsys = lsysToUse
-      const useWiRange = wiUseDateRange.value && wiDateFrom.value && wiDateTo.value
-      if (useWiRange) {
-        wiParams.date_from = wiDateFrom.value
-        wiParams.date_to = wiDateTo.value
-      } else if (month) {
-        wiParams.month = month
-      }
-      const wiRes = await getLeaderWorkIntensity(wiParams)
-      if (wiRes?.success) workIntensity.value = wiRes
-
-      if (!month && !useWiRange) {
-        const today = new Date()
-        const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
-        const monthPromises = []
-        for (let m = 1; m <= maxM; m++) {
-          const mp = { year, month: m }
-          if (lsysToUse) mp.lsys = lsysToUse
-          monthPromises.push(getLeaderWorkIntensity(mp).then(r => ({ month: m, intensity: r?.overallIntensity ?? 0 })).catch(() => ({ month: m, intensity: 0 })))
-        }
-        wiMonthly.value = await Promise.all(monthPromises)
-      } else {
-        wiMonthly.value = []
-      }
+      await loadLeaderWorkIntensity(lsysToUse)
     } catch (e) {
       console.error('工作强度加载失败:', e)
     }
@@ -1909,6 +2037,37 @@ onMounted(async () => {
 }
 /* ====== 工作强度统计 ====== */
 .wi-section { overflow: visible; }
+
+.wi-formula-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin: 0 0 var(--spacing-md);
+}
+.wi-formula-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.wi-formula-btn {
+  padding: 4px 14px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-container);
+  font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
+  cursor: pointer;
+  color: var(--color-text-secondary);
+}
+.wi-formula-btn:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.wi-formula-btn.active {
+  background: var(--color-primary);
+  color: #fff;
+  border-color: var(--color-primary);
+}
 
 .wi-range-toolbar {
   display: flex;
