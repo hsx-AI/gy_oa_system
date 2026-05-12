@@ -199,7 +199,7 @@
     <!-- 排班网格 -->
     <div class="schedule-wrap card" v-if="employees.length">
       <div class="schedule-scroll" @mouseleave="scheduleClearHover">
-        <table class="schedule-table">
+        <table class="schedule-table" ref="scheduleTableRef">
           <thead>
             <tr>
               <th
@@ -641,6 +641,23 @@ const planEditing = ref(false)
 const planEditDate = ref('')
 const planEditText = ref('')
 const planTextareaRef = ref(null)
+const scheduleTableRef = ref(null)
+let _scheduleHeadResizeObserver = null
+
+function measureScheduleHeadHeights() {
+  const table = scheduleTableRef.value
+  if (!table) return
+  const firstRow = table.querySelector('thead tr:first-child')
+  if (firstRow) {
+    const h = firstRow.getBoundingClientRect().height
+    if (h > 0) table.style.setProperty('--schedule-head-r1', `${Math.ceil(h)}px`)
+  }
+  const planRow = table.querySelector('thead tr.plan-row')
+  if (planRow) {
+    const h = planRow.getBoundingClientRect().height
+    if (h > 0) table.style.setProperty('--schedule-head-r2', `${Math.ceil(h)}px`)
+  }
+}
 
 /** 排班表 Excel 式行列十字高亮（当前悬浮列 / 行索引） */
 const scheduleHoverCol = ref(null)
@@ -951,6 +968,28 @@ onMounted(async () => {
     }
   } catch (e) {
     console.error('加载科室列表失败:', e)
+  }
+  await nextTick()
+  measureScheduleHeadHeights()
+  if (typeof window !== 'undefined' && window.ResizeObserver) {
+    _scheduleHeadResizeObserver = new ResizeObserver(() => measureScheduleHeadHeights())
+    if (scheduleTableRef.value) _scheduleHeadResizeObserver.observe(scheduleTableRef.value)
+  }
+})
+
+onUnmounted(() => {
+  if (_scheduleHeadResizeObserver) {
+    _scheduleHeadResizeObserver.disconnect()
+    _scheduleHeadResizeObserver = null
+  }
+})
+
+watch([employees, dates], async () => {
+  await nextTick()
+  measureScheduleHeadHeights()
+  if (_scheduleHeadResizeObserver && scheduleTableRef.value) {
+    _scheduleHeadResizeObserver.disconnect()
+    _scheduleHeadResizeObserver.observe(scheduleTableRef.value)
   }
 })
 
@@ -1556,10 +1595,12 @@ async function handleExportExcel() {
 .shift-page {
   width: 100%;
   max-width: none;
-  min-height: calc(100vh - 96px);
-  padding: 0 0 var(--spacing-xl);
+  height: calc(100vh - 96px);
+  min-height: 0;
+  padding: 0 0 var(--spacing-md);
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 .shift-cap-toast {
   position: fixed;
@@ -1687,6 +1728,12 @@ async function handleExportExcel() {
 .btn-sm { padding: 4px 10px; font-size: 13px; }
 
 /* 配置面板 & 导出面板 */
+.config-panel,
+.export-panel {
+  flex-shrink: 0;
+  max-height: 220px;
+  overflow-y: auto;
+}
 .config-panel h3, .export-panel h3 { margin: 0 0 12px; font-size: var(--font-size-base); }
 .config-dept { color: var(--color-primary); margin-left: 8px; }
 .config-form { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
@@ -1710,8 +1757,8 @@ async function handleExportExcel() {
 
 /* 排班网格 */
 .schedule-wrap {
-  flex: 1 1 auto;
-  min-height: 360px;
+  flex: 1 1 0;
+  min-height: 0;
   padding: 0;
   overflow: hidden;
   display: flex;
@@ -1720,6 +1767,7 @@ async function handleExportExcel() {
 .schedule-scroll {
   flex: 1 1 auto;
   min-height: 0;
+  height: 100%;
   overflow-x: auto;
   overflow-y: auto;
 }
@@ -1737,6 +1785,8 @@ async function handleExportExcel() {
   --sched-hl-row: rgba(191, 219, 254, 0.42);
   --sched-hl-col: rgba(191, 219, 254, 0.42);
   --sched-hl-cross: rgba(96, 165, 250, 0.38);
+  --sched-hl-head: #dbeafe;
+  --sched-hl-head-cross: #bfdbfe;
 }
 /* 鼠标悬浮：整行 + 整列淡蓝高亮，交叉格略深（类似 Excel） */
 .schedule-table th.sched-hl-row,
@@ -1751,54 +1801,60 @@ async function handleExportExcel() {
 .schedule-table td.sched-hl-row.sched-hl-col {
   background: var(--sched-hl-cross) !important;
 }
+.schedule-table thead th.sched-hl-row,
+.schedule-table thead th.sched-hl-col {
+  background: var(--sched-hl-head) !important;
+}
+.schedule-table thead th.sched-hl-row.sched-hl-col {
+  background: var(--sched-hl-head-cross) !important;
+}
 .schedule-table th,
 .schedule-table td { border: 1px solid #e5e7eb; text-align: center; white-space: nowrap; }
 .schedule-table thead th {
   background: #f8fafc;
-  position: sticky;
-  top: 0;
-  z-index: 3;
   padding: 4px 2px;
   font-weight: 500;
 }
-/* 日期表头行：顶边冻结（高度与 --schedule-head-r1 一致，避免与下方 sticky 错位） */
+/* 日期表头行：顶边纵向冻结（仅日期行 sticky，避免后续行盖住第一条员工） */
 .schedule-table thead tr:first-child th {
+  position: sticky;
   top: 0;
-  z-index: 5;
+  z-index: 30;
   min-height: var(--schedule-head-r1);
   box-sizing: border-box;
+  box-shadow: inset 0 -1px 0 #e5e7eb;
 }
-/* 计划行：紧贴在首行之下冻结 */
+/* 计划行：紧贴日期行下方纵向冻结，top 用 JS 实测的首行高度 */
 .schedule-table thead tr.plan-row th {
   position: sticky;
   top: var(--schedule-head-r1);
   vertical-align: middle;
   padding: 6px 2px;
   background: #f0f9ff;
-  border-bottom: 1px solid #bfdbfe;
   white-space: normal;
   font-weight: 500;
-  min-height: 56px;
-  height: 56px;
-  z-index: 4;
+  height: var(--schedule-head-r2);
+  z-index: 28;
+  box-shadow: inset 0 -1px 0 #bfdbfe;
 }
 .schedule-table thead tr.plan-row .sticky-col,
 .schedule-table thead tr.plan-row .sticky-col2 {
   position: sticky;
   top: var(--schedule-head-r1);
   background: #eff6ff;
-  z-index: 8;
+  z-index: 38;
+  box-shadow: inset 0 -1px 0 #bfdbfe;
 }
-/* 当日合计（表头第三行）：贴在计划行之下冻结 */
+/* 当日合计（表头第三行）：紧贴在计划行下方纵向冻结 */
 .schedule-table thead tr.summary-head-row th {
   position: sticky;
   top: calc(var(--schedule-head-r1) + var(--schedule-head-r2));
-  z-index: 4;
+  z-index: 27;
   padding: 5px 2px;
   background: #f8fafc;
   font-weight: 500;
   vertical-align: middle;
-  border-bottom: 1px solid #e5e7eb;
+  box-shadow: inset 0 -1px 0 #e5e7eb;
   height: var(--schedule-head-r3);
   min-height: var(--schedule-head-r3);
   box-sizing: border-box;
@@ -1811,7 +1867,8 @@ async function handleExportExcel() {
   position: sticky;
   top: calc(var(--schedule-head-r1) + var(--schedule-head-r2));
   background: #f8fafc;
-  z-index: 9;
+  z-index: 37;
+  box-shadow: inset 0 -1px 0 #e5e7eb;
 }
 .summary-head-label { font-size: 12px; text-align: left; }
 .summary-head-stat { color: #cbd5e1; font-size: 11px; }
@@ -1887,10 +1944,10 @@ async function handleExportExcel() {
 /* 计划行：避免 hover / plan-has 盖住十字高亮 */
 .schedule-table thead tr.plan-row th.plan-cell.sched-hl-row,
 .schedule-table thead tr.plan-row th.plan-cell.sched-hl-col {
-  background: var(--sched-hl-row) !important;
+  background: var(--sched-hl-head) !important;
 }
 .schedule-table thead tr.plan-row th.plan-cell.sched-hl-row.sched-hl-col {
-  background: var(--sched-hl-cross) !important;
+  background: var(--sched-hl-head-cross) !important;
 }
 
 /* 浮层编辑器 */
@@ -2116,7 +2173,7 @@ async function handleExportExcel() {
 }
 thead tr:first-child .sticky-col,
 thead tr:first-child .sticky-col2 {
-  z-index: 7;
+  z-index: 40;
   background: #f8fafc;
 }
 

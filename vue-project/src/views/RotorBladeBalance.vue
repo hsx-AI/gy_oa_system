@@ -7,8 +7,12 @@
           <p class="header-subtitle">复刻原230系统功能，按叶片重量优化排列，计算综合偏心矩 IZ。</p>
         </div>
         <div class="header-actions no-print">
+          <button type="button" class="btn" @click="openHistory">历史记录</button>
           <button type="button" class="btn" @click="resetForm">重置</button>
-          <button type="button" class="btn" :disabled="!result" @click="printPage">打印</button>
+          <button type="button" class="btn" :disabled="!result" @click="printPage">生成PDF</button>
+          <button type="button" class="btn" :disabled="!result || saveLoading" @click="saveCurrentResult">
+            {{ saveLoading ? '保存中...' : '保存计算结果' }}
+          </button>
           <button type="button" class="btn btn-primary" @click="calculate">计算排列</button>
         </div>
       </div>
@@ -53,8 +57,9 @@
 
         <div class="card-section">
           <div class="section-title">来料重量</div>
-          <div v-if="form.mode === 'V1'" class="table-wrap">
-            <table class="input-table">
+          <div @keydown="onInputTableEnterKey">
+            <div v-if="form.mode === 'V1'" class="table-wrap">
+              <table class="input-table">
               <thead>
                 <tr>
                   <th>计算序号</th>
@@ -70,10 +75,10 @@
                 </tr>
               </tbody>
             </table>
-          </div>
+            </div>
 
-          <div v-else class="table-wrap">
-            <table class="input-table dual-table">
+            <div v-else class="table-wrap">
+              <table class="input-table dual-table">
               <thead>
                 <tr>
                   <th colspan="3">长叶片</th>
@@ -99,8 +104,10 @@
                 </tr>
               </tbody>
             </table>
+            </div>
           </div>
           <p v-if="errorMessage" class="error-text">{{ errorMessage }}</p>
+          <p v-if="saveMessage" class="save-message">{{ saveMessage }}</p>
         </div>
       </div>
 
@@ -130,7 +137,7 @@
         </div>
       </div>
 
-      <div class="result-summary">
+      <div ref="resultSummaryRef" class="result-summary">
         <div>
           <span class="summary-label">叶片形式</span>
           <strong>{{ result.mode === 'V1' ? '单一叶片型式' : '长短叶片型式' }}</strong>
@@ -147,7 +154,7 @@
 
       <div class="result-layout">
         <div class="table-wrap result-table-wrap">
-          <table class="result-table">
+          <table ref="resultTableRef" class="result-table">
             <thead>
               <tr>
                 <th>安放角度</th>
@@ -167,11 +174,26 @@
               </tr>
             </tbody>
           </table>
+          <button
+            type="button"
+            class="copy-table-image-btn no-print"
+            :disabled="copyTableImageLoading"
+            @click="copyResultTableAsImage"
+          >
+            {{ copyTableImageLoading ? '生成中…' : '复制表格图片' }}
+          </button>
         </div>
 
         <div class="diagram-panel">
           <div class="diagram-title">程序优化排列示意图</div>
-          <svg class="blade-diagram" viewBox="0 0 520 520" role="img" aria-label="叶片优化排列示意图">
+          <div class="diagram-figure-wrap">
+            <svg
+              ref="bladeDiagramRef"
+              class="blade-diagram"
+              viewBox="0 0 520 520"
+              role="img"
+              aria-label="叶片优化排列示意图"
+            >
             <circle class="diagram-ring" cx="260" cy="260" r="182" />
             <circle class="diagram-center" cx="260" cy="260" r="46" />
             <line
@@ -188,7 +210,16 @@
               <text :x="point.x" :y="point.y - 4" text-anchor="middle">{{ point.positionLabel }}</text>
               <text :x="point.x" :y="point.y + 13" text-anchor="middle" class="node-sub">{{ point.originalLabel }}</text>
             </g>
-          </svg>
+            </svg>
+            <button
+              type="button"
+              class="copy-table-image-btn no-print"
+              :disabled="copyDiagramImageLoading"
+              @click="copyDiagramAsImage"
+            >
+              {{ copyDiagramImageLoading ? '生成中…' : '复制示意图' }}
+            </button>
+          </div>
         </div>
       </div>
 
@@ -197,11 +228,77 @@
         <label>校核：<input v-model.trim="meta.checker" type="text" class="plain-input"></label>
       </div>
     </section>
+
+    <div v-if="historyOpen" class="history-overlay no-print" @click.self="historyOpen = false">
+      <div class="history-modal">
+        <div class="history-header">
+          <div>
+            <h2>计算结果历史记录</h2>
+            <p>保存后的配重计算结果可在此追溯查看。</p>
+          </div>
+          <button type="button" class="history-close" @click="historyOpen = false">×</button>
+        </div>
+        <div class="history-toolbar">
+          <input
+            v-model.trim="historyKeyword"
+            class="input"
+            type="search"
+            placeholder="搜索电站、水轮机号、工作号、保存人"
+            @keyup.enter="fetchHistory(1)"
+          >
+          <button type="button" class="btn btn-primary" @click="fetchHistory(1)">查询</button>
+        </div>
+        <div v-if="historyError" class="history-error">{{ historyError }}</div>
+        <div class="history-body">
+          <div v-if="historyLoading" class="history-empty">加载中...</div>
+          <div v-else-if="!historyRecords.length" class="history-empty">暂无保存记录</div>
+          <table v-else class="history-table">
+            <thead>
+              <tr>
+                <th>标题</th>
+                <th>形式</th>
+                <th>数量</th>
+                <th>IZ</th>
+                <th>保存人</th>
+                <th>保存时间</th>
+                <th>操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-for="record in historyRecords" :key="record.id">
+                <td>
+                  <strong>{{ record.title || '-' }}</strong>
+                  <small>{{ record.station || '-' }} / {{ record.turbineNo || '-' }} / {{ record.workNo || '-' }}</small>
+                </td>
+                <td>{{ record.mode === 'V1' ? '单一' : '长短' }}</td>
+                <td>{{ record.mode === 'V1' ? `${record.bladeCount}个` : `各${record.bladeCount}个` }}</td>
+                <td>{{ formatNumber(Number(record.iz), 4) }}</td>
+                <td>{{ record.createdBy }}</td>
+                <td>{{ record.createdAt }}</td>
+                <td><button type="button" class="btn btn-sm" @click="loadHistoryRecord(record.id)">查看</button></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="history-footer">
+          <span>共 {{ historyTotal }} 条，第 {{ historyPage }} / {{ historyTotalPages }} 页</span>
+          <div>
+            <button type="button" class="btn btn-sm" :disabled="historyPage <= 1" @click="fetchHistory(historyPage - 1)">上一页</button>
+            <button type="button" class="btn btn-sm" :disabled="historyPage >= historyTotalPages" @click="fetchHistory(historyPage + 1)">下一页</button>
+          </div>
+        </div>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
 import { computed, reactive, ref } from 'vue'
+import {
+  getRotorBladeBalanceRecord,
+  listRotorBladeBalanceRecords,
+  saveRotorBladeBalanceRecord
+} from '@/api/rotorBladeBalance'
 
 const alphabet = 'abcdefghijklmnopqrst'
 
@@ -227,7 +324,24 @@ const longBlades = ref(createRows(4))
 const shortBlades = ref(createRows(4))
 const result = ref(null)
 const errorMessage = ref('')
+const saveMessage = ref('')
+const saveLoading = ref(false)
 const reportRef = ref(null)
+const resultSummaryRef = ref(null)
+const resultTableRef = ref(null)
+const bladeDiagramRef = ref(null)
+const copyTableImageLoading = ref(false)
+const copyDiagramImageLoading = ref(false)
+const historyOpen = ref(false)
+const historyLoading = ref(false)
+const historyError = ref('')
+const historyKeyword = ref('')
+const historyRecords = ref([])
+const historyTotal = ref(0)
+const historyPage = ref(1)
+const historyPageSize = 10
+
+const historyTotalPages = computed(() => Math.max(1, Math.ceil(historyTotal.value / historyPageSize)))
 
 const bladeCountOptions = computed(() => {
   const max = form.mode === 'V1' ? 20 : 17
@@ -274,6 +388,11 @@ function readCurrentUser() {
   }
 }
 
+function currentUserName() {
+  const info = readCurrentUser()
+  return (info.name || info.userName || info.username || '').trim()
+}
+
 function createRows(count) {
   return Array.from({ length: count }, () => ({ code: '', weight: '' }))
 }
@@ -290,7 +409,32 @@ function syncBladeRows() {
   longBlades.value = resizeRows(longBlades.value, form.bladeCount)
   shortBlades.value = resizeRows(shortBlades.value, form.bladeCount)
   errorMessage.value = ''
+  saveMessage.value = ''
   result.value = null
+}
+
+/** Enter：焦点移到同一列下一行的输入框（来料重量表） */
+function onInputTableEnterKey(ev) {
+  if (ev.key !== 'Enter' || ev.shiftKey || ev.ctrlKey || ev.altKey || ev.metaKey) return
+  const target = ev.target
+  if (!(target instanceof HTMLInputElement) || !target.classList.contains('cell-input')) return
+  const td = target.closest('td')
+  const tr = td?.closest('tr')
+  const tbody = tr?.closest('tbody')
+  if (!td || !tr || !tbody) return
+  const colIndex = td.cellIndex
+  let next = tr.nextElementSibling
+  while (next) {
+    const cell = next.cells[colIndex]
+    const input = cell?.querySelector('input.cell-input')
+    if (input) {
+      ev.preventDefault()
+      input.focus()
+      if (typeof input.select === 'function') input.select()
+      return
+    }
+    next = next.nextElementSibling
+  }
 }
 
 function resetForm() {
@@ -301,19 +445,246 @@ function resetForm() {
   shortBlades.value = createRows(4)
   result.value = null
   errorMessage.value = ''
+  saveMessage.value = ''
 }
 
 function printPage() {
-  window.print()
+  if (!result.value) return
+  const originalTitle = document.title
+  const parts = [meta.station, meta.turbineNo, meta.workNo].map((item) => (item || '').trim()).filter(Boolean)
+  document.title = parts.length ? `转轮叶片配重-${parts.join('-')}` : '转轮叶片配重报告'
+  document.body.classList.add('printing-report-only')
+
+  const cleanup = () => {
+    document.body.classList.remove('printing-report-only')
+    document.title = originalTitle
+    window.removeEventListener('afterprint', cleanup)
+  }
+
+  window.addEventListener('afterprint', cleanup, { once: true })
+  setTimeout(() => {
+    window.print()
+    setTimeout(cleanup, 1000)
+  }, 50)
 }
 
 function calculate() {
   errorMessage.value = ''
+  saveMessage.value = ''
   try {
     result.value = form.mode === 'V1' ? calculateSingle() : calculateDual()
   } catch (error) {
     result.value = null
     errorMessage.value = error.message || '计算失败，请检查输入。'
+  }
+}
+
+async function copyResultTableAsImage() {
+  const summaryEl = resultSummaryRef.value
+  const tableEl = resultTableRef.value
+  if (!summaryEl || !tableEl || copyTableImageLoading.value) return
+  copyTableImageLoading.value = true
+  try {
+    const html2canvas = (await import('html2canvas')).default
+    const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+    const opts = {
+      backgroundColor: '#ffffff',
+      scale,
+      useCORS: true,
+      logging: false
+    }
+    const [canvasSummary, canvasTable] = await Promise.all([
+      html2canvas(summaryEl, opts),
+      html2canvas(tableEl, opts)
+    ])
+    const gap = Math.round(8 * scale)
+    const width = Math.max(canvasSummary.width, canvasTable.width)
+    const height = canvasSummary.height + gap + canvasTable.height
+    const merged = document.createElement('canvas')
+    merged.width = width
+    merged.height = height
+    const ctx = merged.getContext('2d')
+    if (!ctx) throw new Error('无法创建画布')
+    ctx.fillStyle = '#ffffff'
+    ctx.fillRect(0, 0, width, height)
+    ctx.drawImage(canvasSummary, 0, 0)
+    ctx.drawImage(canvasTable, 0, canvasSummary.height + gap)
+    const blob = await new Promise((resolve, reject) => {
+      merged.toBlob((b) => (b ? resolve(b) : reject(new Error('无法生成图片'))), 'image/png')
+    })
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      window.alert('当前环境不支持将图片写入剪贴板，请使用 Chrome / Edge 等现代浏览器，并尽量通过 HTTPS 或 localhost 访问。')
+      return
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    window.alert('摘要与表格图片已复制到剪贴板，可在微信、Word、邮件等处粘贴。')
+  } catch (error) {
+    console.error(error)
+    window.alert(error?.message || '复制失败，请重试或检查浏览器剪贴板权限。')
+  } finally {
+    copyTableImageLoading.value = false
+  }
+}
+
+async function copyDiagramAsImage() {
+  const el = bladeDiagramRef.value
+  if (!el || copyDiagramImageLoading.value) return
+  copyDiagramImageLoading.value = true
+  try {
+    const html2canvas = (await import('html2canvas')).default
+    const scale = Math.min(2, Math.max(1, window.devicePixelRatio || 1))
+    const canvas = await html2canvas(el, {
+      backgroundColor: '#ffffff',
+      scale,
+      useCORS: true,
+      logging: false
+    })
+    const blob = await new Promise((resolve, reject) => {
+      canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('无法生成图片'))), 'image/png')
+    })
+    if (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined') {
+      window.alert('当前环境不支持将图片写入剪贴板，请使用 Chrome / Edge 等现代浏览器，并尽量通过 HTTPS 或 localhost 访问。')
+      return
+    }
+    await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })])
+    window.alert('示意图已复制到剪贴板，可在微信、Word、邮件等处粘贴。')
+  } catch (error) {
+    console.error(error)
+    window.alert(error?.message || '复制失败，请重试或检查浏览器剪贴板权限。')
+  } finally {
+    copyDiagramImageLoading.value = false
+  }
+}
+
+function inputSnapshot() {
+  return {
+    mode: form.mode,
+    bladeCount: form.bladeCount,
+    singleBlades: singleBlades.value.map((item) => ({ code: item.code || '', weight: item.weight })),
+    longBlades: longBlades.value.map((item) => ({ code: item.code || '', weight: item.weight })),
+    shortBlades: shortBlades.value.map((item) => ({ code: item.code || '', weight: item.weight }))
+  }
+}
+
+function metaSnapshot() {
+  return {
+    station: meta.station || '',
+    turbineNo: meta.turbineNo || '',
+    workNo: meta.workNo || '',
+    date: meta.date || '',
+    compiler: meta.compiler || '',
+    checker: meta.checker || ''
+  }
+}
+
+function recordTitle() {
+  const parts = [meta.station, meta.turbineNo, meta.workNo].map((item) => (item || '').trim()).filter(Boolean)
+  return parts.join(' / ')
+}
+
+function errorText(error, fallback) {
+  const detail = error?.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  return error?.message || fallback
+}
+
+async function saveCurrentResult() {
+  if (!result.value || saveLoading.value) return
+  const name = currentUserName()
+  if (!name) {
+    saveMessage.value = '未获取到当前登录人，无法保存。'
+    return
+  }
+
+  saveLoading.value = true
+  saveMessage.value = ''
+  try {
+    const res = await saveRotorBladeBalanceRecord({
+      current_user: name,
+      title: recordTitle(),
+      meta: metaSnapshot(),
+      inputData: inputSnapshot(),
+      result: result.value
+    })
+    saveMessage.value = res.message || '保存成功'
+    if (historyOpen.value) fetchHistory(historyPage.value)
+  } catch (error) {
+    saveMessage.value = errorText(error, '保存失败')
+  } finally {
+    saveLoading.value = false
+  }
+}
+
+function openHistory() {
+  historyOpen.value = true
+  fetchHistory(1)
+}
+
+async function fetchHistory(page = historyPage.value) {
+  const name = currentUserName()
+  if (!name) {
+    historyError.value = '未获取到当前登录人，无法查询历史记录。'
+    historyRecords.value = []
+    historyTotal.value = 0
+    return
+  }
+
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    const res = await listRotorBladeBalanceRecords({
+      current_user: name,
+      keyword: historyKeyword.value || undefined,
+      page,
+      page_size: historyPageSize
+    })
+    historyRecords.value = Array.isArray(res.list) ? res.list : []
+    historyTotal.value = Number(res.total || 0)
+    historyPage.value = Number(res.page || page)
+  } catch (error) {
+    historyError.value = errorText(error, '历史记录加载失败')
+    historyRecords.value = []
+    historyTotal.value = 0
+  } finally {
+    historyLoading.value = false
+  }
+}
+
+async function loadHistoryRecord(id) {
+  const name = currentUserName()
+  if (!name) {
+    historyError.value = '未获取到当前登录人，无法查看历史记录。'
+    return
+  }
+
+  historyLoading.value = true
+  historyError.value = ''
+  try {
+    const res = await getRotorBladeBalanceRecord(id, { current_user: name })
+    const record = res.record || {}
+    const savedMeta = record.meta || {}
+    const savedInput = record.inputData || {}
+    Object.assign(meta, {
+      station: savedMeta.station || record.station || '',
+      turbineNo: savedMeta.turbineNo || record.turbineNo || '',
+      workNo: savedMeta.workNo || record.workNo || '',
+      date: savedMeta.date || today,
+      compiler: savedMeta.compiler || record.compiler || '',
+      checker: savedMeta.checker || record.checker || ''
+    })
+    form.mode = savedInput.mode || record.mode || 'V1'
+    form.bladeCount = Number(savedInput.bladeCount || record.bladeCount || 4)
+    singleBlades.value = resizeRows(Array.isArray(savedInput.singleBlades) ? savedInput.singleBlades : [], form.bladeCount)
+    longBlades.value = resizeRows(Array.isArray(savedInput.longBlades) ? savedInput.longBlades : [], form.bladeCount)
+    shortBlades.value = resizeRows(Array.isArray(savedInput.shortBlades) ? savedInput.shortBlades : [], form.bladeCount)
+    result.value = record.result || null
+    errorMessage.value = ''
+    saveMessage.value = `已载入历史记录：${record.title || record.createdAt || ''}`
+    historyOpen.value = false
+  } catch (error) {
+    historyError.value = errorText(error, '历史记录加载失败')
+  } finally {
+    historyLoading.value = false
   }
 }
 
@@ -684,6 +1055,36 @@ function formatWeight(value) {
   overflow-x: auto;
 }
 
+.result-table-wrap {
+  position: relative;
+  padding-bottom: 42px;
+}
+
+.copy-table-image-btn {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  z-index: 2;
+  padding: 6px 12px;
+  font-size: var(--font-size-xs);
+  border: 1px solid var(--color-border-light);
+  border-radius: var(--radius-base);
+  background: #fff;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.08);
+}
+
+.copy-table-image-btn:hover:not(:disabled) {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+
+.copy-table-image-btn:disabled {
+  opacity: 0.65;
+  cursor: not-allowed;
+}
+
 .input-table,
 .result-table {
   width: 100%;
@@ -739,6 +1140,11 @@ function formatWeight(value) {
 .error-text {
   margin-top: var(--spacing-base);
   color: var(--color-error);
+}
+
+.save-message {
+  margin-top: var(--spacing-base);
+  color: var(--color-success, #16a34a);
 }
 
 .report-card {
@@ -839,6 +1245,11 @@ function formatWeight(value) {
   font-weight: var(--font-weight-semibold);
 }
 
+.diagram-figure-wrap {
+  position: relative;
+  padding-bottom: 42px;
+}
+
 .blade-diagram {
   width: 100%;
   height: auto;
@@ -904,6 +1315,132 @@ function formatWeight(value) {
   text-align: center;
 }
 
+.history-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgb(15 23 42 / 42%);
+}
+
+.history-modal {
+  width: min(1080px, 100%);
+  max-height: min(760px, calc(100vh - 48px));
+  display: flex;
+  flex-direction: column;
+  background: #fff;
+  border-radius: var(--radius-md);
+  box-shadow: 0 18px 48px rgb(15 23 42 / 24%);
+  overflow: hidden;
+}
+
+.history-header,
+.history-toolbar,
+.history-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-base);
+  padding: var(--spacing-base) var(--spacing-xl);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+
+.history-header h2 {
+  margin: 0 0 4px;
+  font-size: var(--font-size-xl);
+  color: var(--color-text-primary);
+}
+
+.history-header p {
+  margin: 0;
+  color: var(--color-text-secondary);
+}
+
+.history-close {
+  width: 32px;
+  height: 32px;
+  border: none;
+  border-radius: var(--radius-base);
+  background: transparent;
+  color: var(--color-text-secondary);
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.history-close:hover {
+  background: #f5f7fa;
+  color: var(--color-text-primary);
+}
+
+.history-toolbar .input {
+  min-width: 0;
+  flex: 1;
+}
+
+.history-error {
+  padding: 10px var(--spacing-xl);
+  color: var(--color-error);
+  background: #fff2f0;
+  border-bottom: 1px solid #ffccc7;
+}
+
+.history-body {
+  min-height: 260px;
+  overflow: auto;
+}
+
+.history-empty {
+  padding: 64px var(--spacing-xl);
+  text-align: center;
+  color: var(--color-text-secondary);
+}
+
+.history-table {
+  width: 100%;
+  border-collapse: collapse;
+  table-layout: fixed;
+}
+
+.history-table th,
+.history-table td {
+  padding: 12px;
+  border-bottom: 1px solid var(--color-border-lighter);
+  text-align: left;
+  font-size: var(--font-size-sm);
+  vertical-align: middle;
+}
+
+.history-table th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #f5f7fa;
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-semibold);
+}
+
+.history-table small {
+  display: block;
+  margin-top: 4px;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+}
+
+.history-footer {
+  border-top: 1px solid var(--color-border-lighter);
+  border-bottom: none;
+  color: var(--color-text-secondary);
+}
+
+.history-footer > div {
+  display: flex;
+  gap: var(--spacing-sm);
+}
+
 @media (max-width: 1180px) {
   .workbench,
   .result-layout {
@@ -941,33 +1478,150 @@ function formatWeight(value) {
     flex-direction: column;
     gap: var(--spacing-base);
   }
+
+  .history-overlay {
+    padding: 12px;
+  }
+
+  .history-header,
+  .history-toolbar,
+  .history-footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
 }
 
 @media print {
-  .no-print,
-  .page-header,
-  .app-sidebar,
-  .app-header,
-  .app-footer {
+  @page {
+    size: A4 portrait;
+    margin: 8mm;
+  }
+
+  :global(body.printing-report-only) {
+    margin: 0 !important;
+    background: #fff !important;
+  }
+
+  :global(body.printing-report-only *) {
+    visibility: hidden !important;
+  }
+
+  :global(body.printing-report-only .report-card),
+  :global(body.printing-report-only .report-card *) {
+    visibility: visible !important;
+  }
+
+  :global(body.printing-report-only .no-print),
+  :global(body.printing-report-only .page-header),
+  :global(body.printing-report-only .app-sidebar),
+  :global(body.printing-report-only .app-header),
+  :global(body.printing-report-only .app-footer) {
     display: none !important;
   }
 
-  .blade-page {
-    padding: 0;
+  .report-card {
+    position: absolute !important;
+    top: 0 !important;
+    left: 0 !important;
+    width: 194mm !important;
+    max-width: 194mm !important;
+    margin: 0 !important;
+    border: none !important;
+    box-shadow: none !important;
+    overflow: visible !important;
+    background: #fff !important;
+    color: #000 !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+    print-color-adjust: exact;
+    -webkit-print-color-adjust: exact;
   }
 
-  .report-card {
-    margin: 0;
-    border: none;
-    box-shadow: none;
+  .report-header {
+    grid-template-columns: 34mm minmax(0, 1fr) 42mm;
+    min-height: 16mm;
+  }
+
+  .report-logo,
+  .report-title,
+  .report-meta {
+    padding: 2.5mm 3mm;
+  }
+
+  .report-logo {
+    font-size: 11pt;
+  }
+
+  .report-title {
+    font-size: 12pt;
+    line-height: 1.35;
+  }
+
+  .report-meta {
+    gap: 1.5mm;
+    font-size: 8.5pt;
+  }
+
+  .blank-text {
+    min-width: 16mm;
+  }
+
+  .result-summary > div {
+    padding: 2.5mm 3mm;
+    font-size: 9pt;
+  }
+
+  .summary-label {
+    margin-bottom: 1mm;
+    font-size: 7.5pt;
   }
 
   .result-layout {
-    grid-template-columns: 1fr;
+    grid-template-columns: minmax(0, 1fr) 72mm;
+    gap: 4mm;
+    padding: 4mm;
+  }
+
+  .input-table th,
+  .input-table td,
+  .result-table th,
+  .result-table td {
+    padding: 1.7mm 1.5mm;
+    font-size: 8.5pt;
+    line-height: 1.2;
   }
 
   .diagram-panel {
+    padding: 2.5mm;
     page-break-inside: avoid;
+    break-inside: avoid;
+  }
+
+  .diagram-figure-wrap {
+    padding-bottom: 0;
+  }
+
+  .diagram-title {
+    margin-bottom: 1.5mm;
+    font-size: 9pt;
+  }
+
+  .blade-diagram {
+    max-height: 70mm;
+  }
+
+  .diagram-point text {
+    font-size: 12px;
+  }
+
+  .diagram-point .node-sub {
+    font-size: 10px;
+  }
+
+  .report-footer {
+    gap: 16mm;
+    padding: 3mm 4mm;
+    font-size: 10pt;
   }
 }
 </style>

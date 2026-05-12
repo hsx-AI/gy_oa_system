@@ -86,7 +86,7 @@
                   <button type="button" class="image-remove" @click="removeImage('problem', i)">×</button>
                 </div>
                 <label v-if="problemImages.length < 10" class="image-add-btn">
-                  <input type="file" accept="image/*" multiple hidden @change="e => onFileChange(e, 'problem')">
+                  <input type="file" :accept="IMAGE_ACCEPT" multiple hidden @change="e => onFileChange(e, 'problem')">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
                   <span class="upload-hint">点击、拖拽或粘贴</span>
                 </label>
@@ -123,7 +123,7 @@
                   <button type="button" class="image-remove" @click="removeImage('cause', i)">×</button>
                 </div>
                 <label v-if="causeImages.length < 10" class="image-add-btn">
-                  <input type="file" accept="image/*" multiple hidden @change="e => onFileChange(e, 'cause')">
+                  <input type="file" :accept="IMAGE_ACCEPT" multiple hidden @change="e => onFileChange(e, 'cause')">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
                   <span class="upload-hint">点击、拖拽或粘贴</span>
                 </label>
@@ -162,7 +162,7 @@
                   <button type="button" class="image-remove" @click="removeImage('measures', i)">×</button>
                 </div>
                 <label v-if="measuresImages.length < 10" class="image-add-btn">
-                  <input type="file" accept="image/*" multiple hidden @change="e => onFileChange(e, 'measures')">
+                  <input type="file" :accept="IMAGE_ACCEPT" multiple hidden @change="e => onFileChange(e, 'measures')">
                   <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 01-2 2H5a2 2 0 01-2-2v-4M17 8l-5-5-5 5M12 3v12"/></svg>
                   <span class="upload-hint">点击、拖拽或粘贴</span>
                 </label>
@@ -174,6 +174,9 @@
         <!-- 提交 -->
         <div class="form-submit-bar">
           <button type="button" class="btn btn-default btn-lg" @click="goBack">取消</button>
+          <button type="submit" class="btn btn-outline btn-lg" :disabled="submitting">
+            保存
+          </button>
           <button type="submit" class="btn btn-primary btn-lg" :disabled="submitting">
             {{ submitting ? '提交中...' : (isEdit ? '保存修改' : '提交') }}
           </button>
@@ -215,6 +218,17 @@ const causeImages = ref([])
 const measuresImages = ref([])
 
 const MAX_SIZE = 5 * 1024 * 1024
+const MAX_IMAGES = 10
+const ALLOWED_IMAGE_EXT = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/gif', 'image/bmp', 'image/webp']
+const IMAGE_ACCEPT = [...ALLOWED_IMAGE_EXT, ...ALLOWED_IMAGE_MIME].join(',')
+const MIME_EXT_MAP = {
+  'image/jpeg': '.jpg',
+  'image/png': '.png',
+  'image/gif': '.gif',
+  'image/bmp': '.bmp',
+  'image/webp': '.webp'
+}
 const dragGroup = ref('')
 
 function initRecorder() {
@@ -237,22 +251,66 @@ function getTargetArr(group) {
   return group === 'problem' ? problemImages : group === 'cause' ? causeImages : measuresImages
 }
 
+function imageExt(file) {
+  const name = file?.name || ''
+  const dot = name.lastIndexOf('.')
+  return dot >= 0 ? name.slice(dot).toLowerCase() : ''
+}
+
+function imageDisplayName(file) {
+  return file?.name || '粘贴图片'
+}
+
+function normalizeImageFile(file) {
+  const ext = imageExt(file)
+  if (ext) return file
+  const inferredExt = MIME_EXT_MAP[file?.type || '']
+  if (!inferredExt) return file
+  return new File([file], `pasted-image-${Date.now()}${inferredExt}`, { type: file.type })
+}
+
+function validateImageFile(file) {
+  const normalized = normalizeImageFile(file)
+  const ext = imageExt(normalized)
+  const type = normalized?.type || ''
+  if (!ALLOWED_IMAGE_EXT.includes(ext) || (type && !ALLOWED_IMAGE_MIME.includes(type))) {
+    return {
+      valid: false,
+      file: normalized,
+      message: `图片 "${imageDisplayName(file)}" 格式不支持，仅支持 JPG、PNG、GIF、BMP、WEBP`
+    }
+  }
+  if (normalized.size > MAX_SIZE) {
+    return {
+      valid: false,
+      file: normalized,
+      message: `图片 "${imageDisplayName(file)}" 超过 5MB 限制`
+    }
+  }
+  return { valid: true, file: normalized }
+}
+
 function addFiles(files, group) {
   const targetArr = getTargetArr(group)
+  const messages = []
   for (const f of files) {
-    if (targetArr.value.length >= 10) break
-    if (f.size > MAX_SIZE) {
-      alert(`图片 "${f.name || '粘贴图片'}" 超过 5MB 限制`)
-      continue
+    if (targetArr.value.length >= MAX_IMAGES) {
+      messages.push(`每个区域最多上传 ${MAX_IMAGES} 张图片`)
+      break
     }
-    if (!f.type.startsWith('image/')) {
+    const result = validateImageFile(f)
+    if (!result.valid) {
+      messages.push(result.message)
       continue
     }
     targetArr.value.push({
-      file: f,
-      url: URL.createObjectURL(f),
+      file: result.file,
+      url: URL.createObjectURL(result.file),
       existing: false
     })
+  }
+  if (messages.length) {
+    alert([...new Set(messages)].join('\n'))
   }
 }
 
@@ -272,7 +330,7 @@ function onDrop(e, group) {
 function onPaste(e, group) {
   const items = Array.from(e.clipboardData?.items || [])
   const files = items
-    .filter(item => item.kind === 'file' && item.type.startsWith('image/'))
+    .filter(item => item.kind === 'file')
     .map(item => item.getAsFile())
     .filter(Boolean)
   if (files.length) {

@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS rotor_blade_balance_records (
+    id VARCHAR(32) NOT NULL PRIMARY KEY,
+    title VARCHAR(255) DEFAULT '',
+    station VARCHAR(100) DEFAULT '',
+    turbine_no VARCHAR(100) DEFAULT '',
+    work_no VARCHAR(100) DEFAULT '',
+    mode VARCHAR(10) NOT NULL,
+    blade_count INT NOT NULL,
+    iz DECIMAL(18, 6) DEFAULT NULL,
+    compiler VARCHAR(100) DEFAULT '',
+    checker VARCHAR(100) DEFAULT '',
+    created_by VARCHAR(100) NOT NULL,
+    created_lsys VARCHAR(100) DEFAULT '',
+    created_at DATETIME NOT NULL,
+    meta_json LONGTEXT,
+    input_json LONGTEXT,
+    result_json LONGTEXT,
+    INDEX idx_created_at (created_at),
+    INDEX idx_work_no (work_no),
+    INDEX idx_created_by (created_by)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
