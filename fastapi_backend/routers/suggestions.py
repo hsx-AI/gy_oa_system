@@ -493,10 +493,22 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
                 f"SELECT xm, timefrom, timeto FROM jiaban WHERE xm IN ({ph}) AND jiabanzt IN (0,1,3,5) AND timefrom < %s AND timeto >= %s",
                 tuple(names) + (batch_month_end, batch_month_start),
             ))
-            qj_pending_map = _batch_by_name(db.execute_query(
+            qj_pending_rows = db.execute_query(
                 f"SELECT xm, timefrom, timeto FROM qj WHERE xm IN ({ph}) AND qjzt IN (0,1,3) AND timefrom < %s AND timeto >= %s",
                 tuple(names) + (batch_month_end, batch_month_start),
-            ))
+            )
+            kqyc_pending_rows = db.execute_query(
+                f"SELECT applicant AS xm, CONCAT(attendance_date, ' ', time_from) AS timefrom, "
+                f"CONCAT(attendance_date, ' ', time_to) AS timeto "
+                f"FROM attendance_exception "
+                f"WHERE applicant IN ({ph}) "
+                f"AND first_status != 2 AND second_status != 2 "
+                f"AND NOT (first_status = 1 AND second_status = 1) "
+                f"AND CONCAT(attendance_date, ' ', time_from) < %s "
+                f"AND CONCAT(attendance_date, ' ', time_to) >= %s",
+                tuple(names) + (batch_month_end, batch_month_start),
+            )
+            qj_pending_map = _batch_by_name(qj_pending_rows + kqyc_pending_rows)
             gcsqb_pending_map = _batch_by_name(db.execute_query(
                 f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 f"WHERE gcr IN ({ph}) AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
@@ -1276,6 +1288,18 @@ async def get_suggestions(
                     "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND timefrom < %s AND timeto >= %s",
                     (name, month_end, month_start),
                 )
+                kqyc_pending = db.execute_query(
+                    "SELECT CONCAT(attendance_date, ' ', time_from) AS timefrom, "
+                    "CONCAT(attendance_date, ' ', time_to) AS timeto "
+                    "FROM attendance_exception "
+                    "WHERE applicant = %s "
+                    "AND first_status != 2 AND second_status != 2 "
+                    "AND NOT (first_status = 1 AND second_status = 1) "
+                    "AND CONCAT(attendance_date, ' ', time_from) < %s "
+                    "AND CONCAT(attendance_date, ' ', time_to) >= %s",
+                    (name, month_end, month_start),
+                )
+                qj_pending = list(qj_pending) + list(kqyc_pending)
                 gcsqb_pending = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
@@ -1339,6 +1363,18 @@ async def get_suggestions(
                 "SELECT timefrom, timeto FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND timefrom < %s AND timeto >= %s",
                 (name, fb_month_end, fb_month_start),
             )
+            kqyc_pending = db.execute_query(
+                "SELECT CONCAT(attendance_date, ' ', time_from) AS timefrom, "
+                "CONCAT(attendance_date, ' ', time_to) AS timeto "
+                "FROM attendance_exception "
+                "WHERE applicant = %s "
+                "AND first_status != 2 AND second_status != 2 "
+                "AND NOT (first_status = 1 AND second_status = 1) "
+                "AND CONCAT(attendance_date, ' ', time_from) < %s "
+                "AND CONCAT(attendance_date, ' ', time_to) >= %s",
+                (name, fb_month_end, fb_month_start),
+            )
+            qj_pending = list(qj_pending) + list(kqyc_pending)
             gcsqb_pending = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "

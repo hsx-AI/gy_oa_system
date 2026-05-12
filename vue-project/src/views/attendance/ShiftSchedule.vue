@@ -1556,7 +1556,10 @@ async function handleExportExcel() {
 .shift-page {
   width: 100%;
   max-width: none;
+  min-height: calc(100vh - 96px);
   padding: 0 0 var(--spacing-xl);
+  display: flex;
+  flex-direction: column;
 }
 .shift-cap-toast {
   position: fixed;
@@ -1706,8 +1709,20 @@ async function handleExportExcel() {
 .legend-hint { font-style: italic; color: #9ca3af; }
 
 /* 排班网格 */
-.schedule-wrap { padding: 0; overflow: hidden; }
-.schedule-scroll { overflow-x: auto; overflow-y: auto; max-height: calc(100vh - 300px); }
+.schedule-wrap {
+  flex: 1 1 auto;
+  min-height: 360px;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.schedule-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-x: auto;
+  overflow-y: auto;
+}
 .schedule-table {
   border-collapse: collapse;
   width: max-content;
@@ -1718,6 +1733,7 @@ async function handleExportExcel() {
   /* 表头三行纵向冻结：与首行/计划行/合计行实际高度对齐 */
   --schedule-head-r1: 63px;
   --schedule-head-r2: 56px;
+  --schedule-head-r3: 39px;
   --sched-hl-row: rgba(191, 219, 254, 0.42);
   --sched-hl-col: rgba(191, 219, 254, 0.42);
   --sched-hl-cross: rgba(96, 165, 250, 0.38);
@@ -1783,6 +1799,9 @@ async function handleExportExcel() {
   font-weight: 500;
   vertical-align: middle;
   border-bottom: 1px solid #e5e7eb;
+  height: var(--schedule-head-r3);
+  min-height: var(--schedule-head-r3);
+  box-sizing: border-box;
 }
 .schedule-table thead tr.summary-head-row .summary-head-day {
   white-space: normal;
@@ -2597,7 +2616,6 @@ thead tr:first-child .sticky-col2 {
 
 @media (max-width: 768px) {
   .toolbar { flex-direction: column; align-items: flex-start; }
-  .schedule-scroll { max-height: calc(100vh - 360px); }
   .cal-day-cell { min-height: 70px; padding: 3px; }
   .cal-shift-names { font-size: 10px; }
 }

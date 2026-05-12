@@ -78,11 +78,41 @@
                   @click="openDetailById(t.id)"
                 >
                   <div class="task-top">
-                    <span class="task-deadline" :class="deadlineClass(t.taskDeadline)">
+                    <span
+                      v-if="editingDeadlineId !== t.id"
+                      class="task-deadline"
+                      :class="deadlineClass(t.taskDeadline)"
+                    >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ico">
                         <circle cx="12" cy="12" r="10" /><polyline points="12 6 12 12 16 14" />
                       </svg>
                       {{ t.taskDeadline || '未指定截止时间' }}
+                      <button
+                        type="button"
+                        class="deadline-edit-btn"
+                        title="修改截止时间"
+                        @click.stop="startEditDeadline(t)"
+                      >
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                          <path d="M12 20h9" />
+                          <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                        </svg>
+                      </button>
+                    </span>
+                    <span v-else class="deadline-editor" @click.stop>
+                      <input
+                        v-model="deadlineDraft"
+                        type="datetime-local"
+                        class="deadline-input"
+                        @keydown.enter.prevent="saveDeadline(t.id)"
+                        @keydown.esc.prevent="cancelEditDeadline"
+                      />
+                      <button type="button" class="deadline-save-btn" :disabled="deadlineSavingId === t.id" @click.stop="saveDeadline(t.id)">
+                        保存
+                      </button>
+                      <button type="button" class="deadline-cancel-btn" @click.stop="cancelEditDeadline">
+                        取消
+                      </button>
                     </span>
                     <span class="task-from" :title="t.from">{{ shortFrom(t.from) }}</span>
                     <button
@@ -310,6 +340,7 @@ import {
   syncInboxEmails,
   listInboxTasks,
   analyzeInboxEmails,
+  updateInboxTaskDeadline,
   completeInboxTask,
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
@@ -349,6 +380,9 @@ const taskMsg = ref('')
 const taskMsgType = ref('')
 const marqueeMainRef = ref(null)
 const completingId = ref(null)
+const editingDeadlineId = ref(null)
+const deadlineDraft = ref('')
+const deadlineSavingId = ref(null)
 let taskRefreshTimer = null
 
 const displayTasks = computed(() => tasks.value || [])
@@ -566,6 +600,64 @@ function onBoardWheel(e) {
   if (maxScroll <= 0) return
   e.preventDefault()
   el.scrollTop += deltaY
+}
+
+function deadlineToInputValue(deadline) {
+  const text = String(deadline || '').trim()
+  if (!text) return ''
+  const normalized = text.replace(/\//g, '-').replace(/\s+/, 'T')
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
+    return `${normalized}T00:00`
+  }
+  const match = normalized.match(/^(\d{4}-\d{1,2}-\d{1,2})T(\d{1,2}:\d{2})/)
+  return match ? `${match[1]}T${match[2]}` : ''
+}
+
+function inputValueToDeadline(value) {
+  return String(value || '').trim().replace('T', ' ')
+}
+
+function startEditDeadline(task) {
+  editingDeadlineId.value = task.id
+  deadlineDraft.value = deadlineToInputValue(task.taskDeadline)
+}
+
+function cancelEditDeadline() {
+  editingDeadlineId.value = null
+  deadlineDraft.value = ''
+  deadlineSavingId.value = null
+}
+
+async function saveDeadline(id) {
+  if (!id || deadlineSavingId.value) return
+  const taskDeadline = inputValueToDeadline(deadlineDraft.value)
+  deadlineSavingId.value = id
+  try {
+    const res = await updateInboxTaskDeadline({
+      current_user: currentUserName.value,
+      id,
+      task_deadline: taskDeadline,
+    })
+    if (res && res.success) {
+      tasks.value = tasks.value.map(task => (
+        task.id === id ? { ...task, taskDeadline: res.taskDeadline || '' } : task
+      ))
+      taskMsg.value = res.message || '截止时间已更新'
+      taskMsgType.value = 'success'
+      cancelEditDeadline()
+      await loadTasks()
+      await loadList()
+    } else {
+      taskMsg.value = (res && res.message) || '更新截止时间失败'
+      taskMsgType.value = 'error'
+    }
+  } catch (e) {
+    taskMsg.value = e.message || '更新截止时间失败'
+    taskMsgType.value = 'error'
+  } finally {
+    deadlineSavingId.value = null
+    setTimeout(() => { taskMsg.value = '' }, 5000)
+  }
 }
 
 async function completeTask(id) {
@@ -1037,6 +1129,59 @@ onBeforeUnmount(() => {
 .task-deadline .ico {
   width: 12px;
   height: 12px;
+}
+.deadline-edit-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+.deadline-edit-btn svg {
+  width: 11px;
+  height: 11px;
+}
+.deadline-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 60%;
+}
+.deadline-input {
+  width: 170px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2937;
+  background: #fff;
+}
+.deadline-save-btn,
+.deadline-cancel-btn {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid #c7d2fe;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+.deadline-save-btn {
+  color: #fff;
+  background: #4f46e5;
+  border-color: #4f46e5;
+}
+.deadline-cancel-btn {
+  color: #4b5563;
+  background: #fff;
 }
 .task-deadline.none {
   background: #f3f4f6;

@@ -19,6 +19,11 @@ import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/a
 import { getLeaderInbox, getWallPending, getWallAssigned, getSystemList } from '@/api/feedback'
 import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
 import { getShiftCoverageGap } from '@/api/shift'
+import {
+  getPendingKqyc,
+  getKqycDakamanPending,
+  confirmKqycByDakaman,
+} from '@/api/attendanceException'
 
 function readUserName() {
   try {
@@ -62,6 +67,10 @@ const feedbackSystemPendingCount = ref(0)
 const feedbackWallAssignedList = ref([])
 const shiftCoverageGap = ref(null)
 const shiftCoverageLoading = ref(false)
+/** 打卡异常待审批列表（自动区分一/二级，仅显示当前节点为本人的） */
+const kqycPendingList = ref([])
+/** dakaman 待"已读确认"列表（仅 dakaman 可见有数据） */
+const kqycDakamanList = ref([])
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -212,6 +221,32 @@ const displayTodoList = computed(() => {
       btnLabel: '去回复',
     })
   }
+  for (const item of kqycPendingList.value) {
+    const isSecond = item.pending_for === 'second'
+    list.push({
+      uniqueId: `kqyc-${item.id}`,
+      type: isSecond ? '打卡异常二级审批' : '打卡异常一级审批',
+      description: `${item.applicant}的 ${item.attendance_date} ${item.time_from}~${item.time_to} 打卡异常申请（${item.reason_type || '—'}）`,
+      applicant: item.applicant,
+      time: formatRelativeTime(item.apply_time),
+      applyTime: item.apply_time || '',
+      isKqycApproval: true,
+      btnLabel: '去审批',
+    })
+  }
+  for (const item of kqycDakamanList.value) {
+    list.push({
+      uniqueId: `kqyc-dakaman-${item.id}`,
+      type: '打卡异常处理已读确认',
+      description: `经 ${item.second_approver} 审批已将 ${item.applicant} 的 ${item.attendance_date} ${item.time_from}~${item.time_to} 异常处理为市内公出`,
+      applicant: '本人',
+      time: formatRelativeTime(item.second_approve_time),
+      applyTime: item.second_approve_time || '',
+      isKqycDakamanConfirm: true,
+      kqycDakamanId: item.id,
+      btnLabel: '已读确认',
+    })
+  }
   return list
 })
 
@@ -229,6 +264,8 @@ const totalBadgeCount = computed(() => {
   if (feedbackWallPendingCount.value > 0) count += 1
   count += feedbackWallAssignedList.value.length
   if (feedbackSystemPendingCount.value > 0) count += 1
+  count += kqycPendingList.value.length
+  count += kqycDakamanList.value.length
   return count
 })
 
@@ -407,6 +444,34 @@ async function fetchTripReturnPending() {
   }
 }
 
+async function fetchKqycPending() {
+  const name = readUserName()
+  if (!name) {
+    kqycPendingList.value = []
+    return
+  }
+  try {
+    const res = await getPendingKqyc({ approver: name })
+    kqycPendingList.value = res?.data || []
+  } catch {
+    kqycPendingList.value = []
+  }
+}
+
+async function fetchKqycDakaman() {
+  const name = readUserName()
+  if (!name) {
+    kqycDakamanList.value = []
+    return
+  }
+  try {
+    const res = await getKqycDakamanPending({ name })
+    kqycDakamanList.value = res?.data || []
+  } catch {
+    kqycDakamanList.value = []
+  }
+}
+
 async function fetchSealPending() {
   const name = readUserName()
   if (!name) {
@@ -499,6 +564,8 @@ export async function refreshWorkplaceTodos() {
     fetchSealPending(),
     fetchSealUsePending(),
     fetchFeedbackTodos(),
+    fetchKqycPending(),
+    fetchKqycDakaman(),
   ])
 }
 
@@ -591,6 +658,22 @@ export function useWorkplaceTodos() {
       const query = { tab: task.feedbackTab || 'wall' }
       if (task.feedbackWallId) query.wallId = task.feedbackWallId
       router.push({ path: '/feedback', query })
+      return
+    }
+    if (task.isKqycApproval) {
+      router.push({ path: '/attendance/approvals', query: { type: 'kqyc' } })
+      return
+    }
+    if (task.isKqycDakamanConfirm) {
+      const name = readUserName()
+      if (!name || !task.kqycDakamanId) return
+      try {
+        await confirmKqycByDakaman({ id: task.kqycDakamanId, current_user: name })
+        await fetchKqycDakaman()
+      } catch (e) {
+        const msg = e?.response?.data?.detail || e?.message || '已读确认失败'
+        alert(typeof msg === 'string' ? msg : '已读确认失败')
+      }
       return
     }
     goApprove(task)

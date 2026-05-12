@@ -35,6 +35,11 @@ export function analyzeInboxEmails(params) {
   return request({ url: '/inbox-email/analyze', method: 'post', params })
 }
 
+/** 手动修正 AI 邮件待办任务截止时间 */
+export function updateInboxTaskDeadline(data) {
+  return request({ url: '/inbox-email/task-deadline', method: 'post', data })
+}
+
 /** 标记任务已完成（去旗帜 + 删记录） */
 export function completeInboxTask(params) {
   return request({ url: '/inbox-email/complete', method: 'post', params })

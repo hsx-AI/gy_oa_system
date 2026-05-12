@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email, feedback, contacts, seal_apply
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email, feedback, contacts, seal_apply, attendance_exception
 import logging
 import time
 
@@ -83,6 +83,7 @@ app.include_router(inbox_email.router, prefix=settings.API_PREFIX)  # 共用邮�
 app.include_router(feedback.router, prefix=settings.API_PREFIX)  # 意见与建议
 app.include_router(contacts.router, prefix=settings.API_PREFIX)  # 部门通讯录
 app.include_router(seal_apply.router, prefix=settings.API_PREFIX)  # 部门用印申请
+app.include_router(attendance_exception.router, prefix=settings.API_PREFIX)  # 打卡异常申请
 
 @app.on_event("startup")
 async def startup_event():

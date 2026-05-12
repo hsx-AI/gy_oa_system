@@ -903,6 +903,25 @@ class InboxConfigRequest(BaseModel):
     email_auth_code: str
 
 
+class InboxTaskDeadlineRequest(BaseModel):
+    current_user: str
+    id: int
+    task_deadline: str = ""
+
+
+def _normalize_task_deadline(value: str) -> str:
+    """Normalize editable deadline text from the browser before saving."""
+    text = (value or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"\s+", " ", text.replace("T", " "))
+    if len(text) > 50:
+        raise HTTPException(status_code=400, detail="截止时间长度不能超过 50 个字符")
+    if not re.match(r"^\d{4}-\d{1,2}-\d{1,2}(?: \d{1,2}:\d{2}(?::\d{2})?)?$", text):
+        raise HTTPException(status_code=400, detail="截止时间格式应为 YYYY-MM-DD 或 YYYY-MM-DD HH:mm")
+    return text
+
+
 @router.get("/config")
 async def get_inbox_config(current_user: str = Query(...)):
     """获取共用邮箱配置（脱敏）"""
@@ -1107,6 +1126,37 @@ async def list_inbox_tasks(
             "total": total,
         },
     }
+
+
+@router.post("/task-deadline")
+async def update_inbox_task_deadline(req: InboxTaskDeadlineRequest):
+    """手动修正 AI 邮件待办任务的截止时间。"""
+    _require_inbox_access(req.current_user)
+    _ensure_inbox_task_columns()
+    owner = (req.current_user or "").strip()
+    deadline = _normalize_task_deadline(req.task_deadline)
+
+    rows = db.execute_query(
+        f"""
+        SELECT id FROM inbox_emails
+         WHERE id = %s AND {_owner_filter_sql()}
+           AND has_task = 1
+         LIMIT 1
+        """,
+        (int(req.id), owner),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="任务不存在或无权修改")
+
+    try:
+        db.execute_update(
+            f"UPDATE inbox_emails SET task_deadline = %s WHERE id = %s AND {_owner_filter_sql()}",
+            (deadline, int(req.id), owner),
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"更新截止时间失败: {e}")
+
+    return {"success": True, "message": "截止时间已更新", "taskDeadline": deadline}
 
 
 @router.post("/analyze")

@@ -16,6 +16,10 @@
               <router-link to="/attendance/manual" class="btn btn-header-link">手动填报/记录查询</router-link>
               <p class="header-btn-hint">智能填报无法满足时可手动填报</p>
             </div>
+            <div class="header-btn-wrap">
+              <router-link to="/attendance/kqyc-records" class="btn btn-header-link">打卡异常申请记录</router-link>
+              <p class="header-btn-hint">查询打卡异常申请审批进度</p>
+            </div>
             <!-- 月份选择器 -->
             <div class="month-selector">
               <label class="month-label">选择月份：</label>
@@ -163,6 +167,17 @@
                   </svg>
                   公出登记
                 </button>
+                <button
+                  class="auto-fill-btn btn-kqyc"
+                  @click.stop="handleKqycApply(suggestion)"
+                  title="发起打卡异常申请，二级审批通过后自动处理为市内公出"
+                >
+                  <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="10"/>
+                    <path d="M12 8v4l3 2"/>
+                  </svg>
+                  打卡异常申请
+                </button>
               </div>
             </template>
           </div>
@@ -241,6 +256,14 @@
       :visible="leaveModalVisible"
       :prefill="leavePrefill"
       @close="leaveModalVisible = false"
+      @submitted="loadSuggestions"
+    />
+
+    <!-- 打卡异常申请弹窗（本页填写，无需跳转） -->
+    <AttendanceExceptionApplyModal
+      :visible="kqycModalVisible"
+      :prefill="kqycPrefill"
+      @close="kqycModalVisible = false"
       @submitted="loadSuggestions"
     />
 
@@ -413,6 +436,7 @@ import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
+import AttendanceExceptionApplyModal from '@/components/AttendanceExceptionApplyModal.vue'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
 const router = useRouter()
@@ -424,6 +448,8 @@ const overtimeModalVisible = ref(false)
 const overtimePrefill = ref({})
 const leaveModalVisible = ref(false)
 const leavePrefill = ref({})
+const kqycModalVisible = ref(false)
+const kqycPrefill = ref({})
 
 // 公出申请弹窗（考勤页内，与公出管理页一致）
 const businessTripModalVisible = ref(false)
@@ -585,6 +611,22 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   }
 
   businessTripModalVisible.value = true
+}
+
+// 打卡异常申请：从考勤建议入口，在本页打开打卡异常申请弹窗并预填日期与时段
+const handleKqycApply = (suggestion) => {
+  if (!suggestion) return
+  const date = suggestion?.date ? String(suggestion.date).slice(0, 10) : ''
+  const timeMatch = (suggestion?.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
+  const tf = timeMatch ? toTimeValue(timeMatch[1]) : ''
+  const tt = timeMatch ? toTimeValue(timeMatch[2]) : ''
+  kqycPrefill.value = {
+    attendance_date: date,
+    time_from: tf,
+    time_to: tt,
+    locked: true,
+  }
+  kqycModalVisible.value = true
 }
 
 const toBtDateTime = (s) => {
@@ -1297,6 +1339,16 @@ watch(selectedMonth, () => {
 
 .btn-business-trip:hover {
   box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
+  transform: translateY(-2px);
+}
+
+/* 打卡异常申请按钮 - 紫色渐变 */
+.btn-kqyc {
+  background: linear-gradient(135deg, #a18cd1 0%, #fbc2eb 100%);
+}
+
+.btn-kqyc:hover {
+  box-shadow: 0 4px 12px rgba(161, 140, 209, 0.45);
   transform: translateY(-2px);
 }
 

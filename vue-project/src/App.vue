@@ -47,6 +47,12 @@
             </svg>
             <span>公出管理</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <span>部门用印申请</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser && !canSeeLeaderDashboard" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="20" x2="18" y2="10" />
@@ -133,6 +139,16 @@
               <path d="M9 14l2 2 4-4" />
             </svg>
             <span>技术问题手册</span>
+          </router-link>
+          <router-link v-if="canUseRotorBladeBalance" to="/weldoa/ypp_main" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 3v18" />
+              <path d="M3 12h18" />
+              <path d="M5.64 5.64l12.72 12.72" />
+              <path d="M18.36 5.64L5.64 18.36" />
+            </svg>
+            <span>转轮叶片配重</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/feedback" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -895,6 +911,11 @@ const canShowAttendanceExceptions = computed(() => {
 const isOtherDeptUser = computed(() => {
   const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
   return lsys === '其他部门成员'
+})
+
+const canUseRotorBladeBalance = computed(() => {
+  const lsys = (currentUser.value?.lsys || currentUser.value?.dept || '').trim()
+  return lsys === '焊接工艺室' || lsys === '部办'
 })
 
 // 切换用户菜单

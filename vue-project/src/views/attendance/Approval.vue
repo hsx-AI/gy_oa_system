@@ -294,6 +294,75 @@
         </div>
       </section>
 
+      <!-- 打卡异常审批 -->
+      <section v-show="activeTab === 'kqyc'" class="approval-section card">
+        <div class="card-body">
+          <div class="table-wrap" v-if="kqycList.length">
+            <table class="approval-table">
+              <thead>
+                <tr>
+                  <th>申请人</th>
+                  <th>科室</th>
+                  <th>异常日期</th>
+                  <th>异常时段</th>
+                  <th>事由</th>
+                  <th>情况说明</th>
+                  <th>佐证材料</th>
+                  <th>当前节点</th>
+                  <th>申请时间</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                <tr v-for="item in kqycList" :key="item.id">
+                  <td>{{ item.applicant }}</td>
+                  <td>{{ item.department }}</td>
+                  <td>{{ item.attendance_date }}</td>
+                  <td>{{ item.time_from }} ~ {{ item.time_to }}</td>
+                  <td>{{ item.reason_type || '—' }}</td>
+                  <td class="cell-hxp-ly" :title="item.description">{{ item.description }}</td>
+                  <td>
+                    <a v-if="item.attachment" :href="kqycAttachmentHref(item.attachment)" target="_blank" class="download-link">
+                      {{ item.attachment_original || '下载' }}
+                    </a>
+                    <span v-else>—</span>
+                  </td>
+                  <td>
+                    <span v-if="item.pending_for === 'first'" class="kqyc-node-tag kqyc-node-first">一级审批</span>
+                    <span v-else-if="item.pending_for === 'second'" class="kqyc-node-tag kqyc-node-second">二级审批</span>
+                    <span v-else>—</span>
+                  </td>
+                  <td>{{ item.apply_time }}</td>
+                  <td class="approval-actions">
+                    <button type="button" class="btn btn-approve" @click="handleKqycApprove(item)">通过</button>
+                    <button type="button" class="btn btn-reject" @click="openKqycReject(item)">驳回</button>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+          <p class="empty-text" v-else>暂无待审批的打卡异常申请</p>
+        </div>
+      </section>
+
+      <!-- 打卡异常驳回原因弹窗 -->
+      <div v-if="kqycRejectVisible" class="modal-overlay" @click.self="kqycRejectVisible = false">
+        <div class="modal-card modal-reject">
+          <h3 class="modal-title">驳回原因</h3>
+          <p class="modal-hint">请填写驳回原因，申请人将看到该原因。</p>
+          <textarea
+            v-model="kqycRejectReason"
+            class="modal-textarea"
+            placeholder="请输入驳回原因（必填）"
+            rows="4"
+          ></textarea>
+          <div class="modal-footer">
+            <button type="button" class="btn btn-secondary" @click="kqycRejectVisible = false">取消</button>
+            <button type="button" class="btn btn-reject" @click="confirmKqycReject">确认驳回</button>
+          </div>
+        </div>
+      </div>
+
       <!-- 换休票管理详情弹窗 -->
       <div v-if="hxpManageDetailVisible" class="modal-overlay" @click.self="hxpManageDetailVisible = false">
         <div class="modal-content detail-modal">
@@ -511,6 +580,11 @@ import {
   getHolidayExchangeDownloadUrl
 } from '@/api/attendance'
 import { getPendingHxpApprovals, hxpApprovalAction } from '@/api/admin'
+import {
+  getPendingKqyc,
+  approveKqyc,
+  kqycAttachmentUrl as kqycAttachmentLink,
+} from '@/api/attendanceException'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
 const route = useRoute()
@@ -524,7 +598,8 @@ const tabs = [
   { key: 'leave', label: '请假审批' },
   { key: 'overtime', label: '加班审批' },
   { key: 'business-trip', label: '公出审批' },
-  { key: 'hxp', label: '换休票审批' }
+  { key: 'hxp', label: '换休票审批' },
+  { key: 'kqyc', label: '打卡异常审批' }
 ]
 
 const activeTab = ref('leave')
@@ -554,6 +629,13 @@ const hxpManageRejectVisible = ref(false)
 const hxpManageRejectReason = ref('')
 const hxpManageRejectTarget = ref(null)
 
+// 打卡异常审批
+const kqycList = ref([])
+const kqycRejectVisible = ref(false)
+const kqycRejectReason = ref('')
+const kqycRejectTarget = ref(null)
+function kqycAttachmentHref(filename) { return kqycAttachmentLink(filename) }
+
 const leaveSelectedAll = computed(() =>
   leaveList.value.length > 0 && selectedLeaveIds.value.length === leaveList.value.length
 )
@@ -580,7 +662,7 @@ const materialFileDownloadUrl = computed(() => {
 
 onMounted(() => {
   const type = route.query.type
-  if (type === 'leave' || type === 'overtime' || type === 'business-trip' || type === 'hxp') {
+  if (type === 'leave' || type === 'overtime' || type === 'business-trip' || type === 'hxp' || type === 'kqyc') {
     activeTab.value = type
   }
   if (type === 'holiday-exchange' || type === 'hxp-manage') {
@@ -599,13 +681,69 @@ watch(activeTab, () => {
 async function init() {
   if (!currentUser) return
   const res = await checkCanApprove({ name: currentUser })
+  // 打卡异常审批是基于"当前节点是否为本人"，与 checkCanApprove 的常规职级判断无关，
+  // 因此即便 canApprove=false 也要拉取打卡异常列表以便审批
   canApprove.value = res.canApprove
+  fetchKqycList()
   if (res.canApprove) {
     fetchLeaveList()
     fetchOvertimeList()
     fetchBusinessTripList()
     fetchHolidayExchangeList()
     fetchHxpManageList()
+  } else if (kqycList.value.length > 0) {
+    // 若仅有打卡异常待审批，也要展示页面
+    canApprove.value = true
+    activeTab.value = activeTab.value || 'kqyc'
+  }
+}
+
+async function fetchKqycList() {
+  try {
+    const res = await getPendingKqyc({ approver: currentUser })
+    kqycList.value = res.data || []
+    if (!canApprove.value && kqycList.value.length > 0) {
+      canApprove.value = true
+    }
+  } catch {
+    kqycList.value = []
+  }
+}
+
+async function handleKqycApprove(item) {
+  const node = (item.pending_for === 'second') ? '二级' : '一级'
+  if (!confirm(`确认通过 ${item.applicant} 的打卡异常申请（${node}审批）？${node === '二级' ? '\n通过后将自动写入市内公出。' : ''}`)) return
+  try {
+    const res = await approveKqyc({ id: item.id, approver: currentUser, action: 'approve' })
+    alert(res?.message || '已通过')
+    fetchKqycList()
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '操作失败')
+  }
+}
+
+function openKqycReject(item) {
+  kqycRejectTarget.value = item
+  kqycRejectReason.value = ''
+  kqycRejectVisible.value = true
+}
+
+async function confirmKqycReject() {
+  const item = kqycRejectTarget.value
+  const reason = (kqycRejectReason.value || '').trim()
+  if (!item) return
+  if (!reason) {
+    alert('请填写驳回原因')
+    return
+  }
+  try {
+    await approveKqyc({ id: item.id, approver: currentUser, action: 'reject', reject_reason: reason })
+    kqycRejectVisible.value = false
+    kqycRejectTarget.value = null
+    alert('已驳回')
+    fetchKqycList()
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '操作失败')
   }
 }
 
@@ -705,6 +843,7 @@ function pendingCount(key) {
   if (key === 'overtime') return overtimeList.value.length
   if (key === 'business-trip') return businessTripList.value.length
   if (key === 'hxp') return holidayExchangeList.value.length + hxpManageList.value.length
+  if (key === 'kqyc') return kqycList.value.length
   return 0
 }
 
@@ -977,6 +1116,16 @@ async function batchApprove(type) {
   color: white;
   border-radius: 999px;
 }
+
+.kqyc-node-tag {
+  display: inline-block;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.kqyc-node-first { background: #fff7e6; color: #d46b08; }
+.kqyc-node-second { background: #e6f7ff; color: #096dd9; }
 
 .approval-section {
   background: white;

@@ -110,6 +110,62 @@
       </div>
     </section>
 
+    <!-- 新增功能 -->
+    <section v-if="newFeatureItems.length" class="home-favorites-section home-new-features-section">
+      <div class="favorites-header">
+        <h2 class="favorites-title">
+          <svg class="favorites-title-icon new-features-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M12 5v14M5 12h14" />
+          </svg>
+          新增功能
+        </h2>
+      </div>
+      <div class="favorites-grid">
+        <button
+          v-for="feature in newFeatureItems"
+          :key="feature.id"
+          type="button"
+          class="fav-card"
+          @click="navigateTo(feature)"
+        >
+          <span class="fav-card__icon" :style="{ background: feature.color }">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="feature.iconPath" /></svg>
+          </span>
+          <span class="fav-card__label">{{ feature.title }}</span>
+        </button>
+      </div>
+    </section>
+
+    <!-- 功能快捷入口：分类文件夹 -->
+    <div class="container shortcuts-container">
+      <section class="shortcuts-section">
+        <header class="shortcuts-header">
+          <h2 class="section-title">快捷入口</h2>
+          <span class="shortcuts-count">{{ visibleFeatureCount }} 项功能</span>
+        </header>
+        <div class="shortcut-folders">
+          <button
+            v-for="group in featureGroups"
+            :key="group.title"
+            type="button"
+            class="shortcut-folder"
+            @click="openShortcutGroup(group)"
+          >
+            <span class="shortcut-folder__icon" :style="{ background: folderAccent(group) }">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
+              </svg>
+            </span>
+            <span class="shortcut-folder__body">
+              <strong>{{ group.title }}</strong>
+              <small>{{ group.items.length }} 项</small>
+            </span>
+            <span class="shortcut-folder__arrow">→</span>
+          </button>
+        </div>
+      </section>
+    </div>
+
     <!-- 常用功能编辑弹窗 -->
     <div v-if="favEditorVisible" class="modal-overlay" @click.self="closeFavEditor">
       <div class="fav-editor-modal">
@@ -152,6 +208,7 @@
       </div>
     </div>
 
+    <div class="home-focus-grid" :class="{ 'home-focus-grid--single': !canAccessInboxBoard }">
     <section v-if="canAccessInboxBoard" class="home-ai-task-section">
       <article class="dashboard-card ai-task-card">
         <header class="dashboard-card__header ai-task-card__header">
@@ -216,21 +273,54 @@
             @wheel="onInboxTaskWheel"
           >
             <div class="ai-task-track" :class="{ paused: inboxTaskMarqueePaused, 'no-anim': inboxTasks.length <= 2 }">
-              <button
+              <div
                 v-for="(task, idx) in inboxDisplayTasks"
                 :key="`${task.id}-${idx}`"
-                type="button"
+                role="button"
+                tabindex="0"
                 class="ai-mail-task"
                 @click="openInboxTask(task.id)"
+                @keydown.enter.prevent="openInboxTask(task.id)"
+                @keydown.space.prevent="openInboxTask(task.id)"
               >
                 <span class="ai-mail-task__top">
-                  <span class="ai-mail-task__deadline" :class="deadlineClass(task.taskDeadline)">
+                  <span
+                    v-if="inboxEditingDeadlineId !== task.id"
+                    class="ai-mail-task__deadline"
+                    :class="deadlineClass(task.taskDeadline)"
+                  >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="10" />
                       <polyline points="12 6 12 12 16 14" />
                     </svg>
                     {{ task.taskDeadline || '未指定截止时间' }}
                     <span v-if="task.taskDeadline && deadlineCountdown(task.taskDeadline)" class="ai-mail-task__countdown">{{ deadlineCountdown(task.taskDeadline) }}</span>
+                    <button
+                      type="button"
+                      class="ai-mail-task__edit"
+                      title="修改截止时间"
+                      @click.stop="startEditInboxDeadline(task)"
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M12 20h9" />
+                        <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" />
+                      </svg>
+                    </button>
+                  </span>
+                  <span v-else class="ai-mail-task__deadline-editor" @click.stop>
+                    <input
+                      v-model="inboxDeadlineDraft"
+                      type="datetime-local"
+                      class="ai-mail-task__deadline-input"
+                      @keydown.enter.prevent="saveInboxDeadline(task.id)"
+                      @keydown.esc.prevent="cancelEditInboxDeadline"
+                    />
+                    <button type="button" class="ai-mail-task__deadline-save" :disabled="inboxDeadlineSavingId === task.id" @click.stop="saveInboxDeadline(task.id)">
+                      保存
+                    </button>
+                    <button type="button" class="ai-mail-task__deadline-cancel" @click.stop="cancelEditInboxDeadline">
+                      取消
+                    </button>
                   </span>
                   <span class="ai-mail-task__from" :title="task.from">{{ shortFrom(task.from) }}</span>
                   <span
@@ -249,7 +339,7 @@
                   <span :title="task.subject">{{ task.subject || '（无主题）' }}</span>
                   <span>{{ task.emailDate || task.receivedAt }}</span>
                 </span>
-              </button>
+              </div>
             </div>
           </div>
         </div>
@@ -347,6 +437,7 @@
         </div>
       </article>
     </section>
+    </div>
 
     <!-- 重要信息审阅（仅部长可见） -->
     <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
@@ -429,36 +520,6 @@
       </div>
     </div>
 
-    <!-- 功能快捷入口：分类文件夹 -->
-    <div class="container shortcuts-container">
-      <section class="shortcuts-section">
-        <header class="shortcuts-header">
-          <h2 class="section-title">快捷入口</h2>
-          <span class="shortcuts-count">{{ visibleFeatureCount }} 项功能</span>
-        </header>
-        <div class="shortcut-folders">
-          <button
-            v-for="group in featureGroups"
-            :key="group.title"
-            type="button"
-            class="shortcut-folder"
-            @click="openShortcutGroup(group)"
-          >
-            <span class="shortcut-folder__icon" :style="{ background: folderAccent(group) }">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-              </svg>
-            </span>
-            <span class="shortcut-folder__body">
-              <strong>{{ group.title }}</strong>
-              <small>{{ group.items.length }} 项</small>
-            </span>
-            <span class="shortcut-folder__arrow">→</span>
-          </button>
-        </div>
-      </section>
-    </div>
-
     <div v-if="selectedShortcutGroup" class="modal-overlay" @click.self="closeShortcutGroup">
       <div class="shortcut-modal">
         <div class="shortcut-modal__header">
@@ -506,7 +567,7 @@ import { getMySealApplications } from '@/api/seal'
 import { getLeaderBriefing } from '@/api/admin'
 import { getWallList, likeWall, wallImageUrl } from '@/api/feedback'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail } from '@/api/inboxEmail'
+import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
@@ -545,6 +606,9 @@ const inboxTaskMsg = ref('')
 const inboxTaskMsgType = ref('')
 const inboxTaskBoardRef = ref(null)
 const inboxTaskMarqueePaused = ref(false)
+const inboxEditingDeadlineId = ref(null)
+const inboxDeadlineDraft = ref('')
+const inboxDeadlineSavingId = ref(null)
 let inboxTaskRefreshTimer = null
 
 // 吐槽墙首页预览
@@ -779,6 +843,8 @@ function canShowFeature(permission) {
       return isMinisterLevel(jb) || (!!a2 && name === a2)
     case 'employeeAdmin':
       return isAdmin1 || isMinisterOrDeptLeader(jb) || (!!a2 && name === a2)
+    case 'rotorBladeBalance':
+      return lsys === '焊接工艺室' || lsys === '部办'
     case 'dbManager':
     case 'ygglFill':
       return canAccessDbManager.value
@@ -947,6 +1013,16 @@ const rawFeatureGroups = [
         iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
       },
       {
+        id: 'rotor-blade-balance',
+        title: '转轮叶片配重',
+        description: '按叶片重量优化排列，计算综合偏心矩',
+        path: '/weldoa/ypp_main',
+        permission: 'rotorBladeBalance',
+        color: 'linear-gradient(135deg, #06b6d4 0%, #2563eb 100%)',
+        tag: '新功能',
+        iconPath: 'M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64L5.64 18.36M12 21a9 9 0 100-18 9 9 0 000 18z'
+      },
+      {
         id: 'contacts',
         title: '部门通讯录',
         description: '按科室查看员工手机号、座机号等联系方式',
@@ -1029,7 +1105,7 @@ const visibleFeatureCount = computed(() => {
 })
 
 // ==================== 常用功能 ====================
-const DEFAULT_FAV_IDS = ['attendance', 'businesstrip', 'filenumbering', 'contacts']
+const DEFAULT_FAV_IDS = ['attendance', 'businesstrip', 'filenumbering', 'contacts', 'seal-apply']
 
 function _favStorageKey() {
   const name = (userName.value || '').trim()
@@ -1064,6 +1140,13 @@ const favFeatures = computed(() => {
     .map(id => allFeaturesFlat.value[id])
     .filter(Boolean)
     .filter(f => canShowFeature(f.permission))
+})
+
+const newFeatureItems = computed(() => {
+  return rawFeatureGroups
+    .flatMap(group => group.items)
+    .filter(item => item.tag === '新功能')
+    .filter(item => canShowFeature(item.permission))
 })
 
 const favEditorVisible = ref(false)
@@ -1181,6 +1264,61 @@ async function syncAndRefresh() {
     inboxTaskMsgType.value = 'error'
   } finally {
     inboxSyncing.value = false
+    setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
+  }
+}
+
+function deadlineToInputValue(deadline) {
+  const text = String(deadline || '').trim()
+  if (!text) return ''
+  const normalized = text.replace(/\//g, '-').replace(/\s+/, 'T')
+  if (/^\d{4}-\d{1,2}-\d{1,2}$/.test(normalized)) {
+    return `${normalized}T00:00`
+  }
+  const match = normalized.match(/^(\d{4}-\d{1,2}-\d{1,2})T(\d{1,2}:\d{2})/)
+  return match ? `${match[1]}T${match[2]}` : ''
+}
+
+function inputValueToDeadline(value) {
+  return String(value || '').trim().replace('T', ' ')
+}
+
+function startEditInboxDeadline(task) {
+  inboxTaskMarqueePaused.value = true
+  inboxEditingDeadlineId.value = task.id
+  inboxDeadlineDraft.value = deadlineToInputValue(task.taskDeadline)
+}
+
+function cancelEditInboxDeadline() {
+  inboxEditingDeadlineId.value = null
+  inboxDeadlineDraft.value = ''
+  inboxDeadlineSavingId.value = null
+}
+
+async function saveInboxDeadline(id) {
+  const name = (userName.value || '').trim()
+  if (!name || !id || inboxDeadlineSavingId.value) return
+  const taskDeadline = inputValueToDeadline(inboxDeadlineDraft.value)
+  inboxDeadlineSavingId.value = id
+  try {
+    const res = await updateInboxTaskDeadline({ current_user: name, id, task_deadline: taskDeadline })
+    if (res && res.success) {
+      inboxTasks.value = inboxTasks.value.map(task => (
+        task.id === id ? { ...task, taskDeadline: res.taskDeadline || '' } : task
+      ))
+      inboxTaskMsg.value = res.message || '截止时间已更新'
+      inboxTaskMsgType.value = 'success'
+      cancelEditInboxDeadline()
+      await loadInboxTasks()
+    } else {
+      inboxTaskMsg.value = (res && res.message) || '更新截止时间失败'
+      inboxTaskMsgType.value = 'error'
+    }
+  } catch (e) {
+    inboxTaskMsg.value = e?.message || '更新截止时间失败'
+    inboxTaskMsgType.value = 'error'
+  } finally {
+    inboxDeadlineSavingId.value = null
     setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
   }
 }
@@ -1455,7 +1593,7 @@ onMounted(() => {
   const info = getStoredUserInfo()
   userName.value = info.name || info.userName || ''
   userJb.value = info.jb || ''
-  userLsys.value = (info.dept || info.lsys || '').trim()
+  userLsys.value = (info.lsys || info.dept || '').trim()
   const jb = (info.jb || '').trim()
   isBuzhang.value = jbMatch(jb, '部长')
   refreshWorkplaceTodos()
@@ -1547,11 +1685,14 @@ async function navigateTo(feature) {
 <style scoped>
 .home-page {
   min-height: 100vh;
+  display: flex;
+  flex-direction: column;
   background: var(--color-bg-layout);
 }
 
 /* 工作台：待办 + 我的申请，与系统顶栏间距同其他页（仅 app-main padding-top） */
 .dashboard-section {
+  order: 10;
   margin-top: 0;
   margin-bottom: var(--spacing-xxl);
   padding: 0;
@@ -1913,6 +2054,7 @@ async function navigateTo(feature) {
 
 /* 快捷入口文件夹 */
 .shortcuts-container {
+  order: 50;
   margin-top: var(--spacing-xl);
 }
 
@@ -2179,6 +2321,7 @@ async function navigateTo(feature) {
 
 /* ==================== 常用功能 ==================== */
 .home-favorites-section {
+  order: 30;
   margin-bottom: var(--spacing-lg);
 }
 .favorites-header {
@@ -2201,6 +2344,10 @@ async function navigateTo(feature) {
   height: 20px;
   color: #f59e0b;
   fill: #fbbf24;
+}
+.new-features-title-icon {
+  color: #10b981;
+  fill: none;
 }
 .favorites-edit-btn {
   display: flex;
@@ -2383,6 +2530,38 @@ async function navigateTo(feature) {
   .fav-editor-items { grid-template-columns: 1fr; }
 }
 
+.home-focus-grid {
+  order: 20;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: var(--spacing-xl);
+  align-items: stretch;
+  margin-bottom: var(--spacing-xxl);
+}
+
+.home-focus-grid .home-wall-section,
+.home-focus-grid .home-ai-task-section {
+  min-width: 0;
+  margin-bottom: 0;
+}
+
+.home-focus-grid .home-wall-section {
+  order: 1;
+}
+
+.home-focus-grid .home-ai-task-section {
+  order: 2;
+}
+
+.home-focus-grid .dashboard-card {
+  height: 100%;
+}
+
+.home-focus-grid .wall-preview-grid {
+  width: 100%;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .home-ai-task-section {
   margin-bottom: var(--spacing-xxl);
 }
@@ -2563,7 +2742,7 @@ async function navigateTo(feature) {
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  max-width: 60%;
+  max-width: 68%;
   padding: 2px 10px;
   border-radius: 999px;
   background: #eef2ff;
@@ -2605,6 +2784,66 @@ async function navigateTo(feature) {
   opacity: 0.85;
   padding-left: 4px;
   white-space: nowrap;
+}
+
+.ai-mail-task__edit {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 50%;
+  color: currentColor;
+  background: rgba(255, 255, 255, 0.65);
+  cursor: pointer;
+}
+
+.ai-mail-task__edit svg {
+  width: 11px;
+  height: 11px;
+}
+
+.ai-mail-task__deadline-editor {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  max-width: 68%;
+}
+
+.ai-mail-task__deadline-input {
+  width: 170px;
+  height: 26px;
+  padding: 0 8px;
+  border: 1px solid #c7d2fe;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #1f2937;
+  background: #fff;
+}
+
+.ai-mail-task__deadline-save,
+.ai-mail-task__deadline-cancel {
+  height: 26px;
+  padding: 0 8px;
+  border-radius: 6px;
+  border: 1px solid #c7d2fe;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.ai-mail-task__deadline-save {
+  color: #fff;
+  background: #4f46e5;
+  border-color: #4f46e5;
+}
+
+.ai-mail-task__deadline-cancel {
+  color: #4b5563;
+  background: #fff;
 }
 
 .ai-mail-task__from {
@@ -2746,6 +2985,8 @@ async function navigateTo(feature) {
 }
 
 .wall-preview-grid {
+  width: min(100%, 804px);
+  margin: 0 auto;
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 12px;
@@ -2904,6 +3145,7 @@ async function navigateTo(feature) {
 /* ========== 重要信息审阅 ========== */
 /* 重要信息审阅 - 滚动播放窗口 */
 .briefing-section {
+  order: 60;
   margin-bottom: var(--spacing-xxl);
   padding: 0;
 }
@@ -3233,6 +3475,11 @@ async function navigateTo(feature) {
 
   .briefing-section {
     padding: 0 var(--spacing-md);
+  }
+
+  .home-focus-grid {
+    grid-template-columns: 1fr;
+    gap: var(--spacing-lg);
   }
 
   .home-favorites-section,

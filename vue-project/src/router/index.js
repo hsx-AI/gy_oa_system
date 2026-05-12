@@ -159,6 +159,13 @@ const routes = [
     meta: { title: '编辑技术问题' }
   },
   {
+    path: '/weldoa/ypp_main',
+    alias: '/weldoa/ypp_main.asp',
+    name: 'RotorBladeBalance',
+    component: () => import('../views/RotorBladeBalance.vue'),
+    meta: { title: '转轮叶片配重工艺程序' }
+  },
+  {
     path: '/profile',
     name: 'EmployeeProfile',
     component: () => import('../views/EmployeeProfile.vue')
@@ -240,6 +247,12 @@ const routes = [
     meta: { title: '假期值班出勤核查' }
   },
   {
+    path: '/attendance/kqyc-records',
+    name: 'AttendanceExceptionRecords',
+    component: () => import('@/views/attendance/AttendanceExceptionRecords.vue'),
+    meta: { title: '打卡异常申请记录' }
+  },
+  {
     path: '/feedback',
     name: 'FeedbackCenter',
     component: () => import('@/views/feedback/FeedbackCenter.vue'),
@@ -294,6 +307,23 @@ router.beforeEach(async (to, _from, next) => {
   const raw = localStorage.getItem('userInfo')
   if (!raw) {
     next('/login')
+    return
+  }
+  if (to.name === 'RotorBladeBalance') {
+    try {
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const lsys = (user.lsys || user.dept || '').trim()
+      if (!name) {
+        next('/login')
+      } else if (lsys === '焊接工艺室' || lsys === '部办') {
+        next()
+      } else {
+        next('/')
+      }
+    } catch {
+      next('/login')
+    }
     return
   }
   try {
@@ -556,6 +586,3 @@ router.beforeEach(async (to, _from, next) => {
 })
 
 export default router
-
-
-

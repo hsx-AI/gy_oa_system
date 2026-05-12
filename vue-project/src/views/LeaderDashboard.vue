@@ -561,7 +561,7 @@ import {
   getLeaderWorkIntensity,
   getUploadConfig,
 } from '@/api/attendance'
-import { isMinisterLevel, isMinisterOnly } from '@/utils/roleMatch'
+import { isMinisterLevel } from '@/utils/roleMatch'
 
 const router = useRouter()
 const leaderOtAdmin1 = ref('')
@@ -671,21 +671,19 @@ const wiIntensityFormula = ref('a')
 /** 工作强度口径 B：与后端 /leader/work-intensity intensity_formula=b 一致 */
 const wiIsFormulaB = computed(() => wiIntensityFormula.value === 'b')
 
-/** 与 yggl.jb 一致：仅正职部长/经理可看详细公式（不含副职、不含经理助理等） */
+/** 与 yggl.jb 一致：部长、副部长、经理、副经理等部级/公司经理层可看详细公式；各室主任/副主任等仅看摘要（与 getStatisticsPermission 能进驾驶舱的人员不完全等同） */
 const canSeeWiFormulaDetail = computed(() => {
   try {
     const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const jb = (info.jb || '').trim()
     if (!jb) return false
-    if (!isMinisterOnly(jb)) return false
-    if (jb.includes('助理')) return false
-    return true
+    return isMinisterLevel(jb)
   } catch {
     return false
   }
 })
 
-const WI_FORMULA_CONFIDENTIAL_NOTE = '（本公示仅正职经理/部长可见）'
+const WI_FORMULA_CONFIDENTIAL_NOTE = '（本公示仅正副职部长、经理层可见；科室主任/副主任不展示本条具体算式）'
 
 const wiFormulaDesc = computed(() => {
   const full = canSeeWiFormulaDetail.value
