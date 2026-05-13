@@ -1,89 +1,325 @@
 <template>
   <div class="home-page">
-    <!-- 工作台：待办事项 + 我的申请 -->
-    <section class="dashboard-section">
-      <div class="dashboard-wrap">
-        <!-- 待办事项 -->
-        <article class="dashboard-card dashboard-card--todo">
-          <header class="dashboard-card__header">
-            <h2 class="dashboard-card__title">
-              <span class="dashboard-card__icon dashboard-card__icon--warning" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
-                </svg>
-              </span>
-              <span class="dashboard-card__title-text">待办事项</span>
-              <span class="dashboard-card__badge">{{ totalBadgeCount }}</span>
-            </h2>
-            <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/attendance/pending-tasks')">查看全部</a>
-          </header>
-          <div class="dashboard-card__body">
-            <ul class="todo-list" v-if="displayTodoList.length > 0">
-              <li v-for="task in displayTodoList" :key="task.uniqueId" class="todo-item">
-                <div class="todo-item__top">
-                  <span class="todo-item__type">{{ task.type }}</span>
-                  <p class="todo-item__desc" :title="task.description">{{ task.description }}</p>
-                </div>
-                <div class="todo-item__bottom">
-                  <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
-                  <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
-                    {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
-                  </button>
-                </div>
-              </li>
-            </ul>
-            <div class="dashboard-empty" v-else-if="!todoLoading && !tripReturnLoading">
-              <p>暂无待办事项</p>
-            </div>
-            <div class="dashboard-empty" v-else>
-              <p>加载中...</p>
-            </div>
+    <!-- 待办事项瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('todo')"
+      class="home-tile home-tile--todo"
+      data-home-module-id="todo"
+      :style="homeModuleStyle('todo')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'todo' }"
+        title="拖动调整位置"
+        aria-label="拖动调整待办事项位置"
+        @pointerdown="startHomeTileDrag($event, 'todo')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card dashboard-card--todo">
+        <header class="dashboard-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--warning" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">待办事项</span>
+            <span class="dashboard-card__badge">{{ totalBadgeCount }}</span>
+          </h2>
+          <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/attendance/pending-tasks')">查看全部</a>
+        </header>
+        <div class="dashboard-card__body">
+          <ul class="todo-list" v-if="displayTodoList.length > 0">
+            <li v-for="task in displayTodoList" :key="task.uniqueId" class="todo-item">
+              <div class="todo-item__top">
+                <span class="todo-item__type">{{ task.type }}</span>
+                <p class="todo-item__desc" :title="task.description">{{ task.description }}</p>
+              </div>
+              <div class="todo-item__bottom">
+                <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
+                <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
+                  {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
+                </button>
+              </div>
+            </li>
+          </ul>
+          <div class="dashboard-empty" v-else-if="!todoLoading && !tripReturnLoading">
+            <p>暂无待办事项</p>
           </div>
-        </article>
-
-        <!-- 我的申请流程 -->
-        <article class="dashboard-card dashboard-card--request">
-          <header class="dashboard-card__header">
-            <h2 class="dashboard-card__title">
-              <span class="dashboard-card__icon dashboard-card__icon--info" aria-hidden="true">
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                  <polyline points="14 2 14 8 20 8"/>
-                  <line x1="16" y1="13" x2="8" y2="13"/>
-                  <line x1="16" y1="17" x2="8" y2="17"/>
-                  <polyline points="10 9 9 9 8 9"/>
-                </svg>
-              </span>
-              <span class="dashboard-card__title-text">我的申请流程</span>
-            </h2>
-            <a href="javascript:;" class="dashboard-card__link" @click.prevent="goMyApplications">查看全部</a>
-          </header>
-          <div class="dashboard-card__body">
-            <ul class="request-list" v-if="requestList?.length > 0">
-              <li v-for="req in requestList" :key="req.uniqueId" class="request-item" @click="goMyApplication(req)">
-                <div class="request-item__row request-item__row--main">
-                  <span class="request-item__title" :title="req.title">{{ req.title }}</span>
-                  <span class="request-item__status" :class="req.statusClass">{{ req.status }}</span>
-                </div>
-                <div class="request-item__row request-item__row--sub">
-                  <span class="request-item__time">{{ req.time }}</span>
-                  <span class="request-item__id">{{ req.businessTimeLabel }}</span>
-                </div>
-              </li>
-            </ul>
-            <div class="dashboard-empty" v-else-if="!requestLoading">
-              <p>暂无待审批或审批中的申请</p>
-            </div>
-            <div class="dashboard-empty" v-else>
-              <p>加载中...</p>
-            </div>
+          <div class="dashboard-empty" v-else>
+            <p>加载中...</p>
           </div>
-        </article>
-      </div>
+        </div>
+      </article>
     </section>
 
+    <!-- 我的申请流程瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('request')"
+      class="home-tile home-tile--request"
+      data-home-module-id="request"
+      :style="homeModuleStyle('request')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'request' }"
+        title="拖动调整位置"
+        aria-label="拖动调整我的申请流程位置"
+        @pointerdown="startHomeTileDrag($event, 'request')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card dashboard-card--request">
+        <header class="dashboard-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--info" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                <polyline points="14 2 14 8 20 8"/>
+                <line x1="16" y1="13" x2="8" y2="13"/>
+                <line x1="16" y1="17" x2="8" y2="17"/>
+                <polyline points="10 9 9 9 8 9"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">我的申请流程</span>
+          </h2>
+          <a href="javascript:;" class="dashboard-card__link" @click.prevent="goMyApplications">查看全部</a>
+        </header>
+        <div class="dashboard-card__body">
+          <ul class="request-list" v-if="requestList?.length > 0">
+            <li v-for="req in requestList" :key="req.uniqueId" class="request-item" @click="goMyApplication(req)">
+              <div class="request-item__row request-item__row--main">
+                <span class="request-item__title" :title="req.title">{{ req.title }}</span>
+                <span class="request-item__status" :class="req.statusClass">{{ req.status }}</span>
+              </div>
+              <div class="request-item__row request-item__row--sub">
+                <span class="request-item__time">{{ req.time }}</span>
+                <span class="request-item__id">{{ req.businessTimeLabel }}</span>
+              </div>
+            </li>
+          </ul>
+          <div class="dashboard-empty" v-else-if="!requestLoading">
+            <p>暂无待审批或审批中的申请</p>
+          </div>
+          <div class="dashboard-empty" v-else>
+            <p>加载中...</p>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- 部门通讯录（电话簿）瓦片：与待办等 home-tile 同尺寸，内部滚动 -->
+    <section
+      v-if="isHomeModuleVisible('contactsCard')"
+      class="home-tile home-tile--contacts"
+      data-home-module-id="contactsCard"
+      :style="homeModuleStyle('contactsCard')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'contactsCard' }"
+        title="拖动调整位置"
+        aria-label="拖动调整部门通讯录位置"
+        @pointerdown="startHomeTileDrag($event, 'contactsCard')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card dashboard-card--contacts">
+        <header class="dashboard-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--contacts" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/>
+                <circle cx="9" cy="7" r="4"/>
+                <path d="M23 21v-2a4 4 0 0 0-3-3.87"/>
+                <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">部门通讯录</span>
+            <span v-if="contactsHomeTotal > 0" class="dashboard-card__badge">{{ contactsHomeTotal }}</span>
+          </h2>
+          <router-link to="/contacts" class="dashboard-card__link">查看全部</router-link>
+        </header>
+        <div class="dashboard-card__body contacts-home-body">
+          <div class="contacts-home-toolbar">
+            <select v-model="contactsHomeDept" class="contacts-home-select" @change="loadContactsHome">
+              <option value="">全部科室</option>
+              <option v-for="d in CONTACT_HOME_DEPT_OPTIONS" :key="d" :value="d">{{ d }}</option>
+            </select>
+            <div class="contacts-home-search">
+              <input
+                v-model="contactsHomeKeyword"
+                type="search"
+                class="contacts-home-input"
+                placeholder="姓名、手机、座机…"
+                @input="onContactsHomeSearchInput"
+              />
+              <button v-if="contactsHomeKeyword" type="button" class="contacts-home-clear" @click="clearContactsHomeSearch">&times;</button>
+            </div>
+          </div>
+          <div v-if="contactsHomeLoading" class="dashboard-empty"><p>加载中…</p></div>
+          <div v-else-if="!contactsHomeFlat.length" class="dashboard-empty"><p>{{ contactsHomeKeyword.trim() ? '未找到匹配联系人' : '暂无通讯录数据' }}</p></div>
+          <ul v-else class="contacts-home-list">
+            <li
+              v-for="(row, idx) in contactsHomeFlat"
+              :key="`${row.deptName}-${row.gh || row.name}-${idx}`"
+              class="contacts-home-row"
+            >
+              <div class="contacts-home-row-main">
+                <span class="contacts-home-name">{{ row.name }}</span>
+                <span v-if="row.jb" class="contacts-home-jb" :class="contactsJbClass(row.jb)">{{ row.jb }}</span>
+              </div>
+              <div class="contacts-home-row-sub">
+                <span class="contacts-home-dept">{{ row.deptName }}</span>
+                <span class="contacts-home-phones">
+                  <a v-if="row.mobile" :href="'tel:' + row.mobile" class="contacts-home-tel" @click.stop>{{ row.mobile }}</a>
+                  <span v-if="row.telephone" class="contacts-home-tel contacts-home-tel--land">{{ row.telephone }}</span>
+                  <span v-if="!row.mobile && !row.telephone" class="contacts-home-no">—</span>
+                </span>
+              </div>
+            </li>
+          </ul>
+        </div>
+      </article>
+    </section>
+
+    <!-- 重要信息审阅（仅部长可见） -->
+    <section
+      v-if="isHomeModuleVisible('briefing') && isBuzhang && briefingItems.length > 0"
+      class="home-tile home-tile--briefing briefing-section"
+      data-home-module-id="briefing"
+      :style="homeModuleStyle('briefing')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'briefing' }"
+        title="拖动调整位置"
+        aria-label="拖动调整重要信息审阅位置"
+        @pointerdown="startHomeTileDrag($event, 'briefing')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card dashboard-card--briefing">
+        <header class="dashboard-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--briefing" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">重要信息审阅</span>
+            <span class="dashboard-card__badge">{{ briefingFilteredItems.length }}</span>
+          </h2>
+          <div class="briefing-header-right">
+            <div class="briefing-filter-tabs">
+              <button
+                v-for="f in briefingFilterOptions"
+                :key="f.value"
+                type="button"
+                class="briefing-filter-tab"
+                :class="{ active: briefingFilter === f.value }"
+                @click="briefingFilter = f.value"
+              >{{ f.label }}</button>
+            </div>
+            <select v-model="briefingDays" class="briefing-days-select" @change="fetchBriefing">
+              <option :value="3">最近3天</option>
+              <option :value="7">最近7天</option>
+              <option :value="30">最近30天</option>
+            </select>
+            <button type="button" class="briefing-viewall-btn" @click="showBriefingModal = true">查看全部</button>
+          </div>
+        </header>
+        <div
+          class="briefing-marquee"
+          :class="{ 'briefing-marquee--hover': briefingHover }"
+          @mouseenter="onMarqueeEnter"
+          @mouseleave="onMarqueeLeave"
+          @wheel.prevent="onMarqueeWheel"
+        >
+          <div class="briefing-track" ref="briefingTrackRef">
+            <div
+              v-for="(item, idx) in briefingItemsDup"
+              :key="idx"
+              class="briefing-item"
+              :class="'briefing-item--' + item.type"
+              @click="goBriefingDetail(item)"
+            >
+              <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
+              <span class="briefing-text">{{ item.text }}</span>
+              <span class="briefing-arrow">→</span>
+            </div>
+            <div v-if="!briefingItemsDup.length" class="briefing-empty-inline">当前筛选下暂无信息</div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- 信息审阅全部列表弹窗 -->
+    <div v-if="showBriefingModal" class="modal-overlay" @click.self="showBriefingModal = false">
+      <div class="briefing-modal">
+        <div class="briefing-modal__header">
+          <h2>重要信息审阅（最近{{ briefingDays }}天，共{{ briefingFilteredItems.length }}条）</h2>
+          <button type="button" class="briefing-modal__close" @click="showBriefingModal = false">&times;</button>
+        </div>
+        <div class="briefing-modal__body">
+          <div
+            v-for="(item, idx) in briefingFilteredItems"
+            :key="idx"
+            class="briefing-modal__item"
+            :class="'briefing-modal__item--' + item.type"
+            @click="goBriefingDetail(item); showBriefingModal = false"
+          >
+            <span class="briefing-modal__idx">{{ idx + 1 }}</span>
+            <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
+            <span class="briefing-modal__text">{{ item.text }}</span>
+          </div>
+          <p v-if="!briefingFilteredItems.length" class="briefing-modal__empty">当前筛选下暂无信息</p>
+        </div>
+      </div>
+    </div>
+
     <!-- 常用功能 -->
-    <section class="home-favorites-section">
+    <section
+      v-if="isHomeModuleVisible('favorites')"
+      class="home-tile home-tile--full home-favorites-section"
+      data-home-module-id="favorites"
+      :style="homeModuleStyle('favorites')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'favorites' }"
+        title="拖动调整位置"
+        aria-label="拖动调整常用功能位置"
+        @pointerdown="startHomeTileDrag($event, 'favorites')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
       <div class="favorites-header">
         <h2 class="favorites-title">
           <svg class="favorites-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
@@ -94,24 +330,44 @@
           自定义
         </button>
       </div>
-      <div class="favorites-grid">
+      <div class="app-tiles app-tiles--favorites">
         <button
           v-for="fav in favFeatures"
           :key="fav.id"
           type="button"
-          class="fav-card"
+          class="app-tile"
+          :title="fav.description || fav.title"
           @click="navigateTo(fav)"
         >
-          <span class="fav-card__icon" :style="{ background: fav.color }">
+          <span class="app-tile__icon" :style="{ background: fav.color }">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="fav.iconPath" /></svg>
           </span>
-          <span class="fav-card__label">{{ fav.title }}</span>
+          <span class="app-tile__label">{{ fav.title }}</span>
         </button>
       </div>
     </section>
 
     <!-- 新增功能 -->
-    <section v-if="newFeatureItems.length" class="home-favorites-section home-new-features-section">
+    <section
+      v-if="isHomeModuleVisible('newFeatures') && newFeatureItems.length"
+      class="home-tile home-tile--full home-favorites-section home-new-features-section"
+      data-home-module-id="newFeatures"
+      :style="homeModuleStyle('newFeatures')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'newFeatures' }"
+        title="拖动调整位置"
+        aria-label="拖动调整新增功能位置"
+        @pointerdown="startHomeTileDrag($event, 'newFeatures')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
       <div class="favorites-header">
         <h2 class="favorites-title">
           <svg class="favorites-title-icon new-features-title-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -120,48 +376,79 @@
           新增功能
         </h2>
       </div>
-      <div class="favorites-grid">
+      <div class="app-tiles app-tiles--favorites">
         <button
           v-for="feature in newFeatureItems"
           :key="feature.id"
           type="button"
-          class="fav-card"
+          class="app-tile"
+          :title="feature.description || feature.title"
           @click="navigateTo(feature)"
         >
-          <span class="fav-card__icon" :style="{ background: feature.color }">
+          <span class="app-tile__icon" :style="{ background: feature.color }">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="feature.iconPath" /></svg>
           </span>
-          <span class="fav-card__label">{{ feature.title }}</span>
+          <span class="app-tile__label">{{ feature.title }}</span>
+          <span v-if="feature.tag" class="app-tile__tag">{{ feature.tag }}</span>
         </button>
       </div>
     </section>
 
-    <!-- 功能快捷入口：分类文件夹 -->
-    <div class="container shortcuts-container">
+    <!-- 全部功能：按分组紧凑九宫格平铺 -->
+    <div
+      v-if="isHomeModuleVisible('shortcuts')"
+      class="home-tile home-tile--full container shortcuts-container"
+      data-home-module-id="shortcuts"
+      :style="homeModuleStyle('shortcuts')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'shortcuts' }"
+        title="拖动调整位置"
+        aria-label="拖动调整全部功能位置"
+        @pointerdown="startHomeTileDrag($event, 'shortcuts')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
       <section class="shortcuts-section">
         <header class="shortcuts-header">
-          <h2 class="section-title">快捷入口</h2>
+          <h2 class="section-title">全部功能</h2>
           <span class="shortcuts-count">{{ visibleFeatureCount }} 项功能</span>
         </header>
-        <div class="shortcut-folders">
-          <button
+        <div class="app-folder-stack">
+          <div
             v-for="group in featureGroups"
             :key="group.title"
-            type="button"
-            class="shortcut-folder"
-            @click="openShortcutGroup(group)"
+            class="app-folder"
+            :style="{ '--folder-accent': folderAccent(group) }"
           >
-            <span class="shortcut-folder__icon" :style="{ background: folderAccent(group) }">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M3 7a2 2 0 0 1 2-2h5l2 2h7a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7z"/>
-              </svg>
-            </span>
-            <span class="shortcut-folder__body">
-              <strong>{{ group.title }}</strong>
+            <h3 class="app-folder__title">
+              <span class="app-folder__title-dot" :style="{ background: folderAccent(group) }"></span>
+              {{ group.title }}
               <small>{{ group.items.length }} 项</small>
-            </span>
-            <span class="shortcut-folder__arrow">→</span>
-          </button>
+            </h3>
+            <div class="app-tiles">
+              <button
+                v-for="item in group.items"
+                :key="item.id"
+                type="button"
+                class="app-tile"
+                :title="item.description || item.title"
+                @click="navigateTo(item)"
+              >
+                <span class="app-tile__icon" :style="{ background: item.color }">
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path :d="item.iconPath" /></svg>
+                </span>
+                <span class="app-tile__label">{{ item.title }}</span>
+                <span v-if="item.tag" class="app-tile__tag">{{ item.tag }}</span>
+              </button>
+            </div>
+          </div>
         </div>
       </section>
     </div>
@@ -208,8 +495,27 @@
       </div>
     </div>
 
-    <div class="home-focus-grid" :class="{ 'home-focus-grid--single': !canAccessInboxBoard }">
-    <section v-if="canAccessInboxBoard" class="home-ai-task-section">
+    <!-- AI 待办任务看板瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('inboxBoard') && canAccessInboxBoard"
+      class="home-tile home-tile--inbox home-ai-task-section"
+      data-home-module-id="inboxBoard"
+      :style="homeModuleStyle('inboxBoard')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'inboxBoard' }"
+        title="拖动调整位置"
+        aria-label="拖动调整AI待办任务看板位置"
+        @pointerdown="startHomeTileDrag($event, 'inboxBoard')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
       <article class="dashboard-card ai-task-card">
         <header class="dashboard-card__header ai-task-card__header">
           <h2 class="dashboard-card__title">
@@ -376,8 +682,27 @@
       </div>
     </div>
 
-    <!-- 吐槽墙预览 -->
-    <section class="home-wall-section">
+    <!-- 吐槽墙预览瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('wall')"
+      class="home-tile home-tile--wall home-wall-section"
+      data-home-module-id="wall"
+      :style="homeModuleStyle('wall')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'wall' }"
+        title="拖动调整位置"
+        aria-label="拖动调整吐槽墙位置"
+        @pointerdown="startHomeTileDrag($event, 'wall')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
       <article class="dashboard-card wall-preview-card">
         <header class="dashboard-card__header wall-preview-card__header">
           <h2 class="dashboard-card__title">
@@ -402,14 +727,22 @@
             </router-link>
           </div>
         </header>
-        <div class="wall-preview-body">
+        <div class="wall-preview-body" ref="wallHostRef">
           <div v-if="wallLoading" class="dashboard-empty"><p>加载中...</p></div>
           <div v-else-if="!wallDisplayCards.length" class="dashboard-empty"><p>暂无吐槽</p></div>
-          <div v-else class="wall-preview-grid">
+          <!-- 缩放包装：内容超出瓦片高度时整体等比缩放，避免出现滚动条 -->
+          <div
+            v-else
+            class="wall-scale-content"
+            ref="wallScaleRef"
+            :style="{ transform: `scale(${wallScale})` }"
+          >
+          <div class="wall-preview-grid">
             <div
               v-for="card in wallDisplayCards"
               :key="card.id"
               class="wall-mini-card"
+              :class="{ 'is-truncated': isWallContentTruncated(card.content) }"
               :style="{ background: card._bg, '--rot': card._rotate + 'deg' }"
               @click="router.push('/feedback')"
             >
@@ -434,129 +767,67 @@
               </div>
             </div>
           </div>
-        </div>
-      </article>
-    </section>
-    </div>
-
-    <!-- 重要信息审阅（仅部长可见） -->
-    <section v-if="isBuzhang && briefingItems.length > 0" class="briefing-section">
-      <article class="dashboard-card dashboard-card--briefing">
-        <header class="dashboard-card__header">
-          <h2 class="dashboard-card__title">
-            <span class="dashboard-card__icon dashboard-card__icon--briefing" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9"/>
-              </svg>
-            </span>
-            <span class="dashboard-card__title-text">重要信息审阅</span>
-            <span class="dashboard-card__badge">{{ briefingFilteredItems.length }}</span>
-          </h2>
-          <div class="briefing-header-right">
-            <div class="briefing-filter-tabs">
-              <button
-                v-for="f in briefingFilterOptions"
-                :key="f.value"
-                type="button"
-                class="briefing-filter-tab"
-                :class="{ active: briefingFilter === f.value }"
-                @click="briefingFilter = f.value"
-              >{{ f.label }}</button>
-            </div>
-            <select v-model="briefingDays" class="briefing-days-select" @change="fetchBriefing">
-              <option :value="3">最近3天</option>
-              <option :value="7">最近7天</option>
-              <option :value="30">最近30天</option>
-            </select>
-            <button type="button" class="briefing-viewall-btn" @click="showBriefingModal = true">查看全部</button>
-          </div>
-        </header>
-        <div
-          class="briefing-marquee"
-          :class="{ 'briefing-marquee--hover': briefingHover }"
-          @mouseenter="onMarqueeEnter"
-          @mouseleave="onMarqueeLeave"
-          @wheel.prevent="onMarqueeWheel"
-        >
-          <div class="briefing-track" ref="briefingTrackRef">
-            <div
-              v-for="(item, idx) in briefingItemsDup"
-              :key="idx"
-              class="briefing-item"
-              :class="'briefing-item--' + item.type"
-              @click="goBriefingDetail(item)"
-            >
-              <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
-              <span class="briefing-text">{{ item.text }}</span>
-              <span class="briefing-arrow">→</span>
-            </div>
-            <div v-if="!briefingItemsDup.length" class="briefing-empty-inline">当前筛选下暂无信息</div>
           </div>
         </div>
       </article>
     </section>
 
-    <!-- 信息审阅全部列表弹窗 -->
-    <div v-if="showBriefingModal" class="modal-overlay" @click.self="showBriefingModal = false">
-      <div class="briefing-modal">
-        <div class="briefing-modal__header">
-          <h2>重要信息审阅（最近{{ briefingDays }}天，共{{ briefingFilteredItems.length }}条）</h2>
-          <button type="button" class="briefing-modal__close" @click="showBriefingModal = false">&times;</button>
-        </div>
-        <div class="briefing-modal__body">
-          <div
-            v-for="(item, idx) in briefingFilteredItems"
-            :key="idx"
-            class="briefing-modal__item"
-            :class="'briefing-modal__item--' + item.type"
-            @click="goBriefingDetail(item); showBriefingModal = false"
-          >
-            <span class="briefing-modal__idx">{{ idx + 1 }}</span>
-            <span class="briefing-tag">{{ briefingTagLabel(item.type) }}</span>
-            <span class="briefing-modal__text">{{ item.text }}</span>
-          </div>
-          <p v-if="!briefingFilteredItems.length" class="briefing-modal__empty">当前筛选下暂无信息</p>
-        </div>
-      </div>
-    </div>
-
-    <div v-if="selectedShortcutGroup" class="modal-overlay" @click.self="closeShortcutGroup">
-      <div class="shortcut-modal">
-        <div class="shortcut-modal__header">
+    <div v-if="homeLayoutEditorVisible" class="modal-overlay" @click.self="closeHomeLayoutEditor">
+      <div class="home-layout-modal">
+        <div class="home-layout-modal__header">
           <div>
-            <h2>{{ selectedShortcutGroup.title }}</h2>
-            <p>{{ selectedShortcutGroup.items.length }} 项可用功能</p>
+            <h2>首页布局</h2>
+            <p>调整首页模块顺序，关闭暂时不需要的模块。</p>
           </div>
-          <button type="button" class="shortcut-modal__close" aria-label="关闭" @click="closeShortcutGroup">&times;</button>
+          <button type="button" class="home-layout-modal__close" aria-label="关闭" @click="closeHomeLayoutEditor">&times;</button>
         </div>
-        <div class="shortcut-modal__grid">
-          <button
-            v-for="feature in selectedShortcutGroup.items"
-            :key="feature.id"
-            type="button"
-            class="shortcut-app"
-            @click="navigateFromShortcut(feature)"
+        <div class="home-layout-modal__body">
+          <div
+            v-for="item in homeLayoutConfigurableDraft"
+            :key="item.id"
+            class="home-layout-item"
+            :class="{ disabled: !item.visible }"
           >
-            <span class="shortcut-app__icon" :style="{ background: feature.color }">
-              <svg class="icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path :d="feature.iconPath" />
-              </svg>
-            </span>
-            <span class="shortcut-app__text">
-              <strong>{{ feature.title }}</strong>
-              <small>{{ feature.description }}</small>
-            </span>
-            <span v-if="feature.tag" class="shortcut-app__tag">{{ feature.tag }}</span>
-          </button>
+            <label class="home-layout-item__toggle">
+              <input
+                type="checkbox"
+                :checked="item.visible"
+                :disabled="item.visible && homeLayoutVisibleDraftCount <= 1"
+                @change="toggleHomeLayoutDraftItem(item.id)"
+              />
+              <span></span>
+            </label>
+            <div class="home-layout-item__main">
+              <strong>{{ homeModuleMeta(item.id).label }}</strong>
+              <small>{{ homeModuleMeta(item.id).description }}</small>
+            </div>
+            <span v-if="!isHomeModuleRuntimeAvailable(item.id)" class="home-layout-item__badge">当前无内容</span>
+            <div class="home-layout-item__actions">
+              <button type="button" :disabled="isHomeLayoutDraftEdge(item.id, 'first')" title="上移" @click="moveHomeLayoutDraftItem(item.id, -1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 15l-6-6-6 6"/></svg>
+              </button>
+              <button type="button" :disabled="isHomeLayoutDraftEdge(item.id, 'last')" title="下移" @click="moveHomeLayoutDraftItem(item.id, 1)">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 9l6 6 6-6"/></svg>
+              </button>
+            </div>
+          </div>
+        </div>
+        <div class="home-layout-modal__footer">
+          <button type="button" class="home-layout-reset" @click="resetHomeLayoutDraft">恢复默认</button>
+          <div class="home-layout-modal__btns">
+            <button type="button" class="btn-fav-cancel" @click="closeHomeLayoutEditor">取消</button>
+            <button type="button" class="btn-fav-save" @click="saveHomeLayoutEditor">保存</button>
+          </div>
         </div>
       </div>
     </div>
+
   </div>
 </template>
 
 <script setup>
 import { ref, reactive, computed, onMounted, onBeforeUnmount, nextTick, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   getLeaveList,
   getOvertimeList,
@@ -565,12 +836,14 @@ import {
 } from '@/api/attendance'
 import { getMySealApplications } from '@/api/seal'
 import { getLeaderBriefing } from '@/api/admin'
+import { getContacts } from '@/api/contacts'
 import { getWallList, likeWall, wallImageUrl } from '@/api/feedback'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
+const route = useRoute()
 const router = useRouter()
 
 const {
@@ -591,7 +864,6 @@ const canAccessInboxBoard = computed(() => {
   const jb = (userJb.value || '').trim()
   return isMinisterOrDeptLeader(jb)
 })
-const selectedShortcutGroup = ref(null)
 const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
 const inboxTaskLoading = ref(false)
@@ -633,6 +905,20 @@ function wallResolveLabel(v) {
   return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
 }
 
+/** 估算吐槽内容是否会触发 6 行折叠：3 列窄卡片，单行容纳 ≈ 12 个汉字 / 24 字符 */
+function isWallContentTruncated(text) {
+  const s = (text || '').toString()
+  if (!s) return false
+  const lineBreaks = (s.match(/\n/g) || []).length
+  if (lineBreaks >= 6) return true
+  // 长度：汉字按 2 计、英文按 1 计；阈值 = 6 行 × 每行约 16 等宽单位
+  let weight = 0
+  for (const ch of s) {
+    weight += /[\u4e00-\u9fa5\uff00-\uffef]/.test(ch) ? 2 : 1
+  }
+  return weight > 6 * 16
+}
+
 function getWallImgSrc(filename) {
   return wallImageUrl(filename)
 }
@@ -645,6 +931,49 @@ async function loadWallList() {
   } catch { /* ignore */ }
   wallLoading.value = false
 }
+
+// ===== 吐槽墙等比缩放：内容超出瓦片高度时整体 scale，避免出现滚动条 =====
+const wallHostRef = ref(null)
+const wallScaleRef = ref(null)
+const wallScale = ref(1)
+let wallResizeObserver = null
+
+function recalcWallScale() {
+  const host = wallHostRef.value
+  const content = wallScaleRef.value
+  if (!host || !content) {
+    wallScale.value = 1
+    return
+  }
+  // 用 transform=none 时的自然尺寸度量
+  const prev = content.style.transform
+  content.style.transform = 'none'
+  const contentH = content.scrollHeight
+  const hostH = host.clientHeight
+  content.style.transform = prev
+  if (contentH <= 0 || hostH <= 0) {
+    wallScale.value = 1
+    return
+  }
+  // 仅在内容超出时缩小，不放大
+  const next = Math.min(1, hostH / contentH)
+  // 限制最低缩放，避免文字过小看不清
+  wallScale.value = Math.max(0.45, +next.toFixed(3))
+}
+
+function setupWallResizeObserver() {
+  if (typeof ResizeObserver === 'undefined') return
+  if (wallResizeObserver) wallResizeObserver.disconnect()
+  wallResizeObserver = new ResizeObserver(() => recalcWallScale())
+  if (wallHostRef.value) wallResizeObserver.observe(wallHostRef.value)
+  if (wallScaleRef.value) wallResizeObserver.observe(wallScaleRef.value)
+}
+
+watch([wallDisplayCards, wallHostRef, wallScaleRef], async () => {
+  await nextTick()
+  setupWallResizeObserver()
+  recalcWallScale()
+})
 
 const wallLikedIds = ref(new Set())
 const wallLikeAnimating = ref(new Set())
@@ -858,6 +1187,71 @@ function canShowFeature(permission) {
 const userJb = ref('')
 // 隶属科室（yggl.lsys），登录返回在 userInfo.dept 中
 const userLsys = ref('')
+
+/** 与 Contacts.vue 科室下拉一致 */
+const CONTACT_HOME_DEPT_OPTIONS = [
+  '部办',
+  '综合技术室', '工具技术室', '数控编程室', '智能制造技术室',
+  '水发工艺室', '水轮机工艺室', '汽发工艺室', '焊接工艺室', '非标技术室',
+]
+
+const contactsHomeDepartments = ref([])
+const contactsHomeLoading = ref(false)
+const contactsHomeKeyword = ref('')
+const contactsHomeDept = ref('')
+const contactsHomeTotal = ref(0)
+let contactsHomeSearchTimer = null
+
+const contactsHomeFlat = computed(() => {
+  const rows = []
+  for (const d of contactsHomeDepartments.value || []) {
+    for (const p of d.members || []) {
+      rows.push({ ...p, deptName: d.name })
+    }
+  }
+  return rows
+})
+
+function contactsJbClass(jb) {
+  if (!jb) return ''
+  if (/经理/.test(jb)) return 'jb-manager'
+  if (/主任/.test(jb)) return 'jb-director'
+  if (/组长/.test(jb)) return 'jb-leader'
+  return 'jb-default'
+}
+
+async function loadContactsHome() {
+  contactsHomeLoading.value = true
+  try {
+    const params = {}
+    if (contactsHomeDept.value) params.department = contactsHomeDept.value
+    const kw = contactsHomeKeyword.value.trim()
+    if (kw) params.keyword = kw
+    const res = await getContacts(params)
+    if (res?.success) {
+      const deps = res.departments || []
+      contactsHomeDepartments.value = deps
+      contactsHomeTotal.value =
+        typeof res.total === 'number'
+          ? res.total
+          : deps.reduce((n, d) => n + (Array.isArray(d.members) ? d.members.length : 0), 0)
+    }
+  } catch (e) {
+    console.error('首页通讯录加载失败:', e)
+  } finally {
+    contactsHomeLoading.value = false
+  }
+}
+
+function onContactsHomeSearchInput() {
+  if (contactsHomeSearchTimer) clearTimeout(contactsHomeSearchTimer)
+  contactsHomeSearchTimer = setTimeout(() => loadContactsHome(), 300)
+}
+
+function clearContactsHomeSearch() {
+  contactsHomeKeyword.value = ''
+  loadContactsHome()
+}
 
 const rawFeatureGroups = [
   {
@@ -1105,7 +1499,7 @@ const visibleFeatureCount = computed(() => {
 })
 
 // ==================== 常用功能 ====================
-const DEFAULT_FAV_IDS = ['attendance', 'businesstrip', 'filenumbering', 'contacts', 'seal-apply']
+const DEFAULT_FAV_IDS = ['attendance', 'businesstrip', 'filenumbering', 'seal-apply']
 
 function _favStorageKey() {
   const name = (userName.value || '').trim()
@@ -1117,7 +1511,17 @@ function loadFavIds() {
     const raw = localStorage.getItem(_favStorageKey())
     if (raw) {
       const arr = JSON.parse(raw)
-      if (Array.isArray(arr) && arr.length) return arr
+      if (Array.isArray(arr) && arr.length) {
+        // 通讯录已改为首页独立瓦片，从常用入口中移除避免重复
+        const next = arr.filter(id => id !== 'contacts')
+        if (next.length !== arr.length) {
+          try {
+            localStorage.setItem(_favStorageKey(), JSON.stringify(next.length ? next : DEFAULT_FAV_IDS))
+          } catch { /* ignore */ }
+          return next.length ? next : [...DEFAULT_FAV_IDS]
+        }
+        return arr
+      }
     }
   } catch { /* ignore */ }
   return [...DEFAULT_FAV_IDS]
@@ -1195,6 +1599,260 @@ function getStoredUserInfo() {
 const userInfo = getStoredUserInfo()
 // 首页挂载时再读一次，避免登录后 userName 未更新
 const userName = ref(userInfo.name || userInfo.userName || '')
+
+// ==================== 首页布局 ====================
+// 拆分原 dashboard / focusCards 为更细的 5 个瓦片，便于"恒定大小三栏"以及后续个性化排班
+const HOME_LAYOUT_MODULES = [
+  { id: 'todo', label: '待办事项', description: '需要我处理的待办与审批' },
+  { id: 'request', label: '我的申请流程', description: '我提交的待审批 / 审批中申请' },
+  { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
+  { id: 'briefing', label: '重要信息审阅', description: '部长可见的重要换休、公出信息滚动审阅' },
+  { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },
+  { id: 'wall', label: '吐槽墙', description: '匿名吐槽与互动' },
+  { id: 'favorites', label: '常用功能', description: '用户自定义的常用功能入口' },
+  { id: 'newFeatures', label: '新增功能', description: '最近上线的新功能入口' },
+  { id: 'shortcuts', label: '全部功能', description: '按分类平铺展示全部可用功能' },
+]
+
+// 旧 module id → 新 module id 列表（用于迁移老的本地配置）
+const HOME_LAYOUT_MIGRATION = {
+  dashboard: ['todo', 'request'],
+  focusCards: ['inboxBoard', 'wall'],
+}
+
+function defaultHomeLayout() {
+  return HOME_LAYOUT_MODULES.map(item => ({ id: item.id, visible: true }))
+}
+
+function homeLayoutStorageKey() {
+  const name = (userName.value || '').trim()
+  return name ? `home_layout_modules_${name}` : 'home_layout_modules'
+}
+
+function normalizeHomeLayout(value) {
+  const validIds = new Set(HOME_LAYOUT_MODULES.map(item => item.id))
+  const saved = Array.isArray(value) ? value : []
+  const result = []
+  const seen = new Set()
+  for (const item of saved) {
+    const id = typeof item === 'string' ? item : item?.id
+    const visible = typeof item === 'object' && item.visible === false ? false : true
+    // 旧 module → 拆分为多个新 module，按声明顺序紧挨原位置
+    const migratedIds = HOME_LAYOUT_MIGRATION[id]
+    const targetIds = migratedIds && migratedIds.length ? migratedIds : [id]
+    for (const targetId of targetIds) {
+      if (!validIds.has(targetId) || seen.has(targetId)) continue
+      result.push({ id: targetId, visible })
+      seen.add(targetId)
+    }
+  }
+  for (const item of HOME_LAYOUT_MODULES) {
+    if (!seen.has(item.id)) result.push({ id: item.id, visible: true })
+  }
+  if (!result.some(item => item.visible)) {
+    result[0].visible = true
+  }
+  return result
+}
+
+function loadHomeLayout() {
+  try {
+    const raw = localStorage.getItem(homeLayoutStorageKey())
+    if (raw) return normalizeHomeLayout(JSON.parse(raw))
+  } catch { /* ignore */ }
+  return defaultHomeLayout()
+}
+
+const homeLayout = ref(loadHomeLayout())
+const homeLayoutEditorVisible = ref(false)
+const homeLayoutDraft = ref(defaultHomeLayout())
+const homeLayoutDrag = reactive({
+  activeId: '',
+  moved: false,
+  startX: 0,
+  startY: 0,
+})
+
+function isHomeModuleConfigurable(id) {
+  if (id === 'briefing') return isBuzhang.value
+  return true
+}
+
+const homeLayoutConfigurableDraft = computed(() => {
+  return homeLayoutDraft.value.filter(item => isHomeModuleConfigurable(item.id))
+})
+
+const homeLayoutVisibleDraftCount = computed(() => {
+  return homeLayoutConfigurableDraft.value.filter(item => item.visible).length
+})
+
+function homeModuleMeta(id) {
+  return HOME_LAYOUT_MODULES.find(item => item.id === id) || { id, label: id, description: '' }
+}
+
+function homeModuleConfig(id) {
+  return homeLayout.value.find(item => item.id === id)
+}
+
+function isHomeModuleVisible(id) {
+  return homeModuleConfig(id)?.visible !== false
+}
+
+function homeModuleStyle(id) {
+  const index = homeLayout.value.findIndex(item => item.id === id)
+  return { order: index >= 0 ? (index + 1) * 10 : 999 }
+}
+
+function persistHomeLayout() {
+  const next = normalizeHomeLayout(homeLayout.value)
+  homeLayout.value = next
+  try {
+    localStorage.setItem(homeLayoutStorageKey(), JSON.stringify(next))
+  } catch { /* ignore */ }
+}
+
+function moveHomeLayoutItem(id, targetId) {
+  if (!id || !targetId || id === targetId) return false
+  const arr = [...homeLayout.value]
+  const fromIndex = arr.findIndex(item => item.id === id)
+  const toIndex = arr.findIndex(item => item.id === targetId)
+  if (fromIndex < 0 || toIndex < 0) return false
+  const [item] = arr.splice(fromIndex, 1)
+  arr.splice(toIndex, 0, item)
+  homeLayout.value = arr
+  return true
+}
+
+function homeTileIdFromPoint(clientX, clientY) {
+  const el = document.elementFromPoint(clientX, clientY)
+  const tile = el?.closest?.('[data-home-module-id]')
+  const id = tile?.dataset?.homeModuleId || ''
+  return id && isHomeModuleVisible(id) ? id : ''
+}
+
+function cleanupHomeTileDrag(save = false) {
+  window.removeEventListener('pointermove', onHomeTileDragMove)
+  window.removeEventListener('pointerup', onHomeTileDragEnd)
+  window.removeEventListener('pointercancel', onHomeTileDragEnd)
+  document.body.classList.remove('home-tile-dragging')
+  if (save && homeLayoutDrag.moved) persistHomeLayout()
+  homeLayoutDrag.activeId = ''
+  homeLayoutDrag.moved = false
+  homeLayoutDrag.startX = 0
+  homeLayoutDrag.startY = 0
+}
+
+function onHomeTileDragMove(event) {
+  if (!homeLayoutDrag.activeId) return
+  event.preventDefault()
+  const dx = Math.abs(event.clientX - homeLayoutDrag.startX)
+  const dy = Math.abs(event.clientY - homeLayoutDrag.startY)
+  if (dx + dy < 6) return
+  const targetId = homeTileIdFromPoint(event.clientX, event.clientY)
+  if (moveHomeLayoutItem(homeLayoutDrag.activeId, targetId)) {
+    homeLayoutDrag.moved = true
+  }
+}
+
+function onHomeTileDragEnd() {
+  cleanupHomeTileDrag(true)
+}
+
+function startHomeTileDrag(event, id) {
+  if (event.button != null && event.button !== 0) return
+  if (!isHomeModuleVisible(id)) return
+  event.preventDefault()
+  event.stopPropagation()
+  cleanupHomeTileDrag(false)
+  homeLayoutDrag.activeId = id
+  homeLayoutDrag.startX = event.clientX
+  homeLayoutDrag.startY = event.clientY
+  document.body.classList.add('home-tile-dragging')
+  window.addEventListener('pointermove', onHomeTileDragMove, { passive: false })
+  window.addEventListener('pointerup', onHomeTileDragEnd)
+  window.addEventListener('pointercancel', onHomeTileDragEnd)
+}
+
+function isHomeModuleRuntimeAvailable(id) {
+  if (id === 'briefing') return isBuzhang.value && briefingItems.value.length > 0
+  if (id === 'newFeatures') return newFeatureItems.value.length > 0
+  if (id === 'inboxBoard') return canAccessInboxBoard.value
+  return true
+}
+
+function openHomeLayoutEditor() {
+  homeLayoutDraft.value = homeLayout.value.map(item => ({ ...item }))
+  homeLayoutEditorVisible.value = true
+}
+
+function closeHomeLayoutEditor() {
+  homeLayoutEditorVisible.value = false
+}
+
+function toggleHomeLayoutDraftItem(id) {
+  const item = homeLayoutDraft.value.find(row => row.id === id)
+  if (!item) return
+  if (item.visible && homeLayoutVisibleDraftCount.value <= 1) return
+  item.visible = !item.visible
+}
+
+function isHomeLayoutDraftEdge(id, edge) {
+  const index = homeLayoutConfigurableDraft.value.findIndex(item => item.id === id)
+  if (edge === 'first') return index <= 0
+  if (edge === 'last') return index < 0 || index >= homeLayoutConfigurableDraft.value.length - 1
+  return false
+}
+
+function moveHomeLayoutDraftItem(id, direction) {
+  const currentIndex = homeLayoutConfigurableDraft.value.findIndex(item => item.id === id)
+  const targetItem = homeLayoutConfigurableDraft.value[currentIndex + direction]
+  if (currentIndex < 0 || !targetItem) return
+  const arr = [...homeLayoutDraft.value]
+  const fromIndex = arr.findIndex(item => item.id === id)
+  const toIndex = arr.findIndex(item => item.id === targetItem.id)
+  if (fromIndex < 0 || toIndex < 0) return
+  const [item] = arr.splice(fromIndex, 1)
+  arr.splice(toIndex, 0, item)
+  homeLayoutDraft.value = arr
+}
+
+function resetHomeLayoutDraft() {
+  homeLayoutDraft.value = defaultHomeLayout()
+}
+
+function saveHomeLayoutEditor() {
+  const next = normalizeHomeLayout(homeLayoutDraft.value)
+  homeLayout.value = next
+  persistHomeLayout()
+  homeLayoutEditorVisible.value = false
+}
+
+function handleOpenHomeLayoutSettings() {
+  openHomeLayoutEditor()
+}
+
+watch(userName, () => {
+  homeLayout.value = loadHomeLayout()
+})
+
+watch(
+  () => route.query.homeLayoutSettings,
+  (value) => {
+    if (!value) return
+    openHomeLayoutEditor()
+    const nextQuery = { ...route.query }
+    delete nextQuery.homeLayoutSettings
+    router.replace({ path: route.path, query: nextQuery }).catch(() => {})
+  },
+  { immediate: true }
+)
+
+watch(
+  () => isHomeModuleVisible('contactsCard'),
+  (vis, was) => {
+    if (vis && was === false) void loadContactsHome()
+  }
+)
 
 async function loadInboxTasks() {
   const name = (userName.value || '').trim()
@@ -1578,6 +2236,8 @@ async function fetchRequestList() {
 }
 
 onBeforeUnmount(() => {
+  window.removeEventListener('open-home-layout-settings', handleOpenHomeLayoutSettings)
+  cleanupHomeTileDrag(false)
   stopMarquee()
   if (inboxTaskRefreshTimer) {
     clearInterval(inboxTaskRefreshTimer)
@@ -1587,9 +2247,18 @@ onBeforeUnmount(() => {
     clearInterval(_countdownTimer)
     _countdownTimer = null
   }
+  if (wallResizeObserver) {
+    wallResizeObserver.disconnect()
+    wallResizeObserver = null
+  }
+  if (contactsHomeSearchTimer) {
+    clearTimeout(contactsHomeSearchTimer)
+    contactsHomeSearchTimer = null
+  }
 })
 
 onMounted(() => {
+  window.addEventListener('open-home-layout-settings', handleOpenHomeLayoutSettings)
   const info = getStoredUserInfo()
   userName.value = info.name || info.userName || ''
   userJb.value = info.jb || ''
@@ -1616,26 +2285,16 @@ onMounted(() => {
         syncInboxEmails(name).then(() => loadInboxTasks()).catch(() => loadInboxTasks())
         inboxTaskRefreshTimer = setInterval(loadInboxTasks, 15000)
       }
-  }).catch(() => { canAccessDbManager.value = false })
+    }).catch(() => { canAccessDbManager.value = false })
+  }
+  if (isHomeModuleVisible('contactsCard')) {
+    void loadContactsHome()
   }
   _countdownTimer = setInterval(() => { nowTick.value = Date.now() }, 30000)
 })
 
 function folderAccent(group) {
   return group?.items?.[0]?.color || 'linear-gradient(135deg, #4f46e5 0%, #0891b2 100%)'
-}
-
-function openShortcutGroup(group) {
-  selectedShortcutGroup.value = group
-}
-
-function closeShortcutGroup() {
-  selectedShortcutGroup.value = null
-}
-
-async function navigateFromShortcut(feature) {
-  closeShortcutGroup()
-  await navigateTo(feature)
 }
 
 async function navigateTo(feature) {
@@ -1685,30 +2344,96 @@ async function navigateTo(feature) {
 <style scoped>
 .home-page {
   min-height: 100vh;
-  display: flex;
-  flex-direction: column;
   background: var(--color-bg-layout);
-}
-
-/* 工作台：待办 + 我的申请，与系统顶栏间距同其他页（仅 app-main padding-top） */
-.dashboard-section {
-  order: 10;
-  margin-top: 0;
-  margin-bottom: var(--spacing-xxl);
-  padding: 0;
-}
-
-.dashboard-wrap {
-  width: 100%;
-  max-width: none;
-  margin: 0;
+  /* 3 列瓦片网格：信息瓦片大小恒定（便于后续个性化排班），全宽应用集合行高自适应 */
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-auto-rows: auto;
   gap: var(--spacing-xl);
+  align-items: stretch;
+  --home-tile-h: clamp(320px, 36vh, 400px);
+}
+
+/* 信息瓦片：宽 1 列、高严格等于 --home-tile-h，内容溢出由内部滚动处理；
+   不能用 min-height，否则一行任意一个瓦片内容多就会把整行撑高 */
+.home-tile {
+  position: relative;
+  min-width: 0;
+  height: var(--home-tile-h);
+  min-height: 0;
+  overflow: hidden;
+}
+
+.home-tile-drag-handle {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 12;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #64748b;
+  box-shadow: 0 4px 12px rgba(15, 23, 42, 0.12);
+  cursor: grab;
+  touch-action: none;
+  transition: color .15s, border-color .15s, background .15s, transform .15s;
+}
+
+.home-tile-drag-handle:hover,
+.home-tile-drag-handle.is-active {
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--color-primary, #3b82f6);
+  background: #fff;
+}
+
+.home-tile-drag-handle.is-active {
+  cursor: grabbing;
+  transform: scale(1.04);
+}
+
+.home-tile-drag-handle svg {
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+:global(body.home-tile-dragging) {
+  cursor: grabbing;
+  user-select: none;
+}
+
+:global(body.home-tile-dragging) .home-tile-drag-handle {
+  cursor: grabbing;
+}
+
+.home-tile > .dashboard-card,
+.home-tile > article.dashboard-card {
+  height: 100%;
+  min-height: 0;
+}
+
+.home-tile > .dashboard-card > .dashboard-card__header,
+.home-tile > article.dashboard-card > .dashboard-card__header {
+  padding-right: calc(var(--spacing-xl) + 36px);
+}
+
+/* 跨整行的"应用集合"瓦片（常用/新增/全部功能）：高度自适应内容，避免空白 */
+.home-tile--full {
+  grid-column: 1 / -1;
+  min-height: 0;
+  height: auto;
+  overflow: visible;
 }
 
 .dashboard-card {
   min-width: 0; /* 允许 grid 子项收缩，防止溢出 */
+  height: 100%;
+  min-height: 0;
   background: white;
   border: 1px solid var(--color-border-lighter);
   border-radius: var(--radius-md);
@@ -1778,6 +2503,10 @@ async function navigateTo(feature) {
   background: linear-gradient(135deg, #0ea5e9 0%, #0284c7 100%);
 }
 
+.dashboard-card__icon--contacts {
+  background: linear-gradient(135deg, #6366f1 0%, #7c3aed 100%);
+}
+
 .dashboard-card__badge {
   flex-shrink: 0;
   padding: 2px 8px;
@@ -1802,10 +2531,176 @@ async function navigateTo(feature) {
 .dashboard-card__body {
   flex: 1;
   min-height: 0;
-  max-height: 360px;
+  max-height: none;
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
   overflow-x: hidden;
   overflow-y: auto;
+}
+
+/* 首页部门通讯录：工具条固定，列表区域单独滚动 */
+.dashboard-card__body.contacts-home-body {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-top: var(--spacing-sm);
+}
+
+.contacts-home-toolbar {
+  flex-shrink: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-sm);
+}
+
+.contacts-home-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 11rem;
+  padding: 4px 8px;
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-container, #fff);
+  color: var(--color-text-primary);
+}
+
+.contacts-home-search {
+  flex: 1 1 8rem;
+  min-width: 0;
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.contacts-home-input {
+  width: 100%;
+  padding: 4px 28px 4px 8px;
+  font-size: var(--font-size-sm);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-container, #fff);
+}
+
+.contacts-home-clear {
+  position: absolute;
+  right: 4px;
+  top: 50%;
+  transform: translateY(-50%);
+  border: none;
+  background: transparent;
+  font-size: 18px;
+  line-height: 1;
+  color: var(--color-text-tertiary);
+  cursor: pointer;
+  padding: 0 4px;
+}
+
+.contacts-home-clear:hover {
+  color: var(--color-text-secondary);
+}
+
+.contacts-home-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+
+.contacts-home-row {
+  padding: var(--spacing-md) 0;
+  border-bottom: 1px solid var(--color-border-lighter);
+  min-width: 0;
+}
+
+.contacts-home-row:last-child {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.contacts-home-row-main {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-bottom: var(--spacing-xs);
+  min-width: 0;
+}
+
+.contacts-home-name {
+  font-size: var(--font-size-sm);
+  font-weight: 600;
+  color: var(--color-text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-home-jb {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
+.contacts-home-jb.jb-manager { background: #fef3c7; color: #92400e; }
+.contacts-home-jb.jb-director { background: #dbeafe; color: #1e40af; }
+.contacts-home-jb.jb-leader { background: #dcfce7; color: #166534; }
+.contacts-home-jb.jb-default { background: #f1f5f9; color: #475569; }
+
+.contacts-home-row-sub {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  min-width: 0;
+}
+
+.contacts-home-dept {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.contacts-home-phones {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 55%;
+}
+
+.contacts-home-tel {
+  font-size: var(--font-size-xs);
+  color: var(--color-primary);
+  text-decoration: none;
+}
+
+.contacts-home-tel:hover {
+  text-decoration: underline;
+}
+
+.contacts-home-tel--land {
+  color: var(--color-text-secondary);
+  cursor: default;
+}
+
+.contacts-home-tel--land:hover {
+  text-decoration: none;
+}
+
+.contacts-home-no {
+  color: var(--color-text-tertiary);
 }
 
 /* 待办列表 */
@@ -1969,7 +2864,11 @@ async function navigateTo(feature) {
 }
 
 .dashboard-empty {
-  padding: var(--spacing-xxl);
+  min-height: 100%;
+  padding: var(--spacing-lg);
+  display: flex;
+  align-items: center;
+  justify-content: center;
   text-align: center;
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
@@ -1980,11 +2879,13 @@ async function navigateTo(feature) {
 }
 
 .ai-task-unconfigured {
+  max-height: 100%;
+  overflow-y: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: 10px;
-  padding: var(--spacing-xl) var(--spacing-xxl);
+  padding: var(--spacing-lg) var(--spacing-xl);
   text-align: center;
   background: linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%);
   border: 1px dashed #f59e0b;
@@ -2042,7 +2943,8 @@ async function navigateTo(feature) {
 .ai-task-unconfigured__img {
   max-width: 520px;
   width: 100%;
-  height: auto;
+  max-height: 120px;
+  object-fit: contain;
   border-radius: 8px;
   border: 1px solid #fcd34d;
   box-shadow: 0 2px 8px rgba(245, 158, 11, 0.15);
@@ -2052,14 +2954,15 @@ async function navigateTo(feature) {
   color: #92400e;
 }
 
-/* 快捷入口文件夹 */
+/* 全部功能：分组紧凑九宫格 */
 .shortcuts-container {
-  order: 50;
-  margin-top: var(--spacing-xl);
+  margin-top: 0;
 }
 
 .shortcuts-section {
   padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
   background: #fff;
   border: 1px solid var(--color-border-lighter);
   border-radius: var(--radius-md);
@@ -2072,219 +2975,13 @@ async function navigateTo(feature) {
   justify-content: space-between;
   gap: var(--spacing-md);
   margin-bottom: var(--spacing-md);
+  padding-right: 42px;
 }
 
 .shortcuts-count {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
   white-space: nowrap;
-}
-
-.shortcut-folders {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--spacing-md);
-}
-
-.shortcut-folder {
-  min-width: 0;
-  min-height: 74px;
-  padding: var(--spacing-md);
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  text-align: left;
-  background: #f8fafc;
-  border: 1px solid var(--color-border-lighter);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: transform var(--transition-base) var(--transition-ease), box-shadow var(--transition-base) var(--transition-ease), border-color var(--transition-base) var(--transition-ease);
-}
-
-.shortcut-folder:hover {
-  transform: translateY(-2px);
-  border-color: var(--color-primary-light);
-  box-shadow: var(--shadow-md);
-  background: #fff;
-}
-
-.shortcut-folder__icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 10px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  flex-shrink: 0;
-}
-
-.shortcut-folder__icon svg {
-  width: 23px;
-  height: 23px;
-}
-
-.shortcut-folder__body {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.shortcut-folder__body strong {
-  overflow: hidden;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.shortcut-folder__body small {
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-xs);
-}
-
-.shortcut-folder__arrow {
-  flex-shrink: 0;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-lg);
-}
-
-.shortcut-modal {
-  width: min(900px, calc(100vw - 32px));
-  max-height: min(760px, calc(100vh - 56px));
-  display: flex;
-  flex-direction: column;
-  background: #fff;
-  border-radius: 12px;
-  box-shadow: var(--shadow-elevated);
-  overflow: hidden;
-}
-
-.shortcut-modal__header {
-  flex-shrink: 0;
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: var(--spacing-lg);
-  padding: var(--spacing-lg) var(--spacing-xl);
-  border-bottom: 1px solid var(--color-border-lighter);
-}
-
-.shortcut-modal__header h2 {
-  margin: 0 0 4px;
-  color: var(--color-text-primary);
-  font-size: var(--font-size-xl);
-  font-weight: var(--font-weight-semibold);
-}
-
-.shortcut-modal__header p {
-  margin: 0;
-  color: var(--color-text-tertiary);
-  font-size: var(--font-size-sm);
-}
-
-.shortcut-modal__close {
-  width: 32px;
-  height: 32px;
-  border: none;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--color-text-tertiary);
-  font-size: 24px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.shortcut-modal__close:hover {
-  background: var(--color-bg-layout);
-  color: var(--color-text-primary);
-}
-
-.shortcut-modal__grid {
-  padding: var(--spacing-lg);
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-  gap: var(--spacing-md);
-  overflow-y: auto;
-}
-
-.shortcut-app {
-  position: relative;
-  min-width: 0;
-  min-height: 112px;
-  padding: var(--spacing-md);
-  display: flex;
-  align-items: flex-start;
-  gap: var(--spacing-md);
-  text-align: left;
-  background: #fff;
-  border: 1px solid var(--color-border-lighter);
-  border-radius: 8px;
-  cursor: pointer;
-  transition: transform var(--transition-base) var(--transition-ease), box-shadow var(--transition-base) var(--transition-ease), border-color var(--transition-base) var(--transition-ease);
-}
-
-.shortcut-app:hover {
-  transform: translateY(-2px);
-  border-color: var(--color-primary-light);
-  box-shadow: var(--shadow-md);
-}
-
-.shortcut-app__icon {
-  width: 40px;
-  height: 40px;
-  border-radius: 9px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #fff;
-  flex-shrink: 0;
-}
-
-.shortcut-app__icon svg {
-  width: 22px;
-  height: 22px;
-}
-
-.shortcut-app__text {
-  min-width: 0;
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.shortcut-app__text strong {
-  color: var(--color-text-primary);
-  font-size: var(--font-size-base);
-  font-weight: var(--font-weight-semibold);
-  line-height: 1.25;
-}
-
-.shortcut-app__text small {
-  display: -webkit-box;
-  overflow: hidden;
-  color: var(--color-text-secondary);
-  font-size: var(--font-size-xs);
-  line-height: 1.45;
-  -webkit-box-orient: vertical;
-  -webkit-line-clamp: 2;
-  line-clamp: 2;
-}
-
-.shortcut-app__tag {
-  position: absolute;
-  right: 10px;
-  bottom: 8px;
-  padding: 2px 7px;
-  color: var(--color-primary);
-  background: var(--color-primary-lightest);
-  border-radius: var(--radius-sm);
-  font-size: 11px;
-  font-weight: var(--font-weight-medium);
 }
 
 .section-title {
@@ -2298,37 +2995,38 @@ async function navigateTo(feature) {
 }
 
 /* 响应式 */
+@media (max-width: 1280px) {
+  .home-page {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 992px) {
   .header-content {
     flex-direction: column;
     align-items: flex-start;
     gap: var(--spacing-xl);
   }
-  
+
   .header-meta {
     width: 100%;
     justify-content: space-between;
-  }
-  
-  .dashboard-wrap {
-    grid-template-columns: 1fr;
-  }
-  
-  .shortcut-folders {
-    grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
   }
 }
 
 /* ==================== 常用功能 ==================== */
 .home-favorites-section {
-  order: 30;
-  margin-bottom: var(--spacing-lg);
+  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
 }
 .favorites-header {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   justify-content: space-between;
   margin-bottom: 12px;
+  padding-right: 42px;
 }
 .favorites-title {
   display: flex;
@@ -2365,51 +3063,118 @@ async function navigateTo(feature) {
 .favorites-edit-btn svg { width: 13px; height: 13px; }
 .favorites-edit-btn:hover { background: #f8fafc; border-color: #94a3b8; color: #334155; }
 
-.favorites-grid {
+/* ============= 手机透明文件夹样式 - 应用图标 ============= */
+.app-tiles {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
-  gap: 12px;
+  grid-template-columns: repeat(auto-fill, minmax(76px, 1fr));
+  gap: 16px 8px;
 }
-.fav-card {
+
+/* 常用/新增功能下方平铺，紧贴大段卡片，去掉额外滚动 */
+.app-tiles--favorites {
+  padding: 4px 2px 2px;
+}
+
+.app-tile {
+  position: relative;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  gap: 12px;
-  background: #fff;
-  border: 1px solid #e5e7eb;
-  border-radius: 10px;
-  padding: 14px 16px;
+  gap: 6px;
+  padding: 6px 4px;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
   cursor: pointer;
-  transition: all 0.15s;
-  text-align: left;
+  transition: background .15s ease, transform .15s ease;
+  text-align: center;
+  outline: none;
 }
-.fav-card:hover {
-  border-color: #bfdbfe;
-  box-shadow: 0 4px 12px rgba(59, 130, 246, 0.08);
-  transform: translateY(-1px);
+.app-tile:hover {
+  background: rgba(255, 255, 255, 0.7);
+  transform: translateY(-2px);
 }
-.fav-card__icon {
-  display: flex;
+.app-tile:focus-visible {
+  outline: 2px solid var(--color-primary);
+  outline-offset: 2px;
+}
+.app-tile__icon {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  min-width: 36px;
-  border-radius: 8px;
+  width: 52px;
+  height: 52px;
+  min-width: 52px;
+  border-radius: 14px;
+  color: #fff;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.10), inset 0 1px 0 rgba(255, 255, 255, 0.18);
 }
-.fav-card__icon svg {
-  width: 18px;
-  height: 18px;
+.app-tile__icon svg {
+  width: 26px;
+  height: 26px;
   color: #fff;
   stroke: #fff;
 }
-.fav-card__label {
-  font-size: 13px;
-  font-weight: 600;
-  color: #1e293b;
-  line-height: 1.3;
+.app-tile__label {
+  max-width: 100%;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+  font-size: 12px;
+  line-height: 1.2;
+  color: #1e293b;
+  font-weight: 500;
+}
+.app-tile__tag {
+  position: absolute;
+  top: 0;
+  right: 6px;
+  padding: 0 5px;
+  font-size: 10px;
+  font-weight: 700;
+  color: #fff;
+  background: #ef4444;
+  border-radius: 8px;
+  line-height: 14px;
+  box-shadow: 0 1px 2px rgba(239, 68, 68, 0.4);
+}
+
+/* 透明圆角文件夹容器（包裹一组应用图标） */
+.app-folder-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.app-folder {
+  padding: 14px 16px 10px;
+  border-radius: 18px;
+  background: rgba(241, 245, 249, 0.7);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  border: 1px solid rgba(255, 255, 255, 0.85);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.6), 0 2px 8px rgba(15, 23, 42, 0.04);
+}
+.app-folder__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #475569;
+  letter-spacing: 0.02em;
+}
+.app-folder__title-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.app-folder__title small {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 500;
+  color: #94a3b8;
 }
 
 /* 常用功能编辑弹窗 */
@@ -2525,50 +3290,253 @@ async function navigateTo(feature) {
 }
 .btn-fav-save:hover { opacity: 0.9; }
 
-@media (max-width: 768px) {
-  .favorites-grid { grid-template-columns: repeat(2, 1fr); }
-  .fav-editor-items { grid-template-columns: 1fr; }
+.home-layout-modal {
+  width: 620px;
+  max-width: 94vw;
+  max-height: 82vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #fff;
+  border-radius: 14px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.22);
 }
 
-.home-focus-grid {
-  order: 20;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: var(--spacing-xl);
-  align-items: stretch;
-  margin-bottom: var(--spacing-xxl);
+.home-layout-modal__header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 18px 22px 14px;
+  border-bottom: 1px solid #e5e7eb;
 }
 
-.home-focus-grid .home-wall-section,
-.home-focus-grid .home-ai-task-section {
+.home-layout-modal__header h2 {
+  margin: 0;
+  color: #1e293b;
+  font-size: 17px;
+  font-weight: 700;
+}
+
+.home-layout-modal__header p {
+  margin: 5px 0 0;
+  color: #64748b;
+  font-size: 13px;
+}
+
+.home-layout-modal__close {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  cursor: pointer;
+  font-size: 24px;
+  line-height: 1;
+  padding: 0 4px;
+}
+
+.home-layout-modal__close:hover {
+  color: #ef4444;
+}
+
+.home-layout-modal__body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 20px;
+}
+
+.home-layout-item {
+  min-height: 64px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  background: #fff;
+  transition: border-color .15s, background .15s;
+}
+
+.home-layout-item + .home-layout-item {
+  margin-top: 8px;
+}
+
+.home-layout-item:hover {
+  border-color: #bfdbfe;
+  background: #f8fafc;
+}
+
+.home-layout-item.disabled {
+  background: #f8fafc;
+  opacity: 0.72;
+}
+
+.home-layout-item__toggle {
+  position: relative;
+  width: 38px;
+  height: 22px;
+  flex-shrink: 0;
+  cursor: pointer;
+}
+
+.home-layout-item__toggle input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.home-layout-item__toggle span {
+  position: absolute;
+  inset: 0;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background .15s;
+}
+
+.home-layout-item__toggle span::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.25);
+  transition: transform .15s;
+}
+
+.home-layout-item__toggle input:checked + span {
+  background: var(--color-primary, #3b82f6);
+}
+
+.home-layout-item__toggle input:checked + span::after {
+  transform: translateX(16px);
+}
+
+.home-layout-item__toggle input:disabled + span {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.home-layout-item__main {
+  flex: 1;
   min-width: 0;
-  margin-bottom: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
 }
 
-.home-focus-grid .home-wall-section {
-  order: 1;
+.home-layout-item__main strong {
+  color: #1e293b;
+  font-size: 14px;
+  font-weight: 700;
 }
 
-.home-focus-grid .home-ai-task-section {
-  order: 2;
+.home-layout-item__main small {
+  color: #64748b;
+  font-size: 12px;
+  line-height: 1.45;
 }
 
-.home-focus-grid .dashboard-card {
-  height: 100%;
+.home-layout-item__badge {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: #f1f5f9;
+  color: #64748b;
+  font-size: 12px;
 }
 
-.home-focus-grid .wall-preview-grid {
-  width: 100%;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+.home-layout-item__actions {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.home-layout-item__actions button {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #dbe3ef;
+  border-radius: 8px;
+  background: #fff;
+  color: #475569;
+  cursor: pointer;
+}
+
+.home-layout-item__actions button:hover:not(:disabled) {
+  border-color: var(--color-primary, #3b82f6);
+  color: var(--color-primary, #3b82f6);
+}
+
+.home-layout-item__actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.home-layout-item__actions svg {
+  width: 16px;
+  height: 16px;
+}
+
+.home-layout-modal__footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 20px;
+  border-top: 1px solid #e5e7eb;
+  background: #f8fafc;
+}
+
+.home-layout-reset {
+  border: none;
+  background: transparent;
+  color: var(--color-primary, #3b82f6);
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 0;
+}
+
+.home-layout-reset:hover {
+  text-decoration: underline;
+}
+
+.home-layout-modal__btns {
+  display: flex;
+  gap: 8px;
+}
+
+@media (max-width: 768px) {
+  .app-tiles { grid-template-columns: repeat(auto-fill, minmax(64px, 1fr)); }
+  .fav-editor-items { grid-template-columns: 1fr; }
+  .home-layout-item {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+  .home-layout-item__actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .home-layout-modal__footer {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .home-layout-modal__btns {
+    justify-content: flex-end;
+  }
 }
 
 .home-ai-task-section {
-  margin-bottom: var(--spacing-xxl);
+  margin-bottom: 0;
 }
 
 .ai-task-card {
-  background: linear-gradient(135deg, #eef2ff 0%, #f8fafc 100%);
-  border-color: #dbeafe;
+  background: #fff;
+  border-color: var(--color-border-lighter);
 }
 
 .dashboard-card__icon--ai {
@@ -2679,11 +3647,15 @@ async function navigateTo(feature) {
 }
 
 .ai-task-body {
+  flex: 1;
+  min-height: 0;
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+  overflow: hidden;
 }
 
 .ai-task-marquee {
-  max-height: 300px;
+  height: 100%;
+  max-height: none;
   overflow-x: hidden;
   overflow-y: auto;
   overscroll-behavior: contain;
@@ -2916,12 +3888,13 @@ async function navigateTo(feature) {
 
 /* ========== 吐槽墙首页预览 ========== */
 .home-wall-section {
-  margin-bottom: var(--spacing-xxl);
+  margin-bottom: 0;
 }
 
+/* 吐槽墙瓦片：与其他卡片一致的纯白卡片样式 */
 .wall-preview-card {
-  background: linear-gradient(135deg, #fef3f2 0%, #fdf2f8 50%, #f5f3ff 100%);
-  border-color: #fecdd3;
+  background: #fff;
+  border-color: var(--color-border-lighter);
 }
 
 .dashboard-card__icon--wall {
@@ -2941,9 +3914,9 @@ async function navigateTo(feature) {
 .wall-preview-refresh {
   width: 32px;
   height: 30px;
-  border: 1px solid #fda4af;
+  border: 1px solid var(--color-border-base);
   background: #fff;
-  color: #be123c;
+  color: var(--color-text-secondary);
   border-radius: var(--radius-sm);
   cursor: pointer;
   display: inline-flex;
@@ -2958,15 +3931,16 @@ async function navigateTo(feature) {
 }
 
 .wall-preview-refresh:hover {
-  background: #fff1f2;
+  background: var(--color-bg-layout);
+  color: var(--color-text-primary);
 }
 
 .wall-preview-viewall {
   height: 30px;
   padding: 0 12px;
-  border: 1px solid #fda4af;
+  border: 1px solid var(--color-primary);
   background: #fff;
-  color: #be123c;
+  color: var(--color-primary);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
   font-weight: 600;
@@ -2977,37 +3951,51 @@ async function navigateTo(feature) {
 }
 
 .wall-preview-viewall:hover {
-  background: #fff1f2;
+  background: var(--color-primary);
+  color: #fff;
 }
 
 .wall-preview-body {
+  flex: 1;
+  min-height: 0;
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
+  /* 不滚动，由 .wall-scale-content 等比缩放适配 */
+  overflow: hidden;
+  position: relative;
 }
 
+/* 等比缩放容器：transform-origin 顶部居中，避免 scale<1 时整体偏移 */
+.wall-scale-content {
+  width: 100%;
+  transform-origin: top center;
+  transition: transform .2s ease;
+}
+
+/* 多列 column masonry：每张卡片宽度均匀、高度由内容决定，整体错落自然 */
 .wall-preview-grid {
-  width: min(100%, 804px);
-  margin: 0 auto;
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 12px;
+  display: block;
+  /* 固定 3 列，列间距小一些以适配吐槽墙瓦片宽度 */
+  column-count: 3;
+  column-gap: 8px;
 }
 
 .wall-mini-card {
   position: relative;
-  padding: 14px 14px 10px;
+  display: inline-block;
+  width: 100%;
+  margin-bottom: 8px;
+  padding: 10px 10px 8px;
   border-radius: 10px;
   color: #fff;
   cursor: pointer;
-  transform: rotate(calc(var(--rot, 0deg)));
+  transform: rotate(var(--rot, 0deg));
   transition: transform .2s, box-shadow .2s;
-  min-height: 100px;
-  display: flex;
-  flex-direction: column;
+  break-inside: avoid;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
 }
 
 .wall-mini-card:hover {
-  transform: rotate(0deg) scale(1.04);
+  transform: rotate(0deg) scale(1.02);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   z-index: 1;
 }
@@ -3030,14 +4018,33 @@ async function navigateTo(feature) {
 
 .wall-mini-body {
   margin: 0;
-  font-size: 13px;
-  line-height: 1.5;
-  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.45;
+  word-break: break-word;
+  white-space: pre-wrap;
+  /* 顶部留出徽章空间，避免文字与「未处理/已解决」徽章重叠 */
+  padding-top: 14px;
+  /* 默认折叠到 6 行，超出显示省略号；点击卡片跳转吐槽墙详情查看完整内容 */
   display: -webkit-box;
-  -webkit-line-clamp: 3;
+  -webkit-line-clamp: 6;
   -webkit-box-orient: vertical;
-  flex: 1;
-  word-break: break-all;
+  overflow: hidden;
+  position: relative;
+}
+
+/* 折叠提示：右下角"更多…"标签，提示完整内容请进吐槽墙查看 */
+.wall-mini-card.is-truncated .wall-mini-body::after {
+  content: '更多…';
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  padding: 0 6px 0 18px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #fff;
+  background: linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.22) 40%, rgba(0,0,0,0.22) 100%);
+  border-radius: 4px;
+  pointer-events: none;
 }
 
 .wall-mini-reply {
@@ -3143,15 +4150,37 @@ async function navigateTo(feature) {
 }
 
 /* ========== 重要信息审阅 ========== */
-/* 重要信息审阅 - 滚动播放窗口 */
 .briefing-section {
-  order: 60;
-  margin-bottom: var(--spacing-xxl);
+  margin-bottom: 0;
   padding: 0;
 }
 
 .dashboard-card--briefing {
   border-left: 3px solid #667eea;
+  height: 100%;
+  min-height: 0;
+}
+
+/* 窄瓦片：标题独占一行，筛选/天数/查看全部换到下一行，避免标题被挤成几像素 */
+.dashboard-card--briefing .dashboard-card__header {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: var(--spacing-md) var(--spacing-lg);
+}
+
+.dashboard-card--briefing .dashboard-card__title {
+  width: 100%;
+  flex-shrink: 0;
+  min-width: 0;
+}
+
+.dashboard-card--briefing .dashboard-card__title-text {
+  overflow: visible;
+  text-overflow: clip;
+  white-space: nowrap;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .dashboard-card__icon--briefing {
@@ -3161,9 +4190,10 @@ async function navigateTo(feature) {
 .briefing-header-right {
   display: flex;
   align-items: center;
-  gap: var(--spacing-sm);
+  gap: 8px;
   flex-wrap: wrap;
-  justify-content: flex-end;
+  justify-content: flex-start;
+  width: 100%;
 }
 
 .briefing-filter-tabs {
@@ -3171,6 +4201,13 @@ async function navigateTo(feature) {
   align-items: center;
   gap: 6px;
   flex-wrap: wrap;
+  flex: 1 1 100%;
+  min-width: 0;
+}
+
+.dashboard-card--briefing .briefing-filter-tab {
+  padding: 2px 8px;
+  font-size: 11px;
 }
 
 .briefing-filter-tab {
@@ -3219,7 +4256,9 @@ async function navigateTo(feature) {
 }
 
 .briefing-marquee {
-  height: 160px;
+  flex: 1;
+  height: auto;
+  min-height: 0;
   overflow: hidden;
   position: relative;
   padding: var(--spacing-sm) var(--spacing-xl);
@@ -3445,51 +4484,19 @@ async function navigateTo(feature) {
     font-size: var(--font-size-xxl);
   }
   
-  .dashboard-section {
-    padding: 0 var(--spacing-md);
+  .home-page {
+    grid-template-columns: 1fr;
+    --home-tile-h: clamp(280px, 60vh, 420px);
   }
-  
+
   .dashboard-card__header,
   .dashboard-card__body {
     padding-left: var(--spacing-lg);
     padding-right: var(--spacing-lg);
   }
-  
-  .shortcuts-container {
-    padding: 0 var(--spacing-md);
-  }
 
   .shortcuts-section {
     padding: var(--spacing-md);
-  }
-
-  .shortcut-folders,
-  .shortcut-modal__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .shortcut-modal {
-    width: calc(100vw - 24px);
-    max-height: calc(100vh - 40px);
-  }
-
-  .briefing-section {
-    padding: 0 var(--spacing-md);
-  }
-
-  .home-focus-grid {
-    grid-template-columns: 1fr;
-    gap: var(--spacing-lg);
-  }
-
-  .home-favorites-section,
-  .home-ai-task-section,
-  .home-wall-section {
-    padding: 0 var(--spacing-md);
-  }
-
-  .wall-preview-grid {
-    grid-template-columns: repeat(2, 1fr);
   }
 
   .ai-task-card__header {

@@ -9,7 +9,7 @@ from datetime import datetime, date
 import calendar
 from database import db
 from collections import defaultdict
-from routers.approvers import _get_user_info, _jb_match
+from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
 from routers.db_manager import _get_admin1
 from utils.helpers import format_datetime_plain
 import logging
@@ -90,7 +90,7 @@ async def get_overtime_pay_permission(name: str = Query(..., description="当前
     """
     其他绩效激励统计页权限：全员可访问，按 yggl.jb 与 webconfig.admin2 返回可见范围。
     返回 { success, canView: true, scope, lsys? }
-    - scope=all: 部长/副部长、人事管理员(admin2)，可见全部门；
+    - scope=all: 部长/副部长、综合技术室主任/副主任、人事管理员(admin2)，可见全部门；
     - scope=lsys: 主任/副主任，可见本室(lsys)全部员工；
     - scope=self: 其他员工，仅可见本人。
     """
@@ -98,13 +98,15 @@ async def get_overtime_pay_permission(name: str = Query(..., description="当前
     user = _get_user_info(name_stripped)
     lsys = (user.get("lsys") or "").strip() if user else ""
 
-    # 系统管理员(admin1)、部长/副部长、人事管理员(admin2) -> 全部门
+    # 系统管理员(admin1)、部长/副部长、综合技术室主任/副主任、人事管理员(admin2) -> 全部门
     admin1 = _get_admin1()
     if admin1 and name_stripped == admin1:
         return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
     if user:
         jb = (user.get("jb") or "").strip()
         if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+            return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
+        if is_zonghe_tech_director(user):
             return {"success": True, "canView": True, "scope": "all", "lsys": lsys}
     try:
         wc = db.execute_query("SELECT admin2 FROM webconfig WHERE id = 1 LIMIT 1")

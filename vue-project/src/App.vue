@@ -321,7 +321,7 @@
                     <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
                   </svg>
                 </button>
-                <div v-show="settingsPopoverOpen" class="settings-popover" role="dialog" aria-label="系统配色设置" @click.stop>
+                <div v-show="settingsPopoverOpen" class="settings-popover" role="dialog" aria-label="系统设置" @click.stop>
                   <div class="settings-popover__header">
                     <svg class="settings-popover__icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                       <circle cx="12" cy="12" r="3" />
@@ -348,6 +348,21 @@
                       </span>
                     </button>
                   </div>
+                  <div v-if="!isOtherDeptUser" class="settings-popover__divider"></div>
+                  <button v-if="!isOtherDeptUser" type="button" class="settings-action-card" @click="openHomeLayoutSettings">
+                    <span class="settings-action-card__icon">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                      </svg>
+                    </span>
+                    <span class="settings-action-card__body">
+                      <strong>首页布局</strong>
+                      <small>调整模块顺序和显示状态</small>
+                    </span>
+                  </button>
                 </div>
               </div>
               <div class="user-info" ref="userInfoRef" @click="toggleUserMenu">
@@ -751,6 +766,15 @@ function applySkinStyle(styleKey) {
 
 function toggleSettingsPopover() {
   settingsPopoverOpen.value = !settingsPopoverOpen.value
+}
+
+async function openHomeLayoutSettings() {
+  settingsPopoverOpen.value = false
+  if (route.path === '/') {
+    window.dispatchEvent(new CustomEvent('open-home-layout-settings'))
+    return
+  }
+  await router.push({ path: '/', query: { homeLayoutSettings: String(Date.now()) } })
 }
 
 async function changeSkinStyle(styleKey) {
@@ -1418,6 +1442,67 @@ const displayUserName = computed(() => {
   align-items: center;
   justify-content: center;
   flex-shrink: 0;
+}
+
+.settings-popover__divider {
+  height: 1px;
+  margin: 10px 10px 8px;
+  background: var(--color-border-lighter);
+}
+
+.settings-action-card {
+  width: calc(100% - 20px);
+  margin: 0 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--color-text-primary);
+  cursor: pointer;
+  text-align: left;
+  transition: background .2s ease;
+}
+
+.settings-action-card:hover {
+  background: var(--color-primary-lightest);
+}
+
+.settings-action-card__icon {
+  width: 32px;
+  height: 32px;
+  border-radius: 8px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  color: var(--color-primary);
+  background: var(--color-primary-lightest);
+}
+
+.settings-action-card__icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.settings-action-card__body {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-action-card__body strong {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.settings-action-card__body small {
+  font-size: 12px;
+  color: var(--color-text-tertiary);
+  white-space: nowrap;
 }
 
 .todo-popover {
