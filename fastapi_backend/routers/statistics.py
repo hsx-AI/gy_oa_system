@@ -14,13 +14,21 @@ from io import BytesIO
 from urllib.parse import quote
 from decimal import Decimal, ROUND_HALF_UP
 
-# 「部办」：请假/加班/公出等科室汇总的全员口径仍排除；工作强度等单独 SQL 可包含
+# 「部办」：多数科室汇总的全员口径仍排除；绩效/满勤口径纳入部办非经理人员
 LEADER_EXCLUDE_LSYS = "部办"
 # 不参与任何考勤/统计的虚拟科室
 OTHER_DEPT_NAMES = ("其他部门员工", "其他部门成员")
 # SQL 片段：用于 WHERE 条件中排除虚拟科室（拼接在已有 != 部办 之后）
 _EXCL_OTHER = "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
 _EXCL_OTHER_YGGL = "AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') "
+_EXCL_BUBAN_MANAGERS = (
+    "AND NOT (TRIM(lsys) = '部办' AND "
+    "TRIM(COALESCE(jb,'')) IN ('经理','副经理')) "
+)
+_EXCL_BUBAN_MANAGERS_YGGL = (
+    "AND NOT (TRIM(yggl.lsys) = '部办' AND "
+    "TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理')) "
+)
 # 工作强度：公出仅计境内/境外；gclx 空与考勤模块一致视同「境内公出」
 _WI_TRIP_SQL_EXCLUDE_CITY = (
     "AND COALESCE(NULLIF(TRIM(gcsqb.gclx), ''), '境内公出') != '市内公出'"
@@ -1349,10 +1357,22 @@ async def get_dept_overtime_pay_by_month(
         else:
             all_staff = not (lsys and lsys.strip())
             if all_staff:
-                join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND TRIM(yggl.lsys) != %s AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(yggl.zaizhi,0)=0)"
-                join_param = (LEADER_EXCLUDE_LSYS,)
+                join_cond = (
+                    "INNER JOIN yggl ON jiaban.xm = yggl.name "
+                    "AND RIGHT(TRIM(yggl.name), 1) != '1' "
+                    "AND RIGHT(TRIM(yggl.lsys), 1) != '1' "
+                    f"{_EXCL_OTHER_YGGL}{_EXCL_BUBAN_MANAGERS_YGGL}"
+                    "AND (COALESCE(yggl.zaizhi,0)=0)"
+                )
+                join_param = ()
             else:
-                join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
+                join_cond = (
+                    "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s "
+                    "AND RIGHT(TRIM(yggl.name), 1) != '1' "
+                    "AND RIGHT(TRIM(yggl.lsys), 1) != '1' "
+                    f"{_EXCL_BUBAN_MANAGERS_YGGL}"
+                    "AND (COALESCE(yggl.zaizhi,0)=0)"
+                )
                 join_param = (lsys,)
 
         # 拉取原始加班记录（逐条），后续在 Python 中按人+日期聚合并应用激励规则
@@ -1431,7 +1451,13 @@ async def get_dept_overtime_pay_by_employee(
         else:
             if not lsys or not lsys.strip():
                 return {"success": True, "zhibanfei": zhibanfei, "list": []}
-            join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
+            join_cond = (
+                "INNER JOIN yggl ON jiaban.xm = yggl.name AND yggl.lsys = %s "
+                "AND RIGHT(TRIM(yggl.name), 1) != '1' "
+                "AND RIGHT(TRIM(yggl.lsys), 1) != '1' "
+                f"{_EXCL_BUBAN_MANAGERS_YGGL}"
+                "AND (COALESCE(yggl.zaizhi,0)=0)"
+            )
             params = (lsys.strip(), f"{year}%", year) + month_params
 
         query = f"""
@@ -1499,6 +1525,7 @@ async def get_overtime_pay_export(
               AND RIGHT(TRIM(yggl.name), 1) != '1'
               AND RIGHT(TRIM(yggl.lsys), 1) != '1'
               AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
               AND (COALESCE(yggl.zaizhi,0)=0)
         """
         month_key = f"{year}-{month:02d}"
@@ -1507,11 +1534,11 @@ async def get_overtime_pay_export(
         holiday_map = _load_holiday_festival_map(year)
         _, per_employee = _aggregate_overtime_with_incentive(rows, holiday_map, zhibanfei)
 
-        # 先准备全员名单（排除部办），再按 per_employee 中的 pay 填值，保证人全
+        # 先准备全员名单（含部办非经理人员），再按 per_employee 中的 pay 填值，保证人全
         yggl_rows = db.execute_query(
             "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
-            "AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
-            (LEADER_EXCLUDE_LSYS,),
+            f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+            "AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
         )
 
         list_all = []
@@ -1523,7 +1550,7 @@ async def get_overtime_pay_export(
             pay = round(agg["pay"], 2)
             list_all.append({"name": emp_name, "pay": pay})
 
-        # 科室列表（与 lsys-list 一致，排除部办）
+        # 科室列表（与 lsys-list 一致，部办仅含非经理人员）
         lsys_list = sorted({(r.get("lsys") or "").strip() for r in (yggl_rows or []) if r.get("lsys")})
 
         # 各科室：从全员名单中按 lsys 划分，同样用 per_employee 中的 pay
@@ -1862,14 +1889,19 @@ async def get_leader_full_attendance(
 
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (lsys, LEADER_EXCLUDE_LSYS)
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
+                (lsys,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (LEADER_EXCLUDE_LSYS,)
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
 
@@ -1905,7 +1937,7 @@ async def get_leader_full_attendance(
             for r in rows:
                 n = (r.get("name") or "").strip()
                 d = (r.get("lsys") or "").strip()
-                if not n or d == LEADER_EXCLUDE_LSYS:
+                if not n:
                     continue
                 dept_names.setdefault(d, []).append(n)
             by_dept = []
@@ -1946,14 +1978,19 @@ async def get_leader_full_attendance_export(
 
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (lsys, LEADER_EXCLUDE_LSYS)
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
+                (lsys,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (LEADER_EXCLUDE_LSYS,)
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
 
@@ -1988,7 +2025,7 @@ async def get_leader_full_attendance_export(
             for r in rows:
                 n = (r.get("name") or "").strip()
                 d = (r.get("lsys") or "").strip()
-                if not n or d == LEADER_EXCLUDE_LSYS:
+                if not n:
                     continue
                 dept_names.setdefault(d, []).append(n)
             for d, nlist in sorted(dept_names.items()):
@@ -2031,14 +2068,19 @@ async def get_leader_full_attendance_year(
         year_prefix = f"{year}-"
         if lsys:
             rows = db.execute_query(
-                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (lsys, LEADER_EXCLUDE_LSYS)
+                "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
+                (lsys,)
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
         else:
             rows = db.execute_query(
-                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                (LEADER_EXCLUDE_LSYS,)
+                "SELECT name, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
+                "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                "AND (COALESCE(zaizhi,0)=0)",
             )
             names = [r["name"].strip() for r in rows if r.get("name")]
 
@@ -2072,7 +2114,7 @@ async def get_leader_full_attendance_year(
             for r in rows:
                 n = (r.get("name") or "").strip()
                 d = (r.get("lsys") or "").strip()
-                if not n or d == LEADER_EXCLUDE_LSYS:
+                if not n:
                     continue
                 dept_names.setdefault(d, []).append(n)
             by_dept = []
@@ -2111,14 +2153,19 @@ async def get_leader_full_attendance_by_month(
             month_str = f"{year}-{month:02d}"
             if lsys:
                 rows = db.execute_query(
-                    "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                    (lsys, LEADER_EXCLUDE_LSYS)
+                    "SELECT name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' "
+                    "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                    f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                    "AND (COALESCE(zaizhi,0)=0)",
+                    (lsys,)
                 )
                 names = [r["name"].strip() for r in rows if r.get("name")]
             else:
                 rows = db.execute_query(
-                    "SELECT name FROM yggl WHERE name IS NOT NULL AND name != '' AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)",
-                    (LEADER_EXCLUDE_LSYS,)
+                    "SELECT name FROM yggl WHERE name IS NOT NULL AND name != '' "
+                    "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+                    f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+                    "AND (COALESCE(zaizhi,0)=0)",
                 )
                 names = [r["name"].strip() for r in rows if r.get("name")]
 
