@@ -850,9 +850,48 @@ async def extend_business_trip(item_id: str, req: ExtendTripRequest):
     return {"success": True, "message": f"已延长公出并提交部领导({dept_leader})审批"}
 
 
+def _extendable_scope_where(is_admin: bool, viewer_lsys: str, year: Optional[int]) -> tuple:
+    """
+    可延长公出：时间/年度条件 + 本科室范围（非管理员）。
+    与某公历年度有交集：预计出发～预计返回（缺省字段用 COALESCE 补齐，支持跨年长公出）。
+    未指定 year 时：列出近 15 年内有预计时间的记录（替代原先「仅约一年」限制）。
+    """
+    trip_start = "COALESCE(g.yjcfsj, g.wpsj, g.gcsj, g.yjfhsj)"
+    trip_end = "COALESCE(g.yjfhsj, g.yjcfsj, g.wpsj, g.gcsj)"
+    parts = [
+        "g.bldzt = 2",
+        "g.szrzt = 2",
+        "COALESCE(g.fhdj_status, 0) = 0",
+    ]
+    params: list = []
+    if year is not None:
+        ys = f"{int(year)}-01-01 00:00:00"
+        ye = f"{int(year)}-12-31 23:59:59"
+        parts.append(f"({trip_start}) <= %s")
+        parts.append(f"({trip_end}) >= %s")
+        params.extend([ye, ys])
+    else:
+        min_d = datetime(datetime.now().year - 15, 1, 1).strftime("%Y-%m-%d %H:%M:%S")
+        parts.append(f"({trip_start}) >= %s")
+        params.append(min_d)
+
+    inner = " AND ".join(parts)
+    if is_admin:
+        return inner, tuple(params)
+    return (
+        inner
+        + " AND g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0)",
+        tuple(params + [viewer_lsys]),
+    )
+
+
 @router.get("/extendable-list")
-async def get_extendable_business_trips(name: str = Query(..., description="当前用户姓名")):
-    """获取当前用户科室内可延长的公出记录（已通过且未返回登记）"""
+async def get_extendable_business_trips(
+    name: str = Query(..., description="当前用户姓名"),
+    year: Optional[int] = Query(None, description="公历年度：列出与该年有交集的公出；不传则近15年"),
+    person: Optional[str] = Query(None, description="公出人姓名（精确匹配，可选）"),
+):
+    """获取当前用户科室内可延长的公出记录（已通过且未返回登记）；支持按年度、公出人筛选（含跨年长公出）"""
     viewer = (name or "").strip()
     if not viewer:
         raise HTTPException(status_code=400, detail="姓名不能为空")
@@ -869,25 +908,34 @@ async def get_extendable_business_trips(name: str = Query(..., description="当�
     if not can_extend:
         raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可查看")
 
-    one_year_ago = datetime.now().replace(year=datetime.now().year - 1).strftime("%Y-%m-%d %H:%M:%S")
-    base = f"g.bldzt = 2 AND g.szrzt = 2 AND COALESCE(g.fhdj_status, 0) = 0 AND COALESCE(g.yjcfsj, g.yjfhsj) >= %s"
+    y = int(year) if year is not None else None
+    if y is not None and (y < 1990 or y > 2100):
+        raise HTTPException(status_code=400, detail="年度参数不合法")
 
-    if is_admin:
-        where = base
-        params: tuple = (one_year_ago,)
-    else:
-        where = (
-            f"{base} "
-            "AND g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0)"
-        )
-        params = (one_year_ago, viewer_lsys)
+    scope_where, scope_params = _extendable_scope_where(is_admin, viewer_lsys, y)
+    person_clean = (person or "").strip()
+
+    # 公出人下拉：与列表相同时间/科室条件，不按 person 再缩窄
+    sql_people = f"""
+        SELECT DISTINCT TRIM(g.gcr) AS nm FROM gcsqb g
+        WHERE {scope_where} AND TRIM(g.gcr) <> ''
+        ORDER BY nm
+    """
+    people_rows = db.execute_query(sql_people, scope_params) or []
+    people_list = [(r.get("nm") or "").strip() for r in people_rows if (r.get("nm") or "").strip()]
+
+    list_where = scope_where
+    list_params = list(scope_params)
+    if person_clean:
+        list_where = scope_where + " AND TRIM(g.gcr) = %s"
+        list_params.append(person_clean)
 
     sql = f"""
         SELECT g.id, g.gcr, g.gcdd, g.yjcfsj, g.yjfhsj, g.gclx, g.xmmc, g.gcrw, g.bld
-        FROM gcsqb g WHERE {where}
-        ORDER BY g.yjcfsj DESC
+        FROM gcsqb g WHERE {list_where}
+        ORDER BY COALESCE(g.yjcfsj, g.wpsj, g.yjfhsj) DESC
     """
-    rows = db.execute_query(sql, params) or []
+    rows = db.execute_query(sql, tuple(list_params)) or []
     result = []
     for row in rows:
         result.append({
@@ -900,7 +948,7 @@ async def get_extendable_business_trips(name: str = Query(..., description="当�
             "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
             "deptLeader": (row.get("bld") or "").strip(),
         })
-    return {"success": True, "list": result}
+    return {"success": True, "list": result, "people": people_list}
 
 
 @router.post("/{item_id}/resubmit")

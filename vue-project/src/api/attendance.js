@@ -298,7 +298,7 @@ export function updateBusinessTripReturnTime(id, data) {
   })
 }
 
-/** 获取可延长的公出记录（本科室已通过且未返回登记） */
+/** 获取可延长的公出记录；params: name, year?, person? */
 export function getExtendableBusinessTrips(params) {
   return request({ url: '/business-trip/extendable-list', method: 'get', params })
 }

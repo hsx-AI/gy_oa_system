@@ -399,9 +399,29 @@
         <h2>公出延长</h2>
         <p class="modal-hint">修改预计返回时间，将重新提交部领导审批</p>
         <form @submit.prevent="submitExtend" class="application-form">
+          <div class="form-row extend-filters">
+            <div class="form-group half">
+              <label>年度</label>
+              <select v-model="extendFilterYear" :disabled="extendListLoading" @change="onExtendYearChange">
+                <option value="">全部（近15年）</option>
+                <option v-for="y in extendYearOptions" :key="'ex-y-' + y" :value="String(y)">{{ y }} 年</option>
+              </select>
+            </div>
+            <div class="form-group half">
+              <label>公出人</label>
+              <select v-model="extendFilterPerson" :disabled="extendListLoading" @change="onExtendPersonChange">
+                <option value="">全部</option>
+                <option v-for="p in extendPeopleOptions" :key="'ex-p-' + p" :value="p">{{ p }}</option>
+              </select>
+            </div>
+          </div>
+          <p v-if="extendListLoading" class="modal-hint">加载可延长列表…</p>
+          <p v-else-if="!extendableList.length" class="modal-hint extend-empty-hint">
+            当前筛选下暂无可延长记录（需已通过审批且未返回登记）。可切换「全部（近15年）」、其他年度或公出人后查看。
+          </p>
           <div class="form-group">
             <label>选择公出记录</label>
-            <select v-model="extendForm.selectedId" @change="onExtendSelect">
+            <select v-model="extendForm.selectedId" :disabled="extendListLoading" @change="onExtendSelect">
               <option value="">请选择</option>
               <option v-for="r in extendableList" :key="r.id" :value="r.id">
                 {{ r.person }} · {{ r.location }} · {{ r.expectedStartTime }}～{{ r.expectedReturnTime }}
@@ -679,6 +699,14 @@ const canApprove = ref(false)
 const canExtend = ref(false)
 const showExtendModal = ref(false)
 const extendableList = ref([])
+const extendListLoading = ref(false)
+const extendFilterYear = ref(String(new Date().getFullYear()))
+const extendFilterPerson = ref('')
+const extendPeopleOptions = ref([])
+const extendYearOptions = computed(() => {
+  const y = new Date().getFullYear()
+  return Array.from({ length: 15 }, (_, i) => y - i)
+})
 const extendDeptLeaders = ref([])
 const extendLoadingApprovers = ref(false)
 const extendSubmitting = ref(false)
@@ -1224,28 +1252,65 @@ const submitReturn = async () => {
 }
 
 // ==================== 公出延长 ====================
-const openExtendModal = async () => {
+async function fetchExtendableList() {
   const name = (userInfo.name || '').trim()
   if (!name) return
+  extendListLoading.value = true
   try {
-    const res = await getExtendableBusinessTrips({ name })
+    const params = { name }
+    if (extendFilterYear.value !== '' && extendFilterYear.value != null) {
+      const yy = parseInt(String(extendFilterYear.value), 10)
+      if (!Number.isNaN(yy)) params.year = yy
+    }
+    if ((extendFilterPerson.value || '').trim()) params.person = extendFilterPerson.value.trim()
+    const res = await getExtendableBusinessTrips(params)
     extendableList.value = (res && res.list) || []
+    extendPeopleOptions.value = (res && res.people) || []
   } catch (e) {
     const detail = e.response?.data?.detail || e.message
     alert(detail || '获取可延长列表失败')
-    return
+    extendableList.value = []
+    extendPeopleOptions.value = []
+  } finally {
+    extendListLoading.value = false
   }
-  if (!extendableList.value.length) {
-    alert('暂无可延长的公出记录（需已通过审批且未返回登记）')
-    return
-  }
+}
+
+const onExtendYearChange = async () => {
+  extendFilterPerson.value = ''
   extendForm.selectedId = ''
   extendForm.oldReturnTime = ''
   extendForm.newReturnTime = ''
   extendForm.deptLeader = ''
   extendForm.remark = ''
   extendDeptLeaders.value = []
+  await fetchExtendableList()
+}
+
+const onExtendPersonChange = async () => {
+  extendForm.selectedId = ''
+  extendForm.oldReturnTime = ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  extendForm.remark = ''
+  extendDeptLeaders.value = []
+  await fetchExtendableList()
+}
+
+const openExtendModal = async () => {
+  const name = (userInfo.name || '').trim()
+  if (!name) return
+  extendFilterYear.value = String(new Date().getFullYear())
+  extendFilterPerson.value = ''
+  extendForm.selectedId = ''
+  extendForm.oldReturnTime = ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  extendForm.remark = ''
+  extendDeptLeaders.value = []
+  extendPeopleOptions.value = []
   showExtendModal.value = true
+  await fetchExtendableList()
 }
 
 const onExtendSelect = async () => {
@@ -1828,6 +1893,14 @@ button:hover {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   margin: 4px 0 0;
+}
+
+.extend-filters {
+  margin-top: var(--spacing-sm);
+}
+
+.extend-empty-hint {
+  color: var(--color-warning, #b45309);
 }
 
 .readonly-input {
