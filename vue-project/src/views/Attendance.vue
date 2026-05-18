@@ -358,7 +358,28 @@
             <div class="form-group full">
               <label>公出地点</label>
               <input v-if="btIsCityTrip" id="bt-location" type="text" :value="'市内'" readonly class="readonly-input">
-              <input v-else id="bt-location" type="text" v-model="btForm.location" name="location" autocomplete="street-address" placeholder="请输入公出地点">
+              <div v-else class="multi-location-wrap">
+                <div
+                  v-for="(loc, li) in btForm.locations"
+                  :key="'bt-loc-' + li"
+                  class="multi-location-item"
+                >
+                  <span v-if="btForm.locations.length > 1" class="multi-location-idx">{{ li + 1 }}</span>
+                  <LocationPicker
+                    :model-value="btForm.locations[li]"
+                    :mode="btTripScope === '境外公出' ? 'abroad' : 'domestic'"
+                    @update:model-value="v => { btForm.locations[li] = v; syncBtLocationFromParts() }"
+                  />
+                  <button
+                    v-if="btForm.locations.length > 1"
+                    type="button"
+                    class="multi-location-remove"
+                    title="删除此地点"
+                    @click="btRemoveLocation(li)"
+                  >&times;</button>
+                </div>
+                <button type="button" class="btn-add-location" @click="btAddLocation">+ 添加地点</button>
+              </div>
             </div>
           </div>
 
@@ -436,6 +457,7 @@ import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
+import LocationPicker from '@/components/LocationPicker.vue'
 import AttendanceExceptionApplyModal from '@/components/AttendanceExceptionApplyModal.vue'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
 
@@ -465,6 +487,7 @@ const btForm = reactive({
   workNo: '',
   projectName: '',
   location: '',
+  locations: [''],
   startTime: '',
   endTime: '',
   amount: 0,
@@ -477,9 +500,33 @@ const btDeptLeaders = ref([])
 const btRoomDirectors = ref([])
 const btLoadingApprovers = ref(false)
 
+function btAddLocation() {
+  btForm.locations.push('')
+}
+
+function btRemoveLocation(idx) {
+  if (btForm.locations.length > 1) {
+    btForm.locations.splice(idx, 1)
+    syncBtLocationFromParts()
+  }
+}
+
+function syncBtLocationFromParts() {
+  btForm.location = btForm.locations.filter(s => (s || '').trim()).join('、')
+}
+
 watch(btTripScope, (scope) => {
   if (scope === '市内公出') {
+    btForm.location = '市内'
+    btForm.locations = ['']
+    btForm.assignTime = ''
     btForm.noticeNo = ''
+    btForm.workNo = ''
+    btForm.projectName = ''
+    btForm.amount = 0
+  } else {
+    btForm.locations = ['']
+    btForm.location = ''
   }
 })
 const isBuban = computed(() => {
@@ -574,6 +621,7 @@ const handleBusinessTripReturnFill = async (suggestion) => {
   btForm.workNo = ''
   btForm.projectName = ''
   btForm.location = '市内'
+  btForm.locations = ['']
 
   // 从建议中提取时间段，与后端建议区间秒级一致（缺省秒补 00）
   const timeMatch = (suggestion?.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
@@ -639,7 +687,11 @@ const toBtDateTime = (s) => {
 // 公出申请弹窗提交
 const handleBusinessTripSubmit = async () => {
   const tips = []
-  if (btIsCityTrip.value) btForm.location = '市内'
+  if (btIsCityTrip.value) {
+    btForm.location = '市内'
+  } else {
+    syncBtLocationFromParts()
+  }
   if (!(btForm.location || '').trim()) tips.push('公出地点')
   if (!btIsCityTrip.value && !(btForm.noticeNo || '').trim()) tips.push('通知单编号')
   if (!(btForm.task || '').trim()) tips.push('公出任务')
@@ -1131,6 +1183,79 @@ watch(selectedMonth, () => {
 }
 .modal-close-btn:hover {
   color: var(--color-text-primary);
+}
+
+.readonly-input {
+  background: var(--color-bg-layout);
+  cursor: default;
+}
+
+.multi-location-wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.multi-location-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.multi-location-idx {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: #e0e7ff;
+  color: #3b52b5;
+  font-size: 12px;
+  font-weight: 600;
+  flex-shrink: 0;
+}
+
+.multi-location-item :deep(.location-picker) {
+  flex: 1;
+}
+
+.multi-location-remove {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  margin-top: 4px;
+  border: 1px solid #fca5a5;
+  border-radius: 6px;
+  background: #fff;
+  color: #ef4444;
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.multi-location-remove:hover {
+  background: #fef2f2;
+  border-color: #ef4444;
+}
+
+.btn-add-location {
+  align-self: flex-start;
+  padding: 4px 14px;
+  border: 1px dashed #93c5fd;
+  border-radius: 6px;
+  background: #eff6ff;
+  color: #2563eb;
+  font-size: 13px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-add-location:hover {
+  background: #dbeafe;
+  border-color: #3b82f6;
 }
 
 .suggestions-header {
