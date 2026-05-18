@@ -226,9 +226,28 @@
           </div>
 
           <!-- 底部操作 -->
-          <div class="form-actions">
-            <button type="button" @click="showRegisterModal = false">取消</button>
-            <button type="submit" class="btn-primary">提交</button>
+          <div class="form-actions-wrap">
+            <div class="form-actions">
+              <label
+                class="voluntary-consent"
+                :class="{
+                  'voluntary-consent--error': consentError,
+                  'voluntary-consent--shake': consentShake,
+                }"
+              >
+                <input
+                  v-model="voluntaryOvertimeConfirmed"
+                  type="checkbox"
+                  @change="onVoluntaryConsentChange"
+                />
+                <span>本人自愿加班，知晓补偿规则</span>
+              </label>
+              <div class="form-actions-btns">
+                <button type="button" @click="showRegisterModal = false">取消</button>
+                <button type="submit" class="btn-primary">提交</button>
+              </div>
+            </div>
+            <p v-if="consentError" class="consent-error-hint" role="alert">请勾选确认后方可提交</p>
           </div>
         </form>
       </div>
@@ -251,6 +270,9 @@ const route = useRoute()
 const showRegisterModal = ref(false)
 const editingRejectedId = ref(null)
 const loadingList = ref(false)
+const voluntaryOvertimeConfirmed = ref(false)
+const consentError = ref(false)
+const consentShake = ref(false)
 
 // 本人的加班记录（从 API 获取）
 const myRecordList = ref([])
@@ -704,12 +726,41 @@ onMounted(async () => {
   }
 })
 
+function resetVoluntaryConsent() {
+  voluntaryOvertimeConfirmed.value = false
+  consentError.value = false
+  consentShake.value = false
+}
+
+function onVoluntaryConsentChange() {
+  if (voluntaryOvertimeConfirmed.value) consentError.value = false
+}
+
+function triggerConsentShake() {
+  consentError.value = true
+  consentShake.value = false
+  requestAnimationFrame(() => {
+    consentShake.value = true
+    setTimeout(() => { consentShake.value = false }, 500)
+  })
+}
+
+function requireVoluntaryConsent() {
+  if (voluntaryOvertimeConfirmed.value) return true
+  triggerConsentShake()
+  return false
+}
+
 watch(showRegisterModal, (visible) => {
   if (!visible) editingRejectedId.value = null
-  if (visible && form.name) fetchApprovers()
+  if (visible) {
+    resetVoluntaryConsent()
+    if (form.name) fetchApprovers()
+  }
 })
 
 const submitRegister = async () => {
+  if (!requireVoluntaryConsent()) return
   if (!form.content) {
     alert('请输入加班内容')
     return
@@ -911,13 +962,69 @@ const submitRegister = async () => {
   flex: 1;
 }
 
-.form-actions {
-  display: flex;
-  justify-content: flex-end;
-  gap: var(--spacing-md);
+.form-actions-wrap {
   margin-top: var(--spacing-xxl);
   padding-top: var(--spacing-lg);
   border-top: 1px solid var(--color-border-lighter);
+}
+
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  flex-wrap: wrap;
+}
+
+.voluntary-consent {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+  flex: 1;
+  min-width: 220px;
+}
+
+.voluntary-consent input {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+
+.voluntary-consent--error {
+  color: #cf1322;
+}
+
+.voluntary-consent--error input {
+  accent-color: #ff4d4f;
+  outline: 2px solid #ff4d4f;
+  outline-offset: 1px;
+}
+
+.voluntary-consent--shake {
+  animation: consent-shake 0.45s ease;
+}
+
+.consent-error-hint {
+  margin: 8px 0 0;
+  font-size: var(--font-size-sm);
+  color: #cf1322;
+}
+
+.form-actions-btns {
+  display: flex;
+  gap: var(--spacing-md);
+  flex-shrink: 0;
+}
+
+@keyframes consent-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
 }
 
 button {

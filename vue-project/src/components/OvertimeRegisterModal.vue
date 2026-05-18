@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div v-if="visible" class="modal-overlay">
     <div class="modal-content">
       <button type="button" class="modal-close-btn" @click="$emit('close')">&times;</button>
@@ -90,9 +90,28 @@
             <option v-for="p in approvers" :key="p" :value="p">{{ p }}</option>
           </select>
         </div>
-        <div class="form-actions">
-          <button type="button" @click="$emit('close')">取消</button>
-          <button type="submit" class="btn-primary">提交</button>
+        <div class="form-actions-wrap">
+          <div class="form-actions">
+            <label
+              class="voluntary-consent"
+              :class="{
+                'voluntary-consent--error': consentError,
+                'voluntary-consent--shake': consentShake,
+              }"
+            >
+              <input
+                v-model="voluntaryOvertimeConfirmed"
+                type="checkbox"
+                @change="onVoluntaryConsentChange"
+              />
+              <span>本人自愿加班，知晓补偿规则</span>
+            </label>
+            <div class="form-actions-btns">
+              <button type="button" @click="$emit('close')">取消</button>
+              <button type="submit" class="btn-primary">提交</button>
+            </div>
+          </div>
+          <p v-if="consentError" class="consent-error-hint" role="alert">请勾选确认后方可提交</p>
         </div>
       </form>
     </div>
@@ -134,6 +153,9 @@ const form = reactive({
 const dateOptions = ref([])
 const approvers = ref([])
 const loadingApprovers = ref(false)
+const voluntaryOvertimeConfirmed = ref(false)
+const consentError = ref(false)
+const consentShake = ref(false)
 const zhibanfei = ref(15)
 /** 从智能建议入口进入时锁定日期与时间，不可编辑 */
 const timeLocked = computed(() => !!props.prefill?.locked)
@@ -306,6 +328,7 @@ function initDateOptions() {
 
 watch(() => props.visible, (v) => {
   if (v) {
+    resetVoluntaryConsent()
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
     if (!(form.department || '').trim()) form.department = userInfo.dept || userInfo.department || '技术部'
     if (!(form.name || '').trim()) form.name = userInfo.name || userInfo.userName || ''
@@ -353,6 +376,31 @@ async function fetchApprovers() {
   }
 }
 
+function resetVoluntaryConsent() {
+  voluntaryOvertimeConfirmed.value = false
+  consentError.value = false
+  consentShake.value = false
+}
+
+function onVoluntaryConsentChange() {
+  if (voluntaryOvertimeConfirmed.value) consentError.value = false
+}
+
+function triggerConsentShake() {
+  consentError.value = true
+  consentShake.value = false
+  requestAnimationFrame(() => {
+    consentShake.value = true
+    setTimeout(() => { consentShake.value = false }, 500)
+  })
+}
+
+function requireVoluntaryConsent() {
+  if (voluntaryOvertimeConfirmed.value) return true
+  triggerConsentShake()
+  return false
+}
+
 function resetForm() {
   form.level = '平时加班'
   form.registerMethod = '书面'
@@ -360,9 +408,11 @@ function resetForm() {
   form.content = ''
   form.approver = ''
   applyExchangeTicketRoleRule()
+  resetVoluntaryConsent()
 }
 
 async function handleSubmit() {
+  if (!requireVoluntaryConsent()) return
   if (!form.content) { alert('请输入加班内容'); return }
   if (!form.approver) { alert('请选择审批人'); return }
   try {
@@ -423,7 +473,30 @@ async function handleSubmit() {
 .date-range-inputs { display: flex; flex-direction: column; gap: var(--spacing-sm); }
 .time-inputs { display: flex; align-items: center; gap: var(--spacing-md); }
 .time-inputs input { flex: 1; }
-.form-actions { display: flex; justify-content: flex-end; gap: var(--spacing-md); margin-top: var(--spacing-xl); padding-top: var(--spacing-lg); border-top: 1px solid var(--color-border-lighter); }
-.form-actions button { padding: 8px 20px; border-radius: var(--radius-sm); border: 1px solid var(--color-border-base); cursor: pointer; background: white; }
-.form-actions .btn-primary { background: var(--color-primary); border-color: var(--color-primary); color: white; }
+.form-actions-wrap { margin-top: var(--spacing-xl); padding-top: var(--spacing-lg); border-top: 1px solid var(--color-border-lighter); }
+.form-actions { display: flex; align-items: center; justify-content: space-between; gap: var(--spacing-md); flex-wrap: wrap; }
+.voluntary-consent {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  user-select: none;
+  flex: 1;
+  min-width: 220px;
+}
+.voluntary-consent input { width: 16px; height: 16px; cursor: pointer; flex-shrink: 0; }
+.voluntary-consent--error { color: #cf1322; }
+.voluntary-consent--error input { accent-color: #ff4d4f; outline: 2px solid #ff4d4f; outline-offset: 1px; }
+.voluntary-consent--shake { animation: consent-shake 0.45s ease; }
+.consent-error-hint { margin: 8px 0 0; font-size: var(--font-size-sm); color: #cf1322; }
+.form-actions-btns { display: flex; gap: var(--spacing-md); flex-shrink: 0; }
+.form-actions-btns button { padding: 8px 20px; border-radius: var(--radius-sm); border: 1px solid var(--color-border-base); cursor: pointer; background: white; }
+.form-actions-btns .btn-primary { background: var(--color-primary); border-color: var(--color-primary); color: white; }
+@keyframes consent-shake {
+  0%, 100% { transform: translateX(0); }
+  20%, 60% { transform: translateX(-5px); }
+  40%, 80% { transform: translateX(5px); }
+}
 </style>

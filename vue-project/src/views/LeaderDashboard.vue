@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="leader-dashboard-page">
     <div class="page-header">
       <div class="header-content">
@@ -20,6 +20,15 @@
             </svg>
             考勤纪律审查
           </router-link>
+          <button type="button" class="btn btn-public-dashboard" @click="openPublicDashboard">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="3" width="7" height="7" rx="1"/>
+              <rect x="14" y="3" width="7" height="7" rx="1"/>
+              <rect x="3" y="14" width="7" height="7" rx="1"/>
+              <rect x="14" y="14" width="7" height="7" rx="1"/>
+            </svg>
+            员工信息驾驶舱
+          </button>
         </div>
       </div>
     </div>
@@ -564,6 +573,12 @@ import {
 import { isMinisterLevel } from '@/utils/roleMatch'
 
 const router = useRouter()
+const PUBLIC_DASHBOARD_URL = 'http://10.42.60.230:8088/public-dashboard'
+
+function openPublicDashboard() {
+  window.open(PUBLIC_DASHBOARD_URL, '_blank', 'noopener,noreferrer')
+}
+
 const leaderOtAdmin1 = ref('')
 const leaderOtAdmin2 = ref('')
 const canAccessLeaderOvertimeEntry = computed(() => {
@@ -1530,27 +1545,35 @@ onMounted(async () => {
 }
 
 .btn-discipline,
-.btn-leader-ot {
+.btn-leader-ot,
+.btn-public-dashboard {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   padding: 8px 20px;
   background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
   color: white;
+  border: none;
   border-radius: var(--radius-base);
   font-size: var(--font-size-sm);
   font-weight: var(--font-weight-medium);
   text-decoration: none;
+  cursor: pointer;
   transition: filter 0.15s, box-shadow 0.15s;
   white-space: nowrap;
 }
 .btn-leader-ot {
   background: linear-gradient(135deg, #2563eb 0%, #0f766e 100%);
 }
+.btn-public-dashboard {
+  background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
+}
 .btn-leader-ot:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28); }
 .btn-discipline:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); }
+.btn-public-dashboard:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3); }
 .btn-discipline .btn-icon,
-.btn-leader-ot .btn-icon { width: 18px; height: 18px; }
+.btn-leader-ot .btn-icon,
+.btn-public-dashboard .btn-icon { width: 18px; height: 18px; }
 
 .leader-dashboard-page .container {
   width: 100%;
