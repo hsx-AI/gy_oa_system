@@ -3,15 +3,17 @@
 排班管理 API
 """
 import calendar
+import json
 import logging
+import re
 from datetime import datetime, date, timedelta
 from io import BytesIO
-from typing import Optional, List, Set
+from typing import Optional, List, Set, Tuple
 from urllib.parse import quote
 
 from fastapi import APIRouter, Query, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from database import db, db_demo
 from utils.holiday_loader import load_holidays_for_year
 
@@ -45,6 +47,7 @@ def _ensure_tables():
           workday_night INT NOT NULL DEFAULT 2,
           weekend_day INT NOT NULL DEFAULT 2,
           weekend_night INT NOT NULL DEFAULT 2,
+          email_recipients TEXT NULL,
           updated_by VARCHAR(50) NULL,
           updated_at DATETIME NULL,
           UNIQUE KEY uk_dept (department)
@@ -59,6 +62,16 @@ def _ensure_tables():
     if not col_rows:
         db.execute_update(
             "ALTER TABLE shift_config ADD COLUMN workday_day INT NOT NULL DEFAULT 2 AFTER department"
+        )
+    recipient_col = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shift_config' AND COLUMN_NAME = 'email_recipients' "
+        "LIMIT 1"
+    )
+    if not recipient_col:
+        db.execute_update(
+            "ALTER TABLE shift_config ADD COLUMN email_recipients TEXT NULL "
+            "COMMENT '排班邮件收件人JSON [{name,email}]' AFTER weekend_night"
         )
     db.execute_update("""
         CREATE TABLE IF NOT EXISTS shift_schedule (
@@ -266,6 +279,17 @@ def _daterange(start: date, end: date) -> List[date]:
     return out
 
 
+def _shift_coverage_check_range(today: date) -> Tuple[date, date]:
+    """
+    日常排班缺口检测区间：本周六至下周五（含首尾，共 7 天）。
+    自然周按周一至周日计，「本周六」为当前周内的周六。
+    """
+    monday = today - timedelta(days=today.weekday())
+    this_saturday = monday + timedelta(days=5)
+    next_friday = this_saturday + timedelta(days=6)
+    return this_saturday, next_friday
+
+
 def _prev_month_same_day(d: date) -> date:
     """目标日在上月同一天（上月无该日则取上月最后一天）"""
     if d.month == 1:
@@ -275,6 +299,12 @@ def _prev_month_same_day(d: date) -> date:
     last = calendar.monthrange(y, m)[1]
     day = min(d.day, last)
     return date(y, m, day)
+
+
+def _week_saturday_range(anchor: date) -> tuple[date, date]:
+    """返回 anchor 所在排班周：本周六到下周五。"""
+    start = anchor - timedelta(days=(anchor.weekday() - 5) % 7)
+    return start, start + timedelta(days=6)
 
 
 def _holiday_map_for_years(years: Set[int]) -> dict:
@@ -419,13 +449,59 @@ async def set_day_locks(req: SetDayLocksRequest):
 
 # ==================== 配置 ====================
 
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+class ShiftEmailRecipient(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
 class ShiftConfigRequest(BaseModel):
     department: str
     workday_day: int = 2
     workday_night: int = 2
     weekend_day: int = 2
     weekend_night: int = 2
+    email_recipients: List[ShiftEmailRecipient] = Field(default_factory=list)
     current_user: str = ""
+
+
+def _normalize_shift_email_recipients(recipients) -> List[dict]:
+    normalized = []
+    seen = set()
+    for item in recipients or []:
+        raw_name = item.get("name", "") if isinstance(item, dict) else getattr(item, "name", "")
+        raw_email = item.get("email", "") if isinstance(item, dict) else getattr(item, "email", "")
+        name = (raw_name or "").strip()
+        email = (raw_email or "").strip()
+        if not name and not email:
+            continue
+        if not name or not email:
+            raise HTTPException(status_code=400, detail="排班表收件人姓名和邮箱均不能为空")
+        if not EMAIL_RE.match(email):
+            raise HTTPException(status_code=400, detail=f"排班表收件人邮箱格式不正确：{email}")
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append({"name": name, "email": email})
+    return normalized
+
+
+def _parse_shift_email_recipients(raw) -> List[dict]:
+    if not raw:
+        return []
+    if isinstance(raw, (bytes, bytearray)):
+        raw = raw.decode("utf-8", errors="ignore")
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else raw
+    except (TypeError, json.JSONDecodeError):
+        return []
+    try:
+        return _normalize_shift_email_recipients(data)
+    except HTTPException:
+        return []
 
 
 @router.get("/config")
@@ -433,17 +509,28 @@ async def get_shift_config(department: str = Query(...)):
     """获取科室排班配置"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT workday_day, workday_night, weekend_day, weekend_night FROM shift_config WHERE department = %s LIMIT 1",
+        "SELECT workday_day, workday_night, weekend_day, weekend_night, email_recipients FROM shift_config WHERE department = %s LIMIT 1",
         (department,),
     )
     if rows:
-        return {"success": True, "data": rows[0]}
-    return {"success": True, "data": {"workday_day": 2, "workday_night": 2, "weekend_day": 2, "weekend_night": 2}}
+        data = dict(rows[0])
+        data["email_recipients"] = _parse_shift_email_recipients(data.get("email_recipients"))
+        return {"success": True, "data": data}
+    return {
+        "success": True,
+        "data": {
+            "workday_day": 2,
+            "workday_night": 2,
+            "weekend_day": 2,
+            "weekend_night": 2,
+            "email_recipients": [],
+        },
+    }
 
 
 @router.get("/coverage-gap")
 async def get_shift_coverage_gap(current_user: str = Query(..., description="当前登录人姓名")):
-    """首页待办：检查当前用户所在科室从今天到下周日是否存在日常排班人数缺口。
+    """首页待办：检查当前用户所在科室在「本周六—下周五」是否存在日常排班人数缺口。
 
     只检测普通上班日与公休日；命中系统节假日配置的日期不纳入检测。
     """
@@ -453,8 +540,8 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
         return {"success": True, "hasPending": False, "department": "", "issues": [], "totalIssues": 0}
 
     today = date.today()
-    end_day = today + timedelta(days=(6 - today.weekday()) + 7)
-    dates = _daterange(today, end_day)
+    start_day, end_day = _shift_coverage_check_range(today)
+    dates = _daterange(start_day, end_day)
     years_set = {d.year for d in dates}
     holiday_by_date = _holiday_map_for_years(years_set)
 
@@ -479,7 +566,7 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
             f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s "
             f"AND employee_name IN ({ph}) AND shift_type IN ('白班', '夜班', '白+夜') "
             f"GROUP BY shift_date, shift_type",
-            (dept, today.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")) + tuple(employees),
+            (dept, start_day.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")) + tuple(employees),
         )
         for r in rows or []:
             sd = r.get("shift_date")
@@ -539,7 +626,7 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
         "success": True,
         "hasPending": bool(issues),
         "department": dept,
-        "startDate": today.strftime("%Y-%m-%d"),
+        "startDate": start_day.strftime("%Y-%m-%d"),
         "endDate": end_day.strftime("%Y-%m-%d"),
         "totalIssues": len(issues),
         "summary": sample_text,
@@ -552,18 +639,20 @@ async def save_shift_config(req: ShiftConfigRequest):
     """保存科室排班配置"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    email_recipients = _normalize_shift_email_recipients(req.email_recipients)
+    email_recipients_json = json.dumps(email_recipients, ensure_ascii=False)
     existing = db.execute_query(
         "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (req.department,)
     )
     if existing:
         db.execute_update(
-            "UPDATE shift_config SET workday_day=%s, workday_night=%s, weekend_day=%s, weekend_night=%s, updated_by=%s, updated_at=%s WHERE department=%s",
-            (req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, req.current_user, now, req.department),
+            "UPDATE shift_config SET workday_day=%s, workday_night=%s, weekend_day=%s, weekend_night=%s, email_recipients=%s, updated_by=%s, updated_at=%s WHERE department=%s",
+            (req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, email_recipients_json, req.current_user, now, req.department),
         )
     else:
         db.execute_update(
-            "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
-            (req.department, req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, req.current_user, now),
+            "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, email_recipients, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
+            (req.department, req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, email_recipients_json, req.current_user, now),
         )
     return {"success": True, "message": "配置已保存"}
 
@@ -1165,9 +1254,227 @@ async def get_shift_holiday_options(year: int = Query(...)):
             "startDate": dates_sorted[0],
             "endDate": dates_sorted[-1],
             "days": len(dates_sorted),
+            "dates": dates_sorted,
         })
     options.sort(key=lambda x: x["startDate"])
     return {"success": True, "year": year, "options": options}
+
+
+def build_week_schedule_report(department: str, anchor: Optional[date] = None) -> dict:
+    """生成周排班每日汇总，供导出与自动邮件共用。"""
+    try:
+        from html import escape
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成周排班表")
+
+    _ensure_tables()
+    if not department or department == "__ALL__":
+        raise HTTPException(status_code=400, detail="周排班表请选择具体科室")
+
+    week_start, week_end = _week_saturday_range(anchor or date.today())
+    dates = _daterange(week_start, week_end)
+    employees = _get_dept_employees(department)
+    ds_lo = week_start.strftime("%Y-%m-%d")
+    ds_hi = week_end.strftime("%Y-%m-%d")
+
+    holiday_by_date = _holiday_map_for_years({d.year for d in dates})
+    holidays = {k: v["type"] for k, v in holiday_by_date.items()}
+    date_info = []
+    for d in dates:
+        ds = d.strftime("%Y-%m-%d")
+        h = holiday_by_date.get(ds)
+        ht = h["type"] if h else ""
+        fest = h["festival"] if h else ""
+        date_info.append({
+            "date": ds,
+            "weekday": d.weekday(),
+            "isWorkday": _is_workday(d, holidays),
+            "label": ["一", "二", "三", "四", "五", "六", "日"][d.weekday()],
+            "holidayType": ht,
+            "holidayFestival": fest,
+            "holidayMark": _holiday_header_mark(ht, fest) if h else "",
+        })
+
+    schedule = {}
+    locations = {}
+    if employees:
+        ph = ",".join(["%s"] * len(employees))
+        rows = db.execute_query(
+            f"SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
+            f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s AND employee_name IN ({ph})",
+            (department, ds_lo, ds_hi) + tuple(employees),
+        )
+        for r in rows or []:
+            name = (r.get("employee_name") or "").strip()
+            sd = r.get("shift_date")
+            sd = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
+            st = (r.get("shift_type") or "").strip()
+            sl = (r.get("shift_location") or "").strip()
+            if name and sd:
+                schedule.setdefault(name, {})[sd] = st
+                if sl:
+                    locations.setdefault(name, {})[sd] = sl
+
+    day_plans = {}
+    try:
+        plan_rows = db.execute_query(
+            "SELECT plan_date, content FROM shift_day_plan WHERE department = %s AND plan_date >= %s AND plan_date <= %s",
+            (department, ds_lo, ds_hi),
+        )
+        for pr in plan_rows or []:
+            pd = pr.get("plan_date")
+            pds = pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10]
+            if pds:
+                day_plans[pds] = (pr.get("content") or "").strip()
+    except Exception:
+        pass
+
+    people = _get_dept_people(department)
+    people_by_name = {p["name"]: p for p in people}
+    trip_map = _get_dept_business_trips(department, week_start, week_end)
+
+    def _person(name: str) -> dict:
+        return people_by_name.get(name) or {"name": name, "jb": "", "mobile": "", "telephone": ""}
+
+    def _phone_line(name: str) -> str:
+        p = _person(name)
+        phones = [x for x in [(p.get("mobile") or "").strip(), (p.get("telephone") or "").strip()] if x]
+        return f"{name}（{' / '.join(phones)}）" if phones else name
+
+    def _uniq(values: List[str]) -> List[str]:
+        return list(dict.fromkeys([v for v in values if v]))
+
+    rows_data = []
+    for di in date_info:
+        ds = di["date"]
+        day_prepare, day_service, night_prepare, night_service = [], [], [], []
+        duty_names, trip_entries = [], []
+        for emp in employees:
+            st = schedule.get(emp, {}).get(ds, "")
+            loc = locations.get(emp, {}).get(ds, "")
+            if st in ("白班", "白+夜"):
+                duty_names.append(emp)
+                if loc == "服务组":
+                    day_service.append(emp)
+                else:
+                    day_prepare.append(emp)
+            if st in ("夜班", "白+夜"):
+                duty_names.append(emp)
+                if loc == "准备组":
+                    night_prepare.append(emp)
+                else:
+                    night_service.append(emp)
+            project = trip_map.get(emp, {}).get(ds)
+            if project:
+                trip_entries.append(f"{emp}（{project}）" if project != "公出" else emp)
+        contact_names = _uniq(duty_names)
+        rows_data.append({
+            "date": ds,
+            "weekday": "\n".join([x for x in [f"星期{di['label']}", di.get("holidayFestival"), di.get("holidayType")] if x]),
+            "dayPrepare": "\n".join(_phone_line(n) for n in _uniq(day_prepare)),
+            "dayService": "\n".join(_phone_line(n) for n in _uniq(day_service)),
+            "nightPrepare": "\n".join(_phone_line(n) for n in _uniq(night_prepare)),
+            "nightService": "\n".join(_phone_line(n) for n in _uniq(night_service)),
+            "contacts": "\n".join(_phone_line(n) for n in contact_names),
+            "plan": day_plans.get(ds, ""),
+            "count": len(set(duty_names)),
+            "trips": "\n".join(trip_entries),
+            "remark": "",
+            "dateInfo": di,
+        })
+
+    thin_side = Side(style="thin", color="B0B0B0")
+    thin_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+    font_title = Font(name="微软雅黑", size=14, bold=True, color="1E293B")
+    font_header = Font(name="微软雅黑", size=10, bold=True, color="1E293B")
+    font_body = Font(name="微软雅黑", size=10)
+    align_center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    fill_header = PatternFill("solid", fgColor="F1F5F9")
+    fill_weekend = PatternFill("solid", fgColor="FEF9C3")
+    fill_holiday_rest = PatternFill("solid", fgColor="FDE68A")
+    fill_day_shift = PatternFill("solid", fgColor="DBEAFE")
+    fill_night_shift = PatternFill("solid", fgColor="FEF3C7")
+    fill_summary = PatternFill("solid", fgColor="F1F5F9")
+
+    def _cell_fill_for_date(di):
+        if not di["isWorkday"]:
+            ht = di.get("holidayType", "")
+            if "假" in ht or "休" in ht or di.get("holidayFestival"):
+                return fill_holiday_rest
+            return fill_weekend
+        return None
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "每日汇总"
+    ws.sheet_properties.tabColor = "10B981"
+    title = f"{department} {ds_lo} 至 {ds_hi} 周排班每日汇总"
+    ws.merge_cells("A1:K1")
+    ws["A1"] = title
+    ws["A1"].font = font_title
+    ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
+    ws.row_dimensions[1].height = 30
+
+    headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "公出人员", "备注"]
+    keys = ["date", "weekday", "dayPrepare", "dayService", "nightPrepare", "nightService", "contacts", "plan", "count", "trips", "remark"]
+    for col, header in enumerate(headers, start=1):
+        c = ws.cell(row=2, column=col, value=header)
+        c.font = font_header
+        c.alignment = align_center
+        c.fill = fill_header
+        c.border = thin_border
+    widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 32, 24]
+    for idx, width in enumerate(widths, start=1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+
+    for row_idx, row in enumerate(rows_data, start=3):
+        for col, key in enumerate(keys, start=1):
+            c = ws.cell(row=row_idx, column=col, value=row[key])
+            c.font = font_body
+            c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10, 11) else "center", vertical="center", wrap_text=True)
+            c.border = thin_border
+            cfill = _cell_fill_for_date(row["dateInfo"])
+            if cfill and col in (1, 2):
+                c.fill = cfill
+            if col in (3, 4):
+                c.fill = fill_day_shift
+            elif col in (5, 6):
+                c.fill = fill_night_shift
+            elif col == 9:
+                c.fill = fill_summary
+        ws.row_dimensions[row_idx].height = 72
+    ws.freeze_panes = "A3"
+
+    bio = BytesIO()
+    wb.save(bio)
+    filename = f"{department}_{ds_lo}_至_{ds_hi}_周排班每日汇总.xlsx"
+
+    html_headers = "".join(f"<th>{escape(h)}</th>" for h in headers)
+    html_rows = []
+    for row in rows_data:
+        tds = []
+        for key in keys:
+            value = str(row[key] if row[key] is not None else "")
+            tds.append(f"<td>{escape(value).replace(chr(10), '<br>')}</td>")
+        html_rows.append("<tr>" + "".join(tds) + "</tr>")
+    html_table = (
+        '<table border="1" cellspacing="0" cellpadding="6" '
+        'style="border-collapse:collapse;font-family:Microsoft YaHei,Arial,sans-serif;font-size:13px;">'
+        f"<thead><tr>{html_headers}</tr></thead><tbody>{''.join(html_rows)}</tbody></table>"
+    )
+
+    return {
+        "department": department,
+        "week_start": week_start,
+        "week_end": week_end,
+        "title": title,
+        "filename": filename,
+        "excel_bytes": bio.getvalue(),
+        "html_table": html_table,
+    }
 
 
 # ==================== 导出排班 Excel ====================
@@ -1179,6 +1486,7 @@ async def export_schedule_excel(
     month: Optional[int] = Query(None, ge=1, le=12),
     export_format: str = Query("month", alias="format"),
     holiday: str = Query("", description="format=holiday 时的假期名称"),
+    week_date: Optional[str] = Query(None, description="format=week 时用于定位周六-周五排班周的日期"),
 ):
     """导出科室排班表 Excel。format=holiday 时按节假日值班表样式导出。"""
     try:
@@ -1193,12 +1501,24 @@ async def export_schedule_excel(
     _ensure_tables()
     fmt = (export_format or "").strip().lower()
     is_holiday_export = fmt in ("holiday", "festival", "duty")
+    is_week_export = fmt in ("week", "weekly")
 
-    years_set = {year}
-    holiday_by_date = _holiday_map_for_years(years_set)
-    holidays = {k: v["type"] for k, v in holiday_by_date.items()}
+    if is_week_export:
+        anchor = _parse_iso_date(week_date or "")
+        if not anchor:
+            try:
+                anchor = date(year, int(month or 1), 1) if month else date.today()
+            except Exception:
+                anchor = date.today()
+        report = build_week_schedule_report(department, anchor)
+        return Response(
+            content=report["excel_bytes"],
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(report['filename'])}"},
+        )
 
     if is_holiday_export:
+        holiday_by_date = _holiday_map_for_years({year})
         holiday_name = (holiday or "").strip()
         if not holiday_name:
             raise HTTPException(status_code=400, detail="请选择要导出的假期")
@@ -1215,6 +1535,18 @@ async def export_schedule_excel(
                     selected_dates.append(d)
         dates = selected_dates
         employees = _get_dept_employees(department) if department and department != "__ALL__" else []
+    elif is_week_export:
+        if not department or department == "__ALL__":
+            raise HTTPException(status_code=400, detail="周排班表请选择具体科室")
+        anchor = _parse_iso_date(week_date or "")
+        if not anchor:
+            try:
+                anchor = date(year, int(month or 1), 1) if month else date.today()
+            except Exception:
+                anchor = date.today()
+        week_start, week_end = _week_saturday_range(anchor)
+        dates = _daterange(week_start, week_end)
+        employees = _get_dept_employees(department)
     else:
         if month is None:
             raise HTTPException(status_code=400, detail="请选择月份")
@@ -1224,6 +1556,10 @@ async def export_schedule_excel(
         dates = _month_dates(year, month)
     if not dates:
         raise HTTPException(status_code=400, detail="未找到可导出的日期")
+
+    years_set = {d.year for d in dates}
+    holiday_by_date = _holiday_map_for_years(years_set)
+    holidays = {k: v["type"] for k, v in holiday_by_date.items()}
 
     date_info = []
     for d in dates:
@@ -1618,6 +1954,118 @@ async def export_schedule_excel(
                 return fill_holiday_rest
             return fill_weekend
         return None
+
+    def _export_week_schedule_excel():
+        people = _get_dept_people(department)
+        people_by_name = {p["name"]: p for p in people}
+        trip_map = _get_dept_business_trips(department, dates[0], dates[-1])
+
+        def _person(name: str) -> dict:
+            return people_by_name.get(name) or {"name": name, "jb": "", "mobile": "", "telephone": ""}
+
+        def _mobile(name: str) -> str:
+            return (_person(name).get("mobile") or "").strip()
+
+        def _telephone(name: str) -> str:
+            return (_person(name).get("telephone") or "").strip()
+
+        def _phone_line(name: str) -> str:
+            p = _person(name)
+            phones = [x for x in [(p.get("mobile") or "").strip(), (p.get("telephone") or "").strip()] if x]
+            return f"{name}（{' / '.join(phones)}）" if phones else name
+
+        wb_w = Workbook()
+        ws = wb_w.active
+        ws.title = "每日汇总"
+        ws.sheet_properties.tabColor = "10B981"
+
+        week_start_text = dates[0].strftime("%Y-%m-%d")
+        week_end_text = dates[-1].strftime("%Y-%m-%d")
+        ws.merge_cells("A1:K1")
+        t = ws["A1"]
+        t.value = f"{department} {week_start_text} 至 {week_end_text} 周排班每日汇总"
+        t.font = font_title
+        t.alignment = Alignment(horizontal="center", vertical="center")
+        ws.row_dimensions[1].height = 30
+
+        headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "公出人员", "备注"]
+        for col, header in enumerate(headers, start=1):
+            c = ws.cell(row=2, column=col, value=header)
+            c.font = font_header
+            c.alignment = align_center
+            c.fill = fill_header
+            c.border = thin_border
+        widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 32, 24]
+        for idx, width in enumerate(widths, start=1):
+            ws.column_dimensions[get_column_letter(idx)].width = width
+
+        for row_idx, di in enumerate(date_info, start=3):
+            ds = di["date"]
+            day_prepare, day_service, night_prepare, night_service = [], [], [], []
+            duty_names, trip_entries = [], []
+            for emp in employees:
+                st = schedule.get(emp, {}).get(ds, "")
+                loc = export_locations.get(emp, {}).get(ds, "")
+                if st in ("白班", "白+夜"):
+                    duty_names.append(emp)
+                    if loc == "服务组":
+                        day_service.append(emp)
+                    else:
+                        day_prepare.append(emp)
+                if st in ("夜班", "白+夜"):
+                    duty_names.append(emp)
+                    if loc == "准备组":
+                        night_prepare.append(emp)
+                    else:
+                        night_service.append(emp)
+                project = trip_map.get(emp, {}).get(ds)
+                if project:
+                    trip_entries.append(f"{emp}（{project}）" if project != "公出" else emp)
+            contact_names = []
+            for name in duty_names:
+                if name not in contact_names:
+                    contact_names.append(name)
+            values = [
+                ds,
+                "\n".join([x for x in [f"星期{di['label']}", di.get("holidayFestival"), di.get("holidayType")] if x]),
+                "\n".join(_phone_line(n) for n in dict.fromkeys(day_prepare)),
+                "\n".join(_phone_line(n) for n in dict.fromkeys(day_service)),
+                "\n".join(_phone_line(n) for n in dict.fromkeys(night_prepare)),
+                "\n".join(_phone_line(n) for n in dict.fromkeys(night_service)),
+                "\n".join(_phone_line(n) for n in contact_names),
+                day_plans.get(ds, ""),
+                len(set(duty_names)),
+                "\n".join(trip_entries),
+                "",
+            ]
+            for col, value in enumerate(values, start=1):
+                c = ws.cell(row=row_idx, column=col, value=value)
+                c.font = font_body
+                c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10, 11) else "center", vertical="center", wrap_text=True)
+                c.border = thin_border
+                cfill = _cell_fill_for_date(di)
+                if cfill and col in (1, 2):
+                    c.fill = cfill
+                if col in (3, 4):
+                    c.fill = fill_day_shift
+                elif col in (5, 6):
+                    c.fill = fill_night_shift
+                elif col == 9:
+                    c.fill = fill_summary
+            ws.row_dimensions[row_idx].height = 72
+        ws.freeze_panes = "A3"
+
+        bio_w = BytesIO()
+        wb_w.save(bio_w)
+        fname_w = f"{department}_{week_start_text}_至_{week_end_text}_周排班每日汇总.xlsx"
+        return Response(
+            content=bio_w.getvalue(),
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname_w)}"},
+        )
+
+    if is_week_export:
+        return _export_week_schedule_excel()
 
     wb = Workbook()
 

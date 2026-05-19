@@ -78,8 +78,39 @@
       </div>
       <div class="toolbar-right">
         <template v-if="isManager">
+          <div
+            v-if="sendCountdownItems.length"
+            class="send-countdown"
+            :title="sendCountdownItems.map((item) => item.mainText + item.statusText).join('\n')"
+          >
+            <div
+              class="send-countdown-track"
+              :style="{ transform: `translateY(-${sendCountdownIndex * 32}px)` }"
+            >
+              <div
+                v-for="item in sendCountdownItems"
+                :key="item.key"
+                class="send-countdown-item"
+              >
+                <span class="send-countdown-main">{{ item.mainText }}</span>
+                <span
+                  class="send-countdown-status"
+                  :class="item.completed ? 'is-complete' : 'is-incomplete'"
+                >{{ item.statusText }}</span>
+              </div>
+            </div>
+          </div>
           <button type="button" class="btn btn-outline btn-sm" @click="showConfigPanel = !showConfigPanel" title="排班规则配置">
             ⚙ 配置
+          </button>
+          <button
+            type="button"
+            class="btn btn-outline btn-sm"
+            @click="handleSendScheduleEmail"
+            :disabled="saving || sendingScheduleEmail || !selectedDept"
+            title="手动发送本周六至下周五周排班邮件"
+          >
+            {{ sendingScheduleEmail ? '发送中…' : '发送邮件' }}
           </button>
           <button type="button" class="btn btn-outline btn-sm" @click="handleCopyLastMonth" :disabled="saving">复制上月</button>
           <button type="button" class="btn btn-danger-outline btn-sm" @click="handleClear" :disabled="saving">清空</button>
@@ -114,6 +145,7 @@
           <label>格式</label>
           <select v-model="exportFormat" style="width:150px">
             <option value="month">月排班表</option>
+            <option value="week">周排班表</option>
             <option value="holiday">节假日值班表</option>
           </select>
         </div>
@@ -126,6 +158,10 @@
           <select v-model.number="exportMonth" style="width:72px">
             <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
           </select>
+        </div>
+        <div v-if="exportFormat === 'week'" class="config-item">
+          <label>周起始日期</label>
+          <input type="date" v-model="exportWeekDate" style="width:150px">
         </div>
         <div v-if="exportFormat === 'holiday'" class="config-item">
           <label>假期</label>
@@ -147,7 +183,7 @@
           {{ exporting ? '导出中…' : '下载' }}
         </button>
       </div>
-      <p class="config-hint">月排班表含表格与日历两个 Sheet；节假日值班表按五一、十一、高温假等假期样式导出值班领导、负责人、准备组、服务组、工作内容和出勤人数。</p>
+      <p class="config-hint">月排班表含表格与日历两个 Sheet；周排班表按所选日期归属的周六至下周五导出每日值班明细、准备组/服务组、联系方式和工作计划；节假日值班表按五一、十一、高温假等假期样式导出。</p>
     </div>
 
     <!-- 配置面板 -->
@@ -172,8 +208,32 @@
         </div>
         <button type="button" class="btn btn-primary btn-sm" @click="handleSaveConfig">保存配置</button>
       </div>
+      <div class="recipient-config">
+        <div class="recipient-config-head">
+          <span>排班表收件人</span>
+          <button type="button" class="btn btn-outline btn-sm" @click="addEmailRecipient">新增收件人</button>
+        </div>
+        <div v-if="config.email_recipients.length" class="recipient-list">
+          <div v-for="(recipient, idx) in config.email_recipients" :key="idx" class="recipient-row">
+            <input
+              v-model.trim="recipient.name"
+              class="recipient-name"
+              type="text"
+              placeholder="收件人姓名"
+            >
+            <input
+              v-model.trim="recipient.email"
+              class="recipient-email"
+              type="email"
+              placeholder="邮箱地址"
+            >
+            <button type="button" class="btn btn-danger-outline btn-sm" @click="removeEmailRecipient(idx)">删除</button>
+          </div>
+        </div>
+        <div v-else class="recipient-empty">暂未配置收件人，保存后后续发送排班邮件将不会自动带出收件人。</div>
+      </div>
       <p class="config-hint">
-        自动排班时，仅对「今天及之后」的日期写入；今天之前不覆盖。每天严格按配置人数安排白班和夜班，其余人留空（不值班），人员按日轮转。
+        自动排班时，仅对「今天及之后」的日期写入；今天之前不覆盖。排班表收件人用于后续按科室发送日常排班邮件。
       </p>
     </div>
 
@@ -539,7 +599,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions } from '@/api/shift'
+import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions, runShiftScheduleEmail } from '@/api/shift'
 import { getUploadConfig } from '@/api/attendance'
 import { isDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
@@ -599,6 +659,7 @@ const dayPlans = reactive({})
 const businessTrips = reactive({})
 const loading = ref(false)
 const saving = ref(false)
+const sendingScheduleEmail = ref(false)
 const dirty = ref(false)
 const plansDirty = ref(false)
 const effectiveDirty = computed(() => dirty.value || plansDirty.value)
@@ -715,7 +776,285 @@ function closePlanEditor() {
   planEditing.value = false
 }
 const showConfigPanel = ref(false)
-const config = reactive({ workday_day: 2, workday_night: 2, weekend_day: 2, weekend_night: 2 })
+const config = reactive({
+  workday_day: 2,
+  workday_night: 2,
+  weekend_day: 2,
+  weekend_night: 2,
+  email_recipients: [],
+})
+
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
+function addEmailRecipient() {
+  config.email_recipients.push({ name: '', email: '' })
+}
+
+function removeEmailRecipient(index) {
+  config.email_recipients.splice(index, 1)
+}
+
+function normalizeEmailRecipients() {
+  const normalized = []
+  const seen = new Set()
+  for (const item of config.email_recipients) {
+    const name = (item?.name || '').trim()
+    const email = (item?.email || '').trim()
+    if (!name && !email) continue
+    if (!name || !email) {
+      alert('请完整填写排班表收件人的姓名和邮箱地址')
+      return null
+    }
+    if (!EMAIL_PATTERN.test(email)) {
+      alert(`排班表收件人邮箱格式不正确：${email}`)
+      return null
+    }
+    const key = email.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push({ name, email })
+  }
+  return normalized
+}
+
+function setEmailRecipients(recipients) {
+  config.email_recipients.splice(0, config.email_recipients.length)
+  for (const item of recipients || []) {
+    config.email_recipients.push({
+      name: (item?.name || '').trim(),
+      email: (item?.email || '').trim(),
+    })
+  }
+}
+
+const AUTO_SEND_WEEKDAY = 5
+const AUTO_SEND_HOUR = 17
+const sendCountdownNow = ref(new Date())
+const sendCountdownHolidayOptions = ref([])
+const sendCountdownIndex = ref(0)
+const nextWeekScheduleCompleted = ref(false)
+let sendCountdownTimer = null
+let sendCountdownScrollTimer = null
+let sendCountdownHolidayDateKey = ''
+let nextWeekScheduleCheckSeq = 0
+
+function startOfLocalDay(d) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate())
+}
+
+function nextFridaySendTime(nowDate = new Date()) {
+  const target = startOfLocalDay(nowDate)
+  const addDays = (AUTO_SEND_WEEKDAY - target.getDay() + 7) % 7
+  target.setDate(target.getDate() + addDays)
+  target.setHours(AUTO_SEND_HOUR, 0, 0, 0)
+  if (target <= nowDate) target.setDate(target.getDate() + 7)
+  return target
+}
+
+function weekdayLabel(d) {
+  return ['周日', '周一', '周二', '周三', '周四', '周五', '周六'][d.getDay()]
+}
+
+function formatMonthDayWeek(d) {
+  return `${d.getMonth() + 1}月${d.getDate()}日${weekdayLabel(d)}`
+}
+
+function formatCountdownDistance(target, nowDate = sendCountdownNow.value) {
+  const ms = Math.max(0, target.getTime() - nowDate.getTime())
+  const dayMs = 24 * 60 * 60 * 1000
+  const hourMs = 60 * 60 * 1000
+  const days = Math.floor(ms / dayMs)
+  const hours = Math.floor((ms % dayMs) / hourMs)
+  return `${days}天${hours}小时`
+}
+
+function holidaySendTime(holiday) {
+  const parsedStart = holiday?.start ? new Date(holiday.start) : parseYMD(holiday?.startDate || '')
+  const start = parsedStart && !Number.isNaN(parsedStart.getTime()) ? parsedStart : sendCountdownNow.value
+  const target = startOfLocalDay(start)
+  target.setDate(target.getDate() - 1)
+  target.setHours(AUTO_SEND_HOUR, 0, 0, 0)
+  return target
+}
+
+function weekEndDate(nowDate = sendCountdownNow.value) {
+  const end = startOfLocalDay(nowDate)
+  end.setDate(end.getDate() + 7)
+  return end
+}
+
+function nextWeekRange(nowDate = sendCountdownNow.value) {
+  const target = nextFridaySendTime(nowDate)
+  const start = startOfLocalDay(target)
+  start.setDate(start.getDate() + 1)
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  return { start, end }
+}
+
+function dateRangesOverlap(aStart, aEnd, bStart, bEnd) {
+  return aStart <= bEnd && aEnd >= bStart
+}
+
+function configuredCapsForDateInfo(d) {
+  if (d?.isWorkday) {
+    return {
+      day: Math.max(0, Number(config.workday_day) || 0),
+      night: Math.max(0, Number(config.workday_night) || 0),
+    }
+  }
+  return {
+    day: Math.max(0, Number(config.weekend_day) || 0),
+    night: Math.max(0, Number(config.weekend_night) || 0),
+  }
+}
+
+function countShiftInSchedule(schedule, employeeList, dateStr, shift) {
+  let n = 0
+  for (const emp of employeeList || []) {
+    const v = schedule?.[emp]?.[dateStr] || ''
+    if (v === shift) n++
+    else if (v === '白+夜' && (shift === '白班' || shift === '夜班')) n++
+  }
+  return n
+}
+
+function isScheduleCompleteByConfig(schedule, employeeList, dateList) {
+  for (const d of dateList || []) {
+    const caps = configuredCapsForDateInfo(d)
+    const dayCount = countShiftInSchedule(schedule, employeeList, d.date, '白班')
+    const nightCount = countShiftInSchedule(schedule, employeeList, d.date, '夜班')
+    if (dayCount < caps.day || nightCount < caps.night) return false
+  }
+  return !!dateList?.length
+}
+
+const nextWeekScheduleStatusText = computed(() => (
+  nextWeekScheduleCompleted.value ? '您已经完成下周排班' : '您还未完成下周排班'
+))
+
+const nextHolidayForCountdown = computed(() => {
+  const today = startOfLocalDay(sendCountdownNow.value)
+  const end = weekEndDate(sendCountdownNow.value)
+  const candidates = []
+  for (const item of sendCountdownHolidayOptions.value || []) {
+    if (Array.isArray(item.dates) && item.dates.length) {
+      const matchedDates = item.dates
+        .map((ds) => parseYMD(ds))
+        .filter((d) => d && dateRangesOverlap(d, d, today, end))
+        .sort((a, b) => a - b)
+      if (matchedDates.length) {
+        candidates.push({ ...item, start: matchedDates[0], finish: matchedDates[matchedDates.length - 1] })
+      }
+      continue
+    }
+    const start = parseYMD(item.startDate)
+    const finish = parseYMD(item.endDate)
+    if (!start || !finish) continue
+    if (!dateRangesOverlap(start, finish, today, end)) continue
+    candidates.push({ ...item, start, finish })
+  }
+  candidates.sort((a, b) => a.start - b.start)
+  return candidates[0] || null
+})
+
+const sendCountdownItems = computed(() => {
+  const target = nextFridaySendTime(sendCountdownNow.value)
+  const dateText = formatMonthDayWeek(target)
+  const distance = formatCountdownDistance(target)
+  const statusText = nextWeekScheduleStatusText.value
+  const items = [{
+    key: 'daily',
+    mainText: `距离${dateText}自动发送日常排班还有${distance}，`,
+    statusText,
+    completed: nextWeekScheduleCompleted.value,
+  }]
+  const holiday = nextHolidayForCountdown.value
+  if (holiday) {
+    const holidayTarget = holidaySendTime(holiday)
+    items.push({
+      key: `holiday-${holiday.name}-${holiday.startDate}`,
+      mainText: `距离${formatMonthDayWeek(holidayTarget)}节假日前一天自动发送${holiday.name}排班还有${formatCountdownDistance(holidayTarget)}`,
+      statusText: '',
+      completed: true,
+    })
+  }
+  return items
+})
+
+async function loadNextWeekScheduleCompletion() {
+  const dept = selectedDept.value
+  const seq = ++nextWeekScheduleCheckSeq
+  if (!dept) {
+    nextWeekScheduleCompleted.value = false
+    return
+  }
+  const { start, end } = nextWeekRange(sendCountdownNow.value)
+  try {
+    const res = await getSchedule({
+      department: dept,
+      start_date: toYMD(start),
+      end_date: toYMD(end),
+    })
+    if (seq !== nextWeekScheduleCheckSeq) return
+    nextWeekScheduleCompleted.value = isScheduleCompleteByConfig(
+      res?.schedule || {},
+      res?.employees || [],
+      res?.dates || [],
+    )
+  } catch (e) {
+    if (seq !== nextWeekScheduleCheckSeq) return
+    console.error('检测下周排班完成状态失败:', e)
+    nextWeekScheduleCompleted.value = false
+  }
+}
+
+async function loadSendCountdownHolidayOptions() {
+  const nowDate = sendCountdownNow.value
+  const end = weekEndDate(nowDate)
+  const years = [...new Set([nowDate.getFullYear(), end.getFullYear()])]
+  try {
+    const results = await Promise.all(years.map((year) => getShiftHolidayOptions({ year })))
+    sendCountdownHolidayOptions.value = results.flatMap((res) => res?.options || [])
+  } catch (e) {
+    console.error('加载排班发送倒计时假期失败:', e)
+    sendCountdownHolidayOptions.value = []
+  }
+}
+
+function startSendCountdownTimers() {
+  sendCountdownNow.value = new Date()
+  sendCountdownHolidayDateKey = toYMD(sendCountdownNow.value)
+  loadSendCountdownHolidayOptions()
+  sendCountdownTimer = setInterval(() => {
+    sendCountdownNow.value = new Date()
+    const currentKey = toYMD(sendCountdownNow.value)
+    if (currentKey !== sendCountdownHolidayDateKey) {
+      sendCountdownHolidayDateKey = currentKey
+      loadSendCountdownHolidayOptions()
+      loadNextWeekScheduleCompletion()
+    }
+  }, 60 * 1000)
+  sendCountdownScrollTimer = setInterval(() => {
+    const len = sendCountdownItems.value.length
+    sendCountdownIndex.value = len > 1 ? (sendCountdownIndex.value + 1) % len : 0
+  }, 4000)
+}
+
+function stopSendCountdownTimers() {
+  if (sendCountdownTimer) {
+    clearInterval(sendCountdownTimer)
+    sendCountdownTimer = null
+  }
+  if (sendCountdownScrollTimer) {
+    clearInterval(sendCountdownScrollTimer)
+    sendCountdownScrollTimer = null
+  }
+}
+
+watch(() => sendCountdownItems.value.length, (len) => {
+  if (sendCountdownIndex.value >= len) sendCountdownIndex.value = 0
+})
 
 const monthOverviewVisible = ref(false)
 const monthOverviewLoading = ref(false)
@@ -953,6 +1292,7 @@ function planCellTitle(d) {
 }
 
 onMounted(async () => {
+  startSendCountdownTimers()
   try {
     const cfg = await getUploadConfig()
     if (cfg?.admin2 != null) admin2NameForDuty.value = cfg.admin2 || ''
@@ -978,6 +1318,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  stopSendCountdownTimers()
   if (_scheduleHeadResizeObserver) {
     _scheduleHeadResizeObserver.disconnect()
     _scheduleHeadResizeObserver = null
@@ -998,6 +1339,13 @@ async function loadSchedule() {
     employees.value = []
     employeeSortKey.value = null
     dates.value = []
+    nextWeekScheduleCheckSeq += 1
+    nextWeekScheduleCompleted.value = false
+    config.workday_day = 2
+    config.workday_night = 2
+    config.weekend_day = 2
+    config.weekend_night = 2
+    setEmailRecipients([])
     return
   }
   loading.value = true
@@ -1044,6 +1392,8 @@ async function loadSchedule() {
     config.workday_night = c.workday_night ?? 2
     config.weekend_day = c.weekend_day ?? 2
     config.weekend_night = c.weekend_night ?? 2
+    setEmailRecipients(c.email_recipients || [])
+    loadNextWeekScheduleCompletion()
   } catch (e) {
     console.error('加载排班失败:', e)
   } finally {
@@ -1356,6 +1706,7 @@ async function handleSave() {
     await Promise.all(tasks)
     dirty.value = false
     plansDirty.value = false
+    await loadNextWeekScheduleCompletion()
     alert('已保存')
   } catch (e) {
     alert(e?.response?.data?.detail || '保存失败')
@@ -1441,6 +1792,8 @@ async function handleClear() {
 
 async function handleSaveConfig() {
   if (!selectedDept.value) return
+  const emailRecipients = normalizeEmailRecipients()
+  if (emailRecipients === null) return
   try {
     await saveShiftConfig({
       department: selectedDept.value,
@@ -1448,11 +1801,33 @@ async function handleSaveConfig() {
       workday_night: config.workday_night,
       weekend_day: config.weekend_day,
       weekend_night: config.weekend_night,
+      email_recipients: emailRecipients,
       current_user: getCurrentUser(),
     })
+    setEmailRecipients(emailRecipients)
+    await loadNextWeekScheduleCompletion()
     alert('配置已保存')
   } catch (e) {
-    alert('保存配置失败')
+    alert(e?.response?.data?.detail || '保存配置失败')
+  }
+}
+
+async function handleSendScheduleEmail() {
+  if (!isManager.value || !selectedDept.value || sendingScheduleEmail.value) return
+  const { start, end } = nextWeekRange(sendCountdownNow.value)
+  if (!confirm(`确认发送 ${selectedDept.value} ${toYMD(start)} 至 ${toYMD(end)} 的周排班邮件吗？`)) return
+  sendingScheduleEmail.value = true
+  try {
+    const res = await runShiftScheduleEmail({
+      current_user: getCurrentUser(),
+      department: selectedDept.value,
+      week_date: toYMD(start),
+    })
+    alert(res?.message || '排班邮件发送完成')
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '发送排班邮件失败')
+  } finally {
+    sendingScheduleEmail.value = false
   }
 }
 
@@ -1498,6 +1873,7 @@ async function handleBatchLock(open) {
 const showExportPanel = ref(false)
 const exportYear = ref(new Date().getFullYear())
 const exportMonth = ref(new Date().getMonth() + 1)
+const exportWeekDate = ref(toYMD(nextSaturdayOf(new Date())))
 const exportFormat = ref('month')
 const exportHoliday = ref('')
 const exportHolidayOptions = ref([])
@@ -1507,6 +1883,21 @@ const exporting = ref(false)
 const exportScopeLabel = computed(() => {
   if (exportFormat.value === 'holiday' && exportDeptScope.value === 'all') return '全部门汇总'
   return selectedDept.value || '未选择科室'
+})
+
+function nextSaturdayOf(d) {
+  const x = new Date(d.getFullYear(), d.getMonth(), d.getDate())
+  x.setDate(x.getDate() + ((6 - x.getDay() + 7) % 7))
+  return x
+}
+
+const exportWeekRangeLabel = computed(() => {
+  const anchor = parseYMD(exportWeekDate.value || toYMD(new Date()))
+  const start = new Date(anchor)
+  start.setDate(start.getDate() - ((start.getDay() + 1) % 7))
+  const end = new Date(start)
+  end.setDate(end.getDate() + 6)
+  return `${toYMD(start)} 至 ${toYMD(end)}`
 })
 
 async function loadExportHolidayOptions() {
@@ -1540,8 +1931,8 @@ watch(selectedDept, (val) => {
 })
 
 async function handleExportExcel() {
-  if (exportFormat.value === 'month' && !selectedDept.value) {
-    alert('月排班表请先选择科室')
+  if ((exportFormat.value === 'month' || exportFormat.value === 'week') && !selectedDept.value) {
+    alert(`${exportFormat.value === 'week' ? '周排班表' : '月排班表'}请先选择科室`)
     return
   }
   if (exportFormat.value === 'holiday' && !exportHoliday.value) {
@@ -1560,6 +1951,8 @@ async function handleExportExcel() {
     })
     if (exportFormat.value === 'month') {
       params.set('month', String(exportMonth.value))
+    } else if (exportFormat.value === 'week') {
+      params.set('week_date', exportWeekDate.value || toYMD(new Date()))
     } else {
       params.set('holiday', exportHoliday.value)
     }
@@ -1576,7 +1969,9 @@ async function handleExportExcel() {
     const a = document.createElement('a')
     a.href = URL.createObjectURL(blob)
     const scopeName = exportDept === '__ALL__' ? '全部门汇总' : selectedDept.value
-    const suffix = exportFormat.value === 'holiday' ? `${exportHoliday.value}期间值班值宿人员安排表` : `${exportMonth.value}月_排班表`
+    const suffix = exportFormat.value === 'holiday'
+      ? `${exportHoliday.value}期间值班值宿人员安排表`
+      : (exportFormat.value === 'week' ? `${exportWeekRangeLabel.value}_周排班明细` : `${exportMonth.value}月_排班表`)
     a.download = `${scopeName}_${exportYear.value}年${suffix}.xlsx`
     document.body.appendChild(a)
     a.click()
@@ -1595,12 +1990,11 @@ async function handleExportExcel() {
 .shift-page {
   width: 100%;
   max-width: none;
-  height: calc(100vh - 96px);
-  min-height: 0;
-  padding: 0 0 var(--spacing-md);
+  min-height: calc(100vh - 40px);
+  padding: 0 0 8px;
   display: flex;
   flex-direction: column;
-  overflow: hidden;
+  overflow: visible;
 }
 .shift-cap-toast {
   position: fixed;
@@ -1627,7 +2021,7 @@ async function handleExportExcel() {
 .shift-cap-toast-fade-leave-to {
   opacity: 0;
 }
-.page-header { margin-bottom: var(--spacing-lg); text-align: left; }
+.page-header { margin-bottom: 8px; text-align: left; }
 /* 覆盖 global.css 中 .page-header .header-content 的 space-between，避免标题与规则块左右分列 */
 .shift-page .page-header .header-content {
   display: flex;
@@ -1707,8 +2101,8 @@ async function handleExportExcel() {
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-sm);
   border: 1px solid var(--color-border-lighter);
-  padding: var(--spacing-md) var(--spacing-lg);
-  margin-bottom: var(--spacing-md);
+  padding: 10px var(--spacing-lg);
+  margin-bottom: 8px;
 }
 
 /* 工具栏 */
@@ -1717,6 +2111,37 @@ async function handleExportExcel() {
 .toolbar-label { font-size: var(--font-size-sm); color: var(--color-text-secondary); }
 .toolbar-select { padding: 4px 8px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); font-size: var(--font-size-sm); }
 .toolbar-month { font-weight: var(--font-weight-bold); font-size: var(--font-size-sm); min-width: 200px; max-width: 320px; text-align: center; line-height: 1.35; }
+.send-countdown {
+  width: clamp(360px, 42vw, 620px);
+  height: 32px;
+  overflow: hidden;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: 12px;
+  line-height: 32px;
+}
+.send-countdown-track {
+  transition: transform 0.35s ease;
+  will-change: transform;
+}
+.send-countdown-item {
+  height: 32px;
+  padding: 0 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.send-countdown-status {
+  font-weight: 700;
+}
+.send-countdown-status.is-complete {
+  color: #15803d;
+}
+.send-countdown-status.is-incomplete {
+  color: #dc2626;
+}
 .btn { cursor: pointer; border: 1px solid var(--color-border-base); background: white; border-radius: var(--radius-sm); padding: 4px 12px; font-size: var(--font-size-sm); transition: all .15s; }
 .btn:hover { background: var(--color-primary-lightest, #eff6ff); }
 .btn:disabled { opacity: .5; cursor: not-allowed; }
@@ -1731,7 +2156,7 @@ async function handleExportExcel() {
 .config-panel,
 .export-panel {
   flex-shrink: 0;
-  max-height: 220px;
+  max-height: 360px;
   overflow-y: auto;
 }
 .config-panel h3, .export-panel h3 { margin: 0 0 12px; font-size: var(--font-size-base); }
@@ -1741,9 +2166,43 @@ async function handleExportExcel() {
 .config-item { display: flex; flex-direction: column; gap: 4px; }
 .config-item label { font-size: 12px; color: var(--color-text-secondary); }
 .config-item input { width: 80px; padding: 4px 8px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); text-align: center; }
+.recipient-config {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--color-border-lighter, #e5e7eb);
+}
+.recipient-config-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text-primary, #1f2937);
+}
+.recipient-list { display: flex; flex-direction: column; gap: 8px; }
+.recipient-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.recipient-row input {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
+.recipient-name { width: 140px; }
+.recipient-email { width: 260px; max-width: min(260px, 100%); }
+.recipient-empty {
+  font-size: 12px;
+  color: var(--color-text-tertiary, #94a3b8);
+}
 
 /* 图例 */
-.legend { display: flex; align-items: center; gap: 16px; margin-bottom: var(--spacing-sm); font-size: 13px; color: var(--color-text-secondary); flex-wrap: wrap; }
+.legend { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; font-size: 13px; color: var(--color-text-secondary); flex-wrap: wrap; }
 .legend-item { display: flex; align-items: center; gap: 4px; }
 .legend-dot { width: 14px; height: 14px; border-radius: 3px; display: inline-block; }
 .legend-day { background: #dbeafe; border: 1px solid #93c5fd; }
@@ -1757,19 +2216,19 @@ async function handleExportExcel() {
 
 /* 排班网格 */
 .schedule-wrap {
-  flex: 1 1 0;
+  flex: 0 0 auto;
   min-height: 0;
   padding: 0;
-  overflow: hidden;
+  overflow: visible;
   display: flex;
   flex-direction: column;
 }
 .schedule-scroll {
-  flex: 1 1 auto;
+  flex: 0 0 auto;
   min-height: 0;
-  height: 100%;
+  height: auto;
   overflow-x: auto;
-  overflow-y: auto;
+  overflow-y: visible;
 }
 .schedule-table {
   border-collapse: collapse;

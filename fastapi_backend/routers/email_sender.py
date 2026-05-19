@@ -17,7 +17,7 @@ from email import encoders
 from email.header import Header
 from typing import Optional, List, Dict
 from io import BytesIO
-from datetime import datetime, timedelta
+from datetime import datetime, date, timedelta
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -1051,6 +1051,314 @@ async def auto_reminder_background_loop():
                 )
         except Exception as e:
             logger.error(f"[AutoReminder] 循环异常: {e}")
+            await asyncio.sleep(300)
+
+
+# ==================== 周排班自动邮件 ====================
+
+SHIFT_SCHEDULE_SEND_WEEKDAY = 4
+SHIFT_SCHEDULE_SEND_HOUR = 17
+SHIFT_SCHEDULE_SEND_CHECK_SECONDS = 60
+
+
+def _ensure_shift_schedule_email_log_table():
+    db.execute_update("""
+        CREATE TABLE IF NOT EXISTS shift_schedule_email_log (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          department VARCHAR(100) NOT NULL,
+          week_start DATE NOT NULL,
+          week_end DATE NOT NULL,
+          trigger_label VARCHAR(100) NULL,
+          recipient_count INT NOT NULL DEFAULT 0,
+          status VARCHAR(20) NOT NULL DEFAULT 'ok',
+          message VARCHAR(500) NULL,
+          sent_at DATETIME NOT NULL,
+          UNIQUE KEY uk_shift_mail_week (department, week_start, status),
+          INDEX idx_shift_mail_sent_at (sent_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+
+
+def _shift_schedule_email_sent(department: str, week_start: date) -> bool:
+    _ensure_shift_schedule_email_log_table()
+    rows = db.execute_query(
+        "SELECT id FROM shift_schedule_email_log "
+        "WHERE department = %s AND week_start = %s AND status = 'ok' LIMIT 1",
+        (department, week_start.strftime("%Y-%m-%d")),
+    )
+    return bool(rows)
+
+
+def _record_shift_schedule_email_log(
+    department: str,
+    week_start: date,
+    week_end: date,
+    trigger_label: str,
+    recipient_count: int,
+    status: str,
+    message: str,
+):
+    _ensure_shift_schedule_email_log_table()
+    db.execute_update(
+        "INSERT INTO shift_schedule_email_log "
+        "(department, week_start, week_end, trigger_label, recipient_count, status, message, sent_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON DUPLICATE KEY UPDATE recipient_count = %s, trigger_label = %s, message = %s, sent_at = %s",
+        (
+            department,
+            week_start.strftime("%Y-%m-%d"),
+            week_end.strftime("%Y-%m-%d"),
+            trigger_label,
+            recipient_count,
+            status,
+            (message or "")[:500],
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            recipient_count,
+            trigger_label,
+            (message or "")[:500],
+            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        ),
+    )
+
+
+def _shift_schedule_target_week(now: Optional[datetime] = None) -> date:
+    """周五 17:00 发送的是次日周六到下周五的周排班。"""
+    from routers.shift_schedule import _week_saturday_range
+    current = now or datetime.now()
+    week_start, _week_end = _week_saturday_range(current.date() + timedelta(days=1))
+    return week_start
+
+
+def _get_shift_config_recipients(department: str) -> List[dict]:
+    from routers.shift_schedule import _parse_shift_email_recipients
+    try:
+        rows = db.execute_query(
+            "SELECT email_recipients FROM shift_config WHERE department = %s LIMIT 1",
+            (department,),
+        )
+        if rows:
+            return _parse_shift_email_recipients(rows[0].get("email_recipients"))
+    except Exception as e:
+        logger.warning("[ShiftScheduleEmail] 读取排班收件人失败 %s: %s", department, e)
+    return []
+
+
+def _get_shift_dept_leader_recipients(department: str) -> List[dict]:
+    from routers.approvers import _jb_match
+    rows = db.execute_query(
+        "SELECT name, jb, enterprise_email FROM yggl "
+        "WHERE lsys = %s AND name IS NOT NULL AND TRIM(name) != '' "
+        "AND COALESCE(zaizhi,0) = 0",
+        (department,),
+    )
+    leaders = []
+    for r in rows or []:
+        jb = (r.get("jb") or "").strip()
+        if not (_jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长")):
+            continue
+        email = (r.get("enterprise_email") or "").strip()
+        if not email:
+            continue
+        leaders.append({"name": (r.get("name") or "").strip(), "email": email, "jb": jb})
+    return leaders
+
+
+def _resolve_shift_schedule_email_scope(current_user: str, requested_department: Optional[str]) -> Optional[str]:
+    """管理员可发全部/指定科室；科室主任、副主任、班组长只能发本科室。"""
+    user = (current_user or "").strip()
+    if not user:
+        raise HTTPException(status_code=403, detail="请先登录")
+
+    admin1 = _get_admin1()
+    req_dept = (requested_department or "").strip()
+    if admin1 and user == admin1:
+        return req_dept or None
+
+    from routers.approvers import _jb_match
+    rows = db.execute_query(
+        "SELECT lsys, jb FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+        (user,),
+    )
+    if not rows:
+        raise HTTPException(status_code=403, detail="未找到当前用户信息，无法发送排班邮件")
+    my_dept = (rows[0].get("lsys") or "").strip()
+    jb = (rows[0].get("jb") or "").strip()
+    is_shift_manager = _jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长")
+    if not is_shift_manager or not my_dept:
+        raise HTTPException(status_code=403, detail="仅本科室主任、副主任、班组长可手动发送排班邮件")
+    if req_dept and req_dept != my_dept:
+        raise HTTPException(status_code=403, detail="仅可发送本人所在科室的排班邮件")
+    return my_dept
+
+
+def _merge_shift_email_recipients(*groups: List[dict]) -> List[dict]:
+    merged = []
+    seen = set()
+    for group in groups:
+        for item in group or []:
+            email = (item.get("email") or "").strip()
+            if not email:
+                continue
+            key = email.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append({"name": (item.get("name") or "").strip(), "email": email})
+    return merged
+
+
+def _build_shift_schedule_email_body(report: dict) -> str:
+    week_start = report["week_start"]
+    week_end = report["week_end"]
+    return (
+        "<p>各位领导同事您好：</p>"
+        f"<p>以下为{report['department']} {week_start.month}月{week_start.day}日"
+        f"至{week_end.month}月{week_end.day}日排班计划，附件为周排班表。</p>"
+        f"{report['html_table']}"
+        "<p>本邮件由系统自动发送，请以系统内最新排班为准。</p>"
+    )
+
+
+async def run_shift_schedule_email_once(
+    trigger_label: str = "周五17:00自动发送",
+    target_week_start: Optional[date] = None,
+    department_filter: Optional[str] = None,
+    force: bool = False,
+) -> dict:
+    """发送周排班邮件：配置收件人 + 本科室主任/副主任/班组长。"""
+    from routers.shift_schedule import _get_shift_departments, build_week_schedule_report
+
+    cfg = _get_email_config()
+    sender_addr = cfg["address"]
+    password = cfg["auth_code"]
+    if not sender_addr or not password:
+        return {"success": False, "message": "邮箱未配置，无法发送周排班邮件", "sent": 0, "skipped": 0, "errors": 0}
+
+    week_start = target_week_start or _shift_schedule_target_week()
+    departments = [department_filter] if department_filter else _get_shift_departments()
+    sent = 0
+    skipped = 0
+    errors = 0
+    details = []
+
+    for dept in [d for d in departments if d]:
+        if not force and _shift_schedule_email_sent(dept, week_start):
+            skipped += 1
+            details.append({"department": dept, "status": "skipped", "message": "本周已发送"})
+            continue
+
+        try:
+            report = build_week_schedule_report(dept, week_start)
+            recipients = _merge_shift_email_recipients(
+                _get_shift_config_recipients(dept),
+                _get_shift_dept_leader_recipients(dept),
+            )
+            emails = [r["email"] for r in recipients]
+            if not emails:
+                skipped += 1
+                details.append({"department": dept, "status": "skipped", "message": "未配置有效收件人或领导邮箱"})
+                continue
+
+            subject = f"{report['week_start'].month}月{report['week_start'].day}日排班智能制造工艺部{dept}排班计划（自动发送）"
+            attachment = AttachmentItem(
+                filename=report["filename"],
+                content_base64=base64.b64encode(report["excel_bytes"]).decode("utf-8"),
+            )
+            msg = _build_email_message(
+                sender_addr,
+                emails,
+                [],
+                subject,
+                _build_shift_schedule_email_body(report),
+                "html",
+                [attachment],
+            )
+            success_count, failures = _smtp_send_batch(sender_addr, password, [(emails, msg)])
+            if success_count:
+                sent += 1
+                _record_shift_schedule_email_log(
+                    dept,
+                    report["week_start"],
+                    report["week_end"],
+                    trigger_label,
+                    len(emails),
+                    "ok",
+                    f"已发送给 {len(emails)} 个收件人",
+                )
+                details.append({"department": dept, "status": "ok", "recipientCount": len(emails)})
+            else:
+                errors += 1
+                msg_text = "；".join(failures) if failures else "SMTP 未返回成功"
+                _record_shift_schedule_email_log(
+                    dept,
+                    report["week_start"],
+                    report["week_end"],
+                    trigger_label,
+                    len(emails),
+                    "error",
+                    msg_text,
+                )
+                details.append({"department": dept, "status": "error", "message": msg_text[:200]})
+        except Exception as e:
+            errors += 1
+            logger.error("[ShiftScheduleEmail] %s 周排班邮件发送失败: %s", dept, e)
+            details.append({"department": dept, "status": "error", "message": str(e)[:200]})
+
+    return {
+        "success": errors == 0,
+        "message": f"周排班邮件发送完成：成功 {sent} 个科室，跳过 {skipped} 个科室，失败 {errors} 个科室",
+        "weekStart": week_start.strftime("%Y-%m-%d"),
+        "sent": sent,
+        "skipped": skipped,
+        "errors": errors,
+        "details": details,
+    }
+
+
+@router.post("/run-shift-schedule-email")
+async def run_shift_schedule_email_api(
+    current_user: str = Query(...),
+    week_date: Optional[str] = Query(None, description="指定日期所属的周六-周五排班周"),
+    department: Optional[str] = Query(None, description="只发送指定科室，留空则全部科室"),
+    force: bool = Query(False, description="是否忽略已发送记录强制发送"),
+):
+    scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
+    target_week_start = None
+    if week_date:
+        from routers.shift_schedule import _parse_iso_date, _week_saturday_range
+        anchor = _parse_iso_date(week_date)
+        if not anchor:
+            raise HTTPException(status_code=400, detail="week_date 格式应为 YYYY-MM-DD")
+        target_week_start, _ = _week_saturday_range(anchor)
+    result = await run_shift_schedule_email_once(
+        "手动触发周排班邮件",
+        target_week_start=target_week_start,
+        department_filter=scoped_department,
+        force=force,
+    )
+    return result
+
+
+async def shift_schedule_email_background_loop():
+    """周五 17:00 自动发送本周六至下周五排班邮件。"""
+    logger.info("[ShiftScheduleEmail] 周排班自动邮件后台任务已启动")
+    print("[System] 周排班自动邮件后台任务已启动")
+    last_triggered = set()
+    while True:
+        try:
+            await asyncio.sleep(SHIFT_SCHEDULE_SEND_CHECK_SECONDS)
+            now = datetime.now()
+            if now.weekday() != SHIFT_SCHEDULE_SEND_WEEKDAY or now.hour != SHIFT_SCHEDULE_SEND_HOUR or now.minute > 1:
+                continue
+            run_key = now.strftime("%Y-%m-%d")
+            if run_key in last_triggered:
+                continue
+            last_triggered.add(run_key)
+            if len(last_triggered) > 20:
+                last_triggered = set(sorted(last_triggered)[-10:])
+            await run_shift_schedule_email_once("周五17:00自动发送")
+        except Exception as e:
+            logger.error("[ShiftScheduleEmail] 循环异常: %s", e)
             await asyncio.sleep(300)
 
 

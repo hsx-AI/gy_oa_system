@@ -96,7 +96,7 @@ const displayTodoList = computed(() => {
   if (shiftCoverageGap.value?.hasPending) {
     const gap = shiftCoverageGap.value
     const dept = gap.department || '本科室'
-    const range = gap.startDate && gap.endDate ? `${gap.startDate}至${gap.endDate}` : '当前至下周周末'
+    const range = gap.startDate && gap.endDate ? `${gap.startDate}至${gap.endDate}` : '本周六至下周五'
     const summary = gap.summary ? `：${gap.summary}` : ''
     list.push({
       uniqueId: 'shift-coverage-gap',
