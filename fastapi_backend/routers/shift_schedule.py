@@ -1334,7 +1334,6 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
 
     people = _get_dept_people(department)
     people_by_name = {p["name"]: p for p in people}
-    trip_map = _get_dept_business_trips(department, week_start, week_end)
 
     def _person(name: str) -> dict:
         return people_by_name.get(name) or {"name": name, "jb": "", "mobile": "", "telephone": ""}
@@ -1351,7 +1350,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     for di in date_info:
         ds = di["date"]
         day_prepare, day_service, night_prepare, night_service = [], [], [], []
-        duty_names, trip_entries = [], []
+        duty_names = []
         for emp in employees:
             st = schedule.get(emp, {}).get(ds, "")
             loc = locations.get(emp, {}).get(ds, "")
@@ -1367,9 +1366,6 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
                     night_prepare.append(emp)
                 else:
                     night_service.append(emp)
-            project = trip_map.get(emp, {}).get(ds)
-            if project:
-                trip_entries.append(f"{emp}（{project}）" if project != "公出" else emp)
         contact_names = _uniq(duty_names)
         rows_data.append({
             "date": ds,
@@ -1381,7 +1377,6 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
             "contacts": "\n".join(_phone_line(n) for n in contact_names),
             "plan": day_plans.get(ds, ""),
             "count": len(set(duty_names)),
-            "trips": "\n".join(trip_entries),
             "remark": "",
             "dateInfo": di,
         })
@@ -1412,21 +1407,21 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     ws.title = "每日汇总"
     ws.sheet_properties.tabColor = "10B981"
     title = f"{department} {ds_lo} 至 {ds_hi} 周排班每日汇总"
-    ws.merge_cells("A1:K1")
+    ws.merge_cells("A1:J1")
     ws["A1"] = title
     ws["A1"].font = font_title
     ws["A1"].alignment = Alignment(horizontal="center", vertical="center")
     ws.row_dimensions[1].height = 30
 
-    headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "公出人员", "备注"]
-    keys = ["date", "weekday", "dayPrepare", "dayService", "nightPrepare", "nightService", "contacts", "plan", "count", "trips", "remark"]
+    headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "备注"]
+    keys = ["date", "weekday", "dayPrepare", "dayService", "nightPrepare", "nightService", "contacts", "plan", "count", "remark"]
     for col, header in enumerate(headers, start=1):
         c = ws.cell(row=2, column=col, value=header)
         c.font = font_header
         c.alignment = align_center
         c.fill = fill_header
         c.border = thin_border
-    widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 32, 24]
+    widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 24]
     for idx, width in enumerate(widths, start=1):
         ws.column_dimensions[get_column_letter(idx)].width = width
 
@@ -1434,7 +1429,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
         for col, key in enumerate(keys, start=1):
             c = ws.cell(row=row_idx, column=col, value=row[key])
             c.font = font_body
-            c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10, 11) else "center", vertical="center", wrap_text=True)
+            c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10) else "center", vertical="center", wrap_text=True)
             c.border = thin_border
             cfill = _cell_fill_for_date(row["dateInfo"])
             if cfill and col in (1, 2):
@@ -1958,7 +1953,6 @@ async def export_schedule_excel(
     def _export_week_schedule_excel():
         people = _get_dept_people(department)
         people_by_name = {p["name"]: p for p in people}
-        trip_map = _get_dept_business_trips(department, dates[0], dates[-1])
 
         def _person(name: str) -> dict:
             return people_by_name.get(name) or {"name": name, "jb": "", "mobile": "", "telephone": ""}
@@ -1981,28 +1975,28 @@ async def export_schedule_excel(
 
         week_start_text = dates[0].strftime("%Y-%m-%d")
         week_end_text = dates[-1].strftime("%Y-%m-%d")
-        ws.merge_cells("A1:K1")
+        ws.merge_cells("A1:J1")
         t = ws["A1"]
         t.value = f"{department} {week_start_text} 至 {week_end_text} 周排班每日汇总"
         t.font = font_title
         t.alignment = Alignment(horizontal="center", vertical="center")
         ws.row_dimensions[1].height = 30
 
-        headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "公出人员", "备注"]
+        headers = ["日期", "星期/节假日", "白班准备组", "白班服务组", "夜班准备组", "夜班服务组", "联系方式", "工作计划", "当日值班人数", "备注"]
         for col, header in enumerate(headers, start=1):
             c = ws.cell(row=2, column=col, value=header)
             c.font = font_header
             c.alignment = align_center
             c.fill = fill_header
             c.border = thin_border
-        widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 32, 24]
+        widths = [13, 18, 30, 30, 30, 30, 42, 48, 12, 24]
         for idx, width in enumerate(widths, start=1):
             ws.column_dimensions[get_column_letter(idx)].width = width
 
         for row_idx, di in enumerate(date_info, start=3):
             ds = di["date"]
             day_prepare, day_service, night_prepare, night_service = [], [], [], []
-            duty_names, trip_entries = [], []
+            duty_names = []
             for emp in employees:
                 st = schedule.get(emp, {}).get(ds, "")
                 loc = export_locations.get(emp, {}).get(ds, "")
@@ -2018,9 +2012,6 @@ async def export_schedule_excel(
                         night_prepare.append(emp)
                     else:
                         night_service.append(emp)
-                project = trip_map.get(emp, {}).get(ds)
-                if project:
-                    trip_entries.append(f"{emp}（{project}）" if project != "公出" else emp)
             contact_names = []
             for name in duty_names:
                 if name not in contact_names:
@@ -2035,13 +2026,12 @@ async def export_schedule_excel(
                 "\n".join(_phone_line(n) for n in contact_names),
                 day_plans.get(ds, ""),
                 len(set(duty_names)),
-                "\n".join(trip_entries),
                 "",
             ]
             for col, value in enumerate(values, start=1):
                 c = ws.cell(row=row_idx, column=col, value=value)
                 c.font = font_body
-                c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10, 11) else "center", vertical="center", wrap_text=True)
+                c.alignment = Alignment(horizontal="left" if col in (3, 4, 5, 6, 7, 8, 10) else "center", vertical="center", wrap_text=True)
                 c.border = thin_border
                 cfill = _cell_fill_for_date(di)
                 if cfill and col in (1, 2):

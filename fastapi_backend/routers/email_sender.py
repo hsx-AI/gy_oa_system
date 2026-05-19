@@ -1221,7 +1221,6 @@ def _build_shift_schedule_email_body(report: dict) -> str:
         f"<p>以下为{report['department']} {week_start.month}月{week_start.day}日"
         f"至{week_end.month}月{week_end.day}日排班计划，附件为周排班表。</p>"
         f"{report['html_table']}"
-        "<p>本邮件由系统自动发送，请以系统内最新排班为准。</p>"
     )
 
 
@@ -1343,6 +1342,52 @@ async def run_shift_schedule_email_api(
         force=force,
     )
     return result
+
+
+@router.get("/shift-schedule-email-sent-weeks")
+async def get_shift_schedule_email_sent_weeks_api(
+    current_user: str = Query(...),
+    department: str = Query(...),
+    start_date: str = Query(..., description="修改日期范围起始 YYYY-MM-DD"),
+    end_date: str = Query(..., description="修改日期范围结束 YYYY-MM-DD"),
+):
+    scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
+    if not scoped_department:
+        raise HTTPException(status_code=400, detail="请指定科室")
+    from routers.shift_schedule import _parse_iso_date, _week_saturday_range
+    start = _parse_iso_date(start_date)
+    end = _parse_iso_date(end_date)
+    if not start or not end:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+    if start > end:
+        start, end = end, start
+    _ensure_shift_schedule_email_log_table()
+    rows = db.execute_query(
+        "SELECT week_start, week_end, MAX(sent_at) AS sent_at "
+        "FROM shift_schedule_email_log "
+        "WHERE department = %s AND status = 'ok' AND week_end >= %s AND week_start <= %s "
+        "GROUP BY week_start, week_end ORDER BY week_start",
+        (scoped_department, start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")),
+    )
+    weeks = []
+    for r in rows or []:
+        ws = r.get("week_start")
+        we = r.get("week_end")
+        ws_date = ws if isinstance(ws, date) else _parse_iso_date(str(ws)[:10])
+        we_date = we if isinstance(we, date) else _parse_iso_date(str(we)[:10])
+        if not ws_date or not we_date:
+            continue
+        weeks.append({
+            "weekStart": ws_date.strftime("%Y-%m-%d"),
+            "weekEnd": we_date.strftime("%Y-%m-%d"),
+            "sentAt": str(r.get("sent_at") or ""),
+        })
+    return {
+        "success": True,
+        "department": scoped_department,
+        "hasSent": bool(weeks),
+        "weeks": weeks,
+    }
 
 
 async def shift_schedule_email_background_loop():

@@ -599,7 +599,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions, runShiftScheduleEmail } from '@/api/shift'
+import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions, runShiftScheduleEmail, getShiftScheduleEmailSentWeeks } from '@/api/shift'
 import { getUploadConfig } from '@/api/attendance'
 import { isDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
@@ -663,6 +663,31 @@ const sendingScheduleEmail = ref(false)
 const dirty = ref(false)
 const plansDirty = ref(false)
 const effectiveDirty = computed(() => dirty.value || plansDirty.value)
+const changedShiftDates = new Set()
+const changedPlanDates = new Set()
+
+function markShiftDateChanged(dateStr) {
+  if (dateStr) changedShiftDates.add(dateStr)
+}
+
+function markPlanDateChanged(dateStr) {
+  if (dateStr) changedPlanDates.add(dateStr)
+}
+
+function clearChangedDates() {
+  changedShiftDates.clear()
+  changedPlanDates.clear()
+}
+
+function getChangedDateRange() {
+  const all = getChangedDates()
+  if (!all.length) return null
+  return { start: all[0], end: all[all.length - 1] }
+}
+
+function getChangedDates() {
+  return [...changedShiftDates, ...changedPlanDates].filter(Boolean).sort()
+}
 
 const LOCATION_OPTIONS = ['准备组', '服务组']
 const locPickerVisible = ref(false)
@@ -687,6 +712,7 @@ function pickLocation(loc) {
   if (!scheduleLocations[emp]) scheduleLocations[emp] = {}
   scheduleLocations[emp][ds] = loc
   dirty.value = true
+  markShiftDateChanged(ds)
   locPickerVisible.value = false
 }
 
@@ -772,6 +798,7 @@ function closePlanEditor() {
   if (planEditText.value !== (dayPlans[planEditDate.value] || '')) {
     dayPlans[planEditDate.value] = planEditText.value
     plansDirty.value = true
+    markPlanDateChanged(planEditDate.value)
   }
   planEditing.value = false
 }
@@ -1346,11 +1373,13 @@ async function loadSchedule() {
     config.weekend_day = 2
     config.weekend_night = 2
     setEmailRecipients([])
+    clearChangedDates()
     return
   }
   loading.value = true
   dirty.value = false
   plansDirty.value = false
+  clearChangedDates()
   try {
     const [schRes, cfgRes] = await Promise.all([
       getSchedule({
@@ -1473,6 +1502,7 @@ function cycleShift(emp, dateStr, event) {
   const caps = shiftCapsForDateStr(dateStr)
   scheduleData[emp][dateStr] = next
   dirty.value = true
+  markShiftDateChanged(dateStr)
   if (next === '白班' || next === '夜班') {
     if (event) showLocPicker(emp, dateStr, event)
   } else {
@@ -1524,6 +1554,7 @@ function toggleBothShift(emp, dateStr) {
     scheduleData[emp][dateStr] = '白+夜'
   }
   dirty.value = true
+  markShiftDateChanged(dateStr)
   const caps = shiftCapsForDateStr(dateStr)
   const cntDay = countShiftOnDate(dateStr, '白班')
   const cntNight = countShiftOnDate(dateStr, '夜班')
@@ -1666,9 +1697,45 @@ function holidayThClass(d) {
   return 'th-holiday-other'
 }
 
+async function getChangedSentWeeksForPrompt() {
+  if (!isManager.value || !selectedDept.value) return []
+  const range = getChangedDateRange()
+  if (!range) return []
+  try {
+    const res = await getShiftScheduleEmailSentWeeks({
+      current_user: getCurrentUser(),
+      department: selectedDept.value,
+      start_date: range.start,
+      end_date: range.end,
+    })
+    const changedDates = getChangedDates()
+    return (res?.weeks || []).filter((week) => (
+      changedDates.some((ds) => ds >= week.weekStart && ds <= week.weekEnd)
+    ))
+  } catch (e) {
+    console.error('检查排班邮件发送记录失败:', e)
+    return []
+  }
+}
+
+async function sendScheduleEmailsForWeeks(weeks) {
+  const results = []
+  for (const week of weeks || []) {
+    const res = await runShiftScheduleEmail({
+      current_user: getCurrentUser(),
+      department: selectedDept.value,
+      week_date: week.weekStart,
+      force: true,
+    })
+    results.push(res)
+  }
+  return results
+}
+
 async function handleSave() {
   if (!selectedDept.value) return
   saving.value = true
+  let resendWeeks = []
   try {
     const rs = parseYMD(rangeStartStr.value)
     const tasks = []
@@ -1703,11 +1770,30 @@ async function handleSave() {
       saving.value = false
       return
     }
+    const sentWeeks = await getChangedSentWeeksForPrompt()
+    if (sentWeeks.length) {
+      const ranges = sentWeeks.map(w => `${w.weekStart} 至 ${w.weekEnd}`).join('、')
+      const shouldResend = confirm(`您正在修改已经邮件通知过的排班（${ranges}），请问是否发送邮件通知收件人？`)
+      if (shouldResend) resendWeeks = sentWeeks
+    }
     await Promise.all(tasks)
+    let resendError = ''
+    if (resendWeeks.length) {
+      try {
+        await sendScheduleEmailsForWeeks(resendWeeks)
+      } catch (mailErr) {
+        resendError = mailErr?.response?.data?.detail || mailErr?.message || '发送失败'
+      }
+    }
     dirty.value = false
     plansDirty.value = false
+    clearChangedDates()
     await loadNextWeekScheduleCompletion()
-    alert('已保存')
+    if (resendError) {
+      alert(`已保存，但重新发送排班邮件失败：${resendError}`)
+    } else {
+      alert(resendWeeks.length ? '已保存，并已重新发送排班邮件' : '已保存')
+    }
   } catch (e) {
     alert(e?.response?.data?.detail || '保存失败')
   } finally {
