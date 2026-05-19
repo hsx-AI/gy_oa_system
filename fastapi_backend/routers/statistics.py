@@ -1312,11 +1312,80 @@ def _apply_overtime_pay_scope(
     return lsys, name
 
 
+def _resolve_jiaban_period_filter(
+    year: Optional[int],
+    month: Optional[int],
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Tuple[str, tuple, int, Optional[date], Optional[date]]:
+    """
+    解析 jiaban.timedate 筛选：年月 或 自定义闭区间 [date_from, date_to]。
+    返回 (sql_and片段, 参数元组, 主年份用于缺省, range_start, range_end)。
+    """
+    if date_from or date_to:
+        if not date_from or not date_to:
+            raise HTTPException(status_code=400, detail="date_from 与 date_to 需同时传入")
+        ds = _parse_date(date_from)
+        de = _parse_date(date_to)
+        if not ds or not de:
+            raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD")
+        if ds > de:
+            raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+        cond = " AND DATE(jiaban.timedate) >= %s AND DATE(jiaban.timedate) <= %s"
+        return cond, (ds.isoformat(), de.isoformat()), ds.year, ds, de
+
+    y = year if year is not None else datetime.now().year
+    if month is not None:
+        month_key = f"{y}-{month:02d}"
+        cond = (
+            " AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)"
+            " AND (MONTH(jiaban.timedate) = %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s)"
+        )
+        return cond, (f"{y}%", y, month, month_key), y, None, None
+
+    cond = " AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s)"
+    return cond, (f"{y}%", y), y, None, None
+
+
+def _load_holiday_festival_map_span(
+    year: int,
+    range_start: Optional[date] = None,
+    range_end: Optional[date] = None,
+) -> Dict[str, str]:
+    """加载节假日映射；跨年时合并各年假期表。"""
+    if range_start and range_end:
+        years = range(range_start.year, range_end.year + 1)
+        merged: Dict[str, str] = {}
+        for y in years:
+            merged.update(_load_holiday_festival_map(y))
+        return merged
+    return _load_holiday_festival_map(year)
+
+
+def _month_key_in_period(month_key: str, range_start: date, range_end: date) -> bool:
+    """YYYY-MM 是否与 [range_start, range_end] 有交集。"""
+    if not month_key or len(month_key) < 7:
+        return False
+    try:
+        parts = month_key.split("-")
+        y, m = int(parts[0]), int(parts[1])
+        import calendar
+
+        last_d = calendar.monthrange(y, m)[1]
+        m_start = date(y, m, 1)
+        m_end = date(y, m, last_d)
+        return not (m_end < range_start or m_start > range_end)
+    except (ValueError, IndexError):
+        return False
+
+
 @router.get("/dept/overtime-pay-by-month")
 async def get_dept_overtime_pay_by_month(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
-    month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
     name: Optional[str] = Query(None, description="仅查某人（如普通员工查本人）"),
     current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
     scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
@@ -1334,8 +1403,9 @@ async def get_dept_overtime_pay_by_month(
     """
     try:
         lsys, name = _apply_overtime_pay_scope(scope, current_user, scope_lsys, lsys, name)
-        if year is None:
-            year = datetime.now().year
+        date_cond, date_params, year, range_start, range_end = _resolve_jiaban_period_filter(
+            year, month, date_from, date_to
+        )
         zhibanfei = 15.0
         try:
             wc = db.execute_query("SELECT zhibanfei FROM webconfig WHERE id = 1 LIMIT 1")
@@ -1345,11 +1415,6 @@ async def get_dept_overtime_pay_by_month(
             pass
 
         only_person = name and name.strip()
-        month_cond = ""
-        month_params = ()
-        if month is not None:
-            month_cond = " AND (MONTH(jiaban.timedate) = %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s)"
-            month_params = (month, f"{year}-{month:02d}")
 
         if only_person:
             join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND jiaban.xm = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
@@ -1382,18 +1447,19 @@ async def get_dept_overtime_pay_by_month(
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是')
-              AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s){month_cond}
+              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
         """
-        rows = db.execute_query(query, join_param + (f"{year}%", year) + month_params)
+        rows = db.execute_query(query, join_param + date_params)
 
-        holiday_map = _load_holiday_festival_map(year)
+        holiday_map = _load_holiday_festival_map_span(year, range_start, range_end)
         per_month, _ = _aggregate_overtime_with_incentive(rows, holiday_map, zhibanfei)
 
         list_data = []
-        # 若指定 month，仅返回该月；否则返回所有已出现的月份
+        # 若指定 month（非自定义区间），仅返回该月；自定义区间返回区间内各月
         for month_key, agg in sorted(per_month.items()):
-            if month is not None and month_key != f"{year}-{month:02d}":
+            if month is not None and range_start is None and month_key != f"{year}-{month:02d}":
+                continue
+            if range_start and range_end and not _month_key_in_period(month_key, range_start, range_end):
                 continue
             hours = round(agg["hours"], 2)
             pay = round(agg["pay"], 2)
@@ -1413,7 +1479,9 @@ async def get_dept_overtime_pay_by_month(
 async def get_dept_overtime_pay_by_employee(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空返回空列表（传 name 时可为空）"),
     year: Optional[int] = None,
-    month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
     name: Optional[str] = Query(None, description="仅查某人（如普通员工查本人）"),
     current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
     scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
@@ -1428,8 +1496,9 @@ async def get_dept_overtime_pay_by_employee(
     """
     try:
         lsys, name = _apply_overtime_pay_scope(scope, current_user, scope_lsys, lsys, name)
-        if year is None:
-            year = datetime.now().year
+        date_cond, date_params, year, range_start, range_end = _resolve_jiaban_period_filter(
+            year, month, date_from, date_to
+        )
         zhibanfei = 15.0
         try:
             wc = db.execute_query("SELECT zhibanfei FROM webconfig WHERE id = 1 LIMIT 1")
@@ -1439,15 +1508,10 @@ async def get_dept_overtime_pay_by_employee(
             pass
 
         only_person = name and name.strip()
-        month_cond = ""
-        month_params = ()
-        if month is not None:
-            month_cond = " AND (MONTH(jiaban.timedate) = %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s)"
-            month_params = (month, f"{year}-{month:02d}")
 
         if only_person:
             join_cond = "INNER JOIN yggl ON jiaban.xm = yggl.name AND jiaban.xm = %s AND RIGHT(TRIM(yggl.name), 1) != '1' AND RIGHT(TRIM(yggl.lsys), 1) != '1' AND (COALESCE(yggl.zaizhi,0)=0)"
-            params = (name.strip(), f"{year}%", year) + month_params
+            params = (name.strip(),) + date_params
         else:
             if not lsys or not lsys.strip():
                 return {"success": True, "zhibanfei": zhibanfei, "list": []}
@@ -1458,7 +1522,7 @@ async def get_dept_overtime_pay_by_employee(
                 f"{_EXCL_BUBAN_MANAGERS_YGGL}"
                 "AND (COALESCE(yggl.zaizhi,0)=0)"
             )
-            params = (lsys.strip(), f"{year}%", year) + month_params
+            params = (lsys.strip(),) + date_params
 
         query = f"""
             SELECT jiaban.xm AS emp_name,
@@ -1466,12 +1530,11 @@ async def get_dept_overtime_pay_by_employee(
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是')
-              AND (jiaban.timedate LIKE %s OR YEAR(jiaban.timedate) = %s){month_cond}
+              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
         """
         rows = db.execute_query(query, params)
 
-        holiday_map = _load_holiday_festival_map(year)
+        holiday_map = _load_holiday_festival_map_span(year, range_start, range_end)
         _, per_employee = _aggregate_overtime_with_incentive(rows, holiday_map, zhibanfei)
 
         list_data = []
@@ -1491,19 +1554,29 @@ async def get_dept_overtime_pay_by_employee(
 
 @router.get("/dept/overtime-pay-export")
 async def get_overtime_pay_export(
-    year: int = Query(..., description="年份"),
-    month: int = Query(..., ge=1, le=12, description="月份（必选，用于按月工资报表）"),
+    year: Optional[int] = Query(None, description="年份（与 month 配合；自定义区间时可省略）"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
     current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
     scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
     scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
 ):
     """
-    按月导出其他绩效激励工资报表数据：全员 + 各科室。
-    以 yggl 名单为准，当月无加班记录者本月其他绩效激励为 0，保证科室人全。
-    当传入 current_user+scope 时按权限过滤：self 仅导出本人，lsys 仅本室，all 不限制。
+    导出其他绩效激励工资报表数据：全员 + 各科室。
+    指定 month 或 date_from+date_to 其一；以 yggl 名单为准，无记录者激励为 0。
     返回: { success, zhibanfei, all: [{ name, pay }], byDept: [{ lsys, list: [{ name, pay }] }] }
     """
     try:
+        if not ((date_from and date_to) or (year is not None and month is not None)):
+            raise HTTPException(
+                status_code=400,
+                detail="请指定 year+month，或同时传入 date_from 与 date_to",
+            )
+        date_cond, date_params, year, range_start, range_end = _resolve_jiaban_period_filter(
+            year, month, date_from, date_to
+        )
+
         zhibanfei = 15.0
         try:
             wc = db.execute_query("SELECT zhibanfei FROM webconfig WHERE id = 1 LIMIT 1")
@@ -1512,26 +1585,23 @@ async def get_overtime_pay_export(
         except Exception:
             pass
 
-        # 本月所有加班记录（不区分科室），用于计算激励与普通其他绩效激励
-        q_rows = """
+        q_rows = f"""
             SELECT jiaban.xm AS emp_name,
                    jiaban.timedate,
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban
             INNER JOIN yggl ON jiaban.xm = yggl.name
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是')
-              AND (YEAR(jiaban.timedate) = %s AND (MONTH(jiaban.timedate) = %s OR SUBSTRING(jiaban.timedate, 1, 7) = %s))
+              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
               AND RIGHT(TRIM(yggl.name), 1) != '1'
               AND RIGHT(TRIM(yggl.lsys), 1) != '1'
               AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
               AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
               AND (COALESCE(yggl.zaizhi,0)=0)
         """
-        month_key = f"{year}-{month:02d}"
-        rows = db.execute_query(q_rows, (year, month, month_key))
+        rows = db.execute_query(q_rows, date_params)
 
-        holiday_map = _load_holiday_festival_map(year)
+        holiday_map = _load_holiday_festival_map_span(year, range_start, range_end)
         _, per_employee = _aggregate_overtime_with_incentive(rows, holiday_map, zhibanfei)
 
         # 先准备全员名单（含部办非经理人员），再按 per_employee 中的 pay 填值，保证人全
@@ -1580,6 +1650,116 @@ async def get_overtime_pay_export(
         return {"success": True, "zhibanfei": zhibanfei, "all": list_all, "byDept": by_dept}
     except Exception as e:
         logger.error(f"其他绩效激励按月导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dept/overtime-hours-export")
+async def get_overtime_hours_export(
+    year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
+):
+    """
+    导出全部加班时长（含其他绩效激励与换休票两类，审核通过 jiabanzt=4）。
+    以 yggl 名单为准，无记录者各项为 0。
+    返回: { success, all: [{ name, totalHours, payHours, hxHours, times }], byDept: [...] }
+    """
+    try:
+        if not year and not (date_from and date_to):
+            raise HTTPException(
+                status_code=400,
+                detail="请传入 year，或同时传入 date_from 与 date_to",
+            )
+        date_cond, date_params, year, range_start, range_end = _resolve_jiaban_period_filter(
+            year, month, date_from, date_to
+        )
+
+        q_rows = f"""
+            SELECT jiaban.xm AS emp_name,
+                   CAST(COALESCE(NULLIF(TRIM(jiaban.tian1), ''), jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours,
+                   TRIM(COALESCE(jiaban.hx, '')) AS hx_flag
+            FROM jiaban
+            INNER JOIN yggl ON jiaban.xm = yggl.name
+            WHERE jiaban.jiabanzt = 4
+              {date_cond}
+              AND RIGHT(TRIM(yggl.name), 1) != '1'
+              AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
+              AND (COALESCE(yggl.zaizhi,0)=0)
+        """
+        rows = db.execute_query(q_rows, date_params)
+
+        per_employee: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: {"totalHours": 0.0, "payHours": 0.0, "hxHours": 0.0, "times": 0}
+        )
+        for r in rows or []:
+            emp_name = (r.get("emp_name") or "").strip()
+            if not emp_name:
+                continue
+            try:
+                h = float(r.get("hours") or 0)
+            except (TypeError, ValueError):
+                h = 0.0
+            if h <= 0:
+                continue
+            agg = per_employee[emp_name]
+            agg["totalHours"] += h
+            agg["times"] += 1
+            if (r.get("hx_flag") or "").strip() == "是":
+                agg["hxHours"] += h
+            else:
+                agg["payHours"] += h
+
+        yggl_rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
+            f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+            "AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
+        )
+
+        def _row_from_agg(emp_name: str) -> Dict[str, Any]:
+            agg = per_employee.get(emp_name, {})
+            return {
+                "name": emp_name,
+                "totalHours": round(float(agg.get("totalHours") or 0), 2),
+                "payHours": round(float(agg.get("payHours") or 0), 2),
+                "hxHours": round(float(agg.get("hxHours") or 0), 2),
+                "times": int(agg.get("times") or 0),
+            }
+
+        list_all = []
+        for r in yggl_rows or []:
+            emp_name = (r.get("name") or "").strip()
+            if emp_name:
+                list_all.append(_row_from_agg(emp_name))
+
+        lsys_list = sorted({(r.get("lsys") or "").strip() for r in (yggl_rows or []) if r.get("lsys")})
+        by_dept = []
+        for lsys in lsys_list:
+            dept_list = []
+            for r in yggl_rows or []:
+                emp_name = (r.get("name") or "").strip()
+                emp_lsys = (r.get("lsys") or "").strip()
+                if emp_name and emp_lsys == lsys:
+                    dept_list.append(_row_from_agg(emp_name))
+            by_dept.append({"lsys": lsys, "list": dept_list})
+
+        if current_user and scope == "self":
+            list_all = [x for x in list_all if (x.get("name") or "").strip() == (current_user or "").strip()]
+            by_dept = []
+        elif scope == "lsys" and scope_lsys:
+            lsys_val = (scope_lsys or "").strip()
+            by_dept = [x for x in by_dept if (x.get("lsys") or "").strip() == lsys_val]
+            dept_names = {n.get("name") for d in by_dept for n in (d.get("list") or [])}
+            list_all = [x for x in list_all if (x.get("name") or "") in dept_names]
+
+        return {"success": True, "all": list_all, "byDept": by_dept}
+    except Exception as e:
+        logger.error(f"全部加班时长导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

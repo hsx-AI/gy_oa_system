@@ -3,7 +3,7 @@
     <div class="page-header">
       <div class="header-content">
         <h1 class="header-title">其他绩效激励统计</h1>
-        <p class="header-subtitle">按科室、年份、月份查询</p>
+        <p class="header-subtitle">按科室、年月或自定义时间段查询与导出</p>
       </div>
     </div>
 
@@ -29,18 +29,26 @@
               <label class="form-label">范围</label>
               <span class="scope-self-label">本人</span>
             </div>
-            <div class="form-item">
+            <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
               <label class="form-label">年份</label>
-              <select v-model="filterYear" class="form-select">
+              <select v-model="filterYear" class="form-select" :disabled="isDateRangeMode">
                 <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}年</option>
               </select>
             </div>
-            <div class="form-item">
+            <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
               <label class="form-label">月份</label>
-              <select v-model="filterMonth" class="form-select">
+              <select v-model="filterMonth" class="form-select" :disabled="isDateRangeMode">
                 <option value="">全年</option>
                 <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
               </select>
+            </div>
+            <div class="form-item">
+              <label class="form-label">开始日期</label>
+              <input v-model="dateFrom" type="date" class="form-date" />
+            </div>
+            <div class="form-item">
+              <label class="form-label">结束日期</label>
+              <input v-model="dateTo" type="date" class="form-date" />
             </div>
             <div class="form-item form-actions">
               <button class="btn btn-primary" @click="fetchData" :disabled="loading">
@@ -54,7 +62,7 @@
               <button
                 type="button"
                 class="btn btn-outline"
-                :disabled="!filterMonth || exportLoading"
+                :disabled="(!filterMonth && !isDateRangeMode) || exportLoading"
                 @click="downloadExcel"
               >
                 <span v-if="exportLoading">生成中...</span>
@@ -63,7 +71,17 @@
               <button
                 type="button"
                 class="btn btn-outline"
-                :disabled="fullAttendanceExportLoading"
+                :disabled="overtimeHoursExportLoading"
+                @click="downloadOvertimeHoursExcel"
+              >
+                <span v-if="overtimeHoursExportLoading">生成中...</span>
+                <span v-else>导出全部加班时长</span>
+              </button>
+              <button
+                type="button"
+                class="btn btn-outline"
+                :disabled="isDateRangeMode || fullAttendanceExportLoading"
+                :title="isDateRangeMode ? '满勤名单请使用年份/月份筛选' : ''"
                 @click="downloadFullAttendanceExcel"
               >
                 <span v-if="fullAttendanceExportLoading">生成中...</span>
@@ -72,7 +90,8 @@
               <button
                 type="button"
                 class="btn btn-outline"
-                :disabled="!filterMonth || attendanceReportLoading"
+                :disabled="isDateRangeMode || !filterMonth || attendanceReportLoading"
+                :title="isDateRangeMode ? '考勤表请使用年份/月份筛选' : ''"
                 @click="downloadAttendanceReportWord"
               >
                 <span v-if="attendanceReportLoading">生成中...</span>
@@ -80,7 +99,7 @@
               </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">下载其他绩效激励报表请先选择「月份」，将生成多 sheet：首 sheet 全员，其余为各科室。导出满勤名单首 sheet 为全员满勤人员姓名，其余为各科室明细；统计逻辑与管理驾驶舱一致（根据打卡数据识别，无异常建议即满勤）。下载考勤表(Word)按所选科室和月份自动填充人员及各假别天数（换休不影响全勤，最小0.25天进位）。</p>
+          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「下载 Excel 工资报表」「导出全部加班时长」均支持时间段；工资报表需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -92,7 +111,7 @@
             统计结果
           </h2>
           <p class="section-desc">
-            {{ scope === 'self' ? '本人' : (selectedLsys || '全员') }} {{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}
+            {{ scope === 'self' ? '本人' : (selectedLsys || '全员') }} {{ periodLabel }}
             （单价 {{ overtimePayZhibanfei }} 元/小时，十一、高温假、春节三个假期单日值班满8小时固定奖励200元/天，超出8小时不额外奖励）
           </p>
           <div v-if="overtimePayByMonth.length > 0" class="table-wrap">
@@ -151,7 +170,7 @@
         </div>
 
         <div v-if="!hasFetched && !loading" class="init-hint card">
-          <p>选择科室、年份与月份后点击「查询」查看其他绩效激励统计。</p>
+          <p>选择科室、年份与月份，或填写开始/结束日期后点击「查询」查看其他绩效激励统计。</p>
         </div>
       </template>
     </div>
@@ -162,7 +181,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import * as XLSX from 'xlsx'
-import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getFullAttendanceExport, downloadAttendanceReport } from '@/api/attendance'
+import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getOvertimeHoursExport, getFullAttendanceExport, downloadAttendanceReport } from '@/api/attendance'
 
 const router = useRouter()
 const canView = ref(false)
@@ -173,8 +192,11 @@ const lsysList = ref([])
 const selectedLsys = ref('')
 const filterYear = ref(new Date().getFullYear())
 const filterMonth = ref('')
+const dateFrom = ref('')
+const dateTo = ref('')
 const loading = ref(false)
 const exportLoading = ref(false)
+const overtimeHoursExportLoading = ref(false)
 const fullAttendanceExportLoading = ref(false)
 const attendanceReportLoading = ref(false)
 const hasFetched = ref(false)
@@ -187,14 +209,52 @@ const yearOptions = computed(() => {
   return [y, y - 1, y - 2, y - 3, y - 4, y - 5]
 })
 
+const isDateRangeMode = computed(() => Boolean(dateFrom.value && dateTo.value))
+
+const periodLabel = computed(() => {
+  if (isDateRangeMode.value) return `${dateFrom.value} 至 ${dateTo.value}`
+  return `${filterYear.value}年${filterMonth.value ? filterMonth.value + '月' : '全年'}`
+})
+
+function exportPeriodLabel() {
+  if (isDateRangeMode.value) return `${dateFrom.value}_${dateTo.value}`
+  if (filterMonth.value) return `${filterYear.value}年${filterMonth.value}月`
+  return `${filterYear.value}年全年`
+}
+
+function buildPeriodParams(extra = {}) {
+  const params = {
+    current_user: currentUserName.value,
+    scope: scope.value,
+    ...extra
+  }
+  if (scope.value === 'lsys' && scopeLsys.value) params.scope_lsys = scopeLsys.value
+  if ((dateFrom.value && !dateTo.value) || (!dateFrom.value && dateTo.value)) {
+    throw new Error('开始日期和结束日期需要同时选择')
+  }
+  if (isDateRangeMode.value) {
+    params.date_from = dateFrom.value
+    params.date_to = dateTo.value
+  } else {
+    params.year = filterYear.value
+    if (filterMonth.value) params.month = Number(filterMonth.value)
+  }
+  return params
+}
+
 const fetchData = async () => {
   loading.value = true
   hasFetched.value = true
-  const payParams = { year: filterYear.value, current_user: currentUserName.value, scope: scope.value }
-  if (scope.value === 'lsys' && scopeLsys.value) payParams.scope_lsys = scopeLsys.value
+  let payParams
+  try {
+    payParams = buildPeriodParams()
+  } catch (e) {
+    alert(e.message || '日期筛选无效')
+    loading.value = false
+    return
+  }
   if (scope.value === 'self') payParams.name = currentUserName.value
   else if (selectedLsys.value) payParams.lsys = selectedLsys.value
-  if (filterMonth.value) payParams.month = Number(filterMonth.value)
   try {
     const [resMonth, resEmp] = await Promise.all([
       getDeptOvertimePayByMonth(payParams),
@@ -206,6 +266,7 @@ const fetchData = async () => {
   } catch (e) {
     overtimePayByMonth.value = []
     overtimePayByEmployee.value = []
+    alert(e.response?.data?.detail || e.message || '查询失败')
   } finally {
     loading.value = false
   }
@@ -217,20 +278,53 @@ function sheetFromList(list) {
   return XLSX.utils.aoa_to_sheet([header, ...rows])
 }
 
+function overtimeHoursSheetFromList(list) {
+  const header = ['姓名', '加班总时长(小时)', '其他绩效激励时长(小时)', '换休票时长(小时)', '加班次数']
+  const rows = (list || []).map((item) => [
+    item.name || '',
+    item.totalHours ?? 0,
+    item.payHours ?? 0,
+    item.hxHours ?? 0,
+    item.times ?? 0
+  ])
+  return XLSX.utils.aoa_to_sheet([header, ...rows])
+}
+
+async function downloadOvertimeHoursExcel() {
+  overtimeHoursExportLoading.value = true
+  try {
+    const params = buildPeriodParams()
+    const res = await getOvertimeHoursExport(params)
+    if (!res?.success || res.all === undefined) {
+      alert('获取加班时长数据失败')
+      return
+    }
+    const wb = XLSX.utils.book_new()
+    const allSheet = overtimeHoursSheetFromList(res.all || [])
+    XLSX.utils.book_append_sheet(wb, allSheet, scope.value === 'self' ? '本人' : '全员')
+    for (const dept of res.byDept || []) {
+      const sheetName = (dept.lsys || '科室').slice(0, 31)
+      const sheet = overtimeHoursSheetFromList(dept.list || [])
+      XLSX.utils.book_append_sheet(wb, sheet, sheetName)
+    }
+    const fileName = `全部加班时长_${exportPeriodLabel()}.xlsx`
+    XLSX.writeFile(wb, fileName)
+  } catch (e) {
+    console.error(e)
+    alert(e.message || e.response?.data?.detail || '导出失败，请稍后重试')
+  } finally {
+    overtimeHoursExportLoading.value = false
+  }
+}
+
 async function downloadExcel() {
-  if (!filterMonth.value) {
-    alert('请先选择月份后再下载报表')
+  if (!filterMonth.value && !isDateRangeMode.value) {
+    alert('请先选择月份，或填写开始/结束日期后再下载报表')
     return
   }
   exportLoading.value = true
   try {
-    const res = await getOvertimePayExport({
-      year: filterYear.value,
-      month: Number(filterMonth.value),
-      current_user: currentUserName.value,
-      scope: scope.value,
-      ...(scope.value === 'lsys' && scopeLsys.value ? { scope_lsys: scopeLsys.value } : {})
-    })
+    const res = await getOvertimePayExport(buildPeriodParams())
     if (!res?.success || res.all === undefined) {
       alert('获取报表数据失败')
       return
@@ -244,11 +338,11 @@ async function downloadExcel() {
       const sheet = sheetFromList(dept.list || [])
       XLSX.utils.book_append_sheet(wb, sheet, sheetName)
     }
-    const fileName = `其他绩效激励工资报表_${filterYear.value}年${filterMonth.value}月.xlsx`
+    const fileName = `其他绩效激励工资报表_${exportPeriodLabel()}.xlsx`
     XLSX.writeFile(wb, fileName)
   } catch (e) {
     console.error(e)
-    alert('下载失败，请稍后重试')
+    alert(e.message || e.response?.data?.detail || '下载失败，请稍后重试')
   } finally {
     exportLoading.value = false
   }
@@ -402,12 +496,23 @@ onMounted(async () => {
   font-size: var(--font-size-sm);
   color: var(--color-text-secondary);
 }
-.form-select {
+.form-select,
+.form-date {
   min-width: 120px;
   padding: var(--spacing-sm) var(--spacing-md);
   border: 1px solid var(--color-border-base);
   border-radius: var(--radius-base);
   font-size: var(--font-size-sm);
+}
+.form-date {
+  min-width: 140px;
+}
+.form-item--disabled .form-label {
+  opacity: 0.6;
+}
+.form-item--disabled .form-select {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .scope-self-label {
   padding: var(--spacing-sm) var(--spacing-md);

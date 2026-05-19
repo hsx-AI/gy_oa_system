@@ -427,6 +427,11 @@ export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })
 }
 
+/** 全部加班时长导出（含其他绩效激励与换休票，全员+各科室） */
+export function getOvertimeHoursExport(params) {
+  return request({ url: '/dept/overtime-hours-export', method: 'get', params })
+}
+
 /** 全部科室列表（管理驾驶舱部长/副部长下拉用） */
 export function getDeptLsysList() {
   return request({ url: '/dept/lsys-list', method: 'get' })
