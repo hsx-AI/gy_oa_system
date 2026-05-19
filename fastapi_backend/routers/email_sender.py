@@ -1073,10 +1073,21 @@ def _ensure_shift_schedule_email_log_table():
           status VARCHAR(20) NOT NULL DEFAULT 'ok',
           message VARCHAR(500) NULL,
           sent_at DATETIME NOT NULL,
-          UNIQUE KEY uk_shift_mail_week (department, week_start, status),
+          INDEX idx_shift_mail_week (department, week_start, status),
           INDEX idx_shift_mail_sent_at (sent_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    try:
+        db.execute_update("ALTER TABLE shift_schedule_email_log DROP INDEX uk_shift_mail_week", ())
+    except Exception:
+        pass
+    try:
+        db.execute_update(
+            "ALTER TABLE shift_schedule_email_log ADD INDEX idx_shift_mail_week (department, week_start, status)",
+            (),
+        )
+    except Exception:
+        pass
 
 
 def _shift_schedule_email_sent(department: str, week_start: date) -> bool:
@@ -1102,8 +1113,7 @@ def _record_shift_schedule_email_log(
     db.execute_update(
         "INSERT INTO shift_schedule_email_log "
         "(department, week_start, week_end, trigger_label, recipient_count, status, message, sent_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) "
-        "ON DUPLICATE KEY UPDATE recipient_count = %s, trigger_label = %s, message = %s, sent_at = %s",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
         (
             department,
             week_start.strftime("%Y-%m-%d"),
@@ -1111,10 +1121,6 @@ def _record_shift_schedule_email_log(
             trigger_label,
             recipient_count,
             status,
-            (message or "")[:500],
-            datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-            recipient_count,
-            trigger_label,
             (message or "")[:500],
             datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
         ),

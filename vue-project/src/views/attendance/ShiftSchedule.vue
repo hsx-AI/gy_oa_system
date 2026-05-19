@@ -1822,6 +1822,7 @@ async function handleSendScheduleEmail() {
       current_user: getCurrentUser(),
       department: selectedDept.value,
       week_date: toYMD(start),
+      force: true,
     })
     alert(res?.message || '排班邮件发送完成')
   } catch (e) {
