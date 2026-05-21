@@ -4,8 +4,8 @@
       <header class="page-header">
         <div class="header-content">
           <div class="header-info">
-            <h1 class="header-title">系统健康监控</h1>
-            <p class="header-subtitle">各组件连接与可用性状态（仅系统管理员 webconfig.admin1）</p>
+            <h1 class="header-title">系统管理员页面</h1>
+            <p class="header-subtitle">系统配置与各组件连接状态（仅系统管理员 webconfig.admin1）</p>
           </div>
           <div class="header-actions">
             <button type="button" class="btn btn-primary" :disabled="loading" @click="fetchOverview">
@@ -26,6 +26,33 @@
       </div>
 
       <template v-else>
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
+              <h2 class="section-title">排班邮件功能配置</h2>
+              <p class="section-desc">控制各科室是否启用周排班自动发送、手动发送和发送提醒。</p>
+            </div>
+            <div class="config-actions">
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">全选</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(false)">全部关闭</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="saveShiftEmailConfig">
+                {{ shiftEmailSaving ? '保存中…' : '保存配置' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="shiftEmailLoading" class="status-message">正在加载排班邮件功能配置…</div>
+          <div v-else-if="!shiftEmailItems.length" class="status-message">暂无可配置科室。</div>
+          <div v-else class="dept-switch-grid">
+            <label v-for="item in shiftEmailItems" :key="item.department" class="dept-switch">
+              <span class="dept-name">{{ item.department }}</span>
+              <input v-model="item.enabled" type="checkbox">
+              <span class="switch-visual" :class="{ 'is-on': item.enabled }"></span>
+              <span class="switch-text" :class="{ 'is-on': item.enabled }">{{ item.enabled ? '启用' : '关闭' }}</span>
+            </label>
+          </div>
+          <p v-if="shiftEmailMessage" class="config-message">{{ shiftEmailMessage }}</p>
+        </section>
+
         <div class="status-grid">
           <div
             v-for="item in items"
@@ -84,7 +111,13 @@
 <script setup>
 import { ref, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
-import { getHealthMonitorPermission, getHealthOverview, runTodoReminder } from '@/api/healthMonitor'
+import {
+  getHealthMonitorPermission,
+  getHealthOverview,
+  getShiftEmailFeatureConfig,
+  saveShiftEmailFeatureConfig,
+  runTodoReminder,
+} from '@/api/healthMonitor'
 
 const router = useRouter()
 const canAccess = ref(false)
@@ -93,6 +126,10 @@ const items = ref([])
 const lastUpdate = ref(null)
 const todoReminderLoading = ref(false)
 const todoReminderResult = ref(null)
+const shiftEmailLoading = ref(false)
+const shiftEmailSaving = ref(false)
+const shiftEmailItems = ref([])
+const shiftEmailMessage = ref('')
 
 const lastUpdateText = computed(() => {
   if (!lastUpdate.value) return '—'
@@ -127,6 +164,59 @@ async function fetchOverview() {
   }
 }
 
+async function fetchShiftEmailConfig() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (user.name || user.userName || '').trim()
+  if (!name) return
+  shiftEmailLoading.value = true
+  shiftEmailMessage.value = ''
+  try {
+    const res = await getShiftEmailFeatureConfig({ current_user: name })
+    shiftEmailItems.value = (res?.items || []).map((item) => ({
+      department: item.department,
+      enabled: !!item.enabled,
+    }))
+  } catch (e) {
+    console.error(e)
+    shiftEmailItems.value = []
+    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '排班邮件功能配置加载失败'
+  } finally {
+    shiftEmailLoading.value = false
+  }
+}
+
+function setAllShiftEmailEnabled(enabled) {
+  shiftEmailItems.value.forEach((item) => {
+    item.enabled = enabled
+  })
+}
+
+async function saveShiftEmailConfig() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (user.name || user.userName || '').trim()
+  if (!name) return
+  shiftEmailSaving.value = true
+  shiftEmailMessage.value = ''
+  try {
+    const enabledDepartments = shiftEmailItems.value
+      .filter((item) => item.enabled)
+      .map((item) => item.department)
+    const res = await saveShiftEmailFeatureConfig({
+      current_user: name,
+      enabled_departments: enabledDepartments,
+    })
+    shiftEmailItems.value = (res?.items || []).map((item) => ({
+      department: item.department,
+      enabled: !!item.enabled,
+    }))
+    shiftEmailMessage.value = res?.message || '排班邮件功能配置已保存'
+  } catch (e) {
+    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '保存排班邮件功能配置失败'
+  } finally {
+    shiftEmailSaving.value = false
+  }
+}
+
 async function triggerTodoReminder() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = (user.name || user.userName || '').trim()
@@ -153,7 +243,9 @@ onMounted(async () => {
   try {
     const res = await getHealthMonitorPermission({ current_user: name })
     canAccess.value = !!(res && res.canAccess)
-    if (canAccess.value) await fetchOverview()
+    if (canAccess.value) {
+      await Promise.all([fetchOverview(), fetchShiftEmailConfig()])
+    }
   } catch {
     canAccess.value = false
   }
@@ -196,6 +288,99 @@ onMounted(async () => {
 }
 .no-permission p {
   margin-bottom: var(--spacing-lg);
+}
+.admin-config-card {
+  padding: var(--spacing-lg);
+  margin-bottom: var(--spacing-lg);
+}
+.config-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+.section-title {
+  margin: 0 0 4px 0;
+  font-size: 1.05rem;
+  font-weight: 600;
+}
+.section-desc {
+  margin: 0;
+  color: var(--color-text-secondary);
+  font-size: 0.86rem;
+}
+.config-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.dept-switch-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 10px;
+}
+.dept-switch {
+  position: relative;
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  min-height: 40px;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-container);
+}
+.dept-switch input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.dept-name {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+.switch-visual {
+  position: relative;
+  width: 38px;
+  height: 20px;
+  border-radius: 999px;
+  background: #cbd5e1;
+  transition: background-color 0.15s ease;
+}
+.switch-visual::after {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  transition: transform 0.15s ease;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, 0.24);
+}
+.switch-visual.is-on {
+  background: #2563eb;
+}
+.switch-visual.is-on::after {
+  transform: translateX(18px);
+}
+.switch-text {
+  min-width: 32px;
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+}
+.switch-text.is-on {
+  color: #166534;
+}
+.config-message {
+  margin: var(--spacing-sm) 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
 }
 .status-grid {
   display: grid;
@@ -300,5 +485,15 @@ onMounted(async () => {
 .debug-table th {
   background: var(--color-bg-layout);
   font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .config-card-head {
+    display: block;
+  }
+  .config-actions {
+    justify-content: flex-start;
+    margin-top: var(--spacing-md);
+  }
 }
 </style>

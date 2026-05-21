@@ -79,7 +79,7 @@
       <div class="toolbar-right">
         <template v-if="isManager">
           <div
-            v-if="sendCountdownItems.length"
+            v-if="shiftEmailFeatureEnabled && sendCountdownItems.length"
             class="send-countdown"
             :title="sendCountdownItems.map((item) => item.mainText + item.statusText).join('\n')"
           >
@@ -104,6 +104,7 @@
             ⚙ 配置
           </button>
           <button
+            v-if="shiftEmailFeatureEnabled"
             type="button"
             class="btn btn-outline btn-sm"
             @click="handleSendScheduleEmail"
@@ -809,7 +810,10 @@ const config = reactive({
   weekend_day: 2,
   weekend_night: 2,
   email_recipients: [],
+  email_feature_enabled: true,
 })
+
+const shiftEmailFeatureEnabled = computed(() => config.email_feature_enabled !== false)
 
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 
@@ -1012,7 +1016,7 @@ const sendCountdownItems = computed(() => {
 async function loadNextWeekScheduleCompletion() {
   const dept = selectedDept.value
   const seq = ++nextWeekScheduleCheckSeq
-  if (!dept) {
+  if (!dept || !shiftEmailFeatureEnabled.value) {
     nextWeekScheduleCompleted.value = false
     return
   }
@@ -1372,6 +1376,7 @@ async function loadSchedule() {
     config.workday_night = 2
     config.weekend_day = 2
     config.weekend_night = 2
+    config.email_feature_enabled = true
     setEmailRecipients([])
     clearChangedDates()
     return
@@ -1421,6 +1426,7 @@ async function loadSchedule() {
     config.workday_night = c.workday_night ?? 2
     config.weekend_day = c.weekend_day ?? 2
     config.weekend_night = c.weekend_night ?? 2
+    config.email_feature_enabled = c.email_feature_enabled !== false
     setEmailRecipients(c.email_recipients || [])
     loadNextWeekScheduleCompletion()
   } catch (e) {
@@ -1698,7 +1704,7 @@ function holidayThClass(d) {
 }
 
 async function getChangedSentWeeksForPrompt() {
-  if (!isManager.value || !selectedDept.value) return []
+  if (!isManager.value || !selectedDept.value || !shiftEmailFeatureEnabled.value) return []
   const range = getChangedDateRange()
   if (!range) return []
   try {
@@ -1899,7 +1905,7 @@ async function handleSaveConfig() {
 }
 
 async function handleSendScheduleEmail() {
-  if (!isManager.value || !selectedDept.value || sendingScheduleEmail.value) return
+  if (!isManager.value || !selectedDept.value || !shiftEmailFeatureEnabled.value || sendingScheduleEmail.value) return
   const { start, end } = nextWeekRange(sendCountdownNow.value)
   if (!confirm(`确认发送 ${selectedDept.value} ${toYMD(start)} 至 ${toYMD(end)} 的周排班邮件吗？`)) return
   sendingScheduleEmail.value = true

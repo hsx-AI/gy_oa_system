@@ -1398,6 +1398,15 @@ const rawFeatureGroups = [
         iconPath: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
       },
       {
+        id: 'bid-templates',
+        title: '工艺投标文件管理',
+        description: '维护投标模板最新版本，记录更新要点并支持历史版本下载',
+        path: '/file/bid-templates',
+        color: 'linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%)',
+        tag: '新功能',
+        iconPath: 'M4 4h16v16H4V4zm4 4h8M8 12h8M8 16h5'
+      },
+      {
         id: 'tech-problem',
         title: '工艺技术问题手册',
         description: '工艺技术问题记录、原因分析与措施跟踪',
@@ -1454,8 +1463,8 @@ const rawFeatureGroups = [
       },
       {
         id: 'health-monitor',
-        title: '系统健康监控',
-        description: '数据库、大模型、外链与打卡自动获取服务状态一览',
+        title: '系统管理员',
+        description: '系统配置、排班邮件开关与各组件状态一览',
         path: '/admin/health-monitor',
         permission: 'healthMonitor',
         tag: '系统',

@@ -1231,7 +1231,7 @@ async def run_shift_schedule_email_once(
     force: bool = False,
 ) -> dict:
     """发送周排班邮件：配置收件人 + 本科室主任/副主任/班组长。"""
-    from routers.shift_schedule import _get_shift_departments, build_week_schedule_report
+    from routers.shift_schedule import _get_shift_departments, _load_shift_email_feature_config, build_week_schedule_report
 
     cfg = _get_email_config()
     sender_addr = cfg["address"]
@@ -1241,12 +1241,17 @@ async def run_shift_schedule_email_once(
 
     week_start = target_week_start or _shift_schedule_target_week()
     departments = [department_filter] if department_filter else _get_shift_departments()
+    enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
     sent = 0
     skipped = 0
     errors = 0
     details = []
 
     for dept in [d for d in departments if d]:
+        if dept not in enabled_departments:
+            skipped += 1
+            details.append({"department": dept, "status": "skipped", "message": "本科室未启用排班邮件功能"})
+            continue
         if not force and _shift_schedule_email_sent(dept, week_start):
             skipped += 1
             details.append({"department": dept, "status": "skipped", "message": "本周已发送"})

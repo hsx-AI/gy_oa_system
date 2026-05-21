@@ -132,6 +132,15 @@
             </svg>
             <span>制度查询</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/file/bid-templates" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4h16v16H4z" />
+              <path d="M8 8h8" />
+              <path d="M8 12h8" />
+              <path d="M8 16h5" />
+            </svg>
+            <span>工艺投标文件</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
@@ -200,7 +209,7 @@
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M22 12h-4l-3 9L9 3l-3 9H2" />
             </svg>
-            <span>系统健康监控</span>
+            <span>系统管理员</span>
           </router-link>
           <router-link v-if="canAccessDbManager" to="/admin/yggl-fill" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

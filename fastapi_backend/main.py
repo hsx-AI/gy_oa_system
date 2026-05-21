@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, inbox_email, feedback, contacts, seal_apply, attendance_exception, rotor_blade_balance
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, attendance_exception, rotor_blade_balance
 import logging
 import time
 
@@ -72,7 +72,7 @@ app.include_router(file_numbering.router, prefix=settings.API_PREFIX)
 app.include_router(department_policy.router, prefix=settings.API_PREFIX)
 app.include_router(admin.router, prefix=settings.API_PREFIX)  # 员工在职管理
 app.include_router(db_manager.router, prefix=settings.API_PREFIX)
-app.include_router(health_monitor.router, prefix=settings.API_PREFIX)  # 系统健康监控（仅 admin1）
+app.include_router(health_monitor.router, prefix=settings.API_PREFIX)  # 系统管理员页面（仅 admin1）
 app.include_router(sso.router, prefix=settings.API_PREFIX)  # 系统管理员-数据库表增删改查
 app.include_router(email_sender.router, prefix=settings.API_PREFIX)  # 邮件发送（仅 admin1）
 app.include_router(shift_schedule.router, prefix=settings.API_PREFIX)  # 排班管理
@@ -83,6 +83,7 @@ app.include_router(inbox_email.router, prefix=settings.API_PREFIX)  # 共用邮�
 app.include_router(feedback.router, prefix=settings.API_PREFIX)  # 意见与建议
 app.include_router(contacts.router, prefix=settings.API_PREFIX)  # 部门通讯录
 app.include_router(seal_apply.router, prefix=settings.API_PREFIX)  # 部门用印申请
+app.include_router(bid_template.router, prefix=settings.API_PREFIX)  # 工艺投标模板库
 app.include_router(attendance_exception.router, prefix=settings.API_PREFIX)  # 打卡异常申请
 app.include_router(rotor_blade_balance.router, prefix=settings.API_PREFIX)  # 转轮叶片配重计算结果追溯
 

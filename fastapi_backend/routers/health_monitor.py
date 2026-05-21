@@ -1,19 +1,25 @@
 # -*- coding: utf-8 -*-
 """
-系统健康监控 - 仅 webconfig.admin1 可访问。
-检测：数据库、大模型、人事档案系统、思想汇报系统、打卡数据自动获取服务等。
+系统管理员页面 - 仅 webconfig.admin1 可访问。
+包含：系统配置、数据库、大模型、人事档案系统、思想汇报系统、打卡数据自动获取服务等。
 """
 import logging
-from typing import Optional, Any
+from typing import Optional, Any, List
 
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, Field
 from database import db
 from config import settings
 from routers.db_manager import _get_admin1
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/health-monitor", tags=["系统健康监控"])
+router = APIRouter(prefix="/health-monitor", tags=["系统管理员"])
+
+
+class ShiftEmailFeatureConfigRequest(BaseModel):
+    current_user: str
+    enabled_departments: List[str] = Field(default_factory=list)
 
 
 def _require_admin1(current_user: str) -> None:
@@ -189,3 +195,23 @@ async def get_health_overview(
             items.append({"id": id_, "name": name, "status": "error", "message": str(e)})
 
     return {"success": True, "items": items}
+
+
+@router.get("/shift-email-config")
+async def get_shift_email_feature_config(
+    current_user: str = Query(..., description="当前登录用户，用于权限校验"),
+):
+    """获取各科室排班邮件功能开关配置。仅 admin1 可访问。"""
+    _require_admin1(current_user)
+    from routers.shift_schedule import _get_shift_email_feature_config_items
+    data = _get_shift_email_feature_config_items()
+    return {"success": True, **data}
+
+
+@router.post("/shift-email-config")
+async def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
+    """保存各科室排班邮件功能开关配置。仅 admin1 可访问。"""
+    _require_admin1(req.current_user)
+    from routers.shift_schedule import _save_shift_email_feature_config
+    data = _save_shift_email_feature_config(req.enabled_departments)
+    return {"success": True, "message": "排班邮件功能配置已保存", **data}

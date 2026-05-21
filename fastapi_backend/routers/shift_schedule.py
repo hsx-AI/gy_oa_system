@@ -32,6 +32,8 @@ SHIFT_DEPARTMENT_ORDER = [
     "数控编程室",
 ]
 
+SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN = "shift_schedule_email_departments"
+
 
 def _ensure_tables():
     """确保排班相关表存在。
@@ -154,6 +156,85 @@ def _get_shift_departments() -> List[str]:
             return (len(SHIFT_DEPARTMENT_ORDER), name)
 
     return sorted(depts, key=_dept_sort_key)
+
+
+def _ensure_shift_email_feature_config_column() -> None:
+    """确保 webconfig 中有排班邮件功能启用科室配置列。"""
+    exists = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'webconfig' AND COLUMN_NAME = %s LIMIT 1",
+        (SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN,),
+    )
+    if exists:
+        return
+    db.execute_update(
+        f"ALTER TABLE webconfig ADD COLUMN {SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN} MEDIUMTEXT NULL "
+        "COMMENT '启用排班邮件功能的科室JSON数组'"
+    )
+
+
+def _load_shift_email_feature_config(all_departments: Optional[List[str]] = None) -> Tuple[Set[str], bool]:
+    """返回启用排班邮件功能的科室集合；未配置时默认全部启用。"""
+    departments = all_departments if all_departments is not None else _get_shift_departments()
+    valid = set(departments)
+    _ensure_shift_email_feature_config_column()
+    try:
+        rows = db.execute_query(
+            f"SELECT {SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN} FROM webconfig WHERE id = %s LIMIT 1",
+            ("1",),
+        )
+        raw = rows[0].get(SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN) if rows else None
+        if raw is None or raw == "":
+            return set(departments), False
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="ignore")
+        data = json.loads(raw) if isinstance(raw, str) else raw
+        if not isinstance(data, list):
+            return set(departments), False
+        enabled = {(str(item) or "").strip() for item in data}
+        enabled = {name for name in enabled if name in valid}
+        return enabled, True
+    except Exception as e:
+        logger.warning("读取排班邮件功能科室配置失败: %s", e)
+        return set(departments), False
+
+
+def _is_shift_email_feature_enabled(department: str) -> bool:
+    dept = (department or "").strip()
+    if not dept:
+        return False
+    enabled, _configured = _load_shift_email_feature_config()
+    return dept in enabled
+
+
+def _get_shift_email_feature_config_items() -> dict:
+    departments = _get_shift_departments()
+    enabled, configured = _load_shift_email_feature_config(departments)
+    return {
+        "departments": departments,
+        "enabledDepartments": [dept for dept in departments if dept in enabled],
+        "configured": configured,
+        "items": [{"department": dept, "enabled": dept in enabled} for dept in departments],
+    }
+
+
+def _save_shift_email_feature_config(enabled_departments: List[str]) -> dict:
+    departments = _get_shift_departments()
+    valid = set(departments)
+    normalized = []
+    seen = set()
+    for item in enabled_departments or []:
+        dept = (item or "").strip()
+        if not dept or dept in seen or dept not in valid:
+            continue
+        seen.add(dept)
+        normalized.append(dept)
+    _ensure_shift_email_feature_config_column()
+    db.execute_update(
+        f"UPDATE webconfig SET {SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN} = %s WHERE id = %s",
+        (json.dumps(normalized, ensure_ascii=False), "1"),
+    )
+    return _get_shift_email_feature_config_items()
 
 
 def _get_dept_people(department: str) -> List[dict]:
@@ -515,6 +596,7 @@ async def get_shift_config(department: str = Query(...)):
     if rows:
         data = dict(rows[0])
         data["email_recipients"] = _parse_shift_email_recipients(data.get("email_recipients"))
+        data["email_feature_enabled"] = _is_shift_email_feature_enabled(department)
         return {"success": True, "data": data}
     return {
         "success": True,
@@ -524,6 +606,7 @@ async def get_shift_config(department: str = Query(...)):
             "weekend_day": 2,
             "weekend_night": 2,
             "email_recipients": [],
+            "email_feature_enabled": _is_shift_email_feature_enabled(department),
         },
     }
 

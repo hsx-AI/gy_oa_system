@@ -141,6 +141,12 @@ const routes = [
     meta: { title: '部门制度查询' }
   },
   {
+    path: '/file/bid-templates',
+    name: 'BidTemplateLibrary',
+    component: () => import('../views/file/BidTemplateLibrary.vue'),
+    meta: { title: '工艺投标文件管理' }
+  },
+  {
     path: '/file/tech-problem',
     name: 'TechProblemList',
     component: () => import('../views/file/TechProblemList.vue'),
@@ -185,7 +191,7 @@ const routes = [
     path: '/admin/health-monitor',
     name: 'HealthMonitor',
     component: () => import('../views/admin/HealthMonitor.vue'),
-    meta: { title: '系统健康监控' }
+    meta: { title: '系统管理员' }
   },
   {
     path: '/admin/yggl-fill',
