@@ -610,8 +610,10 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
         xm = (row.get("xm") or "").strip()
 
         if need_exchange and hours > 0 and xm:
-            # 1天=8小时=2张，即 1小时=0.25张；向下取整到 0.25 张
-            tickets = math.floor(hours) / 4  # 1小时=0.25张，向下取整到整小时后折算
+            from utils.overtime_exchange import calc_overtime_exchange_tickets
+
+            jb = (row.get("jb") or "").strip()
+            tickets = calc_overtime_exchange_tickets(hours, jb)
             overtime_sj = str(row.get("timedate") or "")[:10]
             if tickets > 0:
                 _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
@@ -717,7 +719,10 @@ async def overtime_batch_approve(req: BatchApproveRequest):
             pass
 
         if need_exchange and hours > 0 and xm:
-            tickets = math.floor(hours) / 4
+            from utils.overtime_exchange import calc_overtime_exchange_tickets
+
+            jb = (r.get("jb") or "").strip()
+            tickets = calc_overtime_exchange_tickets(hours, jb)
             overtime_sj = str(r.get("timedate") or "")[:10]
             if tickets > 0:
                 try:

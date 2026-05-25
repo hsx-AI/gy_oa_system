@@ -171,6 +171,12 @@
                 <div class="dashboard-total clickable trend-anchor" @click="goOvertime()" title="点击查看全部加班记录">
                   <span class="total-value">{{ overtimeStats.totalHours ?? '-' }}</span>
                   <span class="total-unit">小时</span>
+                  <span
+                    v-if="overtimeStats.autoCalculatedHours != null"
+                    class="auto-ot-badge"
+                    :class="{ 'auto-ot-badge--zero': !overtimeStats.autoCalculatedHours }"
+                    :title="`按打卡数据自动识别的加班时长（与工作强度/部办加班统计同算法）；${overtimeStats.autoCalculatedPersonCount ?? 0} 人有识别记录`"
+                  >自动计算数 {{ overtimeStats.autoCalculatedHours }}h</span>
                   <div v-if="isFullYear && trendOvertime" class="trend-popover trend-popover-overtime">
                     <div class="trend-pop-title">{{ filterYear }}年月度{{ showNetOvertime ? '净加班' : '加班' }}趋势（小时）</div>
                     <svg class="trend-svg" :viewBox="`0 0 ${TREND_W} ${TREND_H}`" preserveAspectRatio="xMidYMid meet">
@@ -848,11 +854,19 @@ function percentForExport(value) {
 }
 
 function workIntensityDeptActualHours(row) {
+  if (row?.actualHours != null && row.actualHours !== '') {
+    return roundForExport(row.actualHours)
+  }
   const expected = Number(workIntensity.value?.expectedHoursPerPerson || 0)
   const count = Number(row?.personCount || 0)
   const tripDays = Number(row?.tripDays || 0)
   const holidayTripDays = Number(row?.tripHolidayDays || 0)
   return roundForExport(expected * count - tripDays * 8 + holidayTripDays * 8)
+}
+
+/** 工作强度导出/汇总用全员明细（不受职务筛选影响） */
+function wiAllPersonsForTotals() {
+  return filterWiRowsBySelectedDept(workIntensity.value?.byPerson || [])
 }
 
 function appendAoASheet(wb, name, rows, widths = []) {
@@ -957,6 +971,22 @@ function exportWorkIntensityTable() {
     )
     return cells
   })
+  const allPersons = wiAllPersonsForTotals()
+  const totalOvertimeHours = wi.totalOvertimeHours != null
+    ? Number(wi.totalOvertimeHours)
+    : allPersons.reduce((sum, p) => sum + Number(p.overtimeHours || 0), 0)
+  const totalActualHours = wi.totalActualHours != null
+    ? Number(wi.totalActualHours)
+    : allPersons.reduce((sum, p) => sum + Number(p.actualHours || 0), 0)
+  const totalLeaveH = b
+    ? (wi.totalLeaveHours != null
+        ? Number(wi.totalLeaveHours)
+        : allPersons.reduce((sum, p) => sum + Number(p.leaveHours || 0), 0))
+    : 0
+  const overallPct = totalActualHours > 0
+    ? (b ? (totalOvertimeHours - totalLeaveH) / totalActualHours : totalOvertimeHours / totalActualHours)
+    : 0
+
   const personRows = wiByPersonFilteredSorted.value.map((row, idx) => {
     const cells = [
       idx + 1,
@@ -974,9 +1004,12 @@ function exportWorkIntensityTable() {
     )
     return cells
   })
-  const actualIdx = b ? 8 : 7
-  const totalActualHours = personRows.reduce((sum, row) => sum + Number(row[actualIdx] || 0), 0)
-  const totalOvertimeHours = personRows.reduce((sum, row) => sum + Number(row[4] || 0), 0)
+
+  const sumDeptCount = deptRows.reduce((s, row) => s + Number(row[2] || 0), 0)
+  const sumDeptOt = deptRows.reduce((s, row) => s + Number(row[3] || 0), 0)
+  const deptActualCol = b ? 7 : 6
+  const sumDeptActual = deptRows.reduce((s, row) => s + Number(row[deptActualCol] || 0), 0)
+  const sumDeptLeave = b ? deptRows.reduce((s, row) => s + Number(row[4] || 0), 0) : 0
 
   const overviewRows = [
     ['统计项', '数值'],
@@ -988,15 +1021,18 @@ function exportWorkIntensityTable() {
     ['全员加班（h）', roundForExport(totalOvertimeHours)],
   ]
   if (b) {
-    const leaveIdx = 5
-    const totalLeaveH = personRows.reduce((sum, row) => sum + Number(row[leaveIdx] || 0), 0)
     overviewRows.push(['全员请假（h）', roundForExport(totalLeaveH)])
     overviewRows.push(['全员（加班−请假）（h）', roundForExport(totalOvertimeHours - totalLeaveH)])
   }
   overviewRows.push(
     ['全员实际在岗（h）', roundForExport(totalActualHours)],
-    ['全员工作强度', percentForExport(wi.overallIntensity)],
+    ['全员工作强度', percentForExport(overallPct)],
+    ['各科室加班合计（h）', roundForExport(sumDeptOt)],
+    ['各科室在岗合计（h）', roundForExport(sumDeptActual)],
   )
+  if (wiJobFilter.value) {
+    overviewRows.push(['说明', '「按个人」sheet 受职务筛选；概览与各科室为全员口径'])
+  }
 
   const wb = XLSX.utils.book_new()
   appendAoASheet(wb, '统计概览', overviewRows, [24, 48])
@@ -1004,7 +1040,10 @@ function exportWorkIntensityTable() {
   if (b) deptHead.push('请假（h）')
   deptHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
   const deptColW = [8, 24, 10, 12, ...(b ? [12] : []), 12, 20, 14, 12]
-  appendAoASheet(wb, '按科室', [deptHead, ...deptRows], deptColW)
+  const deptFoot = ['', '各科室合计', sumDeptCount, roundForExport(sumDeptOt)]
+  if (b) deptFoot.push(roundForExport(sumDeptLeave))
+  deptFoot.push('', '', roundForExport(sumDeptActual), '')
+  appendAoASheet(wb, '按科室', [deptHead, ...deptRows, deptFoot], deptColW)
   const personHead = ['序号', '姓名', '科室', '职务', '加班（h）']
   if (b) personHead.push('请假（h）')
   personHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
@@ -1771,6 +1810,23 @@ onMounted(async () => {
 .total-value { font-size: var(--font-size-huge); font-weight: var(--font-weight-bold); color: var(--color-text-primary); }
 
 .total-unit { font-size: var(--font-size-md); color: var(--color-text-secondary); }
+.auto-ot-badge {
+  margin-left: 10px;
+  padding: 2px 8px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-medium);
+  color: #1d4ed8;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 999px;
+  vertical-align: middle;
+  white-space: nowrap;
+}
+.auto-ot-badge--zero {
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-spotlight);
+  border-color: var(--color-border-lighter);
+}
 
 .dashboard-meta { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin-bottom: var(--spacing-lg); }
 .meta-sub { font-size: var(--font-size-xs); color: var(--color-text-tertiary); }

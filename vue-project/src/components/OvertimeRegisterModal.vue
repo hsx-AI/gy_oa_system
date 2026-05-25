@@ -55,7 +55,7 @@
           </div>
           <p v-if="timeLocked" class="hint-text lock-hint">当前由智能建议自动填充，日期与时间不可修改</p>
           <p v-if="form.needExchangeTicket === '是'" class="hint-text ticket-hint">
-            获得换休票：{{ overtimeExchangeTickets }} 张（1天=8小时=2张，以0.25为单位，不足0.25张舍弃）
+            获得换休票：{{ overtimeExchangeTickets }} 张（{{ exchangeTicketHintText }}）
           </p>
           <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
             <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8 && overtimePayBillableHours > 8">
@@ -125,6 +125,10 @@ import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
 import { validateOvertimeShiftTicket } from '@/utils/overtimeShiftValidation'
 import { canChooseExchangeTicketWhenNormalOvertime, getOvertimeUserMeta, shouldLockExchangeTicketToYes } from '@/utils/overtimeLeaderRules'
+import {
+  calcOvertimeExchangeTicketsFromTimes,
+  overtimeExchangeTicketHint
+} from '@/utils/overtimeExchangeTickets'
 
 const props = defineProps({
   visible: Boolean,
@@ -209,33 +213,11 @@ const specialHolidayName = computed(() => {
   return holidayMap.value[form.date] || ''
 })
 
-// 加班获得换休票：早八晚五8小时工作制，午休1小时(12:00-13:00)不计入；1天=8小时=2张，以0.25为单位，不足0.25张舍弃
-function calcOvertimeExchangeTickets(st, et) {
-  if (!st || !et) return 0
-  const toMins = (t) => {
-    const s = String(t).trim()
-    const parts = s.split(':')
-    const h = parseInt(parts[0] || '0', 10)
-    const m = parseInt(parts[1] || '0', 10)
-    const sec = parseInt(parts[2] || '0', 10)
-    return h * 60 + m + sec / 60
-  }
-  const startMins = toMins(st)
-  const endMins = toMins(et)
-  let mins = endMins - startMins
-  if (mins <= 0) return 0
-  const lunchStart = 12 * 60
-  const lunchEnd = 13 * 60
-  if (startMins < lunchEnd && endMins > lunchStart) {
-    const overlap = Math.min(endMins, lunchEnd) - Math.max(startMins, lunchStart)
-    mins = Math.max(0, mins - overlap)
-  }
-  const hours = mins / 60
-  const tickets = hours / 4  // 1小时=0.25张
-  return Math.floor(tickets * 4) / 4
-}
+const exchangeTicketHintText = computed(() => overtimeExchangeTicketHint(form.level))
 const overtimeExchangeTickets = computed(() =>
-  form.needExchangeTicket === '是' ? calcOvertimeExchangeTickets(form.startTime, form.endTime) : 0
+  form.needExchangeTicket === '是'
+    ? calcOvertimeExchangeTicketsFromTimes(form.startTime, form.endTime, form.level)
+    : 0
 )
 
 // 其他绩效激励计算用工作时长：早八晚五，午休 12:00-13:00 不计入，再按 0.5 时为单位

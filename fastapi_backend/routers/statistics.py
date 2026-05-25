@@ -1186,6 +1186,80 @@ def _query_hx_hours_all(
     return dict(by_name)
 
 
+def _dept_overtime_scope_names(lsys: Optional[str]) -> List[str]:
+    """与 /dept/overtime 统计范围一致的在职员工姓名列表。"""
+    all_staff = not (lsys and lsys.strip())
+    if all_staff:
+        rows = db.execute_query(
+            "SELECT TRIM(name) AS name FROM yggl WHERE name IS NOT NULL AND name != '' "
+            "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+            "AND TRIM(lsys) != %s AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') "
+            "AND (COALESCE(zaizhi,0)=0)",
+            (LEADER_EXCLUDE_LSYS,),
+        )
+    else:
+        rows = db.execute_query(
+            "SELECT TRIM(name) AS name FROM yggl WHERE lsys = %s AND name IS NOT NULL AND name != '' "
+            "AND RIGHT(TRIM(name), 1) != '1' AND RIGHT(TRIM(lsys), 1) != '1' "
+            "AND (COALESCE(zaizhi,0)=0)",
+            (lsys.strip(),),
+        )
+    return [(r.get("name") or "").strip() for r in (rows or []) if (r.get("name") or "").strip()]
+
+
+def _dept_overtime_period_bounds(
+    year: int,
+    month: Optional[int] = None,
+    quarter: Optional[str] = None,
+) -> Tuple[date, date]:
+    """驾驶舱加班统计期 [start, end]（结束日不晚于今天）。"""
+    import calendar as _cal
+
+    today = date.today()
+    if month is not None:
+        d0 = date(year, month, 1)
+        d1 = date(year, month, _cal.monthrange(year, month)[1])
+        if year == today.year and month == today.month:
+            d1 = min(d1, today)
+        return d0, d1
+    if quarter in ("1", "2", "3", "4"):
+        qm = {"1": (1, 3), "2": (4, 6), "3": (7, 9), "4": (10, 12)}[quarter]
+        d0 = date(year, qm[0], 1)
+        d1 = date(year, qm[1], _cal.monthrange(year, qm[1])[1])
+        if year == today.year:
+            d1 = min(d1, today)
+        return d0, d1
+    d0 = date(year, 1, 1)
+    d1 = date(year, 12, 31)
+    if year == today.year:
+        d1 = min(d1, today)
+    return d0, d1
+
+
+def _calc_auto_overtime_hours_from_attendance(
+    scope_names: List[str],
+    period_start: date,
+    period_end: date,
+) -> Tuple[float, int]:
+    """
+    打卡自动识别加班总时长（与部办加班统计/工作强度一致）。
+    返回 (总小时, 有识别记录人数)。
+    """
+    if not scope_names or period_start > period_end:
+        return 0.0, 0
+    if not collect_valid_times_with_marks:
+        return 0.0, 0
+    att_map = _leader_style_overtime_hours_from_attendance(scope_names, period_start, period_end)
+    total = 0.0
+    person_count = 0
+    for n in scope_names:
+        att_h = round(float(att_map.get(n, 0.0)), 2)
+        if att_h > 0:
+            person_count += 1
+        total += att_h
+    return round(total, 2), person_count
+
+
 @router.get("/dept/overtime")
 async def get_dept_overtime_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
@@ -1198,8 +1272,8 @@ async def get_dept_overtime_stats(
     科室加班统计（按人汇总小时）。不传 lsys 时为全员（排除部办）。
     net=true 时，每人加班小时减去该人在同期换休类请假（换休/员工换休票）应扣小时，
     与请假统计一致按日历重叠比例分摊；小时优先取 xiaoshi，缺省按 tian×8。
-    返回: { totalHours, personCount, list: [{ name, hours }] }
-    仅统计 jiabanzt=4 已通过
+    返回: { totalHours, personCount, list, autoCalculatedHours, autoCalculatedPersonCount }
+    已申报：jiabanzt=4 已通过；autoCalculatedHours=打卡自动识别加班合计（同工作强度打卡算法）
     """
     try:
         if year is None:
@@ -1283,12 +1357,20 @@ async def get_dept_overtime_stats(
             total_hours += h
             total_times += t
 
+        period_start, period_end = _dept_overtime_period_bounds(year, month, quarter)
+        scope_names = _dept_overtime_scope_names(lsys)
+        auto_hours, auto_person_count = _calc_auto_overtime_hours_from_attendance(
+            scope_names, period_start, period_end
+        )
+
         return {
             "success": True,
             "totalHours": round(total_hours, 2),
             "totalTimes": total_times,
             "personCount": len(list_data),
-            "list": list_data
+            "list": list_data,
+            "autoCalculatedHours": auto_hours,
+            "autoCalculatedPersonCount": auto_person_count,
         }
     except Exception as e:
         logger.error(f"加班科室统计失败: {str(e)}")
@@ -3934,6 +4016,7 @@ async def get_work_intensity(
                 "overtimeHours": round(da["ot"], 2),
                 "tripDays": round(da["trip_days"], 2),
                 "tripHolidayDays": round(da["trip_holiday_days"], 2),
+                "actualHours": round(dept_actual, 2),
                 "intensity": dept_i,
             }
             if formula == "b":
@@ -3946,6 +4029,9 @@ async def get_work_intensity(
             "workdays": workdays,
             "expectedHoursPerPerson": expected_hours,
             "totalPeople": len(staff),
+            "totalOvertimeHours": round(total_ot, 2),
+            "totalActualHours": round(total_actual, 2),
+            "totalLeaveHours": round(total_leave_h, 2) if formula == "b" else None,
             "overallIntensity": overall_intensity,
             "intensityFormula": formula,
             "byDept": dept_list,
