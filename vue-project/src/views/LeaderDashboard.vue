@@ -199,7 +199,15 @@
                   <ul class="person-list">
                     <li v-for="(item, idx) in overtimeStats.list" :key="item.name" class="person-item clickable" @click="goOvertime(item.name)" :title="`点击查看 ${item.name} 的加班记录`">
                       <span class="person-name"><span class="person-rank">{{ idx + 1 }}</span>{{ item.name }}</span>
-                      <span class="person-value">{{ item.hours }} 小时</span>
+                      <span class="person-value">
+                        {{ item.hours }} 小时
+                        <span
+                          v-if="item.autoHours != null"
+                          class="person-auto-ot"
+                          :class="{ 'person-auto-ot--zero': !item.autoHours }"
+                          :title="`按打卡自动识别 ${item.autoHours} 小时`"
+                        >· 自动计算 {{ item.autoHours }}h</span>
+                      </span>
                     </li>
                   </ul>
                 </div>
@@ -1863,6 +1871,15 @@ onMounted(async () => {
 
 .person-rank { display: inline-block; min-width: 1.6em; text-align: right; margin-right: 0.4em; color: var(--color-text-tertiary); font-variant-numeric: tabular-nums; }
 .person-value { color: var(--color-primary); font-weight: var(--font-weight-medium); }
+.person-auto-ot {
+  margin-left: 6px;
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-normal);
+  color: #1d4ed8;
+}
+.person-auto-ot--zero {
+  color: var(--color-text-tertiary);
+}
 
 .clickable { cursor: pointer; transition: background 0.15s, box-shadow 0.15s; border-radius: var(--radius-sm, 4px); }
 .clickable:hover { background: var(--color-bg-hover, rgba(0,0,0,.04)); }

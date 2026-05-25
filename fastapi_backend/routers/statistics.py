@@ -1347,21 +1347,34 @@ async def get_dept_overtime_stats(
         else:
             all_names = sorted(ot_map, key=lambda k: -ot_map[k])
 
+        period_start, period_end = _dept_overtime_period_bounds(year, month, quarter)
+        scope_names = _dept_overtime_scope_names(lsys)
+        att_map: Dict[str, float] = {}
+        if scope_names and period_start <= period_end and collect_valid_times_with_marks:
+            att_map = _leader_style_overtime_hours_from_attendance(
+                scope_names, period_start, period_end
+            )
+        auto_hours = round(
+            sum(round(float(att_map.get(n, 0.0)), 2) for n in scope_names), 2
+        )
+        auto_person_count = sum(
+            1 for n in scope_names if round(float(att_map.get(n, 0.0)), 2) > 0
+        )
+
         list_data = []
         total_hours = 0
         total_times = 0
         for n in all_names:
             h = round(ot_map[n] - hx_map.get(n, 0), 2) if net else round(ot_map[n], 2)
             t = int(times_map.get(n, 0))
-            list_data.append({"name": n, "hours": h, "times": t})
+            list_data.append({
+                "name": n,
+                "hours": h,
+                "times": t,
+                "autoHours": round(float(att_map.get(n, 0.0)), 2),
+            })
             total_hours += h
             total_times += t
-
-        period_start, period_end = _dept_overtime_period_bounds(year, month, quarter)
-        scope_names = _dept_overtime_scope_names(lsys)
-        auto_hours, auto_person_count = _calc_auto_overtime_hours_from_attendance(
-            scope_names, period_start, period_end
-        )
 
         return {
             "success": True,
