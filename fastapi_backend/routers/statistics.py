@@ -682,10 +682,12 @@ def _parse_attendance_date(val: Any) -> Optional[datetime]:
 
 
 def _leader_overtime_for_record(record: Dict, holidays: Dict[str, str], holiday_festival_map: Dict[str, str]) -> Tuple[float, List[Dict], str]:
-    """打卡加班：与考勤页智能建议「加班建议」同款算法（见 suggestions.calc_suggestion_style_overtime_for_record）。"""
-    if not calc_suggestion_style_overtime_for_record:
-        return 0.0, [], ""
-    return calc_suggestion_style_overtime_for_record(record, holidays, holiday_festival_map)
+    """打卡加班：与驾驶舱自动计算一致（工作日 7:30 前 + 17:30 后，不足 1h 也计；休息日同智能建议）。"""
+    if calc_dashboard_auto_overtime_for_record:
+        return calc_dashboard_auto_overtime_for_record(record, holidays, holiday_festival_map)
+    if calc_suggestion_style_overtime_for_record:
+        return calc_suggestion_style_overtime_for_record(record, holidays, holiday_festival_map)
+    return 0.0, [], ""
 
 
 @router.get("/dept/leader-overtime")
@@ -698,8 +700,8 @@ async def get_leader_overtime_from_attendance(
 ):
     """
     部办人员加班统计：从 attendance_records 打卡数据临时识别，领导岗位单独标记。
-    识别口径与考勤页智能建议「加班建议」一致：工作日 17:00 后与 [17,24] 交集满 1 小时/段；
-    休息日/假期同 analyze_restday。最小精确到 0.1 小时，四舍五入。
+    识别口径与驾驶舱自动计算一致：工作日 7:30 前 + 17:30 后（不足 1 小时也计）；
+    休息日/假期同智能建议休息日逻辑。最小精确到 0.1 小时，四舍五入。
     """
     try:
         if not (current_user or "").strip() or not _can_access_leader_overtime_stats(current_user):
@@ -3723,16 +3725,7 @@ def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, 
         y = date_obj.year
         holidays = holidays_by_year.get(y) or {}
         festival_map = festival_by_year.get(y) or {}
-        if calc_dashboard_auto_overtime_for_record:
-            hours, _segments, _day_type = calc_dashboard_auto_overtime_for_record(
-                row, holidays, festival_map
-            )
-        elif calc_suggestion_style_overtime_for_record:
-            hours, _segments, _day_type = calc_suggestion_style_overtime_for_record(
-                row, holidays, festival_map
-            )
-        else:
-            hours, _segments, _day_type = _leader_overtime_for_record(row, holidays, festival_map)
+        hours, _segments, _day_type = _leader_overtime_for_record(row, holidays, festival_map)
         if hours > 0:
             totals[name] += float(hours)
 

@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h1>部办加班统计</h1>
-        <p>按部办全体人员打卡数据临时识别加班时长，领导岗位已高亮</p>
+        <p>按部办打卡识别加班：工作日 7:30 前 + 17:30 后（不足 1 小时也计），与驾驶舱自动计算一致；领导岗位已高亮</p>
       </div>
       <div class="page-actions">
         <button class="btn btn-secondary" type="button" @click="openBaselineModal">录入排名基准</button>
