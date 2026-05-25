@@ -1145,25 +1145,6 @@ def _calc_auto_overtime_hours_from_attendance(
     return round(total, 2), person_count
 
 
-def _work_intensity_overtime_period_bounds(
-    year: int,
-    month: Optional[int],
-    date_from: Optional[str] = None,
-    date_to: Optional[str] = None,
-) -> Tuple[date, date]:
-    """工作强度加班统计期：自定义区间用 date_from/date_to；否则与驾驶舱 /dept/overtime 自动计算数一致。"""
-    if date_from and date_to:
-        ds = _parse_date(date_from)
-        de = _parse_date(date_to)
-        if not ds or not de:
-            today = date.today()
-            return today, today
-        if de < ds:
-            ds, de = de, ds
-        return ds, min(de, date.today())
-    return _dept_overtime_period_bounds(year, month, None)
-
-
 @router.get("/dept/overtime")
 async def get_dept_overtime_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
@@ -3817,6 +3798,7 @@ async def get_work_intensity(
                 "dateTo": de.isoformat(),
                 "effectiveDateTo": d_end_eff.isoformat(),
             }
+            ot_att_start, ot_att_end = ds, d_end_eff
             leave_ps, leave_pe = ds, d_end_eff
         elif month:
             # 当统计“当前年月”时，应出勤只统计到今天，避免按整月放大分母
@@ -3831,6 +3813,10 @@ async def get_work_intensity(
             import calendar as _cal
             month_first = date(year, month, 1)
             month_last = date(year, month, _cal.monthrange(year, month)[1])
+            ot_att_start = month_first
+            ot_att_end = month_last
+            if year == today.year and month == today.month:
+                ot_att_end = min(month_last, today)
             leave_ps, leave_pe = month_first, month_last
         else:
             # 统计全年时：当年仅统计到今天，历史年份统计整年
@@ -3845,22 +3831,15 @@ async def get_work_intensity(
             range_meta = {"rangeMode": False}
             year_first = date(year, 1, 1)
             year_last = date(year, 12, 31)
+            ot_att_start = year_first
+            ot_att_end = year_last if year < today.year else min(year_last, today)
             leave_ps = year_first
             leave_pe = year_last if year < today.year else min(year_last, today)
 
-        # 加班时长：人员范围与统计期与驾驶舱「自动计算数」(/dept/overtime autoCalculatedHours) 完全一致
-        ot_period_start, ot_period_end = _work_intensity_overtime_period_bounds(
-            year, month, date_from, date_to
-        )
-        scope_names = _dept_overtime_scope_names(lsys)
-        auto_total, auto_person_count = _calc_auto_overtime_hours_from_attendance(
-            scope_names, ot_period_start, ot_period_end
-        )
-        if scope_names:
-            att_ot = _leader_style_overtime_hours_from_attendance(
-                scope_names, ot_period_start, ot_period_end
-            )
-            ot_map = {n: round(float(att_ot.get(n, 0.0)), 2) for n in scope_names}
+        all_names = sorted({s["name"] for s in staff})
+        if all_names:
+            att_ot = _leader_style_overtime_hours_from_attendance(all_names, ot_att_start, ot_att_end)
+            ot_map = {n: round(float(att_ot.get(n, 0.0)), 2) for n in all_names}
         else:
             ot_map = {}
 
@@ -3880,7 +3859,7 @@ async def get_work_intensity(
             name = s["name"]
             dept = s["lsys"]
             jb = s.get("jb") or ""
-            ot = float(ot_map.get(name, 0.0))
+            ot = ot_map.get(name, 0)
             trip_d = float((trip_map.get(name) or {}).get("tripDays", 0))
             trip_holiday_d = float((trip_map.get(name) or {}).get("holidayTripDays", 0))
             trip_h = trip_d * HOURS_PER_DAY
@@ -3914,7 +3893,7 @@ async def get_work_intensity(
 
         person_list.sort(key=lambda x: -x["intensity"])
 
-        total_ot = round(float(auto_total), 2)
+        total_ot = sum(p["overtimeHours"] for p in person_list)
         total_leave_h = sum(float(p.get("leaveHours") or 0) for p in person_list) if formula == "b" else 0.0
         total_trip_d = sum(p["tripDays"] for p in person_list)
         total_trip_holiday_d = sum(p.get("tripHolidayDays", 0) for p in person_list)
@@ -3953,17 +3932,13 @@ async def get_work_intensity(
             "workdays": workdays,
             "expectedHoursPerPerson": expected_hours,
             "totalPeople": len(staff),
-            "totalOvertimeHours": total_ot,
-            "totalAutoOvertimeHours": total_ot,
-            "autoCalculatedPersonCount": auto_person_count,
+            "totalOvertimeHours": round(total_ot, 2),
             "totalActualHours": round(total_actual, 2),
             "totalLeaveHours": round(total_leave_h, 2) if formula == "b" else None,
             "overallIntensity": overall_intensity,
             "intensityFormula": formula,
             "overtimeCalcMethod": "suggestion",
-            "overtimeCalcNote": "加班(h)与驾驶舱加班卡片「自动计算数」一致（智能建议同款；全员口径排除部办；非 jiaban 申报）",
-            "overtimePeriodStart": ot_period_start.isoformat(),
-            "overtimePeriodEnd": ot_period_end.isoformat(),
+            "overtimeCalcNote": "加班时长与考勤页智能建议「加班建议」合计一致（非 jiaban 申报汇总）",
             "byDept": dept_list,
             "byPerson": person_list,
             **range_meta,
