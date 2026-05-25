@@ -1,4 +1,4 @@
-﻿<template>
+<template>
   <div class="leader-dashboard-page">
     <div class="page-header">
       <div class="header-content">
@@ -175,7 +175,7 @@
                     v-if="overtimeStats.autoCalculatedHours != null"
                     class="auto-ot-badge"
                     :class="{ 'auto-ot-badge--zero': !overtimeStats.autoCalculatedHours }"
-                    :title="`按打卡数据自动识别的加班时长（与工作强度/部办加班统计同算法）；${overtimeStats.autoCalculatedPersonCount ?? 0} 人有识别记录`"
+                    :title="`按智能建议「加班建议」同款规则识别；${overtimeStats.autoCalculatedPersonCount ?? 0} 人有识别记录（与工作强度加班(h)一致）`"
                   >自动计算数 {{ overtimeStats.autoCalculatedHours }}h</span>
                   <div v-if="isFullYear && trendOvertime" class="trend-popover trend-popover-overtime">
                     <div class="trend-pop-title">{{ filterYear }}年月度{{ showNetOvertime ? '净加班' : '加班' }}趋势（小时）</div>
@@ -718,12 +718,12 @@ const wiFormulaDesc = computed(() => {
   const full = canSeeWiFormulaDetail.value
   if (wiIntensityFormula.value === 'b') {
     if (full) {
-      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长由打卡数据自动识别（与部办加班统计一致）。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长按考勤智能建议「加班建议」同款规则从打卡识别（与驾驶舱自动计算数一致，非加班申报汇总）。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
     }
     return '口径 B：在统计期内，按「加班相对在岗」并兼顾已通过请假影响折算的强度指标；具体核算方式内部掌握。'
   }
   if (full) {
-    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长由打卡数据自动识别（与部办加班统计一致）。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长按考勤智能建议「加班建议」同款规则从打卡识别（与驾驶舱自动计算数一致，非加班申报汇总）。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
   }
   return '口径 A：在统计期内，按加班时长相对实际在岗时长的强度指标；具体核算方式内部掌握。'
 })
@@ -980,9 +980,11 @@ function exportWorkIntensityTable() {
     return cells
   })
   const allPersons = wiAllPersonsForTotals()
-  const totalOvertimeHours = wi.totalOvertimeHours != null
-    ? Number(wi.totalOvertimeHours)
-    : allPersons.reduce((sum, p) => sum + Number(p.overtimeHours || 0), 0)
+  /** 与驾驶舱加班卡片「自动计算数」同一字段，不受导出时科室筛选影响 */
+  const totalAutoOvertimeHours = Number(
+    wi.totalAutoOvertimeHours ?? wi.totalOvertimeHours ?? 0
+  )
+  const totalOvertimeHours = totalAutoOvertimeHours
   const totalActualHours = wi.totalActualHours != null
     ? Number(wi.totalActualHours)
     : allPersons.reduce((sum, p) => sum + Number(p.actualHours || 0), 0)
@@ -1023,10 +1025,13 @@ function exportWorkIntensityTable() {
     ['统计项', '数值'],
     ['统计范围', wiSectionSubtitle.value],
     ['导出范围', (permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员'],
+    ['加班时长口径', wi.overtimeCalcNote || '与驾驶舱「自动计算数」一致（非 jiaban 申报）'],
+    ['加班统计期', wi.overtimePeriodStart && wi.overtimePeriodEnd ? `${wi.overtimePeriodStart} ~ ${wi.overtimePeriodEnd}` : wiSectionSubtitle.value],
     ['应出勤工作日（天）', wi.workdays ?? 0],
     ['应出勤时长/人（h）', wi.expectedHoursPerPerson ?? 0],
     ['统计人数（人）', wi.totalPeople ?? 0],
-    ['全员加班（h）', roundForExport(totalOvertimeHours)],
+    ['全员加班-自动计算（h）', roundForExport(totalAutoOvertimeHours)],
+    ['自动计算人数（人）', wi.autoCalculatedPersonCount ?? ''],
   ]
   if (b) {
     overviewRows.push(['全员请假（h）', roundForExport(totalLeaveH)])
@@ -1035,7 +1040,7 @@ function exportWorkIntensityTable() {
   overviewRows.push(
     ['全员实际在岗（h）', roundForExport(totalActualHours)],
     ['全员工作强度', percentForExport(overallPct)],
-    ['各科室加班合计（h）', roundForExport(sumDeptOt)],
+    ['各科室加班合计（h，导出表内加总）', roundForExport(sumDeptOt)],
     ['各科室在岗合计（h）', roundForExport(sumDeptActual)],
   )
   if (wiJobFilter.value) {
@@ -1044,7 +1049,7 @@ function exportWorkIntensityTable() {
 
   const wb = XLSX.utils.book_new()
   appendAoASheet(wb, '统计概览', overviewRows, [24, 48])
-  const deptHead = ['序号', '科室', '人数', '加班（h）']
+  const deptHead = ['序号', '科室', '人数', '加班（h，自动计算）']
   if (b) deptHead.push('请假（h）')
   deptHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
   const deptColW = [8, 24, 10, 12, ...(b ? [12] : []), 12, 20, 14, 12]
@@ -1052,7 +1057,7 @@ function exportWorkIntensityTable() {
   if (b) deptFoot.push(roundForExport(sumDeptLeave))
   deptFoot.push('', '', roundForExport(sumDeptActual), '')
   appendAoASheet(wb, '按科室', [deptHead, ...deptRows, deptFoot], deptColW)
-  const personHead = ['序号', '姓名', '科室', '职务', '加班（h）']
+  const personHead = ['序号', '姓名', '科室', '职务', '加班（h，自动计算）']
   if (b) personHead.push('请假（h）')
   personHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
   const personColW = [8, 14, 24, 16, 12, ...(b ? [12] : []), 12, 20, 14, 12]
