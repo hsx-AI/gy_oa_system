@@ -464,7 +464,7 @@
               <span class="wi-value">{{ (workIntensity.overallIntensity * 100).toFixed(1) }}%</span>
             </div>
             <div v-if="!filterMonth && !wiUseDateRange && wiMonthly.length >= 2" class="wi-sparkline-wrap">
-              <span class="wi-label">年内累计趋势</span>
+              <span class="wi-label">月度趋势</span>
               <svg class="wi-sparkline" viewBox="0 0 280 68" preserveAspectRatio="none">
                 <path :d="wiSparklinePoints" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
                 <template v-for="(dot, di) in wiSparklineDots" :key="di">
@@ -814,7 +814,7 @@ const wiSparklineDots = computed(() => {
     const x = WI_SPARK_LEFT + (i / (c.vals.length - 1)) * (WI_SPARK_W - WI_SPARK_LEFT - WI_SPARK_RIGHT)
     const y = WI_SPARK_TOP + (1 - (v - c.min) / c.range) * (WI_SPARK_H - WI_SPARK_TOP - WI_SPARK_BOT)
     const anchor = i === 0 ? 'start' : (i === c.vals.length - 1 ? 'end' : 'middle')
-    return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月累计: ${v.toFixed(1)}%` }
+    return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月: ${v.toFixed(1)}%` }
   })
 })
 
@@ -961,28 +961,19 @@ function wiIntensityFromTotals(ot, leaveH, actualH, useFormulaB) {
   return useFormulaB ? (otN - leaveN) / actual : otN / actual
 }
 
-/** 按月汇总累计工作强度，与当前口径、全员工作强度主数字一致 */
-function buildWiMonthlyCumulative(monthlyTotals, useFormulaB) {
-  let cumOt = 0
-  let cumLeave = 0
-  let cumActual = 0
-  return [...monthlyTotals]
+/** 趋势图各月工作强度：与单独选择该月查询时 overallIntensity 一致 */
+function buildWiMonthlyTrend(monthlySnapshots) {
+  return [...monthlySnapshots]
     .sort((a, b) => a.month - b.month)
-    .map((row) => {
-      cumOt += Number(row.totalOvertimeHours || 0)
-      cumLeave += Number(row.totalLeaveHours || 0)
-      cumActual += Number(row.totalActualHours || 0)
-      return {
-        month: row.month,
-        intensity: wiIntensityFromTotals(cumOt, cumLeave, cumActual, useFormulaB),
-      }
-    })
+    .map((row) => ({
+      month: row.month,
+      intensity: Number(row.overallIntensity) || 0,
+    }))
 }
 
 async function loadLeaderWorkIntensity(lsysToUse) {
   const seq = ++workIntensityFetchSeq
   wiRangeError.value = ''
-  const useFormulaB = wiIntensityFormula.value === 'b'
   const wiParams = {
     year: filterYear.value,
     intensity_formula: wiIntensityFormula.value,
@@ -1016,26 +1007,17 @@ async function loadLeaderWorkIntensity(lsysToUse) {
         getLeaderWorkIntensity(mp)
           .then((r) => ({
             month: m,
-            totalOvertimeHours: r?.totalOvertimeHours ?? 0,
-            totalLeaveHours: r?.totalLeaveHours ?? 0,
-            totalActualHours: r?.totalActualHours ?? 0,
+            overallIntensity: r?.overallIntensity ?? 0,
           }))
           .catch(() => ({
             month: m,
-            totalOvertimeHours: 0,
-            totalLeaveHours: 0,
-            totalActualHours: 0,
+            overallIntensity: 0,
           })),
       )
     }
-    const monthlyTotals = await Promise.all(monthPromises)
+    const monthlySnapshots = await Promise.all(monthPromises)
     if (seq !== workIntensityFetchSeq) return
-    const monthly = buildWiMonthlyCumulative(monthlyTotals, useFormulaB)
-    const overall = Number(workIntensity.value?.overallIntensity)
-    if (monthly.length && Number.isFinite(overall)) {
-      monthly[monthly.length - 1].intensity = overall
-    }
-    wiMonthly.value = monthly
+    wiMonthly.value = buildWiMonthlyTrend(monthlySnapshots)
   } else {
     if (seq !== workIntensityFetchSeq) return
     wiMonthly.value = []
