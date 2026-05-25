@@ -2984,7 +2984,7 @@ async def get_person_scatter(
 
 # ============================================================
 #  工作强度统计：口径 A=加班/在岗；口径 B=（加班−请假h）/在岗
-#  公出仅境内/境外（不含市内；gclx 空视同境内）
+#  加班=打卡自动识别（领导加班统计同款）；公出仅境内/境外（不含市内；gclx 空视同境内）
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
@@ -3770,13 +3770,14 @@ async def get_work_intensity(
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
         "a",
-        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
+        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。加班=打卡自动识别；请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
     ),
 ):
     """
     工作强度统计：
     口径 A = 加班时长 / 实际在岗时长
     口径 B =（加班时长 − 请假时间）/ 实际在岗时长；请假时间为统计期内已通过请假（qjzt=4）按天重叠分摊后×8 小时，与请假汇总卡片一致。
+    加班时长：全员统一按打卡数据自动识别（与部办加班统计/领导加班统计同款，非 jiaban 申报汇总）。
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
     公出时长仅含境内/境外公出（不含市内公出；gclx 空视同境内公出）。
     时长单位统一为小时（天数×8）。
@@ -3805,7 +3806,6 @@ async def get_work_intensity(
                 workdays = _count_workdays_between(ds, d_end_eff)
             expected_hours = workdays * HOURS_PER_DAY
             staff = _get_staff_with_dept(lsys)
-            ot_map = _get_overtime_by_person_range(ds, d_end_eff, lsys)
             trip_map = _get_trip_days_by_person_range(ds, de, lsys)
             range_meta = {
                 "rangeMode": True,
@@ -3823,7 +3823,6 @@ async def get_work_intensity(
                 workdays = _count_workdays_in_month(year, month)
             expected_hours = workdays * HOURS_PER_DAY
             staff = _get_staff_with_dept(lsys)
-            ot_map = _get_overtime_by_person(year, month, lsys)
             trip_map = _get_trip_days_by_person(year, month, lsys)
             range_meta = {"rangeMode": False}
             import calendar as _cal
@@ -3843,7 +3842,6 @@ async def get_work_intensity(
                 workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
             expected_hours = workdays * HOURS_PER_DAY
             staff = _get_staff_with_dept(lsys)
-            ot_map = _get_overtime_by_person(year, None, lsys)
             trip_map = _get_trip_days_by_person(year, None, lsys)
             range_meta = {"rangeMode": False}
             year_first = date(year, 1, 1)
@@ -3853,11 +3851,12 @@ async def get_work_intensity(
             leave_ps = year_first
             leave_pe = year_last if year < today.year else min(year_last, today)
 
-        ban_names = sorted({s["name"] for s in staff if (s.get("lsys") or "").strip() == LEADER_EXCLUDE_LSYS})
-        if ban_names:
-            att_ot = _leader_style_overtime_hours_from_attendance(ban_names, ot_att_start, ot_att_end)
-            for n in ban_names:
-                ot_map[n] = float(att_ot.get(n, 0.0))
+        all_names = sorted({s["name"] for s in staff})
+        if all_names:
+            att_ot = _leader_style_overtime_hours_from_attendance(all_names, ot_att_start, ot_att_end)
+            ot_map = {n: round(float(att_ot.get(n, 0.0)), 2) for n in all_names}
+        else:
+            ot_map = {}
 
         formula = (intensity_formula or "a").strip().lower()
         if formula not in ("a", "b"):
