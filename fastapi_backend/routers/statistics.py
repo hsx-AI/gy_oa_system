@@ -66,6 +66,7 @@ try:
         _is_incentive_festival,
         is_workday,
         calc_suggestion_style_overtime_for_record,
+        calc_dashboard_auto_overtime_for_record,
     )
 except Exception:  # pragma: no cover - import fallback for unusual startup order
     collect_valid_times_with_marks = None
@@ -74,6 +75,7 @@ except Exception:  # pragma: no cover - import fallback for unusual startup orde
     _is_incentive_festival = None
     is_workday = None
     calc_suggestion_style_overtime_for_record = None
+    calc_dashboard_auto_overtime_for_record = None
 
 logger = logging.getLogger(__name__)
 
@@ -1137,7 +1139,7 @@ def _calc_auto_overtime_hours_from_attendance(
     period_end: date,
 ) -> Tuple[float, int]:
     """
-    打卡自动识别加班总时长（与智能建议「加班建议」合计一致）。
+    打卡自动识别加班总时长（工作日 7:30 前 + 17:30 后，不足 1h 也计；休息日同智能建议）。
     返回 (总小时, 有识别记录人数)。
     """
     if not scope_names or period_start > period_end:
@@ -1168,7 +1170,7 @@ async def get_dept_overtime_stats(
     net=true 时，每人加班小时减去该人在同期换休类请假（换休/员工换休票）应扣小时，
     与请假统计一致按日历重叠比例分摊；小时优先取 xiaoshi，缺省按 tian×8。
     返回: { totalHours, personCount, list, autoCalculatedHours, autoCalculatedPersonCount }
-    已申报：jiabanzt=4 已通过；autoCalculatedHours=智能建议同款打卡加班合计
+    已申报：jiabanzt=4 已通过；autoCalculatedHours=打卡自动识别（工作日 7:30 前/17:30 后）
     """
     try:
         if year is None:
@@ -2959,7 +2961,7 @@ async def get_person_scatter(
 
 # ============================================================
 #  工作强度统计：口径 A=加班/在岗；口径 B=（加班−请假h）/在岗
-#  加班=智能建议同款打卡识别；公出仅境内/境外（不含市内；gclx 空视同境内）
+#  加班=工作日7:30前/17:30后打卡识别（不足1h也计）；公出仅境内/境外（不含市内；gclx 空视同境内）
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
@@ -3687,8 +3689,8 @@ def _get_staff_with_dept(lsys: Optional[str]) -> list:
 
 def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, end: date) -> Dict[str, float]:
     """
-    与智能建议「加班建议」同款：从 attendance_records 识别加班时长（工作日 17:00 后；休息日/假期同 analyze_restday）。
-    返回 { name: raw_hours }，与领导加班页一致：先累加原始小时，最后再统一 round。
+    驾驶舱/工作强度自动加班：工作日 7:30 前 + 17:30 后（不足 1h 也计）；休息日同智能建议休息日逻辑。
+    返回 { name: raw_hours }，先按日累加原始小时，汇总时再 round。
     """
     if not names:
         return {}
@@ -3721,7 +3723,11 @@ def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, 
         y = date_obj.year
         holidays = holidays_by_year.get(y) or {}
         festival_map = festival_by_year.get(y) or {}
-        if calc_suggestion_style_overtime_for_record:
+        if calc_dashboard_auto_overtime_for_record:
+            hours, _segments, _day_type = calc_dashboard_auto_overtime_for_record(
+                row, holidays, festival_map
+            )
+        elif calc_suggestion_style_overtime_for_record:
             hours, _segments, _day_type = calc_suggestion_style_overtime_for_record(
                 row, holidays, festival_map
             )
@@ -3742,14 +3748,14 @@ async def get_work_intensity(
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
         "a",
-        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。加班=智能建议同款打卡识别；请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
+        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。加班=打卡识别（工作日7:30前/17:30后，不足1h也计）；请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
     ),
 ):
     """
     工作强度统计：
     口径 A = 加班时长 / 实际在岗时长
     口径 B =（加班时长 − 请假时间）/ 实际在岗时长；请假时间为统计期内已通过请假（qjzt=4）按天重叠分摊后×8 小时，与请假汇总卡片一致。
-    加班时长：全员按打卡数据识别（与考勤智能建议「加班建议」合计一致，非 jiaban 申报汇总）。
+    加班时长：全员按打卡识别（工作日 7:30 前 + 17:30 后，不足 1h 也计；休息日同智能建议；非 jiaban 申报）。
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
     公出时长仅含境内/境外公出（不含市内公出；gclx 空视同境内公出）。
     时长单位统一为小时（天数×8）。
@@ -3925,7 +3931,7 @@ async def get_work_intensity(
             "overallIntensity": overall_intensity,
             "intensityFormula": formula,
             "overtimeCalcMethod": "suggestion",
-            "overtimeCalcNote": "加班时长与考勤页智能建议「加班建议」合计一致（非 jiaban 申报汇总）",
+            "overtimeCalcNote": "工作日按 7:30 前 + 17:30 后识别（不足 1 小时也计）；休息日同智能建议；非 jiaban 申报",
             "byDept": dept_list,
             "byPerson": person_list,
             **range_meta,

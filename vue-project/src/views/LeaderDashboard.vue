@@ -1,4 +1,4 @@
-<template>
+﻿<template>
   <div class="leader-dashboard-page">
     <div class="page-header">
       <div class="header-content">
@@ -175,7 +175,7 @@
                     v-if="overtimeStats.autoCalculatedHours != null"
                     class="auto-ot-badge"
                     :class="{ 'auto-ot-badge--zero': !overtimeStats.autoCalculatedHours }"
-                    :title="`按智能建议「加班建议」同款规则识别；${overtimeStats.autoCalculatedPersonCount ?? 0} 人有识别记录（与工作强度加班(h)一致）`"
+                    :title="`工作日按 7:30 前 + 17:30 后识别（不足 1 小时也计）；${overtimeStats.autoCalculatedPersonCount ?? 0} 人有记录（与工作强度一致）`"
                   >自动计算数 {{ overtimeStats.autoCalculatedHours }}h</span>
                   <div v-if="isFullYear && trendOvertime" class="trend-popover trend-popover-overtime">
                     <div class="trend-pop-title">{{ filterYear }}年月度{{ showNetOvertime ? '净加班' : '加班' }}趋势（小时）</div>
@@ -205,7 +205,7 @@
                           v-if="item.autoHours != null"
                           class="person-auto-ot"
                           :class="{ 'person-auto-ot--zero': !item.autoHours }"
-                          :title="`按智能建议加班规则识别 ${item.autoHours} 小时`"
+                          :title="`工作日 7:30 前/17:30 后打卡识别 ${item.autoHours} 小时`"
                         >· 自动计算 {{ item.autoHours }}h</span>
                       </span>
                     </li>
@@ -718,12 +718,12 @@ const wiFormulaDesc = computed(() => {
   const full = canSeeWiFormulaDetail.value
   if (wiIntensityFormula.value === 'b') {
     if (full) {
-      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长按考勤智能建议「加班建议」同款规则从打卡识别（与驾驶舱自动计算数一致，非加班申报汇总）。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计），休息日同智能建议；与驾驶舱自动计算数一致，非加班申报汇总。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
     }
     return '口径 B：在统计期内，按「加班相对在岗」并兼顾已通过请假影响折算的强度指标；具体核算方式内部掌握。'
   }
   if (full) {
-    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长按考勤智能建议「加班建议」同款规则从打卡识别（与驾驶舱自动计算数一致，非加班申报汇总）。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计），休息日同智能建议；与驾驶舱自动计算数一致，非加班申报汇总。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
   }
   return '口径 A：在统计期内，按加班时长相对实际在岗时长的强度指标；具体核算方式内部掌握。'
 })
@@ -1023,7 +1023,7 @@ function exportWorkIntensityTable() {
     ['统计项', '数值'],
     ['统计范围', wiSectionSubtitle.value],
     ['导出范围', (permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员'],
-    ['加班时长口径', wi.overtimeCalcNote || '与考勤智能建议「加班建议」合计一致（非 jiaban 申报汇总）'],
+    ['加班时长口径', wi.overtimeCalcNote || '工作日 7:30 前 + 17:30 后（不足 1h 也计）；休息日同智能建议'],
     ['应出勤工作日（天）', wi.workdays ?? 0],
     ['应出勤时长/人（h）', wi.expectedHoursPerPerson ?? 0],
     ['统计人数（人）', wi.totalPeople ?? 0],

@@ -1050,7 +1050,7 @@ def analyze_restday(record: dict, date_obj: datetime, is_incentive_holiday: bool
     return suggestions
 
 
-# ---------- 与「加班建议」(status=0) 一致的时长汇总（驾驶舱自动计算、工作强度、领导加班统计） ----------
+# ---------- 考勤智能建议「加班建议」：工作日 17:00 后且单段≥1h（analyze_workday） ----------
 
 WORKDAY_OVERTIME_START_HOUR = 17.0
 WORKDAY_OVERTIME_END_HOUR = 24.0
@@ -1291,6 +1291,114 @@ def calc_suggestion_style_overtime_for_record(
     if is_work:
         hours = calc_workday_overtime_hours(record, date_obj)
         segments = _workday_overtime_segments(record, date_obj)
+    else:
+        incentive = _is_incentive_festival(date_obj, holiday_festival_map or {})
+        hours = calc_restday_overtime_hours(record, date_obj, incentive)
+        segments = _restday_overtime_segments(record, date_obj, incentive)
+    return hours, segments, day_type
+
+
+# ---------- 驾驶舱自动计算 / 工作强度：工作日 7:30 前 + 17:30 后，不足 1 小时也计 ----------
+
+DASHBOARD_WORKDAY_EARLY_END = 7.5   # 07:30
+DASHBOARD_WORKDAY_LATE_START = 17.5  # 17:30
+DASHBOARD_WORKDAY_END_HOUR = 24.0
+
+
+def _dashboard_workday_interval_hours(t_in, t_out) -> float:
+    """工作日单段：7:30 前早到 + 17:30 后晚走，无最小时长门槛。"""
+    a = time_to_decimal(t_in)
+    b = time_to_decimal(t_out)
+    if b <= a:
+        return 0.0
+    total = 0.0
+    early_start = max(a, 0.0)
+    early_end = min(b, DASHBOARD_WORKDAY_EARLY_END)
+    if early_end > early_start:
+        total += early_end - early_start
+    late_start = max(a, DASHBOARD_WORKDAY_LATE_START)
+    late_end = min(b, DASHBOARD_WORKDAY_END_HOUR)
+    if late_end > late_start:
+        total += late_end - late_start
+    return total
+
+
+def calc_dashboard_workday_overtime_hours(record: dict, date_obj: datetime) -> float:
+    """驾驶舱/工作强度：工作日打卡加班（7:30 前 + 17:30 后，允许 0.5h 等短段）。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return 0.0
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    return sum(
+        _dashboard_workday_interval_hours(t_in, t_out)
+        for t_in, t_out in intervals
+    )
+
+
+def _dashboard_workday_overtime_segments(record: dict, date_obj: datetime) -> List[dict]:
+    """工作日加班分段（早到/晚走，供部办领导加班明细等）。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return []
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    segments: List[dict] = []
+    for t_in, t_out in intervals:
+        a = time_to_decimal(t_in)
+        b = time_to_decimal(t_out)
+        if b <= a:
+            continue
+
+        early_start = max(a, 0.0)
+        early_end = min(b, DASHBOARD_WORKDAY_EARLY_END)
+        if early_end > early_start:
+            h = early_end - early_start
+            early_end_dt = t_out if b <= DASHBOARD_WORKDAY_EARLY_END else t_in.replace(
+                hour=7, minute=30, second=0, microsecond=0
+            )
+            segments.append({
+                "start": format_time(t_in),
+                "end": format_time(early_end_dt),
+                "hours": round(h, 1),
+                "type": "早到",
+            })
+
+        late_start = max(a, DASHBOARD_WORKDAY_LATE_START)
+        late_end = min(b, DASHBOARD_WORKDAY_END_HOUR)
+        if late_end > late_start:
+            h = late_end - late_start
+            start_dt = (
+                date_obj.replace(hour=17, minute=30, second=0, microsecond=0)
+                if a < DASHBOARD_WORKDAY_LATE_START
+                else t_in
+            )
+            segments.append({
+                "start": format_time(start_dt),
+                "end": format_time(t_out),
+                "hours": round(h, 1),
+                "type": "晚走",
+            })
+    return segments
+
+
+def calc_dashboard_auto_overtime_for_record(
+    record: dict,
+    holidays: Dict[str, str],
+    holiday_festival_map: Optional[Dict[str, str]] = None,
+) -> tuple:
+    """
+    领导人看板「自动计算数」、工作强度加班时长。
+    工作日：7:30 前 + 17:30 后，单段不足 1 小时也计入；
+    休息日/假期：仍与智能建议休息日逻辑一致。
+    返回 (hours, segments, day_type)。
+    """
+    date_obj = _parse_record_date(record.get("attendance_date"))
+    if not date_obj:
+        return 0.0, [], ""
+    is_work, is_weekend, is_holiday, _holiday_type = is_workday(date_obj, holidays)
+    day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
+    if is_work:
+        hours = calc_dashboard_workday_overtime_hours(record, date_obj)
+        segments = _dashboard_workday_overtime_segments(record, date_obj)
     else:
         incentive = _is_incentive_festival(date_obj, holiday_festival_map or {})
         hours = calc_restday_overtime_hours(record, date_obj, incentive)
