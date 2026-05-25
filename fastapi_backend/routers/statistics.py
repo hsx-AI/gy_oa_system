@@ -49,6 +49,7 @@ try:
         _load_holiday_festival_map,
         _is_incentive_festival,
         is_workday,
+        calc_suggestion_style_overtime_for_record,
     )
 except Exception:  # pragma: no cover - import fallback for unusual startup order
     collect_valid_times_with_marks = None
@@ -56,6 +57,7 @@ except Exception:  # pragma: no cover - import fallback for unusual startup orde
     _load_holiday_festival_map = None
     _is_incentive_festival = None
     is_workday = None
+    calc_suggestion_style_overtime_for_record = None
 
 logger = logging.getLogger(__name__)
 
@@ -661,128 +663,11 @@ def _parse_attendance_date(val: Any) -> Optional[datetime]:
         return None
 
 
-def _lunch_overlap_hours(start_h: float, end_h: float) -> float:
-    return max(0.0, min(end_h, 13.0) - max(start_h, 12.0))
-
-
-def _leader_workday_overtime_hours(record: Dict, date_obj: datetime) -> Tuple[float, List[Dict]]:
-    """工作日：7:30前早到 + 17:30后晚走，合计满 1 小时记加班。"""
-    if not collect_valid_times_with_marks or not build_intervals_from_marks:
-        return 0.0, []
-    intervals = build_intervals_from_marks(collect_valid_times_with_marks(record))
-    segments: List[Dict] = []
-    total = 0.0
-    for t_in, t_out in intervals:
-        a = time_to_decimal(t_in)
-        b = time_to_decimal(t_out)
-        if b <= a:
-            continue
-
-        early_start = max(a, 0.0)
-        early_end = min(b, 7.5)
-        if early_end > early_start:
-            h = early_end - early_start
-            total += h
-            early_end_dt = t_out if b <= 7.5 else t_in.replace(hour=7, minute=30, second=0, microsecond=0)
-            segments.append({
-                "start": format_time(t_in),
-                "end": format_time(early_end_dt),
-                "hours": _round_01_half_up(h),
-                "type": "早到",
-            })
-
-        late_start = max(a, 17.5)
-        late_end = min(b, 24.0)
-        if late_end > late_start:
-            start_dt = date_obj.replace(hour=17, minute=30, second=0, microsecond=0) if a < 17.5 else t_in
-            h = late_end - late_start
-            total += h
-            segments.append({
-                "start": format_time(start_dt),
-                "end": format_time(t_out),
-                "hours": _round_01_half_up(h),
-                "type": "晚走",
-            })
-
-    if total < 1.0:
-        return 0.0, []
-    return total, segments
-
-
-def _leader_restday_overtime_hours(record: Dict, date_obj: datetime, is_incentive_holiday: bool) -> Tuple[float, List[Dict]]:
-    """休息日/假期：复用智能建议口径，8点后计、跨午休扣 12:00-13:00，单段/合并段满 1 小时。"""
-    if not collect_valid_times_with_marks or not build_intervals_from_marks:
-        return 0.0, []
-    intervals = build_intervals_from_marks(collect_valid_times_with_marks(record))
-    pairs = []
-    for t_in, t_out in intervals:
-        a = time_to_decimal(t_in)
-        b = time_to_decimal(t_out)
-        if b > a and b - a >= 1.0:
-            pairs.append((t_in, t_out))
-    if not pairs:
-        return 0.0, []
-
-    groups: List[List[Tuple[Any, Any]]] = []
-    if is_incentive_holiday:
-        groups = [[pairs[0]]]
-        for pair in pairs[1:]:
-            prev_out = time_to_decimal(groups[-1][-1][1])
-            next_in = time_to_decimal(pair[0])
-            if prev_out >= 12.0 and next_in <= 13.0 and prev_out < next_in:
-                groups[-1].append(pair)
-            else:
-                groups.append([pair])
-    else:
-        groups = [[p] for p in pairs]
-
-    total = 0.0
-    segments: List[Dict] = []
-    for group in groups:
-        if not group:
-            continue
-        start = group[0][0]
-        end = group[-1][1]
-        s_val = time_to_decimal(start)
-        e_val = time_to_decimal(end)
-        if e_val <= s_val:
-            continue
-        eff_start = max(s_val, 8.0)
-        if 12.0 <= eff_start < 13.0:
-            eff_start = 13.0
-        eff_end = e_val
-        if 12.0 < eff_end <= 13.0:
-            eff_end = 12.0
-        if eff_end <= eff_start:
-            continue
-        hours = eff_end - eff_start - _lunch_overlap_hours(eff_start, eff_end)
-        if hours < 1.0:
-            continue
-        total += hours
-        start_label = "08:00:00" if s_val < 8.0 else format_time(start)
-        if 12.0 <= eff_start < 13.01:
-            start_label = "13:00:00"
-        segments.append({
-            "start": start_label,
-            "end": format_time(end),
-            "hours": _round_01_half_up(hours),
-            "type": "休息日",
-        })
-    return total, segments
-
-
 def _leader_overtime_for_record(record: Dict, holidays: Dict[str, str], holiday_festival_map: Dict[str, str]) -> Tuple[float, List[Dict], str]:
-    date_obj = _parse_attendance_date(record.get("attendance_date"))
-    if not date_obj or not is_workday:
+    """打卡加班：与考勤页智能建议「加班建议」同款算法（见 suggestions.calc_suggestion_style_overtime_for_record）。"""
+    if not calc_suggestion_style_overtime_for_record:
         return 0.0, [], ""
-    is_work, is_weekend, is_holiday, _holiday_type = is_workday(date_obj, holidays)
-    day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
-    if is_work:
-        hours, segments = _leader_workday_overtime_hours(record, date_obj)
-    else:
-        incentive = bool(_is_incentive_festival and _is_incentive_festival(date_obj, holiday_festival_map))
-        hours, segments = _leader_restday_overtime_hours(record, date_obj, incentive)
-    return hours, segments, day_type
+    return calc_suggestion_style_overtime_for_record(record, holidays, holiday_festival_map)
 
 
 @router.get("/dept/leader-overtime")
@@ -795,8 +680,8 @@ async def get_leader_overtime_from_attendance(
 ):
     """
     部办人员加班统计：从 attendance_records 打卡数据临时识别，领导岗位单独标记。
-    识别口径参考智能建议：工作日计 17:30 后加班，并额外计 7:30 前早到；
-    休息日/假期按智能建议休息日逻辑扣午休。最小精确到 0.1 小时，四舍五入。
+    识别口径与考勤页智能建议「加班建议」一致：工作日 17:00 后与 [17,24] 交集满 1 小时/段；
+    休息日/假期同 analyze_restday。最小精确到 0.1 小时，四舍五入。
     """
     try:
         if not (current_user or "").strip() or not _can_access_leader_overtime_stats(current_user):
@@ -1242,7 +1127,7 @@ def _calc_auto_overtime_hours_from_attendance(
     period_end: date,
 ) -> Tuple[float, int]:
     """
-    打卡自动识别加班总时长（与部办加班统计/工作强度一致）。
+    打卡自动识别加班总时长（与智能建议「加班建议」合计一致）。
     返回 (总小时, 有识别记录人数)。
     """
     if not scope_names or period_start > period_end:
@@ -1273,7 +1158,7 @@ async def get_dept_overtime_stats(
     net=true 时，每人加班小时减去该人在同期换休类请假（换休/员工换休票）应扣小时，
     与请假统计一致按日历重叠比例分摊；小时优先取 xiaoshi，缺省按 tian×8。
     返回: { totalHours, personCount, list, autoCalculatedHours, autoCalculatedPersonCount }
-    已申报：jiabanzt=4 已通过；autoCalculatedHours=打卡自动识别加班合计（同工作强度打卡算法）
+    已申报：jiabanzt=4 已通过；autoCalculatedHours=智能建议同款打卡加班合计
     """
     try:
         if year is None:
@@ -3079,7 +2964,7 @@ async def get_person_scatter(
 
 # ============================================================
 #  工作强度统计：口径 A=加班/在岗；口径 B=（加班−请假h）/在岗
-#  加班=打卡自动识别（领导加班统计同款）；公出仅境内/境外（不含市内；gclx 空视同境内）
+#  加班=智能建议同款打卡识别；公出仅境内/境外（不含市内；gclx 空视同境内）
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
@@ -3815,7 +3700,7 @@ def _get_staff_with_dept(lsys: Optional[str]) -> list:
 
 def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, end: date) -> Dict[str, float]:
     """
-    「领导加班统计」同款口径：从 attendance_records 临时识别加班时长（工作日 7:30 前 + 17:30 后；休息日/假期按休息日逻辑）。
+    与智能建议「加班建议」同款：从 attendance_records 识别加班时长（工作日 17:00 后；休息日/假期同 analyze_restday）。
     返回 { name: raw_hours }，与领导加班页一致：先累加原始小时，最后再统一 round。
     """
     if not names:
@@ -3865,14 +3750,14 @@ async def get_work_intensity(
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
         "a",
-        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。加班=打卡自动识别；请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
+        description="工作强度口径：a=加班÷在岗；b=（加班−请假小时）÷在岗。加班=智能建议同款打卡识别；请假小时=统计期内已通过请假按天重叠分摊×8；公出仅境内/境外（不含市内）",
     ),
 ):
     """
     工作强度统计：
     口径 A = 加班时长 / 实际在岗时长
     口径 B =（加班时长 − 请假时间）/ 实际在岗时长；请假时间为统计期内已通过请假（qjzt=4）按天重叠分摊后×8 小时，与请假汇总卡片一致。
-    加班时长：全员统一按打卡数据自动识别（与部办加班统计/领导加班统计同款，非 jiaban 申报汇总）。
+    加班时长：全员按打卡数据识别（与考勤智能建议「加班建议」合计一致，非 jiaban 申报汇总）。
     实际在岗时长 = 应出勤时长 - 公出时长 + 公出期间节假日时长
     公出时长仅含境内/境外公出（不含市内公出；gclx 空视同境内公出）。
     时长单位统一为小时（天数×8）。

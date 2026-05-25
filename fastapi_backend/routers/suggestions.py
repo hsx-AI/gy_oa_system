@@ -1050,6 +1050,254 @@ def analyze_restday(record: dict, date_obj: datetime, is_incentive_holiday: bool
     return suggestions
 
 
+# ---------- 与「加班建议」(status=0) 一致的时长汇总（驾驶舱自动计算、工作强度、领导加班统计） ----------
+
+WORKDAY_OVERTIME_START_HOUR = 17.0
+WORKDAY_OVERTIME_END_HOUR = 24.0
+WORKDAY_OVERTIME_MIN_HOURS = 1.0
+RESTDAY_NOON_START = 12.0
+RESTDAY_NOON_END = 13.0
+RESTDAY_OT_START_HOUR = 8.0
+RESTDAY_OVERTIME_MIN_HOURS = 1.0
+
+
+def _decimal_to_dt_on_date(base_date: datetime, h: float) -> datetime:
+    """将当日小时小数转为 datetime（与 analyze_workday 一致）。"""
+    hour = int(h)
+    rest_sec = (h - hour) * 3600
+    minute = int(rest_sec // 60)
+    second = int(round(rest_sec - minute * 60))
+    if second >= 60:
+        second = 0
+        minute += 1
+    if minute >= 60:
+        minute = 0
+        hour += 1
+    return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
+
+
+def _workday_overtime_interval_hours(t_in, t_out) -> float:
+    """单段进出与 [17:00, 24:00] 交集，满 1 小时计入（同 analyze_workday 第 5 步）。"""
+    a = time_to_decimal(t_in)
+    b = time_to_decimal(t_out)
+    inter_start = max(a, WORKDAY_OVERTIME_START_HOUR)
+    inter_end = min(b, WORKDAY_OVERTIME_END_HOUR)
+    if inter_end <= inter_start:
+        return 0.0
+    duration = inter_end - inter_start
+    if duration < WORKDAY_OVERTIME_MIN_HOURS:
+        return 0.0
+    return duration
+
+
+def calc_workday_overtime_hours(record: dict, date_obj: datetime) -> float:
+    """工作日打卡加班时长：与 analyze_workday 加班建议合计一致。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return 0.0
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    return sum(
+        _workday_overtime_interval_hours(t_in, t_out)
+        for t_in, t_out in intervals
+    )
+
+
+def _workday_overtime_segments(record: dict, date_obj: datetime) -> List[dict]:
+    """工作日加班分段（供领导加班明细展示）。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return []
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    segments: List[dict] = []
+    for t_in, t_out in intervals:
+        h = _workday_overtime_interval_hours(t_in, t_out)
+        if h <= 0:
+            continue
+        a = time_to_decimal(t_in)
+        b = time_to_decimal(t_out)
+        inter_start = max(a, WORKDAY_OVERTIME_START_HOUR)
+        inter_end = min(b, WORKDAY_OVERTIME_END_HOUR)
+        start_dt = _decimal_to_dt_on_date(date_obj, inter_start)
+        end_dt = _decimal_to_dt_on_date(date_obj, inter_end)
+        segments.append({
+            "start": format_time(start_dt),
+            "end": format_time(end_dt),
+            "hours": round(h, 1),
+            "type": "加班",
+        })
+    return segments
+
+
+def _restday_segment_overtime_hours(
+    segment_pairs: List[tuple],
+    noon_start: float,
+    noon_end: float,
+    ot_start_hour: float,
+    min_hours: float,
+) -> float:
+    """休息日单组进出对的加班时长（与 _generate_segment_suggestion 内时长计算一致）。"""
+    if not segment_pairs:
+        return 0.0
+    has_lunch_leave = False
+    for k in range(len(segment_pairs) - 1):
+        end_val = time_to_decimal(segment_pairs[k][1])
+        next_start = time_to_decimal(segment_pairs[k + 1][0])
+        if end_val < noon_start and next_start > noon_start:
+            has_lunch_leave = True
+            break
+
+    total = 0.0
+    if has_lunch_leave:
+        for s_time, e_time in segment_pairs:
+            s_val = time_to_decimal(s_time)
+            e_val = time_to_decimal(e_time)
+            if s_val >= e_val:
+                continue
+            eff_start = max(s_val, ot_start_hour)
+            if noon_start <= eff_start < noon_end:
+                eff_start = noon_end
+            if eff_start >= e_val:
+                continue
+            duration = e_val - eff_start
+            if duration < min_hours:
+                continue
+            total += duration
+    else:
+        first_time = segment_pairs[0][0]
+        last_time = segment_pairs[-1][1]
+        start_val = time_to_decimal(first_time)
+        end_val = time_to_decimal(last_time)
+        if start_val >= end_val:
+            return 0.0
+
+        eff_start = max(start_val, ot_start_hour)
+        if noon_start <= eff_start < noon_end:
+            eff_start = noon_end
+        eff_end = end_val
+        if noon_start < eff_end <= noon_end:
+            eff_end = noon_start
+        if eff_start >= eff_end:
+            return 0.0
+
+        if eff_start < noon_start and eff_end > noon_end:
+            total = (eff_end - eff_start) - (noon_end - noon_start)
+        else:
+            overlap = max(0, min(eff_end, noon_end) - max(eff_start, noon_start))
+            total = (eff_end - eff_start) - overlap
+
+        if total < min_hours:
+            return 0.0
+    return total
+
+
+def calc_restday_overtime_hours(
+    record: dict,
+    date_obj: datetime,
+    is_incentive_holiday: bool = False,
+) -> float:
+    """休息日/假期打卡加班时长：与 analyze_restday 加班建议合计一致。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return 0.0
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    pairs: List[tuple] = []
+    for t_in, t_out in intervals:
+        dur = time_to_decimal(t_out) - time_to_decimal(t_in)
+        if dur >= RESTDAY_OVERTIME_MIN_HOURS:
+            pairs.append((t_in, t_out))
+    if not pairs:
+        return 0.0
+
+    pair_groups = _group_restday_pairs_for_suggestion(
+        pairs,
+        RESTDAY_NOON_START,
+        RESTDAY_NOON_END,
+        merge_lunch_gap=is_incentive_holiday,
+    )
+    total = 0.0
+    for pair_group in pair_groups:
+        total += _restday_segment_overtime_hours(
+            pair_group,
+            RESTDAY_NOON_START,
+            RESTDAY_NOON_END,
+            RESTDAY_OT_START_HOUR,
+            RESTDAY_OVERTIME_MIN_HOURS,
+        )
+    return total
+
+
+def _restday_overtime_segments(
+    record: dict,
+    date_obj: datetime,
+    is_incentive_holiday: bool = False,
+) -> List[dict]:
+    """休息日加班分段（供领导加班明细展示）。"""
+    time_mark_pairs = collect_valid_times_with_marks(record)
+    if not time_mark_pairs:
+        return []
+    intervals = build_intervals_from_marks(time_mark_pairs)
+    pairs: List[tuple] = []
+    for t_in, t_out in intervals:
+        dur = time_to_decimal(t_out) - time_to_decimal(t_in)
+        if dur >= RESTDAY_OVERTIME_MIN_HOURS:
+            pairs.append((t_in, t_out))
+    if not pairs:
+        return []
+
+    pair_groups = _group_restday_pairs_for_suggestion(
+        pairs,
+        RESTDAY_NOON_START,
+        RESTDAY_NOON_END,
+        merge_lunch_gap=is_incentive_holiday,
+    )
+    segments: List[dict] = []
+    for pair_group in pair_groups:
+        h = _restday_segment_overtime_hours(
+            pair_group,
+            RESTDAY_NOON_START,
+            RESTDAY_NOON_END,
+            RESTDAY_OT_START_HOUR,
+            RESTDAY_OVERTIME_MIN_HOURS,
+        )
+        if h <= 0:
+            continue
+        start = pair_group[0][0]
+        end = pair_group[-1][1]
+        s_val = time_to_decimal(start)
+        start_label = "08:00:00" if s_val < RESTDAY_OT_START_HOUR else format_time(start)
+        segments.append({
+            "start": start_label,
+            "end": format_time(end),
+            "hours": round(h, 1),
+            "type": "休息日",
+        })
+    return segments
+
+
+def calc_suggestion_style_overtime_for_record(
+    record: dict,
+    holidays: Dict[str, str],
+    holiday_festival_map: Optional[Dict[str, str]] = None,
+) -> tuple:
+    """
+    按智能建议「加班建议」同款规则汇总单日加班时长。
+    返回 (hours, segments, day_type)。
+    """
+    date_obj = _parse_record_date(record.get("attendance_date"))
+    if not date_obj:
+        return 0.0, [], ""
+    is_work, is_weekend, is_holiday, _holiday_type = is_workday(date_obj, holidays)
+    day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
+    if is_work:
+        hours = calc_workday_overtime_hours(record, date_obj)
+        segments = _workday_overtime_segments(record, date_obj)
+    else:
+        incentive = _is_incentive_festival(date_obj, holiday_festival_map or {})
+        hours = calc_restday_overtime_hours(record, date_obj, incentive)
+        segments = _restday_overtime_segments(record, date_obj, incentive)
+    return hours, segments, day_type
+
+
 def _parse_record_date(date_obj):
     """将记录中的 attendance_date 转为 datetime"""
     if not date_obj:

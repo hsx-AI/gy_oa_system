@@ -205,7 +205,7 @@
                           v-if="item.autoHours != null"
                           class="person-auto-ot"
                           :class="{ 'person-auto-ot--zero': !item.autoHours }"
-                          :title="`按打卡自动识别 ${item.autoHours} 小时`"
+                          :title="`按智能建议加班规则识别 ${item.autoHours} 小时`"
                         >· 自动计算 {{ item.autoHours }}h</span>
                       </span>
                     </li>
