@@ -464,7 +464,7 @@
               <span class="wi-value">{{ (workIntensity.overallIntensity * 100).toFixed(1) }}%</span>
             </div>
             <div v-if="!filterMonth && !wiUseDateRange && wiMonthly.length >= 2" class="wi-sparkline-wrap">
-              <span class="wi-label">月度趋势</span>
+              <span class="wi-label">年内累计趋势</span>
               <svg class="wi-sparkline" viewBox="0 0 280 68" preserveAspectRatio="none">
                 <path :d="wiSparklinePoints" fill="none" stroke="#c2410c" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
                 <template v-for="(dot, di) in wiSparklineDots" :key="di">
@@ -814,7 +814,7 @@ const wiSparklineDots = computed(() => {
     const x = WI_SPARK_LEFT + (i / (c.vals.length - 1)) * (WI_SPARK_W - WI_SPARK_LEFT - WI_SPARK_RIGHT)
     const y = WI_SPARK_TOP + (1 - (v - c.min) / c.range) * (WI_SPARK_H - WI_SPARK_TOP - WI_SPARK_BOT)
     const anchor = i === 0 ? 'start' : (i === c.vals.length - 1 ? 'end' : 'middle')
-    return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月: ${v.toFixed(1)}%` }
+    return { x, y, anchor, pct: v.toFixed(1) + '%', label: `${data[i].month}月累计: ${v.toFixed(1)}%` }
   })
 })
 
@@ -877,6 +877,67 @@ function wiAllPersonsForTotals() {
   return filterWiRowsBySelectedDept(workIntensity.value?.byPerson || [])
 }
 
+/** 部长筛选为「全员」时导出增加按职务平均工作强度 */
+function isWiExportAllStaffScope() {
+  return permLevel.value === 3 && !wiSelectedDeptTrim()
+}
+
+const WI_EXPORT_ROLE_BUCKET_ORDER = [
+  WI_JOB_FILTER_ALL_MANAGERS,
+  WI_JOB_FILTER_ZHUREN_ZRZE,
+  WI_JOB_FILTER_FUZHUREN,
+  ...WI_JOB_CATEGORY_ORDER,
+]
+
+function wiPersonsMatchingRoleBucket(persons, bucketKey) {
+  const list = persons || []
+  if (bucketKey === WI_JOB_FILTER_ALL_MANAGERS) {
+    return list.filter((row) => {
+      const c = wiJobDisplayCategory(row?.jb, row?.lsys)
+      return c === '主任及副主任' || c === '班组长'
+    })
+  }
+  if (bucketKey === WI_JOB_FILTER_ZHUREN_ZRZE) {
+    return list.filter((row) => wiJobMatchesZhurenOrZrze(row?.jb))
+  }
+  if (bucketKey === WI_JOB_FILTER_FUZHUREN) {
+    return list.filter((row) => wiJobMatchesFuzhurenOnly(row?.jb))
+  }
+  return list.filter((row) => wiJobDisplayCategory(row?.jb, row?.lsys) === bucketKey)
+}
+
+function aggregateWiRoleStats(persons, useFormulaB) {
+  if (!persons?.length) return null
+  const ot = persons.reduce((s, p) => s + Number(p.overtimeHours || 0), 0)
+  const leave = persons.reduce((s, p) => s + Number(p.leaveHours || 0), 0)
+  const actual = persons.reduce((s, p) => s + Number(p.actualHours || 0), 0)
+  const intensity = actual > 0
+    ? (useFormulaB ? (ot - leave) / actual : ot / actual)
+    : 0
+  return { count: persons.length, ot, leave, actual, intensity }
+}
+
+function buildWiRoleAverageOverviewRows(allPersons, useFormulaB) {
+  if (!isWiExportAllStaffScope()) return []
+  const rows = [
+    [],
+    ['按职务平均工作强度', ''],
+  ]
+  const head = ['职务', '人数', '加班（h）']
+  if (useFormulaB) head.push('请假（h）')
+  head.push('实际在岗（h）', '平均工作强度')
+  rows.push(head)
+  for (const bucket of WI_EXPORT_ROLE_BUCKET_ORDER) {
+    const stats = aggregateWiRoleStats(wiPersonsMatchingRoleBucket(allPersons, bucket), useFormulaB)
+    if (!stats) continue
+    const line = [bucket, stats.count, roundForExport(stats.ot)]
+    if (useFormulaB) line.push(roundForExport(stats.leave))
+    line.push(roundForExport(stats.actual), percentForExport(stats.intensity))
+    rows.push(line)
+  }
+  return rows
+}
+
 function appendAoASheet(wb, name, rows, widths = []) {
   const sheet = XLSX.utils.aoa_to_sheet(rows)
   if (widths.length) {
@@ -892,9 +953,36 @@ function formatWiExportFileName() {
   return `工作强度统计_${scope}_${range || filterYear.value}_${suf}.xlsx`
 }
 
+function wiIntensityFromTotals(ot, leaveH, actualH, useFormulaB) {
+  const actual = Number(actualH || 0)
+  if (actual <= 0) return 0
+  const otN = Number(ot || 0)
+  const leaveN = Number(leaveH || 0)
+  return useFormulaB ? (otN - leaveN) / actual : otN / actual
+}
+
+/** 按月汇总累计工作强度，与当前口径、全员工作强度主数字一致 */
+function buildWiMonthlyCumulative(monthlyTotals, useFormulaB) {
+  let cumOt = 0
+  let cumLeave = 0
+  let cumActual = 0
+  return [...monthlyTotals]
+    .sort((a, b) => a.month - b.month)
+    .map((row) => {
+      cumOt += Number(row.totalOvertimeHours || 0)
+      cumLeave += Number(row.totalLeaveHours || 0)
+      cumActual += Number(row.totalActualHours || 0)
+      return {
+        month: row.month,
+        intensity: wiIntensityFromTotals(cumOt, cumLeave, cumActual, useFormulaB),
+      }
+    })
+}
+
 async function loadLeaderWorkIntensity(lsysToUse) {
   const seq = ++workIntensityFetchSeq
   wiRangeError.value = ''
+  const useFormulaB = wiIntensityFormula.value === 'b'
   const wiParams = {
     year: filterYear.value,
     intensity_formula: wiIntensityFormula.value,
@@ -925,11 +1013,28 @@ async function loadLeaderWorkIntensity(lsysToUse) {
       const mp = { year, month: m, intensity_formula: wiIntensityFormula.value }
       if (lsysToUse) mp.lsys = lsysToUse
       monthPromises.push(
-        getLeaderWorkIntensity(mp).then(r => ({ month: m, intensity: r?.overallIntensity ?? 0 })).catch(() => ({ month: m, intensity: 0 })),
+        getLeaderWorkIntensity(mp)
+          .then((r) => ({
+            month: m,
+            totalOvertimeHours: r?.totalOvertimeHours ?? 0,
+            totalLeaveHours: r?.totalLeaveHours ?? 0,
+            totalActualHours: r?.totalActualHours ?? 0,
+          }))
+          .catch(() => ({
+            month: m,
+            totalOvertimeHours: 0,
+            totalLeaveHours: 0,
+            totalActualHours: 0,
+          })),
       )
     }
-    const monthly = await Promise.all(monthPromises)
+    const monthlyTotals = await Promise.all(monthPromises)
     if (seq !== workIntensityFetchSeq) return
+    const monthly = buildWiMonthlyCumulative(monthlyTotals, useFormulaB)
+    const overall = Number(workIntensity.value?.overallIntensity)
+    if (monthly.length && Number.isFinite(overall)) {
+      monthly[monthly.length - 1].intensity = overall
+    }
     wiMonthly.value = monthly
   } else {
     if (seq !== workIntensityFetchSeq) return
@@ -1039,8 +1144,11 @@ function exportWorkIntensityTable() {
     ['各科室加班合计（h）', roundForExport(sumDeptOt)],
     ['各科室在岗合计（h）', roundForExport(sumDeptActual)],
   )
+  overviewRows.push(...buildWiRoleAverageOverviewRows(allPersons, b))
   if (wiJobFilter.value) {
     overviewRows.push(['说明', '「按个人」sheet 受职务筛选；概览与各科室为全员口径'])
+  } else if (isWiExportAllStaffScope()) {
+    overviewRows.push(['说明', '「按职务平均工作强度」与职务筛选下拉一致；强度按组内合计加班÷合计在岗（口径 B 再减请假）'])
   }
 
   const wb = XLSX.utils.book_new()

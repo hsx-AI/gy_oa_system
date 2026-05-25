@@ -207,6 +207,14 @@
           <label>周末夜班人数</label>
           <input type="number" v-model.number="config.weekend_night" min="0" max="50">
         </div>
+        <div v-if="shiftEmailFeatureEnabled" class="config-item config-item-email-send">
+          <label>邮件自动发送</label>
+          <select v-model.number="config.email_send_weekday" class="config-select">
+            <option v-for="opt in emailSendWeekdayOptions" :key="opt.value" :value="opt.value">
+              每周{{ opt.label }} 17:00
+            </option>
+          </select>
+        </div>
         <button type="button" class="btn btn-primary btn-sm" @click="handleSaveConfig">保存配置</button>
       </div>
       <div class="recipient-config">
@@ -235,6 +243,9 @@
       </div>
       <p class="config-hint">
         自动排班时，仅对「今天及之后」的日期写入；今天之前不覆盖。排班表收件人用于后续按科室发送日常排班邮件。
+        <template v-if="shiftEmailFeatureEnabled">
+          {{ emailSendScheduleHint }}
+        </template>
       </p>
     </div>
 
@@ -810,7 +821,27 @@ const config = reactive({
   weekend_day: 2,
   weekend_night: 2,
   email_recipients: [],
+  email_send_weekday: 4,
   email_feature_enabled: true,
+})
+
+const emailSendWeekdayOptions = [
+  { value: 0, label: '周一' },
+  { value: 1, label: '周二' },
+  { value: 2, label: '周三' },
+  { value: 3, label: '周四' },
+  { value: 4, label: '周五' },
+  { value: 5, label: '周六' },
+  { value: 6, label: '周日' },
+]
+
+const emailSendWeekdayLabel = (wd) => emailSendWeekdayOptions.find((o) => o.value === wd)?.label || '周五'
+
+const emailSendScheduleHint = computed(() => {
+  const sendWd = Number(config.email_send_weekday)
+  const sendLabel = emailSendWeekdayLabel(Number.isFinite(sendWd) ? sendWd : 4)
+  const startLabel = emailSendWeekdayLabel((sendWd + 1) % 7)
+  return `邮件于每周${sendLabel} 17:00 自动发送，排班区间为${startLabel}至下${sendLabel}（共 7 天）。`
 })
 
 const shiftEmailFeatureEnabled = computed(() => config.email_feature_enabled !== false)
@@ -858,8 +889,13 @@ function setEmailRecipients(recipients) {
   }
 }
 
-const AUTO_SEND_WEEKDAY = 5
 const AUTO_SEND_HOUR = 17
+
+function pythonWeekdayToJs(pythonWd) {
+  const wd = Number(pythonWd)
+  if (!Number.isFinite(wd) || wd < 0 || wd > 6) return 5
+  return (wd + 1) % 7
+}
 const sendCountdownNow = ref(new Date())
 const sendCountdownHolidayOptions = ref([])
 const sendCountdownIndex = ref(0)
@@ -873,9 +909,10 @@ function startOfLocalDay(d) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate())
 }
 
-function nextFridaySendTime(nowDate = new Date()) {
+function nextConfiguredSendTime(nowDate = new Date(), sendWeekdayPython = config.email_send_weekday) {
   const target = startOfLocalDay(nowDate)
-  const addDays = (AUTO_SEND_WEEKDAY - target.getDay() + 7) % 7
+  const jsWeekday = pythonWeekdayToJs(sendWeekdayPython)
+  const addDays = (jsWeekday - target.getDay() + 7) % 7
   target.setDate(target.getDate() + addDays)
   target.setHours(AUTO_SEND_HOUR, 0, 0, 0)
   if (target <= nowDate) target.setDate(target.getDate() + 7)
@@ -914,8 +951,8 @@ function weekEndDate(nowDate = sendCountdownNow.value) {
   return end
 }
 
-function nextWeekRange(nowDate = sendCountdownNow.value) {
-  const target = nextFridaySendTime(nowDate)
+function nextEmailScheduleRange(nowDate = sendCountdownNow.value, sendWeekdayPython = config.email_send_weekday) {
+  const target = nextConfiguredSendTime(nowDate, sendWeekdayPython)
   const start = startOfLocalDay(target)
   start.setDate(start.getDate() + 1)
   const end = new Date(start)
@@ -990,13 +1027,14 @@ const nextHolidayForCountdown = computed(() => {
 })
 
 const sendCountdownItems = computed(() => {
-  const target = nextFridaySendTime(sendCountdownNow.value)
+  const target = nextConfiguredSendTime(sendCountdownNow.value)
+  const sendLabel = emailSendWeekdayLabel(config.email_send_weekday)
   const dateText = formatMonthDayWeek(target)
   const distance = formatCountdownDistance(target)
   const statusText = nextWeekScheduleStatusText.value
   const items = [{
     key: 'daily',
-    mainText: `距离${dateText}自动发送日常排班还有${distance}，`,
+    mainText: `距离${dateText}（每周${sendLabel} 17:00）自动发送日常排班还有${distance}，`,
     statusText,
     completed: nextWeekScheduleCompleted.value,
   }]
@@ -1020,7 +1058,7 @@ async function loadNextWeekScheduleCompletion() {
     nextWeekScheduleCompleted.value = false
     return
   }
-  const { start, end } = nextWeekRange(sendCountdownNow.value)
+  const { start, end } = nextEmailScheduleRange(sendCountdownNow.value)
   try {
     const res = await getSchedule({
       department: dept,
@@ -1427,6 +1465,7 @@ async function loadSchedule() {
     config.weekend_day = c.weekend_day ?? 2
     config.weekend_night = c.weekend_night ?? 2
     config.email_feature_enabled = c.email_feature_enabled !== false
+    config.email_send_weekday = Number.isFinite(Number(c.email_send_weekday)) ? Number(c.email_send_weekday) : 4
     setEmailRecipients(c.email_recipients || [])
     loadNextWeekScheduleCompletion()
   } catch (e) {
@@ -1894,6 +1933,7 @@ async function handleSaveConfig() {
       weekend_day: config.weekend_day,
       weekend_night: config.weekend_night,
       email_recipients: emailRecipients,
+      email_send_weekday: config.email_send_weekday,
       current_user: getCurrentUser(),
     })
     setEmailRecipients(emailRecipients)
@@ -1906,7 +1946,7 @@ async function handleSaveConfig() {
 
 async function handleSendScheduleEmail() {
   if (!isManager.value || !selectedDept.value || !shiftEmailFeatureEnabled.value || sendingScheduleEmail.value) return
-  const { start, end } = nextWeekRange(sendCountdownNow.value)
+  const { start, end } = nextEmailScheduleRange(sendCountdownNow.value)
   if (!confirm(`确认发送 ${selectedDept.value} ${toYMD(start)} 至 ${toYMD(end)} 的周排班邮件吗？`)) return
   sendingScheduleEmail.value = true
   try {
@@ -2021,6 +2061,10 @@ watch(exportYear, () => {
 
 watch(selectedDept, (val) => {
   if (!val && exportDeptScope.value === 'current') exportDeptScope.value = 'all'
+})
+
+watch(() => config.email_send_weekday, () => {
+  loadNextWeekScheduleCompletion()
 })
 
 async function handleExportExcel() {
@@ -2259,6 +2303,13 @@ async function handleExportExcel() {
 .config-item { display: flex; flex-direction: column; gap: 4px; }
 .config-item label { font-size: 12px; color: var(--color-text-secondary); }
 .config-item input { width: 80px; padding: 4px 8px; border: 1px solid var(--color-border-base); border-radius: var(--radius-sm); text-align: center; }
+.config-item-email-send .config-select {
+  min-width: 168px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+}
 .recipient-config {
   margin-top: 14px;
   padding-top: 12px;

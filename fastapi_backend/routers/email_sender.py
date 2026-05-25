@@ -1056,7 +1056,6 @@ async def auto_reminder_background_loop():
 
 # ==================== 周排班自动邮件 ====================
 
-SHIFT_SCHEDULE_SEND_WEEKDAY = 4
 SHIFT_SCHEDULE_SEND_HOUR = 17
 SHIFT_SCHEDULE_SEND_CHECK_SECONDS = 60
 
@@ -1127,12 +1126,10 @@ def _record_shift_schedule_email_log(
     )
 
 
-def _shift_schedule_target_week(now: Optional[datetime] = None) -> date:
-    """周五 17:00 发送的是次日周六到下周五的周排班。"""
-    from routers.shift_schedule import _week_saturday_range
-    current = now or datetime.now()
-    week_start, _week_end = _week_saturday_range(current.date() + timedelta(days=1))
-    return week_start
+def _shift_schedule_target_week(department: str, now: Optional[datetime] = None) -> date:
+    """按科室配置的发送日，返回当日 17:00 邮件对应的排班周起始日。"""
+    from routers.shift_schedule import _shift_schedule_target_week_start
+    return _shift_schedule_target_week_start(department, now)
 
 
 def _get_shift_config_recipients(department: str) -> List[dict]:
@@ -1239,15 +1236,16 @@ async def run_shift_schedule_email_once(
     if not sender_addr or not password:
         return {"success": False, "message": "邮箱未配置，无法发送周排班邮件", "sent": 0, "skipped": 0, "errors": 0}
 
-    week_start = target_week_start or _shift_schedule_target_week()
     departments = [department_filter] if department_filter else _get_shift_departments()
     enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
     sent = 0
     skipped = 0
     errors = 0
     details = []
+    now_dt = datetime.now()
 
     for dept in [d for d in departments if d]:
+        week_start = target_week_start or _shift_schedule_target_week(dept, now_dt)
         if dept not in enabled_departments:
             skipped += 1
             details.append({"department": dept, "status": "skipped", "message": "本科室未启用排班邮件功能"})
@@ -1317,7 +1315,6 @@ async def run_shift_schedule_email_once(
     return {
         "success": errors == 0,
         "message": f"周排班邮件发送完成：成功 {sent} 个科室，跳过 {skipped} 个科室，失败 {errors} 个科室",
-        "weekStart": week_start.strftime("%Y-%m-%d"),
         "sent": sent,
         "skipped": skipped,
         "errors": errors,
@@ -1335,11 +1332,12 @@ async def run_shift_schedule_email_api(
     scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
     target_week_start = None
     if week_date:
-        from routers.shift_schedule import _parse_iso_date, _week_saturday_range
+        from routers.shift_schedule import _parse_iso_date, _week_range_for_send_day, _get_shift_email_send_weekday
         anchor = _parse_iso_date(week_date)
         if not anchor:
             raise HTTPException(status_code=400, detail="week_date 格式应为 YYYY-MM-DD")
-        target_week_start, _ = _week_saturday_range(anchor)
+        send_wd = _get_shift_email_send_weekday(scoped_department or department or "")
+        target_week_start, _ = _week_range_for_send_day(anchor, send_wd)
     result = await run_shift_schedule_email_once(
         "手动触发周排班邮件",
         target_week_start=target_week_start,
@@ -1396,23 +1394,39 @@ async def get_shift_schedule_email_sent_weeks_api(
 
 
 async def shift_schedule_email_background_loop():
-    """周五 17:00 自动发送本周六至下周五排班邮件。"""
+    """按各科室配置的星期几 17:00 自动发送对应周期的排班邮件。"""
+    from routers.shift_schedule import _get_shift_departments, _get_shift_email_send_weekday, _load_shift_email_feature_config
+
     logger.info("[ShiftScheduleEmail] 周排班自动邮件后台任务已启动")
     print("[System] 周排班自动邮件后台任务已启动")
     last_triggered = set()
+    weekday_labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     while True:
         try:
             await asyncio.sleep(SHIFT_SCHEDULE_SEND_CHECK_SECONDS)
             now = datetime.now()
-            if now.weekday() != SHIFT_SCHEDULE_SEND_WEEKDAY or now.hour != SHIFT_SCHEDULE_SEND_HOUR or now.minute > 1:
+            if now.hour != SHIFT_SCHEDULE_SEND_HOUR or now.minute > 1:
                 continue
-            run_key = now.strftime("%Y-%m-%d")
-            if run_key in last_triggered:
+            enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
+            due_departments = [
+                dept for dept in enabled_departments
+                if _get_shift_email_send_weekday(dept) == now.weekday()
+            ]
+            if not due_departments:
                 continue
-            last_triggered.add(run_key)
-            if len(last_triggered) > 20:
-                last_triggered = set(sorted(last_triggered)[-10:])
-            await run_shift_schedule_email_once("周五17:00自动发送")
+            for dept in due_departments:
+                run_key = f"{now.strftime('%Y-%m-%d')}|{dept}"
+                if run_key in last_triggered:
+                    continue
+                last_triggered.add(run_key)
+                if len(last_triggered) > 200:
+                    last_triggered = set(sorted(last_triggered)[-100:])
+                send_wd = _get_shift_email_send_weekday(dept)
+                label = weekday_labels[send_wd] if 0 <= send_wd <= 6 else "周"
+                await run_shift_schedule_email_once(
+                    f"{label}17:00自动发送",
+                    department_filter=dept,
+                )
         except Exception as e:
             logger.error("[ShiftScheduleEmail] 循环异常: %s", e)
             await asyncio.sleep(300)

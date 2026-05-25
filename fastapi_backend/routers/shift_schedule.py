@@ -75,6 +75,16 @@ def _ensure_tables():
             "ALTER TABLE shift_config ADD COLUMN email_recipients TEXT NULL "
             "COMMENT '排班邮件收件人JSON [{name,email}]' AFTER weekend_night"
         )
+    send_wd_col = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shift_config' AND COLUMN_NAME = 'email_send_weekday' "
+        "LIMIT 1"
+    )
+    if not send_wd_col:
+        db.execute_update(
+            "ALTER TABLE shift_config ADD COLUMN email_send_weekday INT NOT NULL DEFAULT 4 "
+            "COMMENT '排班邮件自动发送星期几(0=周一…6=周日)，固定17:00发送' AFTER email_recipients"
+        )
     db.execute_update("""
         CREATE TABLE IF NOT EXISTS shift_schedule (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -360,15 +370,55 @@ def _daterange(start: date, end: date) -> List[date]:
     return out
 
 
-def _shift_coverage_check_range(today: date) -> Tuple[date, date]:
+DEFAULT_EMAIL_SEND_WEEKDAY = 4  # 周五；与历史「周六至下周五」排班邮件周期一致
+
+
+def _normalize_email_send_weekday(value) -> int:
+    """0=周一 … 6=周日"""
+    try:
+        wd = int(value)
+    except (TypeError, ValueError):
+        wd = DEFAULT_EMAIL_SEND_WEEKDAY
+    if wd < 0 or wd > 6:
+        return DEFAULT_EMAIL_SEND_WEEKDAY
+    return wd
+
+
+def _week_range_for_send_day(anchor: date, send_weekday: int) -> tuple[date, date]:
     """
-    日常排班缺口检测区间：本周六至下周五（含首尾，共 7 天）。
-    自然周按周一至周日计，「本周六」为当前周内的周六。
+    按「发送日」划分的 7 天排班区间：发送日的次日 至 下周同一发送日（含首尾）。
+    例：发送日=周五 → 周六至下周五。
     """
-    monday = today - timedelta(days=today.weekday())
-    this_saturday = monday + timedelta(days=5)
-    next_friday = this_saturday + timedelta(days=6)
-    return this_saturday, next_friday
+    send_weekday = _normalize_email_send_weekday(send_weekday)
+    start_weekday = (send_weekday + 1) % 7
+    start = anchor - timedelta(days=(anchor.weekday() - start_weekday) % 7)
+    return start, start + timedelta(days=6)
+
+
+def _get_shift_email_send_weekday(department: str) -> int:
+    _ensure_tables()
+    if not department:
+        return DEFAULT_EMAIL_SEND_WEEKDAY
+    rows = db.execute_query(
+        "SELECT email_send_weekday FROM shift_config WHERE department = %s LIMIT 1",
+        (department,),
+    )
+    if rows:
+        return _normalize_email_send_weekday(rows[0].get("email_send_weekday"))
+    return DEFAULT_EMAIL_SEND_WEEKDAY
+
+
+def _shift_schedule_target_week_start(department: str, now: Optional[datetime] = None) -> date:
+    """发送当日 17:00 邮件对应的排班周起始日（发送日次日）。"""
+    current = now or datetime.now()
+    anchor = current.date() + timedelta(days=1)
+    week_start, _ = _week_range_for_send_day(anchor, _get_shift_email_send_weekday(department))
+    return week_start
+
+
+def _shift_coverage_check_range(today: date, send_weekday: int = DEFAULT_EMAIL_SEND_WEEKDAY) -> Tuple[date, date]:
+    """日常排班缺口检测区间：与本科室邮件排班周期一致（含首尾，共 7 天）。"""
+    return _week_range_for_send_day(today, send_weekday)
 
 
 def _prev_month_same_day(d: date) -> date:
@@ -383,9 +433,8 @@ def _prev_month_same_day(d: date) -> date:
 
 
 def _week_saturday_range(anchor: date) -> tuple[date, date]:
-    """返回 anchor 所在排班周：本周六到下周五。"""
-    start = anchor - timedelta(days=(anchor.weekday() - 5) % 7)
-    return start, start + timedelta(days=6)
+    """返回 anchor 所在排班周：本周六到下周五（发送日=周五时的邮件周期）。"""
+    return _week_range_for_send_day(anchor, DEFAULT_EMAIL_SEND_WEEKDAY)
 
 
 def _holiday_map_for_years(years: Set[int]) -> dict:
@@ -545,6 +594,7 @@ class ShiftConfigRequest(BaseModel):
     weekend_day: int = 2
     weekend_night: int = 2
     email_recipients: List[ShiftEmailRecipient] = Field(default_factory=list)
+    email_send_weekday: int = DEFAULT_EMAIL_SEND_WEEKDAY
     current_user: str = ""
 
 
@@ -590,12 +640,14 @@ async def get_shift_config(department: str = Query(...)):
     """获取科室排班配置"""
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT workday_day, workday_night, weekend_day, weekend_night, email_recipients FROM shift_config WHERE department = %s LIMIT 1",
+        "SELECT workday_day, workday_night, weekend_day, weekend_night, email_recipients, email_send_weekday "
+        "FROM shift_config WHERE department = %s LIMIT 1",
         (department,),
     )
     if rows:
         data = dict(rows[0])
         data["email_recipients"] = _parse_shift_email_recipients(data.get("email_recipients"))
+        data["email_send_weekday"] = _normalize_email_send_weekday(data.get("email_send_weekday"))
         data["email_feature_enabled"] = _is_shift_email_feature_enabled(department)
         return {"success": True, "data": data}
     return {
@@ -606,6 +658,7 @@ async def get_shift_config(department: str = Query(...)):
             "weekend_day": 2,
             "weekend_night": 2,
             "email_recipients": [],
+            "email_send_weekday": DEFAULT_EMAIL_SEND_WEEKDAY,
             "email_feature_enabled": _is_shift_email_feature_enabled(department),
         },
     }
@@ -623,7 +676,8 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
         return {"success": True, "hasPending": False, "department": "", "issues": [], "totalIssues": 0}
 
     today = date.today()
-    start_day, end_day = _shift_coverage_check_range(today)
+    send_wd = _get_shift_email_send_weekday(dept)
+    start_day, end_day = _shift_coverage_check_range(today, send_wd)
     dates = _daterange(start_day, end_day)
     years_set = {d.year for d in dates}
     holiday_by_date = _holiday_map_for_years(years_set)
@@ -724,18 +778,23 @@ async def save_shift_config(req: ShiftConfigRequest):
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     email_recipients = _normalize_shift_email_recipients(req.email_recipients)
     email_recipients_json = json.dumps(email_recipients, ensure_ascii=False)
+    email_send_weekday = _normalize_email_send_weekday(req.email_send_weekday)
     existing = db.execute_query(
         "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (req.department,)
     )
     if existing:
         db.execute_update(
-            "UPDATE shift_config SET workday_day=%s, workday_night=%s, weekend_day=%s, weekend_night=%s, email_recipients=%s, updated_by=%s, updated_at=%s WHERE department=%s",
-            (req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, email_recipients_json, req.current_user, now, req.department),
+            "UPDATE shift_config SET workday_day=%s, workday_night=%s, weekend_day=%s, weekend_night=%s, "
+            "email_recipients=%s, email_send_weekday=%s, updated_by=%s, updated_at=%s WHERE department=%s",
+            (req.workday_day, req.workday_night, req.weekend_day, req.weekend_night,
+             email_recipients_json, email_send_weekday, req.current_user, now, req.department),
         )
     else:
         db.execute_update(
-            "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, email_recipients, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s)",
-            (req.department, req.workday_day, req.workday_night, req.weekend_day, req.weekend_night, email_recipients_json, req.current_user, now),
+            "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, "
+            "email_recipients, email_send_weekday, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (req.department, req.workday_day, req.workday_night, req.weekend_day, req.weekend_night,
+             email_recipients_json, email_send_weekday, req.current_user, now),
         )
     return {"success": True, "message": "配置已保存"}
 
@@ -1357,7 +1416,10 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     if not department or department == "__ALL__":
         raise HTTPException(status_code=400, detail="周排班表请选择具体科室")
 
-    week_start, week_end = _week_saturday_range(anchor or date.today())
+    week_start, week_end = _week_range_for_send_day(
+        anchor or date.today(),
+        _get_shift_email_send_weekday(department),
+    )
     dates = _daterange(week_start, week_end)
     employees = _get_dept_employees(department)
     ds_lo = week_start.strftime("%Y-%m-%d")
@@ -1622,7 +1684,10 @@ async def export_schedule_excel(
                 anchor = date(year, int(month or 1), 1) if month else date.today()
             except Exception:
                 anchor = date.today()
-        week_start, week_end = _week_saturday_range(anchor)
+        week_start, week_end = _week_range_for_send_day(
+            anchor,
+            _get_shift_email_send_weekday(department),
+        )
         dates = _daterange(week_start, week_end)
         employees = _get_dept_employees(department)
     else:

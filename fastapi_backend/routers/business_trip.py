@@ -99,7 +99,8 @@ def _check_trip_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None) -> l
     sql = """
         SELECT id, gcdd, gclx,
                COALESCE(gcsj, yjcfsj) AS trip_start,
-               COALESCE(sjfhtime, yjfhsj) AS trip_end
+               COALESCE(sjfhtime, yjfhsj) AS trip_end,
+               COALESCE(fhdj_status, 0) AS fhdj_status
         FROM gcsqb
         WHERE TRIM(gcr) = %s
           AND NOT (COALESCE(bldzt,0) = 22 OR COALESCE(szrzt,0) = 22)
@@ -126,6 +127,7 @@ def _check_trip_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None) -> l
                 "type": row.get("gclx") or "",
                 "start": t_start.strftime("%Y-%m-%d %H:%M"),
                 "end": t_end.strftime("%Y-%m-%d %H:%M"),
+                "returned": int(row.get("fhdj_status") or 0) == 1,
             })
     return conflicts
 
@@ -135,7 +137,11 @@ def _raise_if_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None):
     conflicts = _check_trip_overlap(gcr, start_dt, end_dt, exclude_id)
     if conflicts:
         lines = [f"· {c['start']} ~ {c['end']}（{c['type']}，{c['location']}）" for c in conflicts]
-        msg = "公出时间段与以下已有记录重叠，请勿重复填报：\n" + "\n".join(lines) + "\n\n如需修改已有数据请联系黄圣轩7480"
+        msg = "公出时间段与以下已有记录重叠，请勿重复填报：\n" + "\n".join(lines)
+        if all(c.get("returned") for c in conflicts):
+            msg += "\n\n重叠的公出均已返回登记，如需修改已有数据请联系黄圣轩7480"
+        else:
+            msg += "\n\n重叠的公出中存在未返回登记的记录，请先完成返回登记后再提交"
         raise HTTPException(status_code=409, detail=msg)
 
 
