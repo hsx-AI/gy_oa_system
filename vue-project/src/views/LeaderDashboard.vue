@@ -422,6 +422,12 @@
               :class="{ active: wiIntensityFormula === 'b' }"
               @click="setWiIntensityFormula('b')"
             >B</button>
+            <button
+              type="button"
+              class="wi-formula-btn"
+              :class="{ active: wiIntensityFormula === 'c' }"
+              @click="setWiIntensityFormula('c')"
+            >C</button>
           </div>
 
           <div class="wi-range-toolbar">
@@ -511,7 +517,7 @@
               <div class="wi-dept-name">{{ d.lsys }}</div>
               <div class="wi-dept-intensity">{{ (d.intensity * 100).toFixed(1) }}%</div>
               <div class="wi-dept-meta">
-                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h<span v-if="wiIsFormulaB"> · 请假{{ d.leaveHours ?? 0 }}h</span> · 境内境外公出{{ d.tripDays }}天
+                {{ d.personCount }}人 · 加班{{ d.overtimeHours }}h<span v-if="wiDeductsLeave"> · 请假{{ d.leaveHours ?? 0 }}h</span> · 境内境外公出{{ d.tripDays }}天
               </div>
             </div>
           </div>
@@ -531,7 +537,7 @@
                   <th class="wi-th-sort" @click="toggleWiSort('overtimeHours')">
                     加班(h) <span class="wi-sort-ind">{{ wiSortIndicator('overtimeHours') }}</span>
                   </th>
-                  <th v-if="wiIsFormulaB" class="wi-th-sort" @click="toggleWiSort('leaveHours')">
+                  <th v-if="wiDeductsLeave" class="wi-th-sort" @click="toggleWiSort('leaveHours')">
                     请假(h) <span class="wi-sort-ind">{{ wiSortIndicator('leaveHours') }}</span>
                   </th>
                   <th class="wi-th-sort" @click="toggleWiSort('actualHours')">
@@ -549,7 +555,7 @@
                   <td>{{ p.lsys }}</td>
                   <td>{{ p.jb || '-' }}</td>
                   <td class="td-num">{{ p.overtimeHours }}</td>
-                  <td v-if="wiIsFormulaB" class="td-num">{{ p.leaveHours ?? 0 }}</td>
+                  <td v-if="wiDeductsLeave" class="td-num">{{ p.leaveHours ?? 0 }}</td>
                   <td class="td-num">{{ p.actualHours }}</td>
                   <td class="td-num td-intensity">{{ (p.intensity * 100).toFixed(1) }}%</td>
                 </tr>
@@ -697,8 +703,8 @@ const wiSortOrder = ref('desc')
 const wiJobFilter = ref('')
 const wiIntensityFormula = ref('a')
 
-/** 工作强度口径 B：与后端 /leader/work-intensity intensity_formula=b 一致 */
-const wiIsFormulaB = computed(() => wiIntensityFormula.value === 'b')
+/** 口径 B/C：工作强度扣除请假（与后端 intensity_formula=b|c 一致） */
+const wiDeductsLeave = computed(() => wiIntensityFormula.value === 'b' || wiIntensityFormula.value === 'c')
 
 /** 与 yggl.jb 一致：部长、副部长、经理、副经理等部级/公司经理层可看详细公式；各室主任/副主任等仅看摘要（与 getStatisticsPermission 能进驾驶舱的人员不完全等同） */
 const canSeeWiFormulaDetail = computed(() => {
@@ -718,12 +724,18 @@ const wiFormulaDesc = computed(() => {
   const full = canSeeWiFormulaDetail.value
   if (wiIntensityFormula.value === 'b') {
     if (full) {
-      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计），休息日同智能建议；与驾驶舱自动计算数一致，非加班申报汇总。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+      return '口径 B：工作强度 =（加班时长 − 请假时间）÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计），休息日正常计算。请假时间为统计期内已通过请假按天重叠分摊后×8（小时），与请假汇总一致。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
     }
     return '口径 B：在统计期内，按「加班相对在岗」并兼顾已通过请假影响折算的强度指标；具体核算方式内部掌握。'
   }
+  if (wiIntensityFormula.value === 'c') {
+    if (full) {
+      return '口径 C：同口径 B，工作强度 =（加班时长 − 主观请假时间）÷ 实际在岗时长；主观请假仅计换休（含员工换休票等）、病假、事假、带薪年休假，不含工伤、生育、探亲、婚丧等。其余与口径 B 一致。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    }
+    return '口径 C：在口径 B 基础上，请假扣减仅计换休、病假、事假、带薪年休假等主观请假；具体核算方式内部掌握。'
+  }
   if (full) {
-    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计），休息日同智能建议；与驾驶舱自动计算数一致，非加班申报汇总。实际在岗 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
+    return '口径 A：工作强度 = 加班时长 ÷ 实际在岗时长；加班时长按打卡识别：工作日 7:30 前 + 17:30 后（不足 1 小时也计）,休息日正常计算。实际出勤 = 应出勤时长 − 公出时长 + 公出期间节假日时长；公出时长仅计境内/境外公出（不含市内公出）。' + WI_FORMULA_CONFIDENTIAL_NOTE
   }
   return '口径 A：在统计期内，按加班时长相对实际在岗时长的强度指标；具体核算方式内部掌握。'
 })
@@ -949,7 +961,8 @@ function appendAoASheet(wb, name, rows, widths = []) {
 function formatWiExportFileName() {
   const scope = ((permLevel.value === 3 ? selectedLsys.value : lsys.value) || '全员').replace(/[\\/:*?"<>|]+/g, '_')
   const range = wiSectionSubtitle.value.replace(/[\\/:*?"<>|()\s]+/g, '_').replace(/^_+|_+$/g, '')
-  const suf = wiIntensityFormula.value === 'b' ? '口径B' : '口径A'
+  const formulaLabel = { a: '口径A', b: '口径B', c: '口径C' }
+  const suf = formulaLabel[wiIntensityFormula.value] || '口径A'
   return `工作强度统计_${scope}_${range || filterYear.value}_${suf}.xlsx`
 }
 
@@ -1025,7 +1038,7 @@ async function loadLeaderWorkIntensity(lsysToUse) {
 }
 
 async function setWiIntensityFormula(v) {
-  const x = v === 'b' ? 'b' : 'a'
+  const x = v === 'b' || v === 'c' ? v : 'a'
   if (wiIntensityFormula.value === x) return
   wiIntensityFormula.value = x
   if (!hasFetched.value) return
@@ -1049,7 +1062,7 @@ function exportWorkIntensityTable() {
   }
 
   const wi = workIntensity.value || {}
-  const b = wiIntensityFormula.value === 'b'
+  const deductLeave = wiDeductsLeave.value
   const deptRows = filterWiRowsBySelectedDept(wi.byDept || []).map((row, idx) => {
     const cells = [
       idx + 1,
@@ -1057,7 +1070,7 @@ function exportWorkIntensityTable() {
       row.personCount ?? 0,
       roundForExport(row.overtimeHours),
     ]
-    if (b) cells.push(roundForExport(row.leaveHours ?? 0))
+    if (deductLeave) cells.push(roundForExport(row.leaveHours ?? 0))
     cells.push(
       roundForExport(row.tripDays),
       roundForExport(row.tripHolidayDays),
@@ -1073,13 +1086,13 @@ function exportWorkIntensityTable() {
   const totalActualHours = wi.totalActualHours != null
     ? Number(wi.totalActualHours)
     : allPersons.reduce((sum, p) => sum + Number(p.actualHours || 0), 0)
-  const totalLeaveH = b
+  const totalLeaveH = deductLeave
     ? (wi.totalLeaveHours != null
         ? Number(wi.totalLeaveHours)
         : allPersons.reduce((sum, p) => sum + Number(p.leaveHours || 0), 0))
     : 0
   const overallPct = totalActualHours > 0
-    ? (b ? (totalOvertimeHours - totalLeaveH) / totalActualHours : totalOvertimeHours / totalActualHours)
+    ? (deductLeave ? (totalOvertimeHours - totalLeaveH) / totalActualHours : totalOvertimeHours / totalActualHours)
     : 0
 
   const personRows = wiByPersonFilteredSorted.value.map((row, idx) => {
@@ -1090,7 +1103,7 @@ function exportWorkIntensityTable() {
       row.jb || '',
       roundForExport(row.overtimeHours),
     ]
-    if (b) cells.push(roundForExport(row.leaveHours ?? 0))
+    if (deductLeave) cells.push(roundForExport(row.leaveHours ?? 0))
     cells.push(
       roundForExport(row.tripDays),
       roundForExport(row.tripHolidayDays),
@@ -1102,9 +1115,9 @@ function exportWorkIntensityTable() {
 
   const sumDeptCount = deptRows.reduce((s, row) => s + Number(row[2] || 0), 0)
   const sumDeptOt = deptRows.reduce((s, row) => s + Number(row[3] || 0), 0)
-  const deptActualCol = b ? 7 : 6
+  const deptActualCol = deductLeave ? 7 : 6
   const sumDeptActual = deptRows.reduce((s, row) => s + Number(row[deptActualCol] || 0), 0)
-  const sumDeptLeave = b ? deptRows.reduce((s, row) => s + Number(row[4] || 0), 0) : 0
+  const sumDeptLeave = deductLeave ? deptRows.reduce((s, row) => s + Number(row[4] || 0), 0) : 0
 
   const overviewRows = [
     ['统计项', '数值'],
@@ -1116,7 +1129,7 @@ function exportWorkIntensityTable() {
     ['统计人数（人）', wi.totalPeople ?? 0],
     ['全员加班（h）', roundForExport(totalOvertimeHours)],
   ]
-  if (b) {
+  if (deductLeave) {
     overviewRows.push(['全员请假（h）', roundForExport(totalLeaveH)])
     overviewRows.push(['全员（加班−请假）（h）', roundForExport(totalOvertimeHours - totalLeaveH)])
   }
@@ -1126,27 +1139,27 @@ function exportWorkIntensityTable() {
     ['各科室加班合计（h）', roundForExport(sumDeptOt)],
     ['各科室在岗合计（h）', roundForExport(sumDeptActual)],
   )
-  overviewRows.push(...buildWiRoleAverageOverviewRows(allPersons, b))
+  overviewRows.push(...buildWiRoleAverageOverviewRows(allPersons, deductLeave))
   if (wiJobFilter.value) {
     overviewRows.push(['说明', '「按个人」sheet 受职务筛选；概览与各科室为全员口径'])
   } else if (isWiExportAllStaffScope()) {
-    overviewRows.push(['说明', '「按职务平均工作强度」与职务筛选下拉一致；强度按组内合计加班÷合计在岗（口径 B 再减请假）'])
+    overviewRows.push(['说明', '「按职务平均工作强度」与职务筛选下拉一致；强度按组内合计加班÷合计在岗（口径 B/C 再减请假）'])
   }
 
   const wb = XLSX.utils.book_new()
   appendAoASheet(wb, '统计概览', overviewRows, [24, 48])
   const deptHead = ['序号', '科室', '人数', '加班（h）']
-  if (b) deptHead.push('请假（h）')
+  if (deductLeave) deptHead.push('请假（h）')
   deptHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
-  const deptColW = [8, 24, 10, 12, ...(b ? [12] : []), 12, 20, 14, 12]
+  const deptColW = [8, 24, 10, 12, ...(deductLeave ? [12] : []), 12, 20, 14, 12]
   const deptFoot = ['', '各科室合计', sumDeptCount, roundForExport(sumDeptOt)]
-  if (b) deptFoot.push(roundForExport(sumDeptLeave))
+  if (deductLeave) deptFoot.push(roundForExport(sumDeptLeave))
   deptFoot.push('', '', roundForExport(sumDeptActual), '')
   appendAoASheet(wb, '按科室', [deptHead, ...deptRows, deptFoot], deptColW)
   const personHead = ['序号', '姓名', '科室', '职务', '加班（h）']
-  if (b) personHead.push('请假（h）')
+  if (deductLeave) personHead.push('请假（h）')
   personHead.push('公出（天，不含市内）', '公出期间节假日（天，不含市内）', '实际在岗（h）', '工作强度')
-  const personColW = [8, 14, 24, 16, 12, ...(b ? [12] : []), 12, 20, 14, 12]
+  const personColW = [8, 14, 24, 16, 12, ...(deductLeave ? [12] : []), 12, 20, 14, 12]
   appendAoASheet(wb, '按个人', [personHead, ...personRows], personColW)
   XLSX.writeFile(wb, formatWiExportFileName())
 }
