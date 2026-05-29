@@ -19,6 +19,7 @@ import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/a
 import { getLeaderInbox, getWallPending, getWallAssigned, getSystemList } from '@/api/feedback'
 import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
 import { getShiftCoverageGap } from '@/api/shift'
+import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
 import {
   getPendingKqyc,
   getKqycDakamanPending,
@@ -71,6 +72,7 @@ const shiftCoverageLoading = ref(false)
 const kqycPendingList = ref([])
 /** dakaman 待"已读确认"列表（仅 dakaman 可见有数据） */
 const kqycDakamanList = ref([])
+const autoReminderNoticeList = ref([])
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -247,6 +249,19 @@ const displayTodoList = computed(() => {
       btnLabel: '已读确认',
     })
   }
+  for (const item of autoReminderNoticeList.value) {
+    list.push({
+      uniqueId: `auto-reminder-notice-${item.id}`,
+      type: item.title || '考勤异常邮件提醒发送结果',
+      description: item.description || '',
+      applicant: '邮件自动发送',
+      time: formatRelativeTime(item.createdAt || item.sourceTime),
+      applyTime: item.createdAt || item.sourceTime || '',
+      isAutoReminderNotice: true,
+      autoReminderNoticeId: item.id,
+      btnLabel: '已阅',
+    })
+  }
   return list
 })
 
@@ -266,6 +281,7 @@ const totalBadgeCount = computed(() => {
   if (feedbackSystemPendingCount.value > 0) count += 1
   count += kqycPendingList.value.length
   count += kqycDakamanList.value.length
+  count += autoReminderNoticeList.value.length
   return count
 })
 
@@ -472,6 +488,20 @@ async function fetchKqycDakaman() {
   }
 }
 
+async function fetchAutoReminderNotices() {
+  const name = readUserName()
+  if (!name) {
+    autoReminderNoticeList.value = []
+    return
+  }
+  try {
+    const res = await getAutoReminderNotices({ name })
+    autoReminderNoticeList.value = res?.data || []
+  } catch {
+    autoReminderNoticeList.value = []
+  }
+}
+
 async function fetchSealPending() {
   const name = readUserName()
   if (!name) {
@@ -566,6 +596,7 @@ export async function refreshWorkplaceTodos() {
     fetchFeedbackTodos(),
     fetchKqycPending(),
     fetchKqycDakaman(),
+    fetchAutoReminderNotices(),
   ])
 }
 
@@ -673,6 +704,20 @@ export function useWorkplaceTodos() {
       } catch (e) {
         const msg = e?.response?.data?.detail || e?.message || '已读确认失败'
         alert(typeof msg === 'string' ? msg : '已读确认失败')
+      }
+      return
+    }
+    if (task.isAutoReminderNotice) {
+      const name = readUserName()
+      if (!name || !task.autoReminderNoticeId) return
+      try {
+        await markAutoReminderNoticeRead({ id: task.autoReminderNoticeId, current_user: name })
+        autoReminderNoticeList.value = autoReminderNoticeList.value.filter(
+          (item) => item.id !== task.autoReminderNoticeId
+        )
+      } catch (e) {
+        const msg = e?.response?.data?.detail || e?.response?.data?.message || e?.message || '标记已阅失败'
+        alert(typeof msg === 'string' ? msg : '标记已阅失败')
       }
       return
     }

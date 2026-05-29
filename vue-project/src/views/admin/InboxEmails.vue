@@ -53,13 +53,87 @@
               <span v-if="analyzing">分析中…</span>
               <span v-else>立即分析</span>
             </button>
+            <template v-if="selectionMode">
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="!displayTasks.length || batchCompleting"
+                @click="selectAllTasks"
+              >全选</button>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="!selectedTaskIds.length || batchCompleting"
+                @click="clearSelection"
+              >清空</button>
+              <button
+                type="button"
+                class="btn btn-sm batch-complete-btn"
+                :disabled="!selectedTaskIds.length || batchCompleting"
+                @click="batchCompleteTasks"
+              >
+                <span v-if="batchCompleting">处理中…</span>
+                <span v-else>批量完成 ({{ selectedTaskIds.length }})</span>
+              </button>
+              <button
+                type="button"
+                class="btn btn-sm btn-ghost"
+                :disabled="batchCompleting"
+                @click="exitSelectionMode"
+              >取消多选</button>
+            </template>
+            <button
+              v-else
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="!displayTasks.length"
+              @click="enterSelectionMode"
+            >多选完成</button>
+            <button
+              type="button"
+              class="btn btn-sm btn-ghost"
+              :disabled="syncing || !configured"
+              :title="configured ? '从邮箱拉取红旗邮件' : '请先配置邮箱'"
+              @click="manualSync"
+            >
+              <span v-if="syncing">同步中…</span>
+              <span v-else>立即同步</span>
+            </button>
+            <button
+              type="button"
+              class="btn btn-sm btn-ghost board-config-toggle"
+              @click="toggleBoardConfig"
+            >
+              {{ showBoardConfig ? '收起邮箱配置' : '邮箱配置' }}
+            </button>
+            <span
+              v-if="!showBoardConfig"
+              class="config-status config-status-inline"
+              :class="configured ? 'ok' : 'warn'"
+            >{{ configured ? '已配置' : '未配置' }}</span>
+          </div>
+
+          <div v-if="showBoardConfig" class="board-config-panel">
+            <InboxEmailConfigBody
+              compact
+              :configured="configured"
+              :imap-server="imapServer"
+              :imap-port="imapPort"
+              :poll-interval-seconds="pollIntervalSeconds"
+              v-model:email-address="configForm.email_address"
+              v-model:email-auth-code="configForm.email_auth_code"
+              :saving="configSaving"
+              :message="configMsg"
+              :message-type="configMsgType"
+              @save="saveConfig"
+            />
           </div>
 
           <div v-if="taskMsg" class="board-toast" :class="taskMsgType">{{ taskMsg }}</div>
 
           <div class="board-body board-body-main">
             <div v-if="!tasks.length && !taskLoading" class="board-empty">
-              <p>暂无识别出的待办任务。可以先点击上方“立即同步”拉取邮件，再点“立即分析”。</p>
+              <p>暂无识别出的待办任务。请先配置邮箱（或更新 IMAP 授权码），再点「立即同步」拉取邮件，最后点「立即分析」。</p>
             </div>
 
             <div
@@ -75,8 +149,24 @@
                   v-for="(t, idx) in displayTasks"
                   :key="`${t.id}-${idx}`"
                   class="task-card"
-                  @click="openDetailById(t.id)"
+                  :class="{
+                    'task-card-selectable': selectionMode,
+                    'task-card-selected': selectionMode && isTaskSelected(t.id),
+                  }"
+                  @click="onTaskCardClick(t.id)"
                 >
+                  <label
+                    v-if="selectionMode"
+                    class="task-select-wrap"
+                    @click.stop
+                  >
+                    <input
+                      type="checkbox"
+                      :checked="isTaskSelected(t.id)"
+                      :disabled="batchCompleting"
+                      @change="toggleTaskSelection(t.id)"
+                    />
+                  </label>
                   <div class="task-top">
                     <span
                       v-if="editingDeadlineId !== t.id"
@@ -116,6 +206,7 @@
                     </span>
                     <span class="task-from" :title="t.from">{{ shortFrom(t.from) }}</span>
                     <button
+                      v-if="!selectionMode"
                       type="button"
                       class="task-complete-btn"
                       title="标记已完成（去除旗帜并删除记录）"
@@ -160,52 +251,18 @@
               </svg>
             </div>
             <div v-show="showConfig" class="config-body">
-              <div class="config-hint">
-                <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
-                <p>
-                同步范围：仅拉取您个人邮箱中已标旗（FLAGGED）的最新
-                <code>50</code>
-                封邮件；自动拉取间隔：约
-                  <code>{{ pollIntervalSeconds }}</code>
-                  秒。
-                </p>
-              </div>
-              <div class="config-guide">
-                <h4 class="config-guide-title">使用步骤</h4>
-                <ol class="config-guide-steps">
-                  <li>在下方填写您的企业邮箱地址和 IMAP 授权码，点击"保存配置"</li>
-                  <li>在企业邮箱客户端（网页版 / Outlook 等）中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong></li>
-                  <li>系统会自动同步红旗邮件并由 AI 提取待办任务，展示在"AI 待办看板"中</li>
-                </ol>
-              </div>
-              <div class="config-form">
-                <div class="form-row">
-                  <label>企业邮箱地址</label>
-                  <input
-                    v-model="configForm.email_address"
-                    type="text"
-                    placeholder="如 yourname@hec-china.com"
-                  />
-                </div>
-                <div class="form-row">
-                  <label>IMAP 授权码</label>
-                  <input
-                    v-model="configForm.email_auth_code"
-                    type="password"
-                    placeholder="企业邮箱 IMAP 授权码（非登录密码）"
-                  />
-                </div>
-                <div class="form-row">
-                  <button
-                    class="btn btn-primary btn-sm"
-                    :disabled="configSaving"
-                    @click="saveConfig"
-                  >
-                    {{ configSaving ? '保存中…' : '保存配置' }}
-                  </button>
-                  <span v-if="configMsg" class="config-msg" :class="configMsgType">{{ configMsg }}</span>
-                </div>
-              </div>
+              <InboxEmailConfigBody
+                :configured="configured"
+                :imap-server="imapServer"
+                :imap-port="imapPort"
+                :poll-interval-seconds="pollIntervalSeconds"
+                v-model:email-address="configForm.email_address"
+                v-model:email-auth-code="configForm.email_auth_code"
+                :saving="configSaving"
+                :message="configMsg"
+                :message-type="configMsgType"
+                @save="saveConfig"
+              />
             </div>
           </div>
 
@@ -345,6 +402,7 @@ import {
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
+import InboxEmailConfigBody from '@/components/inbox/InboxEmailConfigBody.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -353,6 +411,7 @@ const canAccess = ref(false)
 const currentUserName = ref('')
 
 const showConfig = ref(false)
+const showBoardConfig = ref(false)
 const configured = ref(false)
 const imapServer = ref('')
 const imapPort = ref('')
@@ -380,6 +439,9 @@ const taskMsg = ref('')
 const taskMsgType = ref('')
 const marqueeMainRef = ref(null)
 const completingId = ref(null)
+const selectionMode = ref(false)
+const selectedTaskIds = ref([])
+const batchCompleting = ref(false)
 const editingDeadlineId = ref(null)
 const deadlineDraft = ref('')
 const deadlineSavingId = ref(null)
@@ -426,11 +488,20 @@ async function loadConfig() {
   }
 }
 
+function toggleBoardConfig() {
+  showBoardConfig.value = !showBoardConfig.value
+  if (showBoardConfig.value) {
+    loadConfig()
+  }
+}
+
 async function saveConfig() {
   const addr = (configForm.value.email_address || '').trim()
   const code = (configForm.value.email_auth_code || '').trim()
   if (!addr || !code) {
-    configMsg.value = '请填写邮箱地址和授权码'
+    configMsg.value = configured.value
+      ? '请填写企业邮箱地址和新的 IMAP 授权码'
+      : '请填写邮箱地址和授权码'
     configMsgType.value = 'error'
     return
   }
@@ -660,8 +731,48 @@ async function saveDeadline(id) {
   }
 }
 
+function isTaskSelected(id) {
+  return selectedTaskIds.value.includes(id)
+}
+
+function enterSelectionMode() {
+  selectionMode.value = true
+  selectedTaskIds.value = []
+}
+
+function exitSelectionMode() {
+  selectionMode.value = false
+  selectedTaskIds.value = []
+}
+
+function toggleTaskSelection(id) {
+  if (!id || batchCompleting.value) return
+  const ids = selectedTaskIds.value
+  if (ids.includes(id)) {
+    selectedTaskIds.value = ids.filter(itemId => itemId !== id)
+  } else {
+    selectedTaskIds.value = [...ids, id]
+  }
+}
+
+function selectAllTasks() {
+  selectedTaskIds.value = displayTasks.value.map(t => t.id).filter(Boolean)
+}
+
+function clearSelection() {
+  selectedTaskIds.value = []
+}
+
+function onTaskCardClick(id) {
+  if (selectionMode.value) {
+    toggleTaskSelection(id)
+    return
+  }
+  openDetailById(id)
+}
+
 async function completeTask(id) {
-  if (!id || completingId.value) return
+  if (!id || completingId.value || batchCompleting.value) return
   completingId.value = id
   try {
     const res = await completeInboxTask({ current_user: currentUserName.value, id })
@@ -680,6 +791,42 @@ async function completeTask(id) {
   } finally {
     completingId.value = null
     setTimeout(() => { taskMsg.value = '' }, 5000)
+  }
+}
+
+async function batchCompleteTasks() {
+  const ids = [...selectedTaskIds.value]
+  if (!ids.length || batchCompleting.value) return
+  if (!window.confirm(`确认将选中的 ${ids.length} 个任务标记为已完成？将去除邮件旗帜并删除记录。`)) return
+  batchCompleting.value = true
+  let ok = 0
+  let fail = 0
+  try {
+    for (const id of ids) {
+      try {
+        const res = await completeInboxTask({ current_user: currentUserName.value, id })
+        if (res && res.success) ok += 1
+        else fail += 1
+      } catch {
+        fail += 1
+      }
+    }
+    if (fail === 0) {
+      taskMsg.value = `已批量完成 ${ok} 个任务`
+      taskMsgType.value = 'success'
+    } else if (ok === 0) {
+      taskMsg.value = `批量完成失败（${fail} 个）`
+      taskMsgType.value = 'error'
+    } else {
+      taskMsg.value = `部分完成：成功 ${ok} 个，失败 ${fail} 个`
+      taskMsgType.value = 'error'
+    }
+    exitSelectionMode()
+    await loadTasks()
+    await loadList()
+  } finally {
+    batchCompleting.value = false
+    setTimeout(() => { taskMsg.value = '' }, 6000)
   }
 }
 
@@ -852,70 +999,19 @@ onBeforeUnmount(() => {
   padding: var(--spacing-md) var(--spacing-lg) var(--spacing-lg);
   border-top: 1px solid var(--color-border);
 }
-.config-hint {
+.config-status-inline {
+  font-size: 0.78rem;
+  padding: 2px 10px;
+  border-radius: 999px;
+  font-weight: 500;
+}
+.board-config-panel {
+  margin-bottom: var(--spacing-sm);
+  padding: var(--spacing-md);
   background: #f8fafc;
-  border: 1px solid var(--color-border);
-  border-radius: 6px;
-  padding: var(--spacing-sm) var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-  font-size: 0.85rem;
-  color: var(--color-text-secondary);
-}
-.config-hint p { margin: 4px 0; }
-.config-hint code {
-  background: #e2e8f0;
-  padding: 1px 6px;
-  border-radius: 3px;
-  font-size: 0.82rem;
-}
-.config-guide {
-  background: linear-gradient(135deg, #fff7ed 0%, #fffbeb 100%);
-  border: 1px dashed #f59e0b;
+  border: 1px solid #e0e7ff;
   border-radius: 8px;
-  padding: var(--spacing-sm) var(--spacing-md);
-  margin-bottom: var(--spacing-md);
 }
-.config-guide-title {
-  margin: 0 0 6px 0;
-  font-size: 0.88rem;
-  font-weight: 600;
-  color: #92400e;
-}
-.config-guide-steps {
-  margin: 0;
-  padding-left: 1.4em;
-  font-size: 0.85rem;
-  color: #78350f;
-  line-height: 1.8;
-  list-style: decimal;
-}
-.config-guide-steps strong {
-  color: #dc2626;
-}
-.config-form .form-row {
-  display: flex;
-  align-items: center;
-  gap: var(--spacing-md);
-  margin-bottom: var(--spacing-md);
-}
-.config-form label {
-  width: 100px;
-  color: var(--color-text-secondary);
-  font-size: 0.88rem;
-}
-.config-form input[type="text"], .config-form input[type="password"] {
-  flex: 1;
-  max-width: 480px;
-  padding: 6px 10px;
-  border: 1px solid var(--color-border);
-  border-radius: 4px;
-  font-size: 0.9rem;
-}
-.config-msg {
-  font-size: 0.85rem;
-}
-.config-msg.success { color: #16a34a; }
-.config-msg.error { color: #dc2626; }
 
 .view-tabs-wrap {
   display: flex;
@@ -1023,7 +1119,23 @@ onBeforeUnmount(() => {
   color: #dc2626;
 }
 .board-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
   margin-bottom: var(--spacing-sm);
+}
+.batch-complete-btn {
+  color: #fff;
+  background: #16a34a;
+  border: 1px solid #15803d;
+}
+.batch-complete-btn:hover:not(:disabled) {
+  background: #15803d;
+}
+.batch-complete-btn:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .btn-ghost {
   background: #fff;
@@ -1095,6 +1207,7 @@ onBeforeUnmount(() => {
 }
 
 .task-card {
+  position: relative;
   background: #fff;
   border: 1px solid #e0e7ff;
   border-left: 4px solid #6366f1;
@@ -1103,6 +1216,29 @@ onBeforeUnmount(() => {
   box-shadow: 0 2px 6px rgba(99, 102, 241, 0.08);
   cursor: pointer;
   transition: transform .15s, box-shadow .15s;
+}
+.task-card-selected {
+  background: #f5f3ff;
+  border-color: #a5b4fc;
+  box-shadow: 0 2px 10px rgba(99, 102, 241, 0.2);
+}
+.task-select-wrap {
+  position: absolute;
+  top: 10px;
+  left: 10px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  cursor: pointer;
+}
+.task-select-wrap input {
+  width: 16px;
+  height: 16px;
+  accent-color: #4f46e5;
+  cursor: pointer;
+}
+.task-card-selectable {
+  padding-left: 34px;
 }
 .task-card:hover {
   transform: translateX(2px);

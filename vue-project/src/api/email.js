@@ -31,3 +31,11 @@ export function saveAutoReminderConfig(data) {
 export function getAutoReminderLog(currentUser) {
   return request({ url: '/email/auto-reminder-log', method: 'get', params: { current_user: currentUser } })
 }
+
+export function getAutoReminderNotices(params) {
+  return request({ url: '/email/auto-reminder-notices', method: 'get', params })
+}
+
+export function markAutoReminderNoticeRead(data) {
+  return request({ url: '/email/auto-reminder-notices/read', method: 'post', data })
+}

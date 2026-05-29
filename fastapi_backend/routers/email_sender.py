@@ -9,6 +9,7 @@ import logging
 import base64
 import json
 import asyncio
+import hashlib
 from collections import defaultdict
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -821,6 +822,136 @@ class AutoReminderConfigRequest(BaseModel):
     )
 
 
+class AutoReminderNoticeReadRequest(BaseModel):
+    current_user: str
+    id: int
+
+
+def _ensure_auto_reminder_notice_table():
+    try:
+        db.execute_update(
+            """
+            CREATE TABLE IF NOT EXISTS auto_reminder_result_notifications (
+                id BIGINT PRIMARY KEY AUTO_INCREMENT,
+                recipient_name VARCHAR(100) NOT NULL,
+                title VARCHAR(120) NOT NULL,
+                description TEXT NOT NULL,
+                target_year INT NOT NULL,
+                target_month INT NOT NULL,
+                trigger_label VARCHAR(120) NOT NULL,
+                source_time VARCHAR(30) NOT NULL,
+                source_key VARCHAR(64) NOT NULL,
+                is_read TINYINT NOT NULL DEFAULT 0,
+                created_at DATETIME NOT NULL,
+                read_at DATETIME NULL,
+                UNIQUE KEY uk_auto_reminder_notice (recipient_name, source_key),
+                INDEX idx_auto_reminder_notice_recipient (recipient_name, is_read, created_at)
+            )
+            """,
+            (),
+        )
+    except Exception as e:
+        logger.warning(f"确保自动发送结果通知表失败: {e}")
+    try:
+        cols = db.execute_query("SHOW COLUMNS FROM auto_reminder_result_notifications LIKE 'source_key'", ())
+        if not cols:
+            db.execute_update(
+                "ALTER TABLE auto_reminder_result_notifications ADD COLUMN source_key VARCHAR(64) NOT NULL DEFAULT '' AFTER source_time",
+                (),
+            )
+    except Exception as e:
+        logger.warning(f"确保自动发送结果通知 source_key 字段失败: {e}")
+    try:
+        idx_rows = db.execute_query(
+            """
+            SELECT INDEX_NAME
+            FROM INFORMATION_SCHEMA.STATISTICS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'auto_reminder_result_notifications'
+              AND INDEX_NAME = 'uk_auto_reminder_notice_source'
+            LIMIT 1
+            """,
+            (),
+        )
+        if not idx_rows:
+            db.execute_update(
+                "ALTER TABLE auto_reminder_result_notifications ADD UNIQUE KEY uk_auto_reminder_notice_source (recipient_name, source_key)",
+                (),
+            )
+    except Exception as e:
+        logger.warning(f"确保自动发送结果通知 source_key 唯一索引失败: {e}")
+
+
+def _get_auto_reminder_notice_recipients() -> List[str]:
+    names = set()
+    try:
+        rows = db.execute_query(
+            """
+            SELECT name
+            FROM yggl
+            WHERE name IS NOT NULL AND TRIM(name) != ''
+              AND COALESCE(zaizhi, 0) = 0
+              AND (
+                TRIM(COALESCE(jb, '')) = %s
+                OR TRIM(COALESCE(jb, '')) LIKE %s
+                OR TRIM(COALESCE(jb, '')) = %s
+                OR TRIM(COALESCE(jb, '')) LIKE %s
+              )
+            """,
+            ("经理", "经理%", "副经理", "副经理%"),
+        )
+        for r in rows or []:
+            n = (r.get("name") or "").strip()
+            if n:
+                names.add(n)
+    except Exception as e:
+        logger.warning(f"查询自动发送结果通知经理/副经理失败: {e}")
+
+    try:
+        rows = db.execute_query("SELECT dakaman, admin1 FROM webconfig WHERE id = %s LIMIT 1", ("1",))
+        if rows:
+            for col in ("dakaman", "admin1"):
+                n = (rows[0].get(col) or "").strip()
+                if n:
+                    names.add(n)
+    except Exception as e:
+        logger.warning(f"查询自动发送结果通知管理员失败: {e}")
+
+    return sorted(names)
+
+
+def _create_auto_reminder_result_notifications(log_entry: dict):
+    if log_entry.get("status") != "ok":
+        return
+    _ensure_auto_reminder_notice_table()
+    recipients = _get_auto_reminder_notice_recipients()
+    if not recipients:
+        return
+
+    year = int(log_entry.get("year") or 0)
+    month = int(log_entry.get("month") or 0)
+    trigger = (log_entry.get("trigger") or "").strip()
+    source_time = (log_entry.get("time") or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).strip()
+    message = (log_entry.get("message") or "").strip()
+    source_key = hashlib.sha256(f"{year}|{month}|{trigger}|{source_time}".encode("utf-8")).hexdigest()
+    title = "考勤异常邮件提醒发送结果"
+    description = f"{year}年{month}月考勤异常邮件提醒已完成：{message}。触发计划：{trigger}。"
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for name in recipients:
+        try:
+            db.execute_update(
+                """
+                INSERT IGNORE INTO auto_reminder_result_notifications
+                (recipient_name, title, description, target_year, target_month, trigger_label, source_time, source_key, is_read, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s)
+                """,
+                (name, title, description, year, month, trigger, source_time, source_key, now),
+            )
+        except Exception as e:
+            logger.warning(f"写入自动发送结果通知失败 recipient={name}: {e}")
+
+
 @router.get("/auto-reminder-config")
 async def get_auto_reminder_config_api(current_user: str = Query(...)):
     _require_admin(current_user)
@@ -850,6 +981,55 @@ async def get_auto_reminder_log_api(current_user: str = Query(...)):
     _require_admin(current_user)
     cfg = _get_auto_reminder_config()
     return {"success": True, "log": cfg.get("log", [])}
+
+
+@router.get("/auto-reminder-notices")
+async def get_auto_reminder_notices(name: str = Query(...)):
+    current_user = (name or "").strip()
+    if not current_user:
+        return {"success": True, "data": []}
+    _ensure_auto_reminder_notice_table()
+    rows = db.execute_query(
+        """
+        SELECT id, title, description, target_year, target_month, trigger_label, source_time, created_at
+        FROM auto_reminder_result_notifications
+        WHERE recipient_name = %s AND is_read = 0
+        ORDER BY created_at DESC, id DESC
+        LIMIT 20
+        """,
+        (current_user,),
+    )
+    data = []
+    for r in rows or []:
+        data.append({
+            "id": r.get("id"),
+            "title": (r.get("title") or "").strip(),
+            "description": (r.get("description") or "").strip(),
+            "year": r.get("target_year"),
+            "month": r.get("target_month"),
+            "trigger": (r.get("trigger_label") or "").strip(),
+            "sourceTime": (r.get("source_time") or "").strip(),
+            "createdAt": str(r.get("created_at") or ""),
+        })
+    return {"success": True, "data": data}
+
+
+@router.post("/auto-reminder-notices/read")
+async def mark_auto_reminder_notice_read(req: AutoReminderNoticeReadRequest):
+    current_user = (req.current_user or "").strip()
+    if not current_user or not req.id:
+        return {"success": False, "message": "参数不完整"}
+    _ensure_auto_reminder_notice_table()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    db.execute_update(
+        """
+        UPDATE auto_reminder_result_notifications
+        SET is_read = 1, read_at = %s
+        WHERE id = %s AND recipient_name = %s
+        """,
+        (now, req.id, current_user),
+    )
+    return {"success": True, "message": "已阅"}
 
 
 @router.post("/run-todo-reminder")
@@ -943,6 +1123,7 @@ async def _execute_auto_send(year: int, month: int, trigger_label: str):
             log_entry["message"] += f"，{len(failures)} 封失败"
         log_entry["personal_sent"] = personal_sent
         log_entry["leader_sent"] = leader_count
+        _create_auto_reminder_result_notifications(log_entry)
 
     except Exception as e:
         log_entry["message"] = str(e)[:200]
@@ -963,11 +1144,78 @@ def _has_already_sent_for_month(target_year: int, target_month: int) -> bool:
             if (entry.get("status") == "ok"
                     and entry.get("year") == target_year
                     and entry.get("month") == target_month
-                    and entry.get("personal_sent", 0) > 0):
+                    and (entry.get("personal_sent", 0) > 0 or entry.get("leader_sent", 0) > 0)):
                 return True
     except Exception as e:
         logger.warning(f"[AutoReminder] 检查已发送记录失败: {e}")
     return False
+
+
+def _try_acquire_mysql_lock(lock_name: str, owner_label: str):
+    conn = None
+    try:
+        conn = db.get_connection()
+        if not conn:
+            logger.warning("[%s] 获取数据库连接失败，无法获取发送锁", owner_label)
+            return None
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, 0) AS acquired", (lock_name,))
+            row = cursor.fetchone() or {}
+        if int(row.get("acquired") or 0) == 1:
+            return conn
+        logger.info("[%s] 跳过：已有其他进程持有发送锁 %s", owner_label, lock_name)
+    except Exception as e:
+        logger.warning("[%s] 获取发送锁失败 %s: %s", owner_label, lock_name, e)
+    if conn:
+        conn.close()
+    return None
+
+
+def _release_mysql_lock(conn, lock_name: str, owner_label: str):
+    if not conn:
+        return
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT RELEASE_LOCK(%s)", (lock_name,))
+    except Exception as e:
+        logger.warning("[%s] 释放发送锁失败 %s: %s", owner_label, lock_name, e)
+    finally:
+        conn.close()
+
+
+async def _execute_auto_send_with_month_lock(year: int, month: int, trigger_label: str, now: datetime):
+    """
+    用 MySQL advisory lock 保护自动发送，避免多个后端进程同时命中同一计划时重复发信。
+    """
+    lock_name = f"oa_auto_reminder_{year}_{month}"
+    conn = _try_acquire_mysql_lock(lock_name, "AutoReminder")
+    if not conn:
+        _append_auto_reminder_log({
+            "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "trigger": trigger_label,
+            "year": year,
+            "month": month,
+            "status": "skipped",
+            "message": f"已跳过：{year}年{month}月提醒正在由其他进程发送",
+        })
+        return
+    try:
+        if _has_already_sent_for_month(year, month):
+            _append_auto_reminder_log({
+                "time": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "trigger": trigger_label,
+                "year": year,
+                "month": month,
+                "status": "skipped",
+                "message": f"已跳过：{year}年{month}月提醒已由之前的计划发送",
+            })
+            return
+
+        await _execute_auto_send(year, month, trigger_label)
+    except Exception as e:
+        logger.error(f"[AutoReminder] 自动发送互斥执行失败: {e}")
+    finally:
+        _release_mysql_lock(conn, lock_name, "AutoReminder")
 
 
 async def auto_reminder_background_loop():
@@ -1046,8 +1294,11 @@ async def auto_reminder_background_loop():
                     f"(计划: 每月{day_label} {h}:{m:02d})"
                 )
                 print(f"[AutoReminder] 触发: {target_year}年{target_month}月 ({month_label})")
-                await _execute_auto_send(
-                    target_year, target_month, f"每月{day_label} {h}:{m:02d} · {month_label}考勤"
+                await _execute_auto_send_with_month_lock(
+                    target_year,
+                    target_month,
+                    f"每月{day_label} {h}:{m:02d} · {month_label}考勤",
+                    now,
                 )
         except Exception as e:
             logger.error(f"[AutoReminder] 循环异常: {e}")
@@ -1323,6 +1574,31 @@ async def run_shift_schedule_email_once(
     force: bool = False,
 ) -> dict:
     """发送周排班邮件：按发送时间与收件人单位合并，同单位同时间只发一封（多附件）。"""
+    lock_scope = department_filter or ",".join(only_departments or []) or "all"
+    lock_week = target_week_start.strftime("%Y-%m-%d") if target_week_start else datetime.now().strftime("%Y-%m-%d")
+    lock_name = f"oa_shift_schedule_email_{lock_week}_{hashlib.sha256(lock_scope.encode('utf-8')).hexdigest()[:16]}"
+    lock_conn = _try_acquire_mysql_lock(lock_name, "ShiftScheduleEmail")
+    if not lock_conn:
+        return {"success": True, "message": "已有其他进程正在发送周排班邮件，本进程已跳过", "sent": 0, "skipped": 0, "errors": 0}
+    try:
+        return await _run_shift_schedule_email_once_locked(
+            trigger_label=trigger_label,
+            target_week_start=target_week_start,
+            department_filter=department_filter,
+            only_departments=only_departments,
+            force=force,
+        )
+    finally:
+        _release_mysql_lock(lock_conn, lock_name, "ShiftScheduleEmail")
+
+
+async def _run_shift_schedule_email_once_locked(
+    trigger_label: str = "周五17:00自动发送",
+    target_week_start: Optional[date] = None,
+    department_filter: Optional[str] = None,
+    only_departments: Optional[List[str]] = None,
+    force: bool = False,
+) -> dict:
     from routers.shift_schedule import (
         _get_shift_departments,
         _get_shift_email_send_weekday,
@@ -2043,6 +2319,17 @@ def _get_todo_reminder_recipients() -> List[Dict]:
 
 async def run_todo_email_reminder_once() -> dict:
     """扫描管理人员待办，超过阈值且距离上次提醒已满 3 天则发送邮件。"""
+    lock_name = "oa_todo_email_reminder_run"
+    lock_conn = _try_acquire_mysql_lock(lock_name, "TodoReminder")
+    if not lock_conn:
+        return {"checked": 0, "sent": 0, "message": "已有其他进程正在发送待办提醒，本进程已跳过"}
+    try:
+        return await _run_todo_email_reminder_once_locked()
+    finally:
+        _release_mysql_lock(lock_conn, lock_name, "TodoReminder")
+
+
+async def _run_todo_email_reminder_once_locked() -> dict:
     cfg = _get_email_config()
     sender_addr = cfg["address"]
     password = cfg["auth_code"]

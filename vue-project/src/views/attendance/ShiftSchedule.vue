@@ -20,7 +20,7 @@
             <section class="header-rules-section">
               <h3 class="header-rules-h">二、班次与操作</h3>
               <ul>
-                <li>每人每天一个班次，仅有三种：<strong>白班</strong>、<strong>夜班</strong>、<strong>不值班</strong>（空）。点击格子按顺序循环切换。</li>
+                <li>每人每天一个班次：点击格子一次弹出 <strong>白服 / 白准 / 夜服 / 夜准</strong> 四个选项（白/夜班 + 服务组/准备组）；可选「不值班」清空。长按约 0.5 秒可切换「白+夜」。</li>
                 <li>「统计」列显示该员工在本屏日期内的白班、夜班次数；表脚「当日合计」显示每天白班、夜班人数。</li>
                 <li>日期下方第一行「<strong>计划</strong>」为<strong>当日值班工作计划</strong>：点击对应日期格子弹出编辑框（字数上限 2000）；与排班格子一样，需点工具栏「<strong>保存排班</strong>」才会写入服务器。</li>
               </ul>
@@ -255,7 +255,7 @@
       <span class="legend-item"><span class="legend-dot legend-loc-zhunbei"></span>准备组值班</span>
       <span class="legend-item"><span class="legend-dot legend-loc-fuwu"></span>服务组值班</span>
       <span class="legend-sep">|</span>
-      <span class="legend-hint">点击单元格切换：白班 → 夜班 → 不值班</span>
+      <span class="legend-hint">点击单元格选择：白服 / 白准 / 夜服 / 夜准</span>
       <span class="legend-sep">|</span>
       <span class="legend-item"><span class="legend-dot legend-open"></span>已解锁（成员仅可填本人班次；计划可协同）</span>
       <span class="legend-sep">|</span>
@@ -424,25 +424,28 @@
     <div v-else-if="loading" class="empty-state card"><p>加载中…</p></div>
     <div v-else class="empty-state card"><p>请先选择科室</p></div>
 
-    <!-- 值班位置选择弹窗 -->
+    <!-- 排班选项弹窗：白服/白准/夜服/夜准 -->
     <Teleport to="body">
-      <div v-if="locPickerVisible" class="loc-picker-overlay" @click.self="dismissLocPicker">
+      <div v-if="shiftPickerVisible" class="loc-picker-overlay" @click.self="dismissShiftPicker">
         <div
-          class="loc-picker"
-          :style="{ top: locPickerPos.top + 'px', left: locPickerPos.left + 'px' }"
+          class="loc-picker shift-picker"
+          :style="{ top: shiftPickerPos.top + 'px', left: shiftPickerPos.left + 'px' }"
         >
-          <div class="loc-picker-title">选择值班位置</div>
-          <div class="loc-picker-btns">
+          <div class="loc-picker-title">选择排班</div>
+          <div class="shift-picker-grid">
             <button
-              v-for="loc in LOCATION_OPTIONS"
-              :key="loc"
+              v-for="opt in SHIFT_PICKER_OPTIONS"
+              :key="opt.label"
               type="button"
-              class="loc-picker-btn"
-              :class="{ active: cellLocationLabel(locPickerEmp, locPickerDate) === loc }"
-              @click="pickLocation(loc)"
-            >{{ loc }}</button>
+              class="shift-picker-btn"
+              :class="[
+                opt.tone,
+                { active: isShiftPickerOptionActive(locPickerEmp, locPickerDate, opt) },
+              ]"
+              @click="pickShiftOption(opt)"
+            >{{ opt.label }}</button>
           </div>
-          <button type="button" class="loc-picker-skip" @click="dismissLocPicker">暂不选择</button>
+          <button type="button" class="shift-picker-clear" @click="clearShiftCell">不值班</button>
         </div>
       </div>
     </Teleport>
@@ -696,35 +699,90 @@ function getChangedDates() {
   return [...changedShiftDates, ...changedPlanDates].filter(Boolean).sort()
 }
 
-const LOCATION_OPTIONS = ['准备组', '服务组']
-const locPickerVisible = ref(false)
+/** 单击单元格四选一：班次 + 值班位置 */
+const SHIFT_PICKER_OPTIONS = [
+  { label: '白服', shift: '白班', loc: '服务组', tone: 'tone-day' },
+  { label: '白准', shift: '白班', loc: '准备组', tone: 'tone-day' },
+  { label: '夜服', shift: '夜班', loc: '服务组', tone: 'tone-night' },
+  { label: '夜准', shift: '夜班', loc: '准备组', tone: 'tone-night' },
+]
+
+const shiftPickerVisible = ref(false)
 const locPickerEmp = ref('')
 const locPickerDate = ref('')
-const locPickerPos = reactive({ top: 0, left: 0 })
+const shiftPickerPos = reactive({ top: 0, left: 0 })
 
-function showLocPicker(emp, dateStr, event) {
+function isShiftPickerOptionActive(emp, dateStr, opt) {
+  const v = scheduleData[emp]?.[dateStr] || ''
+  const loc = scheduleLocations[emp]?.[dateStr] || ''
+  return v === opt.shift && loc === opt.loc
+}
+
+function showShiftPicker(emp, dateStr, event) {
+  if (!canEditShiftCell(emp, dateStr)) return
   locPickerEmp.value = emp
   locPickerDate.value = dateStr
-  const rect = event?.target?.getBoundingClientRect?.()
+  const rect = event?.currentTarget?.getBoundingClientRect?.() || event?.target?.getBoundingClientRect?.()
   if (rect) {
-    locPickerPos.top = rect.bottom + 4
-    locPickerPos.left = rect.left
+    const panelW = 168
+    const panelH = 140
+    let top = rect.bottom + 4
+    let left = rect.left
+    if (top + panelH > window.innerHeight - 8) top = Math.max(8, rect.top - panelH - 4)
+    if (left + panelW > window.innerWidth - 8) left = Math.max(8, window.innerWidth - panelW - 8)
+    shiftPickerPos.top = top
+    shiftPickerPos.left = left
   }
-  locPickerVisible.value = true
+  shiftPickerVisible.value = true
 }
 
-function pickLocation(loc) {
+function applyShiftPick(emp, dateStr, shift, loc) {
+  if (!scheduleData[emp]) scheduleData[emp] = {}
+  if (!scheduleLocations[emp]) scheduleLocations[emp] = {}
+  scheduleData[emp][dateStr] = shift
+  scheduleLocations[emp][dateStr] = loc
+  dirty.value = true
+  markShiftDateChanged(dateStr)
+  const caps = shiftCapsForDateStr(dateStr)
+  if (shift === '白班') {
+    const cnt = countShiftOnDate(dateStr, '白班')
+    if (cnt > caps.day) {
+      showShiftCapToast(
+        `提示：${caps.kindLabel}白班已超过配置（配置 ${caps.day} 人，当前 ${cnt} 人），已保留您的排班`,
+      )
+    }
+  } else if (shift === '夜班') {
+    const cnt = countShiftOnDate(dateStr, '夜班')
+    if (cnt > caps.night) {
+      showShiftCapToast(
+        `提示：${caps.kindLabel}夜班已超过配置（配置 ${caps.night} 人，当前 ${cnt} 人），已保留您的排班`,
+      )
+    }
+  }
+}
+
+function pickShiftOption(opt) {
   const emp = locPickerEmp.value
   const ds = locPickerDate.value
-  if (!scheduleLocations[emp]) scheduleLocations[emp] = {}
-  scheduleLocations[emp][ds] = loc
-  dirty.value = true
-  markShiftDateChanged(ds)
-  locPickerVisible.value = false
+  if (!emp || !ds) return
+  applyShiftPick(emp, ds, opt.shift, opt.loc)
+  shiftPickerVisible.value = false
 }
 
-function dismissLocPicker() {
-  locPickerVisible.value = false
+function clearShiftCell() {
+  const emp = locPickerEmp.value
+  const ds = locPickerDate.value
+  if (!emp || !ds || !canEditShiftCell(emp, ds)) return
+  if (!scheduleData[emp]) scheduleData[emp] = {}
+  scheduleData[emp][ds] = ''
+  if (scheduleLocations[emp]) scheduleLocations[emp][ds] = ''
+  dirty.value = true
+  markShiftDateChanged(ds)
+  shiftPickerVisible.value = false
+}
+
+function dismissShiftPicker() {
+  shiftPickerVisible.value = false
 }
 
 function cellLocationLabel(emp, dateStr) {
@@ -1507,7 +1565,6 @@ function goThisWeek() {
   loadSchedule()
 }
 
-const SHIFT_CYCLE = ['白班', '夜班', '']
 let _lpTimer = null
 let _lpFired = false
 const shiftCapToast = ref('')
@@ -1552,39 +1609,6 @@ function countShiftOnDate(dateStr, shift) {
   return n
 }
 
-function cycleShift(emp, dateStr, event) {
-  if (!canEditShiftCell(emp, dateStr)) return
-  if (!scheduleData[emp]) scheduleData[emp] = {}
-  const cur = scheduleData[emp][dateStr] || ''
-  const idxRaw = cur === '白+夜' ? 2 : SHIFT_CYCLE.indexOf(cur)
-  const idx = idxRaw >= 0 ? idxRaw : 2
-  const next = SHIFT_CYCLE[(idx + 1) % SHIFT_CYCLE.length]
-  const caps = shiftCapsForDateStr(dateStr)
-  scheduleData[emp][dateStr] = next
-  dirty.value = true
-  markShiftDateChanged(dateStr)
-  if (next === '白班' || next === '夜班') {
-    if (event) showLocPicker(emp, dateStr, event)
-  } else {
-    if (scheduleLocations[emp]) scheduleLocations[emp][dateStr] = ''
-  }
-  if (next === '白班') {
-    const cnt = countShiftOnDate(dateStr, '白班')
-    if (cnt > caps.day) {
-      showShiftCapToast(
-        `提示：${caps.kindLabel}白班已超过配置（配置 ${caps.day} 人，当前 ${cnt} 人），已保留您的排班`,
-      )
-    }
-  } else if (next === '夜班') {
-    const cnt = countShiftOnDate(dateStr, '夜班')
-    if (cnt > caps.night) {
-      showShiftCapToast(
-        `提示：${caps.kindLabel}夜班已超过配置（配置 ${caps.night} 人，当前 ${cnt} 人），已保留您的排班`,
-      )
-    }
-  }
-}
-
 function onCellDown(emp, dateStr, e) {
   _lpFired = false
   if (_lpTimer) clearTimeout(_lpTimer)
@@ -1601,7 +1625,7 @@ function onCellUp() {
 
 function onCellClick(emp, dateStr, event) {
   if (_lpFired) { _lpFired = false; return }
-  cycleShift(emp, dateStr, event)
+  showShiftPicker(emp, dateStr, event)
 }
 
 function toggleBothShift(emp, dateStr) {
@@ -3247,48 +3271,60 @@ thead tr:first-child .sticky-col2 {
   font-weight: 600;
   color: #334155;
 }
-.loc-picker-btns {
-  display: flex;
-  gap: 10px;
+.shift-picker {
+  min-width: 168px;
 }
-.loc-picker-btn {
-  padding: 8px 18px;
-  font-size: 13px;
-  font-weight: 600;
-  border-radius: 6px;
+.shift-picker-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  width: 100%;
+}
+.shift-picker-btn {
+  padding: 10px 6px;
+  font-size: 14px;
+  font-weight: 700;
+  border-radius: 8px;
   border: 1.5px solid #cbd5e1;
   background: #fff;
   color: #334155;
   cursor: pointer;
   transition: all .15s;
 }
-.loc-picker-btn:first-child {
-  border-color: #22c55e;
-  color: #15803d;
+.shift-picker-btn.tone-day {
+  border-color: #93c5fd;
+  color: #1d4ed8;
 }
-.loc-picker-btn:first-child:hover,
-.loc-picker-btn:first-child.active {
-  background: #dcfce7;
-  border-color: #16a34a;
+.shift-picker-btn.tone-day:hover,
+.shift-picker-btn.tone-day.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
 }
-.loc-picker-btn:last-child {
-  border-color: #f97316;
-  color: #c2410c;
+.shift-picker-btn.tone-night {
+  border-color: #fcd34d;
+  color: #92400e;
 }
-.loc-picker-btn:last-child:hover,
-.loc-picker-btn:last-child.active {
-  background: #fff7ed;
-  border-color: #ea580c;
+.shift-picker-btn.tone-night:hover,
+.shift-picker-btn.tone-night.active {
+  background: #fef3c7;
+  border-color: #f59e0b;
 }
-.loc-picker-skip {
-  background: none;
-  border: none;
-  font-size: 12px;
-  color: #94a3b8;
+.shift-picker-clear {
+  width: 100%;
+  margin-top: 2px;
+  padding: 9px 12px;
+  font-size: 13px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1.5px solid #cbd5e1;
+  background: #f8fafc;
+  color: #64748b;
   cursor: pointer;
-  padding: 2px 6px;
+  transition: all 0.15s;
 }
-.loc-picker-skip:hover {
+.shift-picker-clear:hover {
+  background: #f1f5f9;
+  border-color: #94a3b8;
   color: #475569;
 }
 

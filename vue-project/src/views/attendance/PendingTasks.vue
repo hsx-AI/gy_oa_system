@@ -39,7 +39,7 @@
                   <td>{{ task.applyTime }}</td>
                   <td>
                     <button type="button" class="btn btn-primary btn-sm" @click="goApprove(task)">
-                      {{ task.isShiftCoverageGap ? '去排班' : (task.isReturnReminder ? '去登记' : '处理') }}
+                      {{ task.isAutoReminderNotice ? '已阅' : (task.isShiftCoverageGap ? '去排班' : (task.isReturnReminder ? '去登记' : '处理')) }}
                     </button>
                   </td>
                 </tr>
@@ -70,6 +70,7 @@ import {
   getBusinessTripList
 } from '@/api/attendance'
 import { getShiftCoverageGap } from '@/api/shift'
+import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
 
 const router = useRouter()
 const canApprove = ref(false)
@@ -78,6 +79,7 @@ const loading = ref(false)
 /** 公出已通过但未做返回登记的数量 */
 const tripReturnPendingCount = ref(0)
 const shiftCoverageGap = ref(null)
+const autoReminderNoticeList = ref([])
 
 const userInfo = (() => {
   try {
@@ -121,16 +123,40 @@ const displayTodoList = computed(() => {
       isReturnReminder: true
     })
   }
+  for (const item of autoReminderNoticeList.value) {
+    list.push({
+      uniqueId: `auto-reminder-notice-${item.id}`,
+      type: item.title || '考勤异常邮件提醒发送结果',
+      typeClass: 'type-email',
+      description: item.description || '',
+      applicant: '邮件自动发送',
+      applyTime: item.createdAt || item.sourceTime || '',
+      isAutoReminderNotice: true,
+      autoReminderNoticeId: item.id
+    })
+  }
   return list
 })
 
-function goApprove(task) {
+async function goApprove(task) {
   if (task.isShiftCoverageGap) {
     router.push('/attendance/shift-schedule')
     return
   }
   if (task.isReturnReminder) {
     router.push('/attendance/business-trip')
+    return
+  }
+  if (task.isAutoReminderNotice) {
+    if (!userName || !task.autoReminderNoticeId) return
+    try {
+      await markAutoReminderNoticeRead({ id: task.autoReminderNoticeId, current_user: userName })
+      autoReminderNoticeList.value = autoReminderNoticeList.value.filter(
+        item => item.id !== task.autoReminderNoticeId
+      )
+    } catch (e) {
+      alert(e?.response?.data?.message || e?.message || '标记已阅失败')
+    }
     return
   }
   router.push({ path: '/attendance/approvals', query: { type: task.tabType } })
@@ -147,6 +173,12 @@ async function fetchData() {
       shiftCoverageGap.value = shiftRes?.hasPending ? shiftRes : null
     } catch {
       shiftCoverageGap.value = null
+    }
+    try {
+      const noticeRes = await getAutoReminderNotices({ name: userName })
+      autoReminderNoticeList.value = noticeRes?.data || []
+    } catch {
+      autoReminderNoticeList.value = []
     }
     if (canApprove.value) {
       const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
