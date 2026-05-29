@@ -17,9 +17,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/health-monitor", tags=["系统管理员"])
 
 
+class ShiftEmailRecipientItem(BaseModel):
+    name: str = ""
+    email: str = ""
+    unit: str = "其他"
+
+
+class ShiftEmailDeptSettingsItem(BaseModel):
+    department: str
+    email_send_weekday: int = 4
+    email_recipients: List[ShiftEmailRecipientItem] = Field(default_factory=list)
+
+
 class ShiftEmailFeatureConfigRequest(BaseModel):
     current_user: str
     enabled_departments: List[str] = Field(default_factory=list)
+    departments: Optional[List[ShiftEmailDeptSettingsItem]] = None
 
 
 def _require_admin1(current_user: str) -> None:
@@ -201,7 +214,7 @@ async def get_health_overview(
 async def get_shift_email_feature_config(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
-    """获取各科室排班邮件功能开关配置。仅 admin1 可访问。"""
+    """获取各科室排班邮件配置（功能开关、发送时间、收件人）。仅 admin1 可访问。"""
     _require_admin1(current_user)
     from routers.shift_schedule import _get_shift_email_feature_config_items
     data = _get_shift_email_feature_config_items()
@@ -210,8 +223,12 @@ async def get_shift_email_feature_config(
 
 @router.post("/shift-email-config")
 async def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
-    """保存各科室排班邮件功能开关配置。仅 admin1 可访问。"""
+    """保存各科室排班邮件配置（功能开关、发送时间、收件人）。仅 admin1 可访问。"""
     _require_admin1(req.current_user)
     from routers.shift_schedule import _save_shift_email_feature_config
-    data = _save_shift_email_feature_config(req.enabled_departments)
-    return {"success": True, "message": "排班邮件功能配置已保存", **data}
+    data = _save_shift_email_feature_config(
+        req.enabled_departments,
+        department_email_settings=req.departments,
+        updated_by=req.current_user,
+    )
+    return {"success": True, "message": "排班邮件配置已保存", **data}

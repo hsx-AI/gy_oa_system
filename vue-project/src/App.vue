@@ -475,7 +475,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard } from '@/utils/roleMatch'
 
 const route = useRoute()
 const router = useRouter()
@@ -898,16 +898,18 @@ const canManageHxp = computed(() => {
   return isMinisterLevel(jb)
 })
 
-// 是否显示管理驾驶舱（部长/副部长 或 综合技术室主任/副主任 或 系统管理员 admin1，权限等同于部长）
+// 是否显示管理驾驶舱（部长/副部长、综合技术室主任/副主任、admin1、admin2）
 const canSeeLeaderDashboard = computed(() => {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
-  const a1 = (admin1.value || '').trim()
-  if (a1 && name === a1) return true
   const jb = (currentUser.value?.jb || '').trim()
   const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
-  const minister = isMinisterLevel(jb)
-  const isZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
-  return minister || isZhjsDirector
+  return canAccessLeaderDashboard({
+    name,
+    jb,
+    lsys,
+    admin1: admin1.value,
+    admin2: admin2.value,
+  })
 })
 
 // 其他绩效激励统计：全员可访问，页面内按权限显示本人/本室/全部门

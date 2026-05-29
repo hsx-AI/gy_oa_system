@@ -29,27 +29,73 @@
         <section class="card admin-config-card">
           <div class="config-card-head">
             <div>
-              <h2 class="section-title">排班邮件功能配置</h2>
-              <p class="section-desc">控制各科室是否启用周排班自动发送、手动发送和发送提醒。</p>
+              <h2 class="section-title">排班邮件配置</h2>
+              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间与收件人（固定 17:00 发送）。</p>
             </div>
             <div class="config-actions">
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">全选</button>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(false)">全部关闭</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">功能全选</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(false)">功能全关</button>
               <button type="button" class="btn btn-primary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="saveShiftEmailConfig">
                 {{ shiftEmailSaving ? '保存中…' : '保存配置' }}
               </button>
             </div>
           </div>
-          <div v-if="shiftEmailLoading" class="status-message">正在加载排班邮件功能配置…</div>
+          <div v-if="shiftEmailLoading" class="status-message">正在加载排班邮件配置…</div>
           <div v-else-if="!shiftEmailItems.length" class="status-message">暂无可配置科室。</div>
-          <div v-else class="dept-switch-grid">
-            <label v-for="item in shiftEmailItems" :key="item.department" class="dept-switch">
-              <span class="dept-name">{{ item.department }}</span>
-              <input v-model="item.enabled" type="checkbox">
-              <span class="switch-visual" :class="{ 'is-on': item.enabled }"></span>
-              <span class="switch-text" :class="{ 'is-on': item.enabled }">{{ item.enabled ? '启用' : '关闭' }}</span>
-            </label>
-          </div>
+          <template v-else>
+            <div class="dept-switch-grid">
+              <label v-for="item in shiftEmailItems" :key="'sw-' + item.department" class="dept-switch">
+                <span class="dept-name">{{ item.department }}</span>
+                <input v-model="item.enabled" type="checkbox">
+                <span class="switch-visual" :class="{ 'is-on': item.enabled }"></span>
+                <span class="switch-text" :class="{ 'is-on': item.enabled }">{{ item.enabled ? '启用' : '关闭' }}</span>
+              </label>
+            </div>
+            <div v-if="shiftEmailEnabledItems.length" class="shift-email-preview-panel">
+              <h3 class="shift-email-preview-panel-title">邮件发送信息汇总</h3>
+              <p class="shift-email-preview-intro">
+                按发送时间与收件人单位合并发送：同一单位、同一发送时间只发一封邮件（可含多个科室附件）。
+                排班表收件人为邮件收件人；各科室主任/副主任/班组长（已配置企业邮箱）为抄送。
+              </p>
+              <ul class="shift-email-preview-list">
+                <li v-for="(line, idx) in shiftEmailPreviewLines" :key="'pv-' + idx">
+                  {{ line }}
+                </li>
+              </ul>
+            </div>
+            <h3 v-if="shiftEmailEnabledItems.length" class="email-settings-title">各科室邮件发送时间与收件人</h3>
+            <p v-else class="email-settings-hint">当前无启用邮件功能的科室；在上方打开开关后可配置发送时间与收件人。</p>
+            <div v-if="shiftEmailEnabledItems.length" class="dept-email-list">
+              <div v-for="item in shiftEmailEnabledItems" :key="'em-' + item.department" class="dept-email-card">
+                <div class="dept-email-head">
+                  <span class="dept-email-name">{{ item.department }}</span>
+                  <label class="dept-email-send">
+                    <span>自动发送</span>
+                    <select v-model.number="item.email_send_weekday" class="email-send-select">
+                      <option v-for="opt in emailSendWeekdayOptions" :key="opt.value" :value="opt.value">
+                        每周{{ opt.label }} 17:00
+                      </option>
+                    </select>
+                  </label>
+                </div>
+                <div class="recipient-toolbar">
+                  <span class="recipient-label">排班表收件人</span>
+                  <button type="button" class="btn btn-secondary btn-sm" @click="addShiftEmailRecipient(item)">新增收件人</button>
+                </div>
+                <div v-if="item.email_recipients.length" class="recipient-list">
+                  <div v-for="(recipient, idx) in item.email_recipients" :key="idx" class="recipient-row">
+                    <input v-model.trim="recipient.name" type="text" class="recipient-input" placeholder="姓名">
+                    <select v-model="recipient.unit" class="recipient-select recipient-select-unit">
+                      <option v-for="u in recipientUnitOptions" :key="u" :value="u">{{ u }}</option>
+                    </select>
+                    <input v-model.trim="recipient.email" type="email" class="recipient-input recipient-input-email" placeholder="邮箱">
+                    <button type="button" class="btn btn-secondary btn-sm" @click="removeShiftEmailRecipient(item, idx)">删除</button>
+                  </div>
+                </div>
+                <p v-else class="recipient-empty">暂未配置收件人</p>
+              </div>
+            </div>
+          </template>
           <p v-if="shiftEmailMessage" class="config-message">{{ shiftEmailMessage }}</p>
         </section>
 
@@ -131,6 +177,169 @@ const shiftEmailSaving = ref(false)
 const shiftEmailItems = ref([])
 const shiftEmailMessage = ref('')
 
+const emailSendWeekdayOptions = [
+  { value: 0, label: '周一' },
+  { value: 1, label: '周二' },
+  { value: 2, label: '周三' },
+  { value: 3, label: '周四' },
+  { value: 4, label: '周五' },
+  { value: 5, label: '周六' },
+  { value: 6, label: '周日' },
+]
+
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+const recipientUnitOptions = [
+  '水电分厂',
+  '汽发分厂',
+  '线圈分厂',
+  '冲剪分厂',
+  '冷作分厂',
+  '成品分厂',
+  '大电机研究所',
+  '金工分厂',
+  '其他',
+]
+
+function mapShiftEmailItem(item) {
+  return {
+    department: item.department,
+    enabled: !!item.enabled,
+    email_send_weekday: Number.isFinite(Number(item.email_send_weekday)) ? Number(item.email_send_weekday) : 4,
+    email_recipients: (item.email_recipients || []).map((r) => ({
+      name: (r?.name || '').trim(),
+      email: (r?.email || '').trim(),
+      unit: recipientUnitOptions.includes((r?.unit || '').trim()) ? (r?.unit || '').trim() : '其他',
+    })),
+    leader_recipients: (item.leader_recipients || []).map((r) => ({
+      name: (r?.name || '').trim(),
+      email: (r?.email || '').trim(),
+      jb: (r?.jb || '').trim(),
+    })),
+  }
+}
+
+const SHIFT_EMAIL_SEND_HOUR = 17
+
+function nextShiftEmailSendTime(sendWeekdayPython, nowDate = new Date()) {
+  const wd = Number.isFinite(Number(sendWeekdayPython)) ? Number(sendWeekdayPython) : 4
+  const jsWeekday = (wd + 1) % 7
+  const target = new Date(nowDate.getFullYear(), nowDate.getMonth(), nowDate.getDate())
+  const addDays = (jsWeekday - target.getDay() + 7) % 7
+  target.setDate(target.getDate() + addDays)
+  target.setHours(SHIFT_EMAIL_SEND_HOUR, 0, 0, 0)
+  if (target <= nowDate) target.setDate(target.getDate() + 7)
+  return target
+}
+
+function formatShiftEmailSendWhen(d) {
+  return `${d.getMonth() + 1}月${d.getDate()}日${SHIFT_EMAIL_SEND_HOUR}:00`
+}
+
+function normalizeRecipientUnit(unit) {
+  const u = (unit || '').trim()
+  return recipientUnitOptions.includes(u) ? u : '其他'
+}
+
+const shiftEmailPreviewLines = computed(() => {
+  const buckets = new Map()
+  for (const item of shiftEmailEnabledItems.value) {
+    const wd = item.email_send_weekday
+    const leaders = item.leader_recipients || []
+    const config = item.email_recipients || []
+    const units = new Set()
+    for (const r of config) {
+      if ((r.email || '').trim()) units.add(normalizeRecipientUnit(r.unit))
+    }
+    if (!units.size && leaders.some((l) => (l.email || '').trim())) {
+      units.add('其他')
+    }
+    if (!units.size) continue
+
+    const leaderEmails = new Set(
+      leaders.map((l) => (l.email || '').trim().toLowerCase()).filter(Boolean),
+    )
+
+    for (const unit of units) {
+      const key = `${wd}|${unit}`
+      if (!buckets.has(key)) {
+        buckets.set(key, {
+          sendWeekday: wd,
+          unit,
+          departments: [],
+          configNames: new Set(),
+          leadersByDept: [],
+          sortAt: nextShiftEmailSendTime(wd).getTime(),
+        })
+      }
+      const bucket = buckets.get(key)
+      bucket.departments.push(item.department)
+
+      const leaderNames = leaders.map((l) => l.name).filter(Boolean)
+      if (leaderNames.length) {
+        bucket.leadersByDept.push({ dept: item.department, names: leaderNames })
+      }
+      for (const r of config) {
+        if (normalizeRecipientUnit(r.unit) !== unit) continue
+        const email = (r.email || '').trim().toLowerCase()
+        if (r.name && (!email || !leaderEmails.has(email))) {
+          bucket.configNames.add(r.name)
+        }
+      }
+    }
+  }
+
+  return [...buckets.values()]
+    .sort((a, b) => a.sortAt - b.sortAt || a.unit.localeCompare(b.unit, 'zh-CN'))
+    .map((bucket) => {
+      const whenStr = formatShiftEmailSendWhen(nextShiftEmailSendTime(bucket.sendWeekday))
+      const deptPart = bucket.departments.join('、')
+      const configPart = [...bucket.configNames].join('、')
+      const ccPart = bucket.leadersByDept
+        .map(({ dept, names }) => `${dept}管理人员（${names.join('、')}）`)
+        .join('；')
+
+      const toPart = configPart ? `收件人（${configPart}）` : '收件人（未配置）'
+      const ccSuffix = ccPart ? `，抄送${ccPart}` : ''
+
+      return `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表，${toPart}${ccSuffix}。`
+    })
+})
+
+function addShiftEmailRecipient(item) {
+  item.email_recipients.push({ name: '', unit: '其他', email: '' })
+}
+
+function removeShiftEmailRecipient(item, index) {
+  item.email_recipients.splice(index, 1)
+}
+
+function normalizeDeptEmailRecipients(recipients) {
+  const normalized = []
+  const seen = new Set()
+  for (const row of recipients || []) {
+    const name = (row?.name || '').trim()
+    const email = (row?.email || '').trim()
+    const unit = (row?.unit || '').trim()
+    if (!name && !email) continue
+    if (!name || !email) {
+      return { error: '请完整填写各科室排班表收件人的姓名和邮箱' }
+    }
+    if (!unit || !recipientUnitOptions.includes(unit)) {
+      return { error: '请为收件人选择单位' }
+    }
+    if (!EMAIL_PATTERN.test(email)) {
+      return { error: `排班表收件人邮箱格式不正确：${email}` }
+    }
+    const key = email.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    normalized.push({ name, unit, email })
+  }
+  return { recipients: normalized }
+}
+
+const shiftEmailEnabledItems = computed(() => shiftEmailItems.value.filter((item) => item.enabled))
+
 const lastUpdateText = computed(() => {
   if (!lastUpdate.value) return '—'
   const d = new Date(lastUpdate.value)
@@ -172,14 +381,11 @@ async function fetchShiftEmailConfig() {
   shiftEmailMessage.value = ''
   try {
     const res = await getShiftEmailFeatureConfig({ current_user: name })
-    shiftEmailItems.value = (res?.items || []).map((item) => ({
-      department: item.department,
-      enabled: !!item.enabled,
-    }))
+    shiftEmailItems.value = (res?.items || []).map(mapShiftEmailItem)
   } catch (e) {
     console.error(e)
     shiftEmailItems.value = []
-    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '排班邮件功能配置加载失败'
+    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '排班邮件配置加载失败'
   } finally {
     shiftEmailLoading.value = false
   }
@@ -197,6 +403,20 @@ async function saveShiftEmailConfig() {
   if (!name) return
   shiftEmailSaving.value = true
   shiftEmailMessage.value = ''
+  const departmentsPayload = []
+  for (const item of shiftEmailItems.value) {
+    const parsed = normalizeDeptEmailRecipients(item.email_recipients)
+    if (parsed.error) {
+      shiftEmailMessage.value = parsed.error
+      shiftEmailSaving.value = false
+      return
+    }
+    departmentsPayload.push({
+      department: item.department,
+      email_send_weekday: item.email_send_weekday,
+      email_recipients: parsed.recipients,
+    })
+  }
   try {
     const enabledDepartments = shiftEmailItems.value
       .filter((item) => item.enabled)
@@ -204,12 +424,10 @@ async function saveShiftEmailConfig() {
     const res = await saveShiftEmailFeatureConfig({
       current_user: name,
       enabled_departments: enabledDepartments,
+      departments: departmentsPayload,
     })
-    shiftEmailItems.value = (res?.items || []).map((item) => ({
-      department: item.department,
-      enabled: !!item.enabled,
-    }))
-    shiftEmailMessage.value = res?.message || '排班邮件功能配置已保存'
+    shiftEmailItems.value = (res?.items || []).map(mapShiftEmailItem)
+    shiftEmailMessage.value = res?.message || '排班邮件配置已保存'
   } catch (e) {
     shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '保存排班邮件功能配置失败'
   } finally {
@@ -258,7 +476,7 @@ onMounted(async () => {
   background: var(--color-bg-layout);
 }
 .health-monitor-page .container {
-  max-width: 900px;
+  max-width: 1080px;
   margin: 0 auto;
   padding: var(--spacing-xl) var(--spacing-lg);
 }
@@ -381,6 +599,138 @@ onMounted(async () => {
   margin: var(--spacing-sm) 0 0;
   font-size: 0.85rem;
   color: var(--color-text-secondary);
+}
+.email-settings-title {
+  margin: var(--spacing-lg) 0 var(--spacing-md);
+  font-size: 0.95rem;
+  font-weight: 600;
+}
+.email-settings-hint {
+  margin: var(--spacing-lg) 0 0;
+  font-size: 0.85rem;
+  color: var(--color-text-tertiary);
+}
+.dept-email-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.dept-email-card {
+  padding: 12px 14px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-layout);
+}
+.dept-email-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  margin-bottom: 10px;
+}
+.dept-email-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.dept-email-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.email-send-select {
+  min-width: 168px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--color-bg-container);
+}
+.recipient-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.recipient-label {
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.recipient-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.recipient-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.recipient-input {
+  flex: 1;
+  min-width: 100px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+}
+.recipient-input-email {
+  flex: 2;
+  min-width: 180px;
+}
+.recipient-select {
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--color-bg-container);
+}
+.recipient-select-unit {
+  min-width: 120px;
+}
+.recipient-empty {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--color-text-tertiary);
+}
+.shift-email-preview-panel {
+  margin-top: var(--spacing-lg);
+  padding: 14px 16px;
+  border-radius: 8px;
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+}
+.shift-email-preview-panel-title {
+  margin: 0 0 8px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+.shift-email-preview-intro {
+  margin: 0 0 12px;
+  font-size: 0.82rem;
+  color: #475569;
+}
+.shift-email-preview-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.shift-email-preview-list li {
+  padding: 10px 12px;
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: #1e3a8a;
+  background: rgba(255, 255, 255, 0.75);
+  border-radius: 6px;
+  border: 1px solid #dbeafe;
 }
 .status-grid {
   display: grid;

@@ -8,7 +8,7 @@ import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -366,14 +366,8 @@ router.beforeEach(async (to, _from, next) => {
         return
       }
       const user = JSON.parse(raw)
-      const name = (user.name || user.userName || '').trim()
       const jb = (user.jb || '').trim()
-      const res = await getUploadConfig()
-      const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
-      const admin2 = (res && res.admin2 != null ? res.admin2 : '').trim()
-      const allowedByAdmin = (admin1 && name === admin1) || (admin2 && name === admin2)
-      const allowedByJb = isMinisterLevel(jb)
-      if (allowedByAdmin || allowedByJb) next()
+      if (isMinisterLevel(jb)) next()
       else next('/')
     } catch {
       next('/')
@@ -394,10 +388,8 @@ router.beforeEach(async (to, _from, next) => {
       const lsys = (user.dept || user.lsys || '').trim()
       const res = await getUploadConfig()
       const admin1 = (res && res.admin1 != null ? res.admin1 : '').trim()
-      const allowedByAdmin1 = admin1 && name === admin1
-      const allowedByJb = isMinisterLevel(jb)
-      const allowedByZhjsDirector = lsys === '综合技术室' && isDirectorLevel(jb)
-      if (allowedByAdmin1 || allowedByJb || allowedByZhjsDirector) next()
+      const admin2 = (res && res.admin2 != null ? res.admin2 : '').trim()
+      if (canAccessLeaderDashboard({ name, jb, lsys, admin1, admin2 })) next()
       else next('/')
     } catch {
       next('/')

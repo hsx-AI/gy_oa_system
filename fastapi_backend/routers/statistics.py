@@ -82,61 +82,22 @@ logger = logging.getLogger(__name__)
 
 def _can_access_holiday_duty_attendance(name: Optional[str]) -> bool:
     """
-    假期值班出勤核查：部长/副部长、系统管理员 admin1、综合技术室主任/副主任（含主任责等主任职级）、人事管理员 admin2。
-    与考勤纪律审查页、排班管理入口的可用范围一致。
+    假期值班出勤核查：与管理驾驶舱入口权限一致。
     """
-    n = (name or "").strip()
-    if not n:
-        return False
     try:
-        wc = db.execute_query("SELECT admin1, admin2 FROM webconfig WHERE id = 1 LIMIT 1")
-        if wc:
-            row = wc[0]
-            a1 = (row.get("admin1") or "").strip()
-            a2 = (row.get("admin2") or "").strip()
-            if a1 and n == a1:
-                return True
-            if a2 and n == a2:
-                return True
-    except Exception:
-        pass
-    try:
-        from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
+        from routers.approvers import can_access_leader_dashboard
+        return can_access_leader_dashboard(name)
     except Exception:
         return False
-    user = _get_user_info(n)
-    if not user:
-        return False
-    jb = (user.get("jb") or "").strip()
-    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
-        return True
-    if is_zonghe_tech_director(user):
-        return True
-    return False
 
 
 def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     """
-    领导加班统计权限：
-    - 部长/副部长
-    - 系统管理员 admin1、人事管理员 admin2
-    （不含综合技术室主任/副主任，与驾驶舱其它入口区分）
+    领导加班统计权限：仅部长/副部长（不含 admin1/admin2、综合技术室主任/副主任）。
     """
     n = (name or "").strip()
     if not n:
         return False
-    try:
-        wc = db.execute_query("SELECT admin1, admin2 FROM webconfig WHERE id = 1 LIMIT 1")
-        if wc:
-            row = wc[0]
-            a1 = (row.get("admin1") or "").strip()
-            a2 = (row.get("admin2") or "").strip()
-            if a1 and n == a1:
-                return True
-            if a2 and n == a2:
-                return True
-    except Exception:
-        pass
     try:
         from routers.approvers import _get_user_info, _jb_match
     except Exception:
@@ -145,9 +106,7 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     if not user:
         return False
     jb = (user.get("jb") or "").strip()
-    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
-        return True
-    return False
+    return bool(_jb_match(jb, "部长") or _jb_match(jb, "副部长"))
 
 
 INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}

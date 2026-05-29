@@ -88,6 +88,35 @@ def is_zonghe_tech_director(user: Optional[Dict[str, Any]]) -> bool:
     return _jb_match(jb, "主任") or _jb_match(jb, "副主任")
 
 
+def can_access_leader_dashboard(name: Optional[str]) -> bool:
+    """
+    管理驾驶舱 / 考勤纪律审查：部长/副部长、综合技术室主任/副主任、
+    系统管理员 admin1、人事管理员 admin2（与综合技术室主任同级数据范围）。
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        from routers.db_manager import _get_admin1
+        from routers.admin import _get_admin2
+
+        a1 = (_get_admin1() or "").strip()
+        a2 = (_get_admin2() or "").strip()
+        if a1 and n == a1:
+            return True
+        if a2 and n == a2:
+            return True
+    except Exception:
+        pass
+    user = _get_user_info(n)
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return True
+    return is_zonghe_tech_director(user)
+
+
 def _get_approvers_first(name: str) -> List[dict]:
     """第一审批人：根据申请人 jb、lsys 按规则筛选"""
     user = _get_user_info(name)

@@ -62,27 +62,33 @@ router = APIRouter(prefix="/report", tags=["报表统计"])
 async def get_statistics_permission(name: str = Query(..., description="当前用户姓名")):
     """
     统计汇总页权限：1=仅自己 2=科室下拉 3=全部输入查询
-    总监、责任工艺师、副总专业师等按1级；按 yggl.jb 职级判定，不做 admin2 特开。
+    管理驾驶舱 level 3：部长/副部长、综合技术室主任/副主任、admin1、admin2。
     """
-    user = _get_user_info(name)
+    name_stripped = (name or "").strip()
+    user = _get_user_info(name_stripped)
     if not user:
-        return {"success": True, "level": 1, "lsys": "", "name": name}
+        return {"success": True, "level": 1, "lsys": "", "name": name_stripped}
     jb = (user.get("jb") or "").strip()
     lsys = (user.get("lsys") or "").strip()
+
+    try:
+        from routers.approvers import can_access_leader_dashboard
+        if can_access_leader_dashboard(name_stripped):
+            return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}
+    except Exception:
+        pass
+
     if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
-        return {"success": True, "level": 3, "lsys": lsys, "name": name}
+        return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}
     # 部办：文件编号等可看全部专业
     if lsys == "部办":
-        return {"success": True, "level": 3, "lsys": lsys, "name": name}
-    # 综合技术室主任/副主任：领导人看板权限等同部长（level 3，可选全员或任意科室）
-    if lsys == "综合技术室" and (_jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb))):
-        return {"success": True, "level": 3, "lsys": lsys, "name": name}
+        return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}
     if _jb_match(jb, "组长") or _jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb)):
-        return {"success": True, "level": 2, "lsys": lsys, "name": name}
+        return {"success": True, "level": 2, "lsys": lsys, "name": name_stripped}
     # "其他部门成员"：文件编号权限等同综合技术室普通员工
     if lsys == "其他部门成员":
-        return {"success": True, "level": 1, "lsys": "综合技术室", "name": name}
-    return {"success": True, "level": 1, "lsys": lsys, "name": name}
+        return {"success": True, "level": 1, "lsys": "综合技术室", "name": name_stripped}
+    return {"success": True, "level": 1, "lsys": lsys, "name": name_stripped}
 
 
 @router.get("/overtime-pay-permission")

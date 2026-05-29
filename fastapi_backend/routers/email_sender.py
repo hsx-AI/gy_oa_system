@@ -1210,6 +1210,26 @@ def _merge_shift_email_recipients(*groups: List[dict]) -> List[dict]:
     return merged
 
 
+def _normalize_shift_recipient_unit(unit: str) -> str:
+    from routers.shift_schedule import SHIFT_EMAIL_RECIPIENT_UNITS
+
+    u = (unit or "").strip() or "其他"
+    return u if u in SHIFT_EMAIL_RECIPIENT_UNITS else "其他"
+
+
+def _shift_recipient_units(config_recipients: List[dict], leaders: List[dict]) -> set:
+    """科室参与合并发送的单位集合；无配置收件人仅有管理人员时归入「其他」。"""
+    units = set()
+    for item in config_recipients or []:
+        email = (item.get("email") or "").strip()
+        if not email:
+            continue
+        units.add(_normalize_shift_recipient_unit(item.get("unit")))
+    if not units and leaders:
+        units.add("其他")
+    return units
+
+
 def _build_shift_schedule_email_body(report: dict) -> str:
     week_start = report["week_start"]
     week_end = report["week_end"]
@@ -1221,14 +1241,94 @@ def _build_shift_schedule_email_body(report: dict) -> str:
     )
 
 
+def _build_merged_shift_schedule_subject(reports: List[dict], unit: str) -> str:
+    if not reports:
+        return "排班计划（自动发送）"
+    ws = min(r["week_start"] for r in reports)
+    dept_names = "、".join(r["department"] for r in reports)
+    if len(reports) == 1:
+        return f"{ws.month}月{ws.day}日排班智能制造工艺部{dept_names}排班计划（自动发送）"
+    return f"{ws.month}月{ws.day}日排班智能制造工艺部{dept_names}等单位周排班计划（{unit}·自动发送）"
+
+
+def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
+    dept_names = "、".join(r["department"] for r in reports)
+    parts = [
+        "<p>各位领导同事您好：</p>",
+        f"<p>以下为向<strong>{unit}</strong>发送的周排班计划，包含<strong>{dept_names}</strong>，"
+        f"共 {len(reports)} 个科室排班表（见附件）。</p>",
+    ]
+    for report in reports:
+        week_start = report["week_start"]
+        week_end = report["week_end"]
+        parts.append(
+            f"<p><strong>{report['department']}</strong> "
+            f"{week_start.month}月{week_start.day}日至{week_end.month}月{week_end.day}日：</p>"
+            f"{report['html_table']}"
+        )
+    return "".join(parts)
+
+
+def _collect_shift_email_send_buckets(jobs: List[dict]) -> dict:
+    """
+    按发送星期 + 收件人单位合并。
+    jobs 元素需含 department, send_weekday, report, config_recipients, leaders。
+    """
+    buckets = {}
+    for job in jobs:
+        dept = job["department"]
+        send_wd = job["send_weekday"]
+        report = job["report"]
+        config = job["config_recipients"]
+        leaders = job["leaders"]
+        units = _shift_recipient_units(config, leaders)
+        if not units:
+            continue
+        for unit in units:
+            key = (send_wd, unit)
+            bucket = buckets.setdefault(
+                key,
+                {
+                    "send_weekday": send_wd,
+                    "unit": unit,
+                    "reports": [],
+                    "to_emails": set(),
+                    "cc_emails": set(),
+                    "departments": [],
+                },
+            )
+            if dept not in bucket["departments"]:
+                bucket["departments"].append(dept)
+                bucket["reports"].append(report)
+            for item in config or []:
+                if _normalize_shift_recipient_unit(item.get("unit")) != unit:
+                    continue
+                email = (item.get("email") or "").strip()
+                if email:
+                    bucket["to_emails"].add(email)
+            for item in leaders or []:
+                email = (item.get("email") or "").strip()
+                if email:
+                    bucket["cc_emails"].add(email)
+    for bucket in buckets.values():
+        bucket["cc_emails"] -= bucket["to_emails"]
+    return buckets
+
+
 async def run_shift_schedule_email_once(
     trigger_label: str = "周五17:00自动发送",
     target_week_start: Optional[date] = None,
     department_filter: Optional[str] = None,
+    only_departments: Optional[List[str]] = None,
     force: bool = False,
 ) -> dict:
-    """发送周排班邮件：配置收件人 + 本科室主任/副主任/班组长。"""
-    from routers.shift_schedule import _get_shift_departments, _load_shift_email_feature_config, build_week_schedule_report
+    """发送周排班邮件：按发送时间与收件人单位合并，同单位同时间只发一封（多附件）。"""
+    from routers.shift_schedule import (
+        _get_shift_departments,
+        _get_shift_email_send_weekday,
+        _load_shift_email_feature_config,
+        build_week_schedule_report,
+    )
 
     cfg = _get_email_config()
     sender_addr = cfg["address"]
@@ -1236,13 +1336,20 @@ async def run_shift_schedule_email_once(
     if not sender_addr or not password:
         return {"success": False, "message": "邮箱未配置，无法发送周排班邮件", "sent": 0, "skipped": 0, "errors": 0}
 
-    departments = [department_filter] if department_filter else _get_shift_departments()
+    if department_filter:
+        departments = [department_filter]
+    elif only_departments:
+        departments = [d for d in only_departments if d]
+    else:
+        departments = _get_shift_departments()
     enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
     sent = 0
     skipped = 0
     errors = 0
     details = []
+    mail_sent = 0
     now_dt = datetime.now()
+    jobs = []
 
     for dept in [d for d in departments if d]:
         week_start = target_week_start or _shift_schedule_target_week(dept, now_dt)
@@ -1255,69 +1362,133 @@ async def run_shift_schedule_email_once(
             details.append({"department": dept, "status": "skipped", "message": "本周已发送"})
             continue
 
+        config = _get_shift_config_recipients(dept)
+        leaders = _get_shift_dept_leader_recipients(dept)
+        if not _shift_recipient_units(config, leaders):
+            skipped += 1
+            details.append({"department": dept, "status": "skipped", "message": "未配置有效收件人或领导邮箱"})
+            continue
+
         try:
             report = build_week_schedule_report(dept, week_start)
-            recipients = _merge_shift_email_recipients(
-                _get_shift_config_recipients(dept),
-                _get_shift_dept_leader_recipients(dept),
-            )
-            emails = [r["email"] for r in recipients]
-            if not emails:
-                skipped += 1
-                details.append({"department": dept, "status": "skipped", "message": "未配置有效收件人或领导邮箱"})
-                continue
+            jobs.append({
+                "department": dept,
+                "send_weekday": _get_shift_email_send_weekday(dept),
+                "report": report,
+                "config_recipients": config,
+                "leaders": leaders,
+            })
+        except Exception as e:
+            errors += 1
+            logger.error("[ShiftScheduleEmail] %s 生成排班报表失败: %s", dept, e)
+            details.append({"department": dept, "status": "error", "message": str(e)[:200]})
 
-            subject = f"{report['week_start'].month}月{report['week_start'].day}日排班智能制造工艺部{dept}排班计划（自动发送）"
-            attachment = AttachmentItem(
+    buckets = _collect_shift_email_send_buckets(jobs)
+    if not buckets and jobs:
+        for job in jobs:
+            skipped += 1
+            details.append({"department": job["department"], "status": "skipped", "message": "无法归入发送批次"})
+
+    for bucket in buckets.values():
+        to_emails = sorted(bucket["to_emails"])
+        cc_emails = sorted(bucket["cc_emails"])
+        reports = bucket["reports"]
+        unit = bucket["unit"]
+        if not reports:
+            continue
+        if not to_emails:
+            for dept in bucket["departments"]:
+                skipped += 1
+                details.append({
+                    "department": dept,
+                    "status": "skipped",
+                    "message": "该单位未配置排班表收件人（管理人员仅抄送，不能单独作为收件人）",
+                })
+            continue
+
+        subject = _build_merged_shift_schedule_subject(reports, unit)
+        attachments = [
+            AttachmentItem(
                 filename=report["filename"],
                 content_base64=base64.b64encode(report["excel_bytes"]).decode("utf-8"),
             )
-            msg = _build_email_message(
-                sender_addr,
-                emails,
-                [],
-                subject,
-                _build_shift_schedule_email_body(report),
-                "html",
-                [attachment],
-            )
-            success_count, failures = _smtp_send_batch(sender_addr, password, [(emails, msg)])
+            for report in reports
+        ]
+        body = (
+            _build_shift_schedule_email_body(reports[0])
+            if len(reports) == 1
+            else _build_merged_shift_schedule_body(reports, unit)
+        )
+        msg = _build_email_message(sender_addr, to_emails, cc_emails, subject, body, "html", attachments)
+        all_recipients = list(set(to_emails + cc_emails))
+        try:
+            success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
             if success_count:
-                sent += 1
-                _record_shift_schedule_email_log(
-                    dept,
-                    report["week_start"],
-                    report["week_end"],
-                    trigger_label,
-                    len(emails),
-                    "ok",
-                    f"已发送给 {len(emails)} 个收件人",
+                mail_sent += 1
+                log_msg = (
+                    f"已向{unit}发送 {len(reports)} 个科室排班表，"
+                    f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人"
                 )
-                details.append({"department": dept, "status": "ok", "recipientCount": len(emails)})
+                recipient_total = len(all_recipients)
+                for report in reports:
+                    sent += 1
+                    _record_shift_schedule_email_log(
+                        report["department"],
+                        report["week_start"],
+                        report["week_end"],
+                        trigger_label,
+                        recipient_total,
+                        "ok",
+                        log_msg,
+                    )
+                    details.append({
+                        "department": report["department"],
+                        "status": "ok",
+                        "recipientCount": len(to_emails),
+                        "ccCount": len(cc_emails),
+                        "unit": unit,
+                        "merged": len(reports) > 1,
+                    })
             else:
-                errors += 1
+                errors += len(reports)
                 msg_text = "；".join(failures) if failures else "SMTP 未返回成功"
-                _record_shift_schedule_email_log(
-                    dept,
-                    report["week_start"],
-                    report["week_end"],
-                    trigger_label,
-                    len(emails),
-                    "error",
-                    msg_text,
-                )
-                details.append({"department": dept, "status": "error", "message": msg_text[:200]})
+                for report in reports:
+                    _record_shift_schedule_email_log(
+                        report["department"],
+                        report["week_start"],
+                        report["week_end"],
+                        trigger_label,
+                        len(all_recipients),
+                        "error",
+                        msg_text,
+                    )
+                    details.append({
+                        "department": report["department"],
+                        "status": "error",
+                        "message": msg_text[:200],
+                        "unit": unit,
+                    })
         except Exception as e:
-            errors += 1
-            logger.error("[ShiftScheduleEmail] %s 周排班邮件发送失败: %s", dept, e)
-            details.append({"department": dept, "status": "error", "message": str(e)[:200]})
+            errors += len(reports)
+            logger.error("[ShiftScheduleEmail] 合并发送失败 unit=%s: %s", unit, e)
+            for report in reports:
+                details.append({
+                    "department": report["department"],
+                    "status": "error",
+                    "message": str(e)[:200],
+                    "unit": unit,
+                })
 
     return {
         "success": errors == 0,
-        "message": f"周排班邮件发送完成：成功 {sent} 个科室，跳过 {skipped} 个科室，失败 {errors} 个科室",
+        "message": (
+            f"周排班邮件发送完成：成功 {sent} 个科室（{mail_sent} 封合并邮件），"
+            f"跳过 {skipped} 个科室，失败 {errors} 个科室"
+        ),
         "sent": sent,
         "skipped": skipped,
         "errors": errors,
+        "mailCount": mail_sent,
         "details": details,
     }
 
@@ -1414,19 +1585,18 @@ async def shift_schedule_email_background_loop():
             ]
             if not due_departments:
                 continue
-            for dept in due_departments:
-                run_key = f"{now.strftime('%Y-%m-%d')}|{dept}"
-                if run_key in last_triggered:
-                    continue
-                last_triggered.add(run_key)
-                if len(last_triggered) > 200:
-                    last_triggered = set(sorted(last_triggered)[-100:])
-                send_wd = _get_shift_email_send_weekday(dept)
-                label = weekday_labels[send_wd] if 0 <= send_wd <= 6 else "周"
-                await run_shift_schedule_email_once(
-                    f"{label}17:00自动发送",
-                    department_filter=dept,
-                )
+            run_key = f"{now.strftime('%Y-%m-%d')}|shift-email-batch"
+            if run_key in last_triggered:
+                continue
+            last_triggered.add(run_key)
+            if len(last_triggered) > 200:
+                last_triggered = set(sorted(last_triggered)[-100:])
+            send_wd = now.weekday()
+            label = weekday_labels[send_wd] if 0 <= send_wd <= 6 else "周"
+            await run_shift_schedule_email_once(
+                f"{label}17:00自动发送",
+                only_departments=due_departments,
+            )
         except Exception as e:
             logger.error("[ShiftScheduleEmail] 循环异常: %s", e)
             await asyncio.sleep(300)

@@ -53,3 +53,20 @@ export function isMinisterOrDeptLeader(jb) {
 export function isDirectorLevel(jb) {
   return jbMatch(jb, '主任') || jbMatch(jb, '副主任')
 }
+
+/** 领导加班统计：仅部长/副部长 */
+export function canAccessLeaderOvertimeStats(jb) {
+  return isMinisterLevel(jb)
+}
+
+/** 管理驾驶舱 / 考勤纪律审查：部长副部长、综合技术室主任副主任、admin1、admin2 */
+export function canAccessLeaderDashboard({ name, jb, lsys, admin1, admin2 }) {
+  const n = (name || '').trim()
+  const a1 = (admin1 || '').trim()
+  const a2 = (admin2 || '').trim()
+  if (a1 && n === a1) return true
+  if (a2 && n === a2) return true
+  if (isMinisterLevel(jb)) return true
+  if ((lsys || '').trim() === '综合技术室' && isDirectorLevel(jb)) return true
+  return false
+}

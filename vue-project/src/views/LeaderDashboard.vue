@@ -588,9 +588,8 @@ import {
   getLeaderFullAttendanceByMonth,
   getLeaderDeptComparison,
   getLeaderWorkIntensity,
-  getUploadConfig,
 } from '@/api/attendance'
-import { isMinisterLevel } from '@/utils/roleMatch'
+import { canAccessLeaderOvertimeStats, isMinisterLevel } from '@/utils/roleMatch'
 
 const router = useRouter()
 const PUBLIC_DASHBOARD_URL = 'http://10.42.60.230:8088/public-dashboard'
@@ -599,17 +598,10 @@ function openPublicDashboard() {
   window.open(PUBLIC_DASHBOARD_URL, '_blank', 'noopener,noreferrer')
 }
 
-const leaderOtAdmin1 = ref('')
-const leaderOtAdmin2 = ref('')
 const canAccessLeaderOvertimeEntry = computed(() => {
   try {
     const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
-    const name = (info.name || info.userName || '').trim()
-    const jb = (info.jb || '').trim()
-    const a1 = (leaderOtAdmin1.value || '').trim()
-    const a2 = (leaderOtAdmin2.value || '').trim()
-    if ((a1 && name === a1) || (a2 && name === a2)) return true
-    return isMinisterLevel(jb)
+    return canAccessLeaderOvertimeStats((info.jb || '').trim())
   } catch {
     return false
   }
@@ -1652,14 +1644,6 @@ async function toggleNetOvertime() {
 }
 
 onMounted(async () => {
-  try {
-    const cfg = await getUploadConfig()
-    leaderOtAdmin1.value = cfg?.admin1 || ''
-    leaderOtAdmin2.value = cfg?.admin2 || ''
-  } catch {
-    leaderOtAdmin1.value = ''
-    leaderOtAdmin2.value = ''
-  }
   await loadPermission()
   await nextTick()
   if (canViewDept.value && (permLevel.value === 3 ? true : !!lsys.value)) {

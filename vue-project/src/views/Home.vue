@@ -842,7 +842,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
 const route = useRoute()
 const router = useRouter()
 
@@ -1162,8 +1162,13 @@ function canShowFeature(permission) {
     case 'holidaySettings':
       return isAdmin1 || (!!d && name === d)
     case 'leaderDashboard':
-      return isAdmin1 || isMinisterLevel(jb) ||
-        (lsys === '综合技术室' && isDirectorLevel(jb))
+      return canAccessLeaderDashboard({
+        name,
+        jb,
+        lsys,
+        admin1: a1,
+        admin2: a2,
+      })
     case 'overtimePay':
       return true
     case 'exceptions':
@@ -1464,7 +1469,7 @@ const rawFeatureGroups = [
       {
         id: 'health-monitor',
         title: '系统管理员',
-        description: '系统配置、排班邮件开关与各组件状态一览',
+        description: '系统配置、排班邮件（功能/时间/收件人）与各组件状态一览',
         path: '/admin/health-monitor',
         permission: 'healthMonitor',
         tag: '系统',

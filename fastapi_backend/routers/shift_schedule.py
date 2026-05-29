@@ -217,18 +217,92 @@ def _is_shift_email_feature_enabled(department: str) -> bool:
     return dept in enabled
 
 
+def _get_shift_dept_leader_recipients(department: str) -> List[dict]:
+    """本科室主任/副主任/班组长且已配置企业邮箱（与周排班邮件发送对象一致）。"""
+    from routers.approvers import _jb_match
+
+    rows = db.execute_query(
+        "SELECT name, jb, enterprise_email FROM yggl "
+        "WHERE lsys = %s AND name IS NOT NULL AND TRIM(name) != '' "
+        "AND COALESCE(zaizhi,0) = 0",
+        (department,),
+    )
+    leaders = []
+    for r in rows or []:
+        jb = (r.get("jb") or "").strip()
+        if not (_jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长")):
+            continue
+        email = (r.get("enterprise_email") or "").strip()
+        if not email:
+            continue
+        leaders.append({
+            "name": (r.get("name") or "").strip(),
+            "email": email,
+            "jb": jb,
+        })
+    return leaders
+
+
 def _get_shift_email_feature_config_items() -> dict:
     departments = _get_shift_departments()
     enabled, configured = _load_shift_email_feature_config(departments)
+    _ensure_tables()
+    rows = db.execute_query(
+        "SELECT department, email_recipients, email_send_weekday FROM shift_config"
+    )
+    by_dept = {(r.get("department") or "").strip(): r for r in (rows or [])}
+    items = []
+    for dept in departments:
+        row = by_dept.get(dept) or {}
+        items.append({
+            "department": dept,
+            "enabled": dept in enabled,
+            "email_send_weekday": _normalize_email_send_weekday(row.get("email_send_weekday")),
+            "email_recipients": _parse_shift_email_recipients(row.get("email_recipients")),
+            "leader_recipients": _get_shift_dept_leader_recipients(dept),
+        })
     return {
         "departments": departments,
         "enabledDepartments": [dept for dept in departments if dept in enabled],
         "configured": configured,
-        "items": [{"department": dept, "enabled": dept in enabled} for dept in departments],
+        "items": items,
     }
 
 
-def _save_shift_email_feature_config(enabled_departments: List[str]) -> dict:
+def _upsert_shift_email_settings(
+    department: str,
+    email_send_weekday: int,
+    email_recipients,
+    updated_by: str,
+) -> None:
+    """仅更新科室排班邮件发送时间与收件人（系统管理员配置）。"""
+    _ensure_tables()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    recipients_json = json.dumps(_normalize_shift_email_recipients(email_recipients), ensure_ascii=False)
+    send_wd = _normalize_email_send_weekday(email_send_weekday)
+    existing = db.execute_query(
+        "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (department,)
+    )
+    if existing:
+        db.execute_update(
+            "UPDATE shift_config SET email_recipients=%s, email_send_weekday=%s, "
+            "updated_by=%s, updated_at=%s WHERE department=%s",
+            (recipients_json, send_wd, updated_by, now, department),
+        )
+    else:
+        db.execute_update(
+            "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, "
+            "email_recipients, email_send_weekday, updated_by, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (department, 2, 2, 2, 2, recipients_json, send_wd, updated_by, now),
+        )
+
+
+def _save_shift_email_feature_config(
+    enabled_departments: List[str],
+    department_email_settings: Optional[List] = None,
+    updated_by: str = "",
+) -> dict:
     departments = _get_shift_departments()
     valid = set(departments)
     normalized = []
@@ -244,6 +318,26 @@ def _save_shift_email_feature_config(enabled_departments: List[str]) -> dict:
         f"UPDATE webconfig SET {SHIFT_EMAIL_DEPARTMENTS_CONFIG_COLUMN} = %s WHERE id = %s",
         (json.dumps(normalized, ensure_ascii=False), "1"),
     )
+    if department_email_settings is not None:
+        by_dept = {}
+        for item in department_email_settings:
+            if isinstance(item, dict):
+                dept = (item.get("department") or "").strip()
+                send_wd = item.get("email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
+                recipients = item.get("email_recipients") or []
+            else:
+                dept = (getattr(item, "department", None) or "").strip()
+                send_wd = getattr(item, "email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
+                recipients = getattr(item, "email_recipients", None) or []
+            if not dept or dept not in valid:
+                continue
+            by_dept[dept] = (send_wd, recipients)
+        for dept in departments:
+            if dept in by_dept:
+                send_wd, recipients = by_dept[dept]
+            else:
+                send_wd, recipients = DEFAULT_EMAIL_SEND_WEEKDAY, []
+            _upsert_shift_email_settings(dept, send_wd, recipients, updated_by)
     return _get_shift_email_feature_config_items()
 
 
@@ -580,11 +674,23 @@ async def set_day_locks(req: SetDayLocksRequest):
 # ==================== 配置 ====================
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+SHIFT_EMAIL_RECIPIENT_UNITS = {
+    "水电分厂",
+    "汽发分厂",
+    "线圈分厂",
+    "冲剪分厂",
+    "冷作分厂",
+    "成品分厂",
+    "大电机研究所",
+    "金工分厂",
+    "其他",
+}
 
 
 class ShiftEmailRecipient(BaseModel):
     name: str = ""
     email: str = ""
+    unit: str = "其他"
 
 
 class ShiftConfigRequest(BaseModel):
@@ -604,19 +710,23 @@ def _normalize_shift_email_recipients(recipients) -> List[dict]:
     for item in recipients or []:
         raw_name = item.get("name", "") if isinstance(item, dict) else getattr(item, "name", "")
         raw_email = item.get("email", "") if isinstance(item, dict) else getattr(item, "email", "")
+        raw_unit = item.get("unit", "") if isinstance(item, dict) else getattr(item, "unit", "")
         name = (raw_name or "").strip()
         email = (raw_email or "").strip()
+        unit = (raw_unit or "").strip() or "其他"
         if not name and not email:
             continue
         if not name or not email:
             raise HTTPException(status_code=400, detail="排班表收件人姓名和邮箱均不能为空")
         if not EMAIL_RE.match(email):
             raise HTTPException(status_code=400, detail=f"排班表收件人邮箱格式不正确：{email}")
+        if unit not in SHIFT_EMAIL_RECIPIENT_UNITS:
+            unit = "其他"
         key = email.lower()
         if key in seen:
             continue
         seen.add(key)
-        normalized.append({"name": name, "email": email})
+        normalized.append({"name": name, "email": email, "unit": unit})
     return normalized
 
 
@@ -773,28 +883,27 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
 
 @router.post("/config")
 async def save_shift_config(req: ShiftConfigRequest):
-    """保存科室排班配置"""
+    """保存科室排班人数规则与排班表收件人；自动发送时间仍由系统管理员配置。"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     email_recipients = _normalize_shift_email_recipients(req.email_recipients)
     email_recipients_json = json.dumps(email_recipients, ensure_ascii=False)
-    email_send_weekday = _normalize_email_send_weekday(req.email_send_weekday)
     existing = db.execute_query(
         "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (req.department,)
     )
     if existing:
         db.execute_update(
             "UPDATE shift_config SET workday_day=%s, workday_night=%s, weekend_day=%s, weekend_night=%s, "
-            "email_recipients=%s, email_send_weekday=%s, updated_by=%s, updated_at=%s WHERE department=%s",
+            "email_recipients=%s, updated_by=%s, updated_at=%s WHERE department=%s",
             (req.workday_day, req.workday_night, req.weekend_day, req.weekend_night,
-             email_recipients_json, email_send_weekday, req.current_user, now, req.department),
+             email_recipients_json, req.current_user, now, req.department),
         )
     else:
         db.execute_update(
             "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, "
             "email_recipients, email_send_weekday, updated_by, updated_at) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)",
             (req.department, req.workday_day, req.workday_night, req.weekend_day, req.weekend_night,
-             email_recipients_json, email_send_weekday, req.current_user, now),
+             email_recipients_json, DEFAULT_EMAIL_SEND_WEEKDAY, req.current_user, now),
         )
     return {"success": True, "message": "配置已保存"}
 

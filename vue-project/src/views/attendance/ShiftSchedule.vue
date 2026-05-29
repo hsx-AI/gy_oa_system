@@ -207,14 +207,6 @@
           <label>周末夜班人数</label>
           <input type="number" v-model.number="config.weekend_night" min="0" max="50">
         </div>
-        <div v-if="shiftEmailFeatureEnabled" class="config-item config-item-email-send">
-          <label>邮件自动发送</label>
-          <select v-model.number="config.email_send_weekday" class="config-select">
-            <option v-for="opt in emailSendWeekdayOptions" :key="opt.value" :value="opt.value">
-              每周{{ opt.label }} 17:00
-            </option>
-          </select>
-        </div>
         <button type="button" class="btn btn-primary btn-sm" @click="handleSaveConfig">保存配置</button>
       </div>
       <div class="recipient-config">
@@ -230,6 +222,9 @@
               type="text"
               placeholder="收件人姓名"
             >
+            <select v-model="recipient.unit" class="recipient-unit">
+              <option v-for="u in recipientUnitOptions" :key="u" :value="u">{{ u }}</option>
+            </select>
             <input
               v-model.trim="recipient.email"
               class="recipient-email"
@@ -239,12 +234,12 @@
             <button type="button" class="btn btn-danger-outline btn-sm" @click="removeEmailRecipient(idx)">删除</button>
           </div>
         </div>
-        <div v-else class="recipient-empty">暂未配置收件人，保存后后续发送排班邮件将不会自动带出收件人。</div>
+        <div v-else class="recipient-empty">暂未配置收件人，保存后发送排班邮件时将使用此处名单。</div>
       </div>
       <p class="config-hint">
-        自动排班时，仅对「今天及之后」的日期写入；今天之前不覆盖。排班表收件人用于后续按科室发送日常排班邮件。
+        自动排班时，仅对「今天及之后」的日期写入；今天之前不覆盖。排班表收件人可在本科室保存，与系统管理员页面配置同步。
         <template v-if="shiftEmailFeatureEnabled">
-          {{ emailSendScheduleHint }}
+          {{ emailSendScheduleHint }} 自动发送时间由系统管理员在「系统管理员页面」配置。
         </template>
       </p>
     </div>
@@ -825,6 +820,20 @@ const config = reactive({
   email_feature_enabled: true,
 })
 
+const recipientUnitOptions = [
+  '水电分厂',
+  '汽发分厂',
+  '线圈分厂',
+  '冲剪分厂',
+  '冷作分厂',
+  '成品分厂',
+  '大电机研究所',
+  '金工分厂',
+  '其他',
+]
+
+const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
+
 const emailSendWeekdayOptions = [
   { value: 0, label: '周一' },
   { value: 1, label: '周二' },
@@ -846,10 +855,8 @@ const emailSendScheduleHint = computed(() => {
 
 const shiftEmailFeatureEnabled = computed(() => config.email_feature_enabled !== false)
 
-const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
-
 function addEmailRecipient() {
-  config.email_recipients.push({ name: '', email: '' })
+  config.email_recipients.push({ name: '', unit: '其他', email: '' })
 }
 
 function removeEmailRecipient(index) {
@@ -862,9 +869,14 @@ function normalizeEmailRecipients() {
   for (const item of config.email_recipients) {
     const name = (item?.name || '').trim()
     const email = (item?.email || '').trim()
+    const unit = (item?.unit || '').trim()
     if (!name && !email) continue
     if (!name || !email) {
       alert('请完整填写排班表收件人的姓名和邮箱地址')
+      return null
+    }
+    if (!unit || !recipientUnitOptions.includes(unit)) {
+      alert('请为收件人选择单位')
       return null
     }
     if (!EMAIL_PATTERN.test(email)) {
@@ -874,7 +886,7 @@ function normalizeEmailRecipients() {
     const key = email.toLowerCase()
     if (seen.has(key)) continue
     seen.add(key)
-    normalized.push({ name, email })
+    normalized.push({ name, unit, email })
   }
   return normalized
 }
@@ -882,8 +894,10 @@ function normalizeEmailRecipients() {
 function setEmailRecipients(recipients) {
   config.email_recipients.splice(0, config.email_recipients.length)
   for (const item of recipients || []) {
+    const unit = recipientUnitOptions.includes((item?.unit || '').trim()) ? (item?.unit || '').trim() : '其他'
     config.email_recipients.push({
       name: (item?.name || '').trim(),
+      unit,
       email: (item?.email || '').trim(),
     })
   }
@@ -1415,6 +1429,7 @@ async function loadSchedule() {
     config.weekend_day = 2
     config.weekend_night = 2
     config.email_feature_enabled = true
+    config.email_send_weekday = 4
     setEmailRecipients([])
     clearChangedDates()
     return
@@ -1933,7 +1948,6 @@ async function handleSaveConfig() {
       weekend_day: config.weekend_day,
       weekend_night: config.weekend_night,
       email_recipients: emailRecipients,
-      email_send_weekday: config.email_send_weekday,
       current_user: getCurrentUser(),
     })
     setEmailRecipients(emailRecipients)
@@ -2061,10 +2075,6 @@ watch(exportYear, () => {
 
 watch(selectedDept, (val) => {
   if (!val && exportDeptScope.value === 'current') exportDeptScope.value = 'all'
-})
-
-watch(() => config.email_send_weekday, () => {
-  loadNextWeekScheduleCompletion()
 })
 
 async function handleExportExcel() {
@@ -2338,8 +2348,16 @@ async function handleExportExcel() {
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
 }
-.recipient-name { width: 140px; }
-.recipient-email { width: 260px; max-width: min(260px, 100%); }
+.recipient-name { width: 120px; }
+.recipient-unit {
+  min-width: 120px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  background: var(--color-bg-container);
+}
+.recipient-email { width: 220px; max-width: min(220px, 100%); }
 .recipient-empty {
   font-size: 12px;
   color: var(--color-text-tertiary, #94a3b8);
