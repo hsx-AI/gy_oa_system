@@ -813,7 +813,8 @@ const loadSuggestions = async () => {
     if (response.success && response.suggestions) {
       const list = response.suggestions.map(item => {
         let type = 'info'
-        if ((item.suggestion || '').includes('缺勤') || (item.suggestion || '').includes('迟到')) type = 'warning'
+        const msg = item.suggestion || ''
+        if (msg.includes('缺勤') || msg.includes('迟到') || msg.includes('打卡数据异常')) type = 'warning'
         return {
           type,
           typeLabel: item.dayType || '',

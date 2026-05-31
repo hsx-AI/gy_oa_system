@@ -727,46 +727,46 @@
             </router-link>
           </div>
         </header>
-        <div class="wall-preview-body" ref="wallHostRef">
+        <div class="wall-preview-body">
           <div v-if="wallLoading" class="dashboard-empty"><p>加载中...</p></div>
-          <div v-else-if="!wallDisplayCards.length" class="dashboard-empty"><p>暂无吐槽</p></div>
-          <!-- 缩放包装：内容超出瓦片高度时整体等比缩放，避免出现滚动条 -->
+          <div v-else-if="!wallBarrageRows.length" class="dashboard-empty"><p>暂无吐槽</p></div>
           <div
             v-else
-            class="wall-scale-content"
-            ref="wallScaleRef"
-            :style="{ transform: `scale(${wallScale})` }"
+            class="wall-barrage-stage"
+            @click="router.push('/feedback')"
           >
-          <div class="wall-preview-grid">
             <div
-              v-for="card in wallDisplayCards"
-              :key="card.id"
-              class="wall-mini-card"
-              :class="{ 'is-truncated': isWallContentTruncated(card.content) }"
-              :style="{ background: card._bg, '--rot': card._rotate + 'deg' }"
-              @click="router.push('/feedback')"
+              v-for="row in wallBarrageRows"
+              :key="row.key"
+              class="wall-barrage-row"
+              :style="row.style"
             >
-              <span :class="['wall-mini-badge', `wmb-${card.resolved || 0}`]">
-                {{ wallResolveLabel(card.resolved) }}
-              </span>
-              <p class="wall-mini-body">{{ card.content }}</p>
-              <div v-if="card.replies?.length" class="wall-mini-reply">
-                {{ card.replies[card.replies.length - 1].replyBy }} 回复：{{ (card.replies[card.replies.length - 1].replyContent || '').slice(0, 12) }}{{ (card.replies[card.replies.length - 1].replyContent || '').length > 12 ? '…' : '' }}
-              </div>
-              <div class="wall-mini-foot">
-                <span class="wall-mini-avatar">匿</span>
-                <span class="wall-mini-dept">匿名</span>
-                <span
-                  class="wall-mini-like"
-                  :class="{ liked: wallLikedIds.has(card.id), animating: wallLikeAnimating.has(card.id) }"
-                  @click.stop="doWallLike(card.id)"
+              <div class="wall-barrage-track">
+                <button
+                  v-for="item in row.items"
+                  :key="`${row.key}-${item._seq}`"
+                  type="button"
+                  class="wall-barrage-item"
+                  :class="[`wall-barrage-item--${item.resolved || 0}`, { liked: wallLikedIds.has(item.id), animating: wallLikeAnimating.has(item.id) }]"
+                  :style="{ '--item-accent': item._accent }"
+                  :title="item._title"
+                  @click.stop="router.push('/feedback')"
                 >
-                  <span class="wall-like-icon">👍</span>
-                  <span class="wall-like-count">{{ card.likeCount || 0 }}</span>
-                </span>
+                  <span class="wall-barrage-status">{{ wallResolveLabel(item.resolved) }}</span>
+                  <span class="wall-barrage-text">{{ item._displayText }}</span>
+                  <span
+                    class="wall-barrage-like"
+                    title="点赞"
+                    @click.stop="doWallLike(item.id)"
+                  >
+                    <span class="wall-like-icon">👍</span>
+                    <span class="wall-like-count">{{ item.likeCount || 0 }}</span>
+                  </span>
+                </button>
               </div>
             </div>
-          </div>
+            <div class="wall-barrage-vignette wall-barrage-vignette--left"></div>
+            <div class="wall-barrage-vignette wall-barrage-vignette--right"></div>
           </div>
         </div>
       </article>
@@ -837,7 +837,7 @@ import {
 import { getMySealApplications } from '@/api/seal'
 import { getLeaderBriefing } from '@/api/admin'
 import { getContacts } from '@/api/contacts'
-import { getWallList, likeWall, wallImageUrl } from '@/api/feedback'
+import { getWallList, likeWall } from '@/api/feedback'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
@@ -886,41 +886,54 @@ let inboxTaskRefreshTimer = null
 // 吐槽墙首页预览
 const wallList = ref([])
 const wallLoading = ref(false)
-const WALL_CARD_BG = [
-  'linear-gradient(135deg,#e74c5e,#c62d42)', 'linear-gradient(135deg,#3a7bd5,#2b5ea7)',
-  'linear-gradient(135deg,#43a047,#2e7d32)', 'linear-gradient(135deg,#f4a62a,#e88d1a)',
-  'linear-gradient(135deg,#8e44ad,#6c3483)', 'linear-gradient(135deg,#00acc1,#00838f)',
+const WALL_BARRAGE_COLORS = [
+  '#38bdf8', '#fb7185', '#f59e0b', '#34d399', '#a78bfa', '#f97316', '#22c55e', '#60a5fa',
 ]
-const WALL_CARD_ROT = [-2, 1.5, -1, 2, -1.5, 1]
 
-const wallDisplayCards = computed(() => {
-  return (wallList.value || []).slice(0, 6).map((w, i) => ({
+const wallBarrageItems = computed(() => {
+  return (wallList.value || []).slice(0, 3).map((w, i) => ({
     ...w,
-    _bg: WALL_CARD_BG[i % WALL_CARD_BG.length],
-    _rotate: WALL_CARD_ROT[i % WALL_CARD_ROT.length],
+    _accent: WALL_BARRAGE_COLORS[i % WALL_BARRAGE_COLORS.length],
+    _displayText: buildWallBarrageText(w),
+    _title: buildWallBarrageTitle(w),
   }))
+})
+
+const wallBarrageRows = computed(() => {
+  const source = wallBarrageItems.value
+  if (!source.length) return []
+  return source.map((item, rowIndex) => {
+    return {
+      key: `row-${rowIndex}`,
+      items: [{ ...item, _seq: `${item.id}-0` }],
+      style: {
+        '--row-top': `${24 + rowIndex * 26}%`,
+        '--row-duration': `${22 + rowIndex * 3}s`,
+        '--row-delay': `${rowIndex * -5}s`,
+      },
+    }
+  })
 })
 
 function wallResolveLabel(v) {
   return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
 }
 
-/** 估算吐槽内容是否会触发 6 行折叠：3 列窄卡片，单行容纳 ≈ 12 个汉字 / 24 字符 */
-function isWallContentTruncated(text) {
-  const s = (text || '').toString()
-  if (!s) return false
-  const lineBreaks = (s.match(/\n/g) || []).length
-  if (lineBreaks >= 6) return true
-  // 长度：汉字按 2 计、英文按 1 计；阈值 = 6 行 × 每行约 16 等宽单位
-  let weight = 0
-  for (const ch of s) {
-    weight += /[\u4e00-\u9fa5\uff00-\uffef]/.test(ch) ? 2 : 1
+function buildWallBarrageText(item) {
+  let text = (item?.content || '').toString().replace(/\s+/g, ' ').trim()
+  if (text.length > 42) text = `${text.slice(0, 42)}...`
+  const latest = item?.replies?.length ? item.replies[item.replies.length - 1] : null
+  if (latest?.replyContent) {
+    const reply = latest.replyContent.toString().replace(/\s+/g, ' ').trim()
+    text += ` / 回复：${reply.length > 18 ? `${reply.slice(0, 18)}...` : reply}`
   }
-  return weight > 6 * 16
+  return text || '匿名吐槽'
 }
 
-function getWallImgSrc(filename) {
-  return wallImageUrl(filename)
+function buildWallBarrageTitle(item) {
+  const text = (item?.content || '').toString().replace(/\s+/g, ' ').trim()
+  const latest = item?.replies?.length ? item.replies[item.replies.length - 1] : null
+  return latest?.replyContent ? `${text}\n回复：${latest.replyContent}` : text
 }
 
 async function loadWallList() {
@@ -931,49 +944,6 @@ async function loadWallList() {
   } catch { /* ignore */ }
   wallLoading.value = false
 }
-
-// ===== 吐槽墙等比缩放：内容超出瓦片高度时整体 scale，避免出现滚动条 =====
-const wallHostRef = ref(null)
-const wallScaleRef = ref(null)
-const wallScale = ref(1)
-let wallResizeObserver = null
-
-function recalcWallScale() {
-  const host = wallHostRef.value
-  const content = wallScaleRef.value
-  if (!host || !content) {
-    wallScale.value = 1
-    return
-  }
-  // 用 transform=none 时的自然尺寸度量
-  const prev = content.style.transform
-  content.style.transform = 'none'
-  const contentH = content.scrollHeight
-  const hostH = host.clientHeight
-  content.style.transform = prev
-  if (contentH <= 0 || hostH <= 0) {
-    wallScale.value = 1
-    return
-  }
-  // 仅在内容超出时缩小，不放大
-  const next = Math.min(1, hostH / contentH)
-  // 限制最低缩放，避免文字过小看不清
-  wallScale.value = Math.max(0.45, +next.toFixed(3))
-}
-
-function setupWallResizeObserver() {
-  if (typeof ResizeObserver === 'undefined') return
-  if (wallResizeObserver) wallResizeObserver.disconnect()
-  wallResizeObserver = new ResizeObserver(() => recalcWallScale())
-  if (wallHostRef.value) wallResizeObserver.observe(wallHostRef.value)
-  if (wallScaleRef.value) wallResizeObserver.observe(wallScaleRef.value)
-}
-
-watch([wallDisplayCards, wallHostRef, wallScaleRef], async () => {
-  await nextTick()
-  setupWallResizeObserver()
-  recalcWallScale()
-})
 
 const wallLikedIds = ref(new Set())
 const wallLikeAnimating = ref(new Set())
@@ -2260,10 +2230,6 @@ onBeforeUnmount(() => {
   if (_countdownTimer) {
     clearInterval(_countdownTimer)
     _countdownTimer = null
-  }
-  if (wallResizeObserver) {
-    wallResizeObserver.disconnect()
-    wallResizeObserver = null
   }
   if (contactsHomeSearchTimer) {
     clearTimeout(contactsHomeSearchTimer)
@@ -3973,178 +3939,139 @@ async function navigateTo(feature) {
   flex: 1;
   min-height: 0;
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
-  /* 不滚动，由 .wall-scale-content 等比缩放适配 */
   overflow: hidden;
   position: relative;
 }
 
-/* 等比缩放容器：transform-origin 顶部居中，避免 scale<1 时整体偏移 */
-.wall-scale-content {
-  width: 100%;
-  transform-origin: top center;
-  transition: transform .2s ease;
-}
-
-/* 多列 column masonry：每张卡片宽度均匀、高度由内容决定，整体错落自然 */
-.wall-preview-grid {
-  display: block;
-  /* 固定 3 列，列间距小一些以适配吐槽墙瓦片宽度 */
-  column-count: 3;
-  column-gap: 8px;
-}
-
-.wall-mini-card {
+.wall-barrage-stage {
   position: relative;
-  display: inline-block;
-  width: 100%;
-  margin-bottom: 8px;
-  padding: 10px 10px 8px;
-  border-radius: 10px;
-  color: #fff;
+  height: 100%;
+  min-height: 190px;
+  border-radius: 8px;
+  overflow: hidden;
   cursor: pointer;
-  transform: rotate(var(--rot, 0deg));
-  transition: transform .2s, box-shadow .2s;
-  break-inside: avoid;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.12);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.82), rgba(248,250,252,.92)),
+    radial-gradient(circle at 16% 18%, rgba(56,189,248,.12), transparent 34%),
+    radial-gradient(circle at 88% 82%, rgba(251,113,133,.10), transparent 36%),
+    #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(148,163,184,.18);
 }
 
-.wall-mini-card:hover {
-  transform: rotate(0deg) scale(1.02);
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  z-index: 1;
-}
-
-.wall-mini-badge {
+.wall-barrage-stage::before {
+  content: '';
   position: absolute;
-  top: 8px;
-  right: 8px;
-  padding: 1px 8px;
-  border-radius: 999px;
-  font-size: 11px;
-  font-weight: 600;
-  background: rgba(255, 255, 255, 0.28);
-  color: #fff;
-}
-
-.wmb-1 { background: rgba(251, 191, 36, 0.5); }
-.wmb-2 { background: rgba(96, 165, 250, 0.5); }
-.wmb-3 { background: rgba(74, 222, 128, 0.5); }
-
-.wall-mini-body {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.45;
-  word-break: break-word;
-  white-space: pre-wrap;
-  /* 顶部留出徽章空间，避免文字与「未处理/已解决」徽章重叠 */
-  padding-top: 14px;
-  /* 默认折叠到 6 行，超出显示省略号；点击卡片跳转吐槽墙详情查看完整内容 */
-  display: -webkit-box;
-  -webkit-line-clamp: 6;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-  position: relative;
-}
-
-/* 折叠提示：右下角"更多…"标签，提示完整内容请进吐槽墙查看 */
-.wall-mini-card.is-truncated .wall-mini-body::after {
-  content: '更多…';
-  position: absolute;
-  right: 0;
-  bottom: 0;
-  padding: 0 6px 0 18px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #fff;
-  background: linear-gradient(90deg, rgba(0,0,0,0) 0%, rgba(0,0,0,0.22) 40%, rgba(0,0,0,0.22) 100%);
-  border-radius: 4px;
+  inset: 0;
+  background-image:
+    linear-gradient(rgba(148,163,184,.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(148,163,184,.07) 1px, transparent 1px);
+  background-size: 24px 24px;
+  opacity: .5;
   pointer-events: none;
 }
 
-.wall-mini-reply {
-  margin-top: 6px;
-  padding: 4px 8px;
-  background: rgba(255, 255, 255, 0.2);
-  border-radius: 6px;
-  font-size: 11px;
-  line-height: 1.4;
-  overflow: hidden;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.wall-barrage-stage:hover .wall-barrage-track {
+  animation-play-state: paused;
 }
 
-.wall-mini-foot {
+.wall-barrage-row {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: var(--row-top);
+  height: 48px;
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.wall-barrage-track {
   display: flex;
   align-items: center;
-  gap: 6px;
-  margin-top: 8px;
-  font-size: 12px;
-  opacity: 0.85;
+  justify-content: flex-end;
+  gap: 18px;
+  width: 100%;
+  animation: wall-barrage-move var(--row-duration) linear infinite;
+  animation-delay: var(--row-delay);
+  will-change: transform;
 }
 
-.wall-mini-avatar {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  background: rgba(255, 255, 255, 0.3);
+.wall-barrage-item {
+  min-height: 36px;
+  max-height: 48px;
+  max-width: min(520px, 78vw);
+  border: 1px solid rgba(148,163,184,.24);
+  border-left: 3px solid var(--item-accent);
+  border-radius: 18px;
+  padding: 5px 8px 5px 10px;
+  background: rgba(255,255,255,.86);
+  color: #334155;
+  box-shadow: 0 6px 16px rgba(15,23,42,.08);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  font-size: 10px;
-  font-weight: 700;
-  flex-shrink: 0;
-}
-
-.wall-mini-dept {
-  flex: 1;
-  min-width: 0;
-}
-
-.wall-mini-like {
-  position: relative;
+  gap: 8px;
+  pointer-events: auto;
   cursor: pointer;
-  white-space: nowrap;
-  transition: transform .15s;
+  backdrop-filter: blur(8px);
+  transition: transform .16s ease, background .16s ease, border-color .16s ease;
+}
+
+.wall-barrage-item:hover {
+  transform: translateY(-1px) scale(1.02);
+  background: #fff;
+  border-color: rgba(100,116,139,.3);
+}
+
+.wall-barrage-status {
+  flex: 0 0 auto;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  font-weight: 700;
+  color: #2563eb;
+  background: #dbeafe;
+}
+
+.wall-barrage-text {
+  min-width: 0;
+  max-width: 390px;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.35;
+  white-space: normal;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+}
+
+.wall-barrage-like {
+  position: relative;
+  flex: 0 0 auto;
   display: inline-flex;
   align-items: center;
   gap: 3px;
   padding: 2px 6px;
   border-radius: 999px;
-  user-select: none;
+  color: #64748b;
+  background: rgba(148,163,184,.12);
+  transition: transform .15s ease, background .15s ease;
 }
 
-.wall-mini-like:hover {
-  transform: scale(1.15);
-  background: rgba(255, 255, 255, 0.25);
+.wall-barrage-like:hover {
+  transform: scale(1.12);
+  background: rgba(148,163,184,.2);
 }
 
-.wall-mini-like.liked {
-  background: rgba(255, 255, 255, 0.35);
-  font-weight: 700;
+.wall-barrage-item.liked .wall-barrage-like {
+  color: #92400e;
+  background: rgba(251, 191, 36, .22);
 }
 
-.wall-mini-like.liked .wall-like-count {
-  color: #fff;
-}
-
-.wall-like-icon {
-  display: inline-block;
-  transition: transform .3s cubic-bezier(.34, 1.56, .64, 1);
-}
-
-.wall-mini-like.animating .wall-like-icon {
+.wall-barrage-item.animating .wall-like-icon {
   animation: wall-like-pop .5s cubic-bezier(.34, 1.56, .64, 1);
 }
 
-@keyframes wall-like-pop {
-  0%   { transform: scale(1); }
-  25%  { transform: scale(1.5) rotate(-15deg); }
-  50%  { transform: scale(0.9) rotate(5deg); }
-  75%  { transform: scale(1.2); }
-  100% { transform: scale(1); }
-}
-
-.wall-mini-like.animating.liked::after {
+.wall-barrage-item.animating.liked .wall-barrage-like::after {
   content: '';
   position: absolute;
   top: -4px;
@@ -4155,6 +4082,43 @@ async function navigateTo(feature) {
   border-radius: 50%;
   animation: wall-like-burst .5s ease-out forwards;
   pointer-events: none;
+}
+
+.wall-barrage-vignette {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 58px;
+  z-index: 2;
+  pointer-events: none;
+}
+
+.wall-barrage-vignette--left {
+  left: 0;
+  background: linear-gradient(90deg, #f8fafc, rgba(248,250,252,0));
+}
+
+.wall-barrage-vignette--right {
+  right: 0;
+  background: linear-gradient(270deg, #f8fafc, rgba(248,250,252,0));
+}
+
+@keyframes wall-barrage-move {
+  from { transform: translateX(100%); }
+  to { transform: translateX(-100%); }
+}
+
+.wall-like-icon {
+  display: inline-block;
+  transition: transform .3s cubic-bezier(.34, 1.56, .64, 1);
+}
+
+@keyframes wall-like-pop {
+  0%   { transform: scale(1); }
+  25%  { transform: scale(1.5) rotate(-15deg); }
+  50%  { transform: scale(0.9) rotate(5deg); }
+  75%  { transform: scale(1.2); }
+  100% { transform: scale(1); }
 }
 
 @keyframes wall-like-burst {
