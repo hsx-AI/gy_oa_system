@@ -1,4 +1,4 @@
-/** 加班换休票：平时加班 1h=0.25张(步长0.25)；值班 1h=0.125张(步长0.125) */
+/** 加班换休票：平时加班 1h=0.25张(步长0.25)；值班 0.5h=0.125张(步长0.125) */
 
 export function overtimeWorkMinutesBetween(st, et) {
   if (!st || !et) return 0
@@ -27,7 +27,7 @@ export function calcOvertimeExchangeTicketsFromHours(hours, level = '平时加�
   if (!hours || hours <= 0) return 0
   const isDuty = String(level || '').trim() === '值班'
   const step = isDuty ? 0.125 : 0.25
-  const perHour = isDuty ? 0.125 : 0.25
+  const perHour = 0.25
   const raw = hours * perHour
   return Math.floor(raw / step + 1e-9) * step
 }
@@ -39,7 +39,7 @@ export function calcOvertimeExchangeTicketsFromTimes(startTime, endTime, level =
 
 export function overtimeExchangeTicketHint(level = '平时加班') {
   if (String(level || '').trim() === '值班') {
-    return '值班：1小时=0.125张，以0.125为单位，不足0.125张舍弃'
+    return '值班：半小时=0.125张，以0.125为单位，不足0.125张舍弃'
   }
   return '1天=8小时=2张，以0.25为单位，不足0.25张舍弃'
 }
