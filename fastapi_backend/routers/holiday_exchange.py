@@ -383,7 +383,8 @@ def _add_exchange_tickets(name: str, tickets: float, ly: str = "公出节假日�
     if not name or tickets <= 0:
         return
     try:
-        tickets = round(float(tickets), 2)
+        from utils.hxp_helper import normalize_hxp_amount
+        tickets = normalize_hxp_amount(tickets)
         if tickets <= 0:
             return
         sj_val = (sj or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")

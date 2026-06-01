@@ -25,6 +25,7 @@ import {
   getKqycDakamanPending,
   confirmKqycByDakaman,
 } from '@/api/attendanceException'
+import { formatHxpAmount } from '@/utils/formatHxp'
 
 function readUserName() {
   try {
@@ -131,7 +132,7 @@ const displayTodoList = computed(() => {
     list.push({
       uniqueId: `hxp-${hxp.id}`,
       type: '换休票入账',
-      description: `您获得 ${hxp.sl} 张换休票（来源：${hxp.ly}）`,
+      description: `您获得 ${formatHxpAmount(hxp.sl)} 张换休票（来源：${hxp.ly}）`,
       applicant: '本人',
       time: formatRelativeTime(hxp.sj),
       isHxpNotice: true,

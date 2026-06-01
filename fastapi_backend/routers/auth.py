@@ -264,7 +264,7 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
             if exp:
                 expire_groups[exp] = expire_groups.get(exp, 0.0) + sl
         details = [
-            {"expireDate": k, "count": round(v, 2)}
+            {"expireDate": k, "count": round(v, 3)}
             for k, v in sorted(expire_groups.items(), key=lambda x: parse_expire_for_sort(x[0]))
         ]
         # 换休票预扣减：正在审核中的换休/员工换休票请假所消耗的张数，从「可用」中扣除，避免多单同时审核导致扣成负数
@@ -350,9 +350,9 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
                 "idNumber": (r.get("sfzh") or "").strip(),
                 "mobile": mobile,
                 "entryDate": entry_date,
-                "exchangeTickets": round(hxp_available, 2),
-                "exchangeTicketsTotal": round(total, 2),
-                "exchangeTicketsPending": round(hxp_pending, 2),
+                "exchangeTickets": round(hxp_available, 3),
+                "exchangeTicketsTotal": round(total, 3),
+                "exchangeTicketsPending": round(hxp_pending, 3),
                 "exchangeTicketDetails": details,
                 "paidLeaveRemaining": paid_leave_remaining,
                 "paidLeaveDetail": paid_leave_detail,

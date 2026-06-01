@@ -16,7 +16,10 @@ import math
 import uuid
 from routers.approvers import _get_user_info, _jb_match
 from routers.db_manager import _get_admin1
-from routers.leave_overtime import _calc_hours, round_overtime_hours_down
+from routers.leave_overtime import (
+    _raw_overtime_hours_from_row,
+    _recalc_overtime_hours_from_row,
+)
 from routers.suggestions import collect_valid_times_with_marks, build_intervals_from_marks
 from utils.helpers import format_datetime_plain
 import logging
@@ -27,45 +30,17 @@ router = APIRouter(prefix="/approval", tags=["审批"])
 
 
 def _recalc_overtime_hours(row: dict) -> float:
-    """从 timefrom/timeto 重新计算加班时长，避免依赖可能由旧算法写入的 tian1/jbf。"""
-    tf = row.get("timefrom")
-    tt = row.get("timeto")
-    date_val = row.get("timedate")
-    if not tf or not tt:
-        raw = row.get("tian1")
-        if raw is None or raw == "" or raw == 0:
-            raw = row.get("jbf") or 0
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return 0.0
-    try:
-        if isinstance(tf, datetime):
-            tf_str = tf.strftime("%H:%M:%S")
-            date_str = tf.strftime("%Y-%m-%d")
-        else:
-            tf_str = str(tf).strip()
-            if " " in tf_str:
-                date_str, tf_str = tf_str.split(" ", 1)
-            else:
-                date_str = str(date_val or "")[:10]
-        if isinstance(tt, datetime):
-            tt_str = tt.strftime("%H:%M:%S")
-        else:
-            tt_str = str(tt).strip()
-            if " " in tt_str:
-                tt_str = tt_str.split(" ", 1)[1]
-        hours = _calc_hours(tf_str, tt_str, date_str)
-        return round_overtime_hours_down(hours)
-    except Exception as e:
-        logger.debug("重算加班时长失败: %s", e)
-        raw = row.get("tian1")
-        if raw is None or raw == "" or raw == 0:
-            raw = row.get("jbf") or 0
-        try:
-            return float(raw)
-        except (TypeError, ValueError):
-            return 0.0
+    """从 timefrom/timeto 重新计算加班时长（0.5h 向下取整），用于 tian1/jbf。"""
+    return _recalc_overtime_hours_from_row(row)
+
+
+def _overtime_exchange_tickets_from_row(row: dict) -> float:
+    """按起止时间与加班类型计算换休票张数，与前端 overtimeExchangeTickets.js 一致。"""
+    from utils.overtime_exchange import calc_overtime_exchange_tickets
+
+    hours = _raw_overtime_hours_from_row(row)
+    jb = (row.get("jb") or "").strip()
+    return calc_overtime_exchange_tickets(hours, jb)
 
 
 def _get_dakaman() -> Optional[str]:
@@ -195,7 +170,8 @@ def _add_exchange_tickets(name: str, tickets: float, ly: str = "", sj: str = "")
     if not name or tickets <= 0:
         return
     try:
-        tickets = round(float(tickets), 2)
+        from utils.hxp_helper import normalize_hxp_amount
+        tickets = normalize_hxp_amount(tickets)
         if tickets <= 0:
             return
         sj_val = (sj or "").strip() or datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -236,7 +212,7 @@ def _deduct_exchange_tickets(name: str, consume: float):
                 continue  # 已过期，不参与扣减
             rows_with_exp.append((r, parse_expire_for_sort(exp) if exp else (9999, 12)))
         rows_with_exp.sort(key=lambda x: x[1])
-        remain = round(float(consume), 2)
+        remain = round(float(consume), 3)
         for row, _ in rows_with_exp:
             if remain <= 0:
                 break
@@ -249,7 +225,7 @@ def _deduct_exchange_tickets(name: str, consume: float):
                 continue
             if remain >= sl:
                 db.execute_update("DELETE FROM hxp WHERE id = %s", (rid,))
-                remain = round(remain - sl, 2)
+                remain = round(remain - sl, 3)
             else:
                 db.execute_update("UPDATE hxp SET sl = sl - %s WHERE id = %s",
                                   (round(remain, 2), rid))
@@ -545,7 +521,7 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
     """加班单条审批。item_id 为 jiaban 表 id（UUID 字符串）。"""
     item_id = str(item_id).strip()
     rows = db.execute_query(
-        "SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate FROM jiaban WHERE id = %s",
+        "SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id = %s",
         (item_id,)
     )
     if not rows:
@@ -610,10 +586,7 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
         xm = (row.get("xm") or "").strip()
 
         if need_exchange and hours > 0 and xm:
-            from utils.overtime_exchange import calc_overtime_exchange_tickets
-
-            jb = (row.get("jb") or "").strip()
-            tickets = calc_overtime_exchange_tickets(hours, jb)
+            tickets = _overtime_exchange_tickets_from_row(row)
             overtime_sj = str(row.get("timedate") or "")[:10]
             if tickets > 0:
                 _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
@@ -650,7 +623,7 @@ async def overtime_batch_approve(req: BatchApproveRequest):
 
     ph = ",".join(["%s"] * len(ids))
     rows = db.execute_query(
-        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate FROM jiaban WHERE id IN ({ph})",
+        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
@@ -719,10 +692,7 @@ async def overtime_batch_approve(req: BatchApproveRequest):
             pass
 
         if need_exchange and hours > 0 and xm:
-            from utils.overtime_exchange import calc_overtime_exchange_tickets
-
-            jb = (r.get("jb") or "").strip()
-            tickets = calc_overtime_exchange_tickets(hours, jb)
+            tickets = _overtime_exchange_tickets_from_row(r)
             overtime_sj = str(r.get("timedate") or "")[:10]
             if tickets > 0:
                 try:
@@ -1237,7 +1207,22 @@ def _ensure_hxp_read_column():
     except Exception as e:
         logger.warning(f"检查/添加 hxp.is_read 列失败: {e}")
 
+
+def _ensure_hxp_sl_precision():
+    """换休票 sl 需支持 0.125 步长，decimal(10,2) 会把 1.875 四舍五入成 1.88。"""
+    try:
+        cols = db.execute_query("SHOW COLUMNS FROM hxp LIKE 'sl'")
+        if cols:
+            col_type = (cols[0].get("Type") or "").lower()
+            if "decimal(10,2)" in col_type.replace(" ", ""):
+                db.execute_update("ALTER TABLE hxp MODIFY COLUMN sl DECIMAL(10,3) NOT NULL DEFAULT 0.000")
+                logger.info("hxp.sl 已升级为 DECIMAL(10,3)")
+    except Exception as e:
+        logger.warning(f"检查/升级 hxp.sl 精度失败: {e}")
+
+
 _ensure_hxp_read_column()
+_ensure_hxp_sl_precision()
 
 
 @router.get("/hxp/unread")

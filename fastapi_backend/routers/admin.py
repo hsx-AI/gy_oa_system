@@ -687,7 +687,7 @@ async def hxp_detail(
         expired = bool(exp and exp < today_str)
         items.append({
             "id": r.get("id") or "",
-            "sl": round(sl, 2),
+            "sl": round(sl, 3),
             "sj": sj_str,
             "ly": (r.get("ly") or "").strip() or "-",
             "expire": exp,

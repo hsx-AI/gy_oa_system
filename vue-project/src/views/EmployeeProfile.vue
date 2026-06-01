@@ -111,6 +111,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getEmployeeProfile, changePassword } from '@/api/attendance'
+import { formatHxpAmount } from '@/utils/formatHxp'
 
 const profile = ref(null)
 const loading = ref(true)
@@ -173,9 +174,8 @@ const handleChangePassword = async () => {
 }
 
 function formatTicketCount(n) {
-  if (n == null || n === '') return ''
-  const v = Number(n)
-  return Number.isInteger(v) ? String(v) : String(v)  // 支持 0.5 张，不进位
+  const text = formatHxpAmount(n)
+  return text === '—' ? '' : text
 }
 
 function formatExpireDate(s) {

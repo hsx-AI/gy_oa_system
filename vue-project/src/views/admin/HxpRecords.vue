@@ -98,7 +98,7 @@
                   </td>
                   <td class="cell-rest-summary" :title="r.restDaySummary">{{ r.restDaySummary || '—' }}</td>
                   <td class="td-num">{{ r.days != null ? r.days : '—' }}</td>
-                  <td class="td-num td-hxp">{{ formatHxp(r.hxpCount) }}</td>
+                  <td class="td-num td-hxp">{{ formatHxpAmount(r.hxpCount) }}</td>
                   <td class="td-materials">
                     <template v-if="r.materialFiles && r.materialFiles.length">
                       <a
@@ -149,7 +149,7 @@
           </template>
           <p v-if="detailRecord.restDaySummary"><strong>说明：</strong>{{ detailRecord.restDaySummary }}</p>
           <p v-if="detailRecord.days != null"><strong>天数：</strong>{{ detailRecord.days }} 天</p>
-          <p><strong>换休票数量：</strong>{{ formatHxp(detailRecord.hxpCount) }} 张</p>
+          <p><strong>换休票数量：</strong>{{ formatHxpAmount(detailRecord.hxpCount) }} 张</p>
           <p><strong>状态：</strong>{{ detailRecord.status }}</p>
           <p><strong>一级审批人：</strong>{{ detailRecord.approver1 || '—' }}</p>
           <p><strong>二级审批人：</strong>{{ detailRecord.approver2 || '—' }}</p>
@@ -173,6 +173,7 @@ import { ref, computed, onMounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { getHolidayExchangeSummary, getDeptLsysList, getUploadConfig } from '@/api/attendance'
 import { isMinisterLevel } from '@/utils/roleMatch'
+import { formatHxpAmount } from '@/utils/formatHxp'
 
 const route = useRoute()
 const now = new Date()
@@ -238,12 +239,6 @@ function sourceTagClass(source) {
   if (source.includes('公出')) return 'source-trip'
   if (source.includes('值班')) return 'source-duty'
   return 'source-reward'
-}
-
-function formatHxp(v) {
-  if (v == null) return '—'
-  const f = parseFloat(v)
-  return f === Math.floor(f) ? f : parseFloat(f.toFixed(4))
 }
 
 function formatApproverText(record) {

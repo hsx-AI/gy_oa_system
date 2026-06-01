@@ -31,3 +31,11 @@ def parse_expire_for_sort(exp_str: str) -> tuple:
         return (int(parts[0]), int(parts[1]) if len(parts) > 1 else 12)
     except (ValueError, IndexError):
         return (9999, 12)
+
+
+def normalize_hxp_amount(value) -> float:
+    """换休票张数标准化：最小步长 0.125，保留 3 位小数（避免 round(..., 2) 把 1.875 变成 1.88）。"""
+    try:
+        return round(float(value or 0), 3)
+    except (TypeError, ValueError):
+        return 0.0

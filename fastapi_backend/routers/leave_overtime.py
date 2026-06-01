@@ -633,6 +633,46 @@ class OvertimeRegisterRequest(BaseModel):
     approver: str  # 审批人 spr
 
 
+def _raw_overtime_hours_from_row(row: dict) -> float:
+    """从 timefrom/timeto 计算原始加班时长（不取整），与前端换休票预览一致。"""
+    tf = row.get("timefrom")
+    tt = row.get("timeto")
+    date_val = row.get("timedate")
+    if not tf or not tt:
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+    try:
+        if isinstance(tf, datetime):
+            tf_str = tf.strftime("%H:%M:%S")
+            date_str = tf.strftime("%Y-%m-%d")
+        else:
+            tf_str = str(tf).strip()
+            if " " in tf_str:
+                date_str, tf_str = tf_str.split(" ", 1)
+            else:
+                date_str = str(date_val or "")[:10]
+        if isinstance(tt, datetime):
+            tt_str = tt.strftime("%H:%M:%S")
+        else:
+            tt_str = str(tt).strip()
+            if " " in tt_str:
+                tt_str = tt_str.split(" ", 1)[1]
+        return _calc_hours(tf_str, tt_str, date_str)
+    except Exception:
+        raw = row.get("tian1")
+        if raw is None or raw == "" or raw == 0:
+            raw = row.get("jbf") or 0
+        try:
+            return float(raw)
+        except (TypeError, ValueError):
+            return 0.0
+
+
 def _recalc_overtime_hours_from_row(row: dict) -> float:
     """从 timefrom/timeto 重新计算加班时长，避免依赖旧算法写入的 tian1/jbf。"""
     tf = row.get("timefrom")
