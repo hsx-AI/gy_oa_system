@@ -4,6 +4,10 @@
 包含：系统配置、数据库、大模型、人事档案系统、思想汇报系统、打卡数据自动获取服务等。
 """
 import logging
+import asyncio
+import os
+import platform
+import shutil
 from typing import Optional, Any, List
 
 from fastapi import APIRouter, HTTPException, Query
@@ -174,6 +178,129 @@ async def _check_scheduler() -> dict:
     return {"status": "ok", "message": f"已配置，每日 {time_str}（{tz}）执行"}
 
 
+def _format_bytes(size: Any) -> str:
+    if size is None:
+        return "未知"
+    value = float(size)
+    for unit in ("B", "KB", "MB", "GB", "TB"):
+        if value < 1024 or unit == "TB":
+            return f"{value:.1f}{unit}" if unit != "B" else f"{int(value)}B"
+        value /= 1024
+    return f"{value:.1f}TB"
+
+
+def _read_proc_cpu_times() -> Optional[tuple[int, int]]:
+    try:
+        with open("/proc/stat", "r", encoding="utf-8") as f:
+            parts = f.readline().split()
+        if not parts or parts[0] != "cpu":
+            return None
+        values = [int(v) for v in parts[1:]]
+        idle = values[3] + (values[4] if len(values) > 4 else 0)
+        total = sum(values)
+        return idle, total
+    except Exception:
+        return None
+
+
+async def _get_cpu_percent() -> Optional[float]:
+    first = _read_proc_cpu_times()
+    if not first:
+        return None
+    await asyncio.sleep(0.1)
+    second = _read_proc_cpu_times()
+    if not second:
+        return None
+    idle_delta = second[0] - first[0]
+    total_delta = second[1] - first[1]
+    if total_delta <= 0:
+        return None
+    return round(max(0.0, min(100.0, (1 - idle_delta / total_delta) * 100)), 1)
+
+
+def _get_memory_usage() -> Optional[dict[str, float]]:
+    try:
+        data: dict[str, int] = {}
+        with open("/proc/meminfo", "r", encoding="utf-8") as f:
+            for line in f:
+                key, value = line.split(":", 1)
+                data[key] = int(value.strip().split()[0]) * 1024
+        total = data.get("MemTotal")
+        available = data.get("MemAvailable")
+        if not total or available is None:
+            return None
+        used = total - available
+        return {
+            "total": float(total),
+            "used": float(used),
+            "percent": round(used / total * 100, 1),
+        }
+    except Exception:
+        return None
+
+
+def _get_uptime_text() -> str:
+    try:
+        with open("/proc/uptime", "r", encoding="utf-8") as f:
+            seconds = int(float(f.readline().split()[0]))
+        days, rem = divmod(seconds, 86400)
+        hours, rem = divmod(rem, 3600)
+        minutes, _ = divmod(rem, 60)
+        if days:
+            return f"{days}天{hours}小时"
+        if hours:
+            return f"{hours}小时{minutes}分钟"
+        return f"{minutes}分钟"
+    except Exception:
+        return "未知"
+
+
+async def _check_server_resources() -> dict:
+    """采集运行后端的 Ubuntu/Linux 服务器资源。"""
+    system_name = platform.system()
+    if system_name != "Linux":
+        return {"status": "unconfigured", "message": f"当前后端运行环境为 {system_name}，仅在 Ubuntu/Linux 服务器上采集资源"}
+
+    cpu_percent = await _get_cpu_percent()
+    memory = _get_memory_usage()
+    disk = shutil.disk_usage("/")
+    disk_percent = round(disk.used / disk.total * 100, 1) if disk.total else 0.0
+    cpu_count = os.cpu_count() or 1
+
+    try:
+        load1, load5, load15 = os.getloadavg()
+        load_text = f"{load1:.2f}/{load5:.2f}/{load15:.2f}"
+    except OSError:
+        load1 = load5 = load15 = 0.0
+        load_text = "未知"
+
+    high_items = []
+    if cpu_percent is not None and cpu_percent >= 90:
+        high_items.append(f"CPU {cpu_percent}%")
+    if memory and memory["percent"] >= 90:
+        high_items.append(f"内存 {memory['percent']}%")
+    if disk_percent >= 90:
+        high_items.append(f"磁盘 {disk_percent}%")
+    if load5 >= cpu_count * 2:
+        high_items.append(f"5分钟负载 {load5:.2f}")
+
+    cpu_text = f"{cpu_percent}%" if cpu_percent is not None else "未知"
+    memory_text = (
+        f"{memory['percent']}%（{_format_bytes(memory['used'])}/{_format_bytes(memory['total'])}）"
+        if memory else "未知"
+    )
+    disk_text = f"{disk_percent}%（{_format_bytes(disk.used)}/{_format_bytes(disk.total)}）"
+    release_text = platform.platform()
+    message = (
+        f"CPU：{cpu_text}；内存：{memory_text}；根分区：{disk_text}；"
+        f"负载(1/5/15)：{load_text}；运行：{_get_uptime_text()}；系统：{release_text}"
+    )
+
+    if high_items:
+        return {"status": "error", "message": "资源占用偏高：" + "、".join(high_items) + "。" + message}
+    return {"status": "ok", "message": message}
+
+
 @router.get("/overview")
 async def get_health_overview(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
@@ -193,6 +320,7 @@ async def get_health_overview(
         ("sixianghuibao", "思想汇报管理系统", _check_sixianghuibao),
         ("attendance_fetch", "打卡数据自动获取服务", _check_attendance_fetch_service),
         ("scheduler", "定时拉取打卡报表任务配置", _check_scheduler),
+        ("server_resources", "Ubuntu 服务器资源", _check_server_resources),
     ]
     for id_, name, coro in checks:
         try:

@@ -7,14 +7,11 @@ import threading
 from config import settings
 from typing import Optional, List, Dict, Any
 import logging
+import time
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
-
-# 连接池大小，限制并发连接数，避免端口耗尽
-POOL_SIZE = 5
-
 
 class _PooledConnection:
     """包装连接，close 时归还连接池而非真正关闭"""
@@ -56,7 +53,10 @@ class MySQLDatabase:
         self.charset = 'utf8mb4'
         self._pool: List[pymysql.Connection] = []
         self._lock = threading.Lock()
-        self._sem = threading.Semaphore(POOL_SIZE)
+        self.pool_size = max(1, int(getattr(settings, "MYSQL_POOL_SIZE", 10) or 10))
+        self.acquire_timeout = max(0.1, float(getattr(settings, "MYSQL_POOL_ACQUIRE_TIMEOUT", 3.0) or 3.0))
+        self.slow_query_ms = max(0, int(getattr(settings, "MYSQL_SLOW_QUERY_MS", 800) or 0))
+        self._sem = threading.Semaphore(self.pool_size)
 
     def _create_conn(self) -> Optional[pymysql.Connection]:
         try:
@@ -68,6 +68,10 @@ class MySQLDatabase:
                 database=self.db_name,
                 charset=self.charset,
                 cursorclass=pymysql.cursors.DictCursor,
+                connect_timeout=getattr(settings, "MYSQL_CONNECT_TIMEOUT", 5),
+                read_timeout=getattr(settings, "MYSQL_READ_TIMEOUT", 30),
+                write_timeout=getattr(settings, "MYSQL_WRITE_TIMEOUT", 30),
+                autocommit=False,
             )
         except Exception as e:
             logger.error(f"数据库连接失败 [{self.db_name}]: {str(e)}")
@@ -75,7 +79,7 @@ class MySQLDatabase:
 
     def _put_back(self, conn: pymysql.Connection):
         with self._lock:
-            if len(self._pool) < POOL_SIZE:
+            if len(self._pool) < self.pool_size:
                 self._pool.append(conn)
             else:
                 try:
@@ -97,8 +101,16 @@ class MySQLDatabase:
             return None
 
     def get_connection(self) -> Optional[Any]:
-        """从池中获取连接或新建（受 POOL_SIZE 限制，避免 WinError 10048）"""
-        self._sem.acquire()
+        """从池中获取连接或新建（受配置的 pool_size 限制，避免连接数失控）"""
+        acquired = self._sem.acquire(timeout=self.acquire_timeout)
+        if not acquired:
+            logger.error(
+                "获取数据库连接超时 [%s]: pool_size=%s, wait=%.1fs",
+                self.db_name,
+                self.pool_size,
+                self.acquire_timeout,
+            )
+            return None
         try:
             conn = None
             with self._lock:
@@ -118,6 +130,20 @@ class MySQLDatabase:
             logger.error(f"获取连接失败: {str(e)}")
             self._sem.release()
             return None
+
+    def _log_slow_query(self, elapsed_ms: float, sql: str, params: Any = None) -> None:
+        if not self.slow_query_ms or elapsed_ms < self.slow_query_ms:
+            return
+        compact_sql = " ".join((sql or "").split())
+        if len(compact_sql) > 800:
+            compact_sql = compact_sql[:800] + "..."
+        logger.warning(
+            "慢 SQL [%s] %.0f ms: %s | Params: %s",
+            self.db_name,
+            elapsed_ms,
+            compact_sql,
+            params,
+        )
     
     def execute_query(self, sql: str, params: tuple = None) -> List[Dict[str, Any]]:
         """执行查询并返回字典列表"""
@@ -128,8 +154,10 @@ class MySQLDatabase:
                 raise Exception("无法连接到数据库")
             
             with conn.cursor() as cursor:
+                start = time.monotonic()
                 cursor.execute(sql, params)
                 result = cursor.fetchall()
+                self._log_slow_query((time.monotonic() - start) * 1000, sql, params)
                 return result
         except Exception as e:
             logger.error(f"查询执行失败: {str(e)}\nSQL: {sql}\nParams: {params}")
@@ -147,8 +175,10 @@ class MySQLDatabase:
                 raise Exception("无法连接到数据库")
             
             with conn.cursor() as cursor:
+                start = time.monotonic()
                 cursor.execute(sql, params)
                 row = cursor.fetchone()
+                self._log_slow_query((time.monotonic() - start) * 1000, sql, params)
                 if row:
                     # 返回字典中的第一个值
                     return list(row.values())[0]
@@ -169,8 +199,10 @@ class MySQLDatabase:
                 raise Exception("无法连接到数据库")
             
             with conn.cursor() as cursor:
+                start = time.monotonic()
                 cursor.execute(sql, params)
                 affected_rows = cursor.rowcount
+                self._log_slow_query((time.monotonic() - start) * 1000, sql, params)
             
             conn.commit()
             return affected_rows
@@ -199,11 +231,13 @@ class MySQLDatabase:
                 raise Exception("无法连接到数据库")
             affected = 0
             with conn.cursor() as cursor:
+                start = time.monotonic()
                 for params in params_list:
                     cursor.execute(sql, params)
                     rc = cursor.rowcount
                     if rc is not None and rc >= 0:
                         affected += rc
+                self._log_slow_query((time.monotonic() - start) * 1000, sql, f"{len(params_list)} rows")
             conn.commit()
             return affected
         except Exception as e:
@@ -224,8 +258,10 @@ class MySQLDatabase:
                 raise Exception("无法连接到数据库")
             
             with conn.cursor() as cursor:
+                start = time.monotonic()
                 cursor.execute(sql, params)
                 last_id = cursor.lastrowid
+                self._log_slow_query((time.monotonic() - start) * 1000, sql, params)
             
             conn.commit()
             return last_id
