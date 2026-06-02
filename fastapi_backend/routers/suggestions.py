@@ -485,7 +485,7 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
             gcsqb_approved_map = _batch_by_name(db.execute_query(
                 f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 f"WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
-                f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                f"AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                 f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                 tuple(names) + (batch_month_end, batch_month_start),
             ))
@@ -512,7 +512,7 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
             gcsqb_pending_map = _batch_by_name(db.execute_query(
                 f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 f"WHERE gcr IN ({ph}) AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                f"AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                 f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                 tuple(names) + (batch_month_end, batch_month_start),
             ))
@@ -536,8 +536,8 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
 
             def _has_pending_process_on_date(date_str: str) -> bool:
                 """
-                异常列表页口径：只要该日期存在任一“正在审核中”的请假/公出/打卡异常申请，
-                即视为“已在处理”，不再展示为待处理异常。
+                异常列表页口径：只要该日期存在任一正在审核中的请假/公出/打卡异常申请，
+                即视为已在处理，不再展示为待处理异常。
                 """
                 if not date_str:
                     return False
@@ -1655,7 +1655,7 @@ async def get_suggestions(
                 gcsqb_rows = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                     "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                     (name, month_end, month_start),
                 )
@@ -1682,7 +1682,7 @@ async def get_suggestions(
                 gcsqb_pending = db.execute_query(
                     "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                     "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                    "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                    "AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                     "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                     (name, month_end, month_start),
                 )
@@ -1730,7 +1730,7 @@ async def get_suggestions(
             gcsqb_rows = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND bldzt = 2 AND szrzt = 2 "
-                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                "AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                 "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                 (name, fb_month_end, fb_month_start),
             )
@@ -1757,7 +1757,7 @@ async def get_suggestions(
             gcsqb_pending = db.execute_query(
                 "SELECT yjcfsj, yjfhsj, gcsj, sjfhtime FROM gcsqb "
                 "WHERE gcr = %s AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
-                "AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
+                "AND (COALESCE(yjcfsj, gcsj) IS NOT NULL OR COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) IS NOT NULL) "
                 "AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
                 (name, fb_month_end, fb_month_start),
             )
