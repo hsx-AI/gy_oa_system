@@ -72,9 +72,9 @@ class ExcelProcessor:
     @staticmethod
     def _dedup_close_times(group: List[Dict], threshold_sec: int = 5) -> List[Dict]:
         """
-        合并同日同人 threshold_sec 秒内的重复打卡。
-        相邻两条时间差 ≤ threshold_sec 时，保留第一条；
-        若第二条有明确 inout_mark 而第一条没有，则继承其 mark。
+        去除同日同人、间隔 ≤ threshold_sec 的重复打卡。
+        仅当相邻两条均无 H 列进出标识（inout_mark 为 None）时才视为重复并丢弃后一条；
+        任一条有明确「进/出」标识则全部保留，供后续按标记生成建议。
         必须在按 attendance_time 排序后调用。
         """
         if len(group) <= 1:
@@ -89,11 +89,11 @@ class ExcelProcessor:
             except (ValueError, KeyError):
                 diff = threshold_sec + 1
             if diff <= threshold_sec:
-                if prev.get("inout_mark") is None and rec.get("inout_mark") is not None:
-                    result[-1] = dict(prev)
-                    result[-1]["inout_mark"] = rec["inout_mark"]
-            else:
-                result.append(rec)
+                prev_marked = prev.get("inout_mark") is not None
+                curr_marked = rec.get("inout_mark") is not None
+                if not prev_marked and not curr_marked:
+                    continue
+            result.append(rec)
         return result
 
     @staticmethod
@@ -345,6 +345,7 @@ class ExcelProcessor:
     def merge_records_by_employee_and_date(self, records: List[Dict]) -> List[Dict]:
         """
         按员工和日期合并记录（同人同日按时间排序，最多保留 10 次打卡）。
+        去重：仅合并无进出标识且间隔 ≤5 秒的重复刷卡；有 H 列「进/出」的全部保留。
         进出标记：H 列有「进/入」「出」则用其值；否则按时间线与前一条交替（首条无法识别时视为进）。
         """
         grouped = defaultdict(list)
