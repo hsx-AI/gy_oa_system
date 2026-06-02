@@ -14,7 +14,7 @@ router = APIRouter(prefix="/auth", tags=["认证"])
 
 
 def _format_entry_date(value) -> str:
-    """入厂时间展示：精确到月份（YYYY-MM）；仅有年份时显示 YYYY。"""
+    """参加工作时间展示：精确到月份（YYYY-MM）；仅有年份时显示 YYYY。"""
     if value is None:
         return ""
     if hasattr(value, "strftime"):
@@ -31,7 +31,7 @@ def _format_entry_date(value) -> str:
 
 
 def _parse_entry_date_for_seniority(value):
-    """解析入厂日期用于工龄（精确到日；仅 YYYY-MM 时按当月 1 日）。"""
+    """解析参加工作时间用于工龄（精确到日；仅 YYYY-MM 时按当月 1 日）。"""
     from datetime import date as dt_date, datetime as dt_datetime
 
     if value is None:
@@ -63,7 +63,7 @@ def _parse_entry_date_for_seniority(value):
 
 
 def _service_months(entry, today) -> int:
-    """入厂至今完整工龄月数（未满月不计入下一月）。"""
+    """参加工作至今完整工龄月数（未满月不计入下一月）。"""
     months = (today.year - entry.year) * 12 + (today.month - entry.month)
     if today.day < entry.day:
         months -= 1
@@ -293,7 +293,7 @@ async def delete_notification(req: dict):
 
 @router.get("/profile")
 async def get_profile(name: str = Query(..., description="员工姓名")):
-    """获取员工信息：用户名、工号、科室、级别、身份证号、入厂时间、换休票总数及明细（按过期日分组）"""
+    """获取员工信息：用户名、工号、科室、级别、身份证号、参加工作时间、换休票总数及明细（按过期日分组）"""
     try:
         from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
         sql = (
@@ -354,20 +354,20 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
         if sfzh_clean:
             try:
                 demo_rows = db_demo.execute_query(
-                    "SELECT mobile, factory_entry_date FROM employee_info WHERE id_card = %s LIMIT 1",
+                    "SELECT mobile, work_start_date FROM employee_info WHERE id_card = %s LIMIT 1",
                     (sfzh_clean,),
                 )
                 if demo_rows:
                     mobile = str(demo_rows[0].get("mobile") or "").strip()
-                    fed = demo_rows[0].get("factory_entry_date")
-                    if fed is not None:
-                        entry_raw_for_seniority = fed
-                        demo_entry = _format_entry_date(fed)
+                    wsd = demo_rows[0].get("work_start_date")
+                    if wsd is not None:
+                        entry_raw_for_seniority = wsd
+                        demo_entry = _format_entry_date(wsd)
                         if demo_entry:
                             entry_date = demo_entry
             except Exception as e:
                 logger.debug("demo 库 employee_info 查询失败: %s", e)
-        # 带薪休假：按入厂年月精确计算工龄（月），再对应应得天数
+        # 带薪休假：按参加工作时间精确计算工龄（月），再对应应得天数
         paid_leave_remaining = None
         paid_leave_detail = None
         try:

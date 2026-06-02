@@ -39,7 +39,7 @@
             </span>
           </div>
           <div class="profile-row">
-            <span class="profile-label">入厂时间</span>
+            <span class="profile-label">参加工作时间</span>
             <span class="profile-value">
               {{ profile.entryDate || '-' }}
               <span class="profile-value-sub">（与人事信息库同步，按身份证号匹配）</span>

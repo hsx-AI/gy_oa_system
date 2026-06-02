@@ -3993,13 +3993,14 @@ async def attendance_report_export(
 ):
     """
     根据模版生成 Word 考勤表。
-    返回：每科室一份 sheet 数据，前端据此填充 Word；
-    或直接生成 .docx 文件流返回下载。
+    指定科室：返回单个 .docx；
+    不传科室（全员）：按科室各生成一份 Word，打包为 zip（每科室一个文件夹）。
     """
     import calendar
+    import re
+    import zipfile
     from docx import Document
     from docx.oxml.ns import qn
-    from docx.oxml import OxmlElement
     from copy import deepcopy
 
     try:
@@ -4034,9 +4035,12 @@ async def attendance_report_export(
 
         from docx.shared import Pt, Cm
         from docx.enum.text import WD_ALIGN_PARAGRAPH
+        from docx.enum.table import WD_ALIGN_VERTICAL, WD_ROW_HEIGHT_RULE
 
         FONT_CJK = "宋体"
         FONT_LATIN = "Times New Roman"
+        FONT_SIZE_XIAO_SI = Pt(12)   # 宋体小四
+        FONT_SIZE_YI_HAO = Pt(26)    # 宋体一号
 
         def _set_run_font(run, size=None, bold=False):
             """统一 run 字体：中文宋体，数字/英文 Times New Roman"""
@@ -4050,26 +4054,54 @@ async def attendance_report_export(
                 run.font.size = size
             run.font.bold = bold
 
-        def _set_cell_font(cell, size=Pt(9)):
+        def _zero_paragraph_spacing(paragraph):
+            pf = paragraph.paragraph_format
+            pf.space_before = Pt(0)
+            pf.space_after = Pt(0)
+
+        def _set_cell_align_center(cell):
+            cell.vertical_alignment = WD_ALIGN_VERTICAL.CENTER
+            for p in cell.paragraphs:
+                p.alignment = WD_ALIGN_PARAGRAPH.CENTER
+                _zero_paragraph_spacing(p)
+
+        def _set_cell_font(cell, size=FONT_SIZE_XIAO_SI):
             """遍历单元格所有段落所有 run，统一字体"""
             for p in cell.paragraphs:
                 for run in p.runs:
                     _set_run_font(run, size=size)
 
-        base_doc = Document(template_path)
-        out_doc = Document()
-        # 继承模版页面设置
-        out_sec = out_doc.sections[0]
-        tmpl_sec = base_doc.sections[0]
-        out_sec.page_width = tmpl_sec.page_width
-        out_sec.page_height = tmpl_sec.page_height
-        out_sec.left_margin = tmpl_sec.left_margin
-        out_sec.right_margin = tmpl_sec.right_margin
-        out_sec.top_margin = tmpl_sec.top_margin
-        out_sec.bottom_margin = tmpl_sec.bottom_margin
-        out_sec.orientation = tmpl_sec.orientation
+        def _format_attendance_table(table):
+            """表格内文字：宋体小四，水平垂直居中；首行高度 1.2cm"""
+            if table.rows:
+                row0 = table.rows[0]
+                row0.height = Cm(1.2)
+                row0.height_rule = WD_ROW_HEIGHT_RULE.EXACTLY
+            for row in table.rows:
+                for cell in row.cells:
+                    _set_cell_align_center(cell)
+                    _set_cell_font(cell, size=FONT_SIZE_XIAO_SI)
 
-        is_first_dept = True
+        base_doc = Document(template_path)
+        tmpl_sec = base_doc.sections[0]
+        export_all_depts = not (lsys and lsys.strip())
+        generated_docs: List[Tuple[str, Any]] = []
+
+        def _new_attendance_doc():
+            doc = Document()
+            sec = doc.sections[0]
+            sec.page_width = tmpl_sec.page_width
+            sec.page_height = tmpl_sec.page_height
+            sec.left_margin = tmpl_sec.left_margin
+            sec.right_margin = tmpl_sec.right_margin
+            sec.top_margin = tmpl_sec.top_margin
+            sec.bottom_margin = tmpl_sec.bottom_margin
+            sec.orientation = tmpl_sec.orientation
+            return doc
+
+        def _safe_zip_name(name: str) -> str:
+            s = re.sub(r'[\\/:*?"<>|]+', "_", (name or "").strip())
+            return s or "科室"
 
         for dept_name in dept_list:
             # 获取该科室在职人员
@@ -4143,45 +4175,86 @@ async def attendance_report_export(
 
             # 从模版复制表格结构
             tmpl_table1 = base_doc.tables[1]
-
-            if not is_first_dept:
-                # 分页
-                run = out_doc.add_paragraph().add_run()
-                br = OxmlElement('w:br')
-                br.set(qn('w:type'), 'page')
-                run._element.append(br)
+            out_doc = _new_attendance_doc()
 
             # ---- 标题：居中大号加粗段落 ----
             title_p = out_doc.add_paragraph()
             title_p.alignment = WD_ALIGN_PARAGRAPH.CENTER
             title_run = title_p.add_run(f"{year}年{month}月份考勤表")
-            _set_run_font(title_run, size=Pt(16), bold=True)
-            title_p.space_after = Pt(6)
+            _set_run_font(title_run, size=FONT_SIZE_YI_HAO, bold=True)
+            _zero_paragraph_spacing(title_p)
 
             # ---- Table 1: 主体考勤表 ----
             new_tbl1 = deepcopy(tmpl_table1._tbl)
             out_doc.element.body.append(new_tbl1)
             tbl1_obj = out_doc.tables[-1]
 
+            def _normalize_cell_single_paragraph(cell):
+                """合并单元格后常残留多个 w:p，只保留第一段以免多出一行空白。"""
+                tc = cell._tc
+                for extra_p in tc.findall(qn("w:p"))[1:]:
+                    tc.remove(extra_p)
+
+            def _set_cell_width_cm(cell, width_cm: float):
+                from docx.oxml import OxmlElement
+
+                tc = cell._tc
+                tcPr = tc.get_or_add_tcPr()
+                tcW = tcPr.find(qn("w:tcW"))
+                if tcW is None:
+                    tcW = OxmlElement("w:tcW")
+                    tcPr.append(tcW)
+                tcW.set(qn("w:w"), str(int(Cm(width_cm).twips)))
+                tcW.set(qn("w:type"), "dxa")
+
             def _cell_set_text(cell, text):
                 """清除单元格所有段落内容，在第一段写入文本并设字体。"""
-                for p in cell.paragraphs:
-                    p.clear()
+                _normalize_cell_single_paragraph(cell)
+                cell.paragraphs[0].clear()
                 run = cell.paragraphs[0].add_run(text)
-                _set_run_font(run, size=Pt(9))
+                _set_run_font(run, size=FONT_SIZE_XIAO_SI)
+                _set_cell_align_center(cell)
 
-            # 修改表头 Row0 中的科室和月/日/天信息
-            hdr_cells = tbl1_obj.rows[0].cells
-            _cell_set_text(hdr_cells[2], dept_name)
-            _cell_set_text(hdr_cells[8], f"{month}月")
-            _cell_set_text(hdr_cells[14], f" {month}月")
-            _cell_set_text(hdr_cells[16], f"{last_day}日计")
-            _cell_set_text(hdr_cells[19], f"{workdays}天）")
+            def _format_header_row0(table):
+                """首行：科室名 + 合并考勤区间为一整句，去掉页数。"""
+                from docx.table import _Cell
 
-            # 统一表头 Row0 和 Row1 中原有 run 的字体
+                tr = table.rows[0]._tr
+                tcs = tr.findall(qn("w:tc"))
+                if len(tcs) < 8:
+                    return
+
+                _set_cell_width_cm(_Cell(tcs[0], table), 1.38)
+                _cell_set_text(_Cell(tcs[0], table), "单位:")
+
+                period_text = (
+                    f"（本月考勤自{month}月1日——{month}月{last_day}日计{workdays}天）"
+                )
+                _cell_set_text(_Cell(tcs[1], table), dept_name)
+
+                # 每次合并后 tc 列表会变，须重新 findall，且始终合并 [2] 与 [3]
+                for _ in range(5):
+                    tcs = tr.findall(qn("w:tc"))
+                    if len(tcs) < 4:
+                        break
+                    _Cell(tcs[2], table).merge(_Cell(tcs[3], table))
+                tcs = tr.findall(qn("w:tc"))
+                if len(tcs) >= 3:
+                    _cell_set_text(_Cell(tcs[2], table), period_text)
+
+                tcs_after = tr.findall(qn("w:tc"))
+                if tcs_after:
+                    last_tc = tcs_after[-1]
+                    if "页" in "".join(last_tc.itertext()):
+                        tr.remove(last_tc)
+
+            _format_header_row0(tbl1_obj)
+
+            # 统一表头 Row0 和 Row1 中原有 run 的字体与对齐
             for ri in range(min(2, len(tbl1_obj.rows))):
                 for cell in tbl1_obj.rows[ri].cells:
-                    _set_cell_font(cell, size=Pt(9))
+                    _set_cell_font(cell, size=FONT_SIZE_XIAO_SI)
+                    _set_cell_align_center(cell)
 
             # 删除模版数据行（保留 row0=表头区域, row1=列标题）
             data_rows_to_remove = list(tbl1_obj.rows[2:])
@@ -4199,9 +4272,11 @@ async def attendance_report_export(
                 cells = row_obj.cells
 
                 def _data_cell(cell, text):
+                    _normalize_cell_single_paragraph(cell)
                     cell.paragraphs[0].clear()
                     run = cell.paragraphs[0].add_run(text)
-                    _set_run_font(run, size=Pt(9))
+                    _set_run_font(run, size=FONT_SIZE_XIAO_SI)
+                    _set_cell_align_center(cell)
 
                 # Col0: 编号
                 _data_cell(cells[0], str(idx))
@@ -4213,10 +4288,8 @@ async def attendance_report_export(
                 # 获取该人的请假数据（已映射到模板列名）
                 pl = person_leave.get(name, {})
 
-                # 判断出勤：除"换休"列外有任何假别即非全勤
-                non_hx_leave = sum(v for k, v in pl.items() if k != "换休")
-                # Col4: 出勤
-                _data_cell(cells[4], "全勤" if non_hx_leave <= 0 else "")
+                # Col4: 出勤 — 无「事假」即全勤（病假、换休等其他假别不影响）
+                _data_cell(cells[4], "全勤" if pl.get("事假", 0) <= 0 else "")
 
                 # 各假别列映射 (col_index, leave_type)
                 leave_col_map = [
@@ -4257,29 +4330,53 @@ async def attendance_report_export(
                 hx_total = pl.get("换休", 0)
                 _data_cell(cells[23], _fmt_days(_ceil_quarter(hx_total)) if hx_total > 0 else "0")
 
-            # 底部签名段落
-            footer_p = out_doc.add_paragraph()
-            footer_p.space_before = Pt(12)
-            footer_run = footer_p.add_run("主    管                                   考 勤 员:")
-            _set_run_font(footer_run, size=Pt(11))
+            # 表格末行：主管、考勤员
+            footer_row = tbl1_obj.add_row()
+            footer_cell = footer_row.cells[0]
+            for ci in range(1, len(footer_row.cells)):
+                footer_cell = footer_cell.merge(footer_row.cells[ci])
+            _normalize_cell_single_paragraph(footer_cell)
+            footer_cell.paragraphs[0].clear()
+            footer_run = footer_cell.paragraphs[0].add_run(
+                "主    管：                                   考 勤 员:"
+            )
+            _set_run_font(footer_run, size=FONT_SIZE_XIAO_SI)
 
-            is_first_dept = False
+            _format_attendance_table(tbl1_obj)
 
-        # 输出文件
-        buf = BytesIO()
-        out_doc.save(buf)
-        buf.seek(0)
-        month_str = f"{month:02d}"
-        fname = f"考勤表_{year}年{month}月"
-        if lsys and lsys.strip():
-            fname += f"_{lsys.strip()}"
-        fname += ".docx"
+            generated_docs.append((dept_name, out_doc))
+
+        if not generated_docs:
+            raise HTTPException(status_code=404, detail="没有可导出的考勤表数据")
 
         from urllib.parse import quote
+
+        if export_all_depts:
+            zip_buf = BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for dept_name, doc in generated_docs:
+                    doc_buf = BytesIO()
+                    doc.save(doc_buf)
+                    safe_dept = _safe_zip_name(dept_name)
+                    arc_doc = f"{safe_dept}/考勤表_{year}年{month}月_{safe_dept}.docx"
+                    zf.writestr(arc_doc, doc_buf.getvalue())
+            zip_buf.seek(0)
+            fname = f"考勤表_{year}年{month}月_各科室.zip"
+            return StreamingResponse(
+                zip_buf,
+                media_type="application/zip",
+                headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+            )
+
+        buf = BytesIO()
+        generated_docs[0][1].save(buf)
+        buf.seek(0)
+        single_dept = generated_docs[0][0]
+        fname = f"考勤表_{year}年{month}月_{single_dept}.docx"
         return StreamingResponse(
             buf,
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"}
+            headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
         )
     except HTTPException:
         raise

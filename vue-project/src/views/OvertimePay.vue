@@ -99,7 +99,7 @@
               </button>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「下载 Excel 工资报表」「导出全部加班时长」均支持时间段；工资报表需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。</p>
+          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「下载 Excel 工资报表」「导出全部加班时长」均支持时间段；工资报表需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -361,8 +361,11 @@ async function downloadAttendanceReportWord() {
     const url = window.URL.createObjectURL(blob instanceof Blob ? blob : new Blob([blob]))
     const a = document.createElement('a')
     a.href = url
+    const isAllDepts = scope.value !== 'self' && !selectedLsys.value
     const lsysLabel = selectedLsys.value ? `_${selectedLsys.value}` : ''
-    a.download = `考勤表_${filterYear.value}年${filterMonth.value}月${lsysLabel}.docx`
+    a.download = isAllDepts
+      ? `考勤表_${filterYear.value}年${filterMonth.value}月_各科室.zip`
+      : `考勤表_${filterYear.value}年${filterMonth.value}月${lsysLabel}.docx`
     document.body.appendChild(a)
     a.click()
     document.body.removeChild(a)
