@@ -79,6 +79,122 @@ def _can_see_attendance_exceptions(current_user: str) -> tuple:
     return False, None, False, False
 
 
+def _parse_date_only(val) -> Optional[date_type]:
+    """Convert DB date/datetime/string values to a date for attendance exception filtering."""
+    if val is None:
+        return None
+    if isinstance(val, datetime):
+        return val.date()
+    if isinstance(val, date_type):
+        return val
+    s = str(val).strip()
+    if not s:
+        return None
+    if "." in s:
+        s = s.split(".")[0]
+    s = s[:10]
+    try:
+        return datetime.strptime(s, "%Y-%m-%d").date()
+    except Exception:
+        return None
+
+
+def _date_in_range(day: date_type, start_val, end_val) -> bool:
+    start_day = _parse_date_only(start_val)
+    end_day = _parse_date_only(end_val) or start_day
+    if not day or not start_day or not end_day:
+        return False
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+    return start_day <= day <= end_day
+
+
+def _filter_exception_keys_without_pending_process(exception_keys: List[tuple], year: int, month: int) -> List[tuple]:
+    """
+    考勤异常列表最终兜底过滤：同一天已有未驳回的请假/公出申请时，
+    视为已在处理，不再展示为待处理考勤异常。
+    """
+    if not exception_keys:
+        return []
+    names = sorted({(n or "").strip() for n, _, _ in exception_keys if (n or "").strip()})
+    if not names:
+        return exception_keys
+
+    import calendar
+
+    _, last_day = calendar.monthrange(year, month)
+    month_start = f"{year}-{month:02d}-01"
+    month_end = f"{year}-{month:02d}-{last_day:02d} 23:59:59"
+    pending_by_name = {}
+
+    try:
+        ph = ",".join(["%s"] * len(names))
+        qj_rows = db.execute_query(
+            f"""
+            SELECT TRIM(xm) AS xm, timefrom, timeto
+            FROM qj
+            WHERE TRIM(xm) IN ({ph})
+              AND COALESCE(qjzt, 0) != 22
+              AND timefrom <= %s
+              AND timeto >= %s
+            """,
+            tuple(names) + (month_end, month_start),
+        ) or []
+        for r in qj_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                pending_by_name.setdefault(n, []).append((r.get("timefrom"), r.get("timeto")))
+
+        trip_rows = db.execute_query(
+            f"""
+            SELECT TRIM(gcr) AS xm,
+                   COALESCE(yjcfsj, gcsj, wpsj, yjfhsj, sjfhtime) AS timefrom,
+                   COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj, wpsj) AS timeto
+            FROM gcsqb
+            WHERE TRIM(gcr) IN ({ph})
+              AND NOT (COALESCE(bldzt, 0) = 22 OR COALESCE(szrzt, 0) = 22)
+              AND COALESCE(yjcfsj, gcsj, wpsj, yjfhsj, sjfhtime) <= %s
+              AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj, wpsj) >= %s
+            """,
+            tuple(names) + (month_end, month_start),
+        ) or []
+        for r in trip_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                pending_by_name.setdefault(n, []).append((r.get("timefrom"), r.get("timeto")))
+
+        kqyc_rows = db.execute_query(
+            f"""
+            SELECT TRIM(applicant) AS xm,
+                   CONCAT(attendance_date, ' ', time_from) AS timefrom,
+                   CONCAT(attendance_date, ' ', time_to) AS timeto
+            FROM attendance_exception
+            WHERE TRIM(applicant) IN ({ph})
+              AND first_status != 2
+              AND second_status != 2
+              AND attendance_date >= %s
+              AND attendance_date <= %s
+            """,
+            tuple(names) + (month_start[:10], month_end[:10]),
+        ) or []
+        for r in kqyc_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                pending_by_name.setdefault(n, []).append((r.get("timefrom"), r.get("timeto")))
+    except Exception as e:
+        logger.warning(f"考勤异常列表过滤审核中请假/公出失败，保留原异常数据: {e}")
+        return exception_keys
+
+    filtered = []
+    for name, dept, date_str in exception_keys:
+        day = _parse_date_only(date_str)
+        n = (name or "").strip()
+        if day and any(_date_in_range(day, s, e) for s, e in pending_by_name.get(n, [])):
+            continue
+        filtered.append((name, dept, date_str))
+    return filtered
+
+
 def _build_attendance_exceptions_data(year: int, month: int, filter_lsys: Optional[str], include_buban: bool = False) -> List[dict]:
     """
     构建指定年月的考勤异常列表原始数据（不做权限检查）。
@@ -91,6 +207,7 @@ def _build_attendance_exceptions_data(year: int, month: int, filter_lsys: Option
     start_date = f"{year}-{month:02d}-01"
     end_date = f"{year}-{month:02d}-{last_day:02d}"
     exception_keys = get_attendance_exception_keys(year, month, include_buban=include_buban)
+    exception_keys = _filter_exception_keys_without_pending_process(exception_keys, year, month)
     if not exception_keys:
         return []
     if filter_lsys:
@@ -1172,4 +1289,3 @@ async def dakaman_process_exception(req: DakamanProcessRequest):
         "message": f"已处理 {len(created_ids)} 条异常记录",
         "ids": created_ids,
     }
-
