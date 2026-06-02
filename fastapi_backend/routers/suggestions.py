@@ -534,6 +534,28 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
             qj_pending = qj_pending_map.get(name, [])
             gcsqb_pending = gcsqb_pending_map.get(name, [])
 
+            def _has_pending_process_on_date(date_str: str) -> bool:
+                """
+                异常列表页口径：只要该日期存在任一“正在审核中”的请假/公出/打卡异常申请，
+                即视为“已在处理”，不再展示为待处理异常。
+                """
+                if not date_str:
+                    return False
+                day_start = _to_comparable_dt(f"{date_str} 00:00:00")
+                day_end = _to_comparable_dt(f"{date_str} 23:59:59")
+                if not day_start or not day_end:
+                    return False
+                if _interval_overlaps(day_start, day_end, qj_pending, lambda x: (x.get("timefrom"), x.get("timeto"))):
+                    return True
+                if _interval_overlaps(
+                    day_start,
+                    day_end,
+                    gcsqb_pending,
+                    lambda x: (x.get("yjcfsj") or x.get("gcsj"), x.get("yjfhsj") or x.get("sjfhtime")),
+                ):
+                    return True
+                return False
+
             for r in rows:
                 st = r.get("status") if r.get("status") is not None else 0
                 if st != 1:
@@ -548,8 +570,10 @@ def get_attendance_exception_keys(year: int, month: int, include_buban: bool = F
                     r.get("start_time"), r.get("end_time"), st,
                     jiaban_pending, qj_pending, gcsqb_pending,
                 )
+                date_str = (r.get("date") or "").strip()
+                if not handled and not under_review and _has_pending_process_on_date(date_str):
+                    under_review = True
                 if not handled and not under_review:
-                    date_str = r.get("date") or ""
                     if date_str:
                         exception_keys.append((name, dept, date_str))
         return exception_keys
@@ -636,7 +660,7 @@ def collect_valid_times_with_marks(record: dict) -> List[tuple]:
 def build_intervals_from_marks(time_mark_pairs: List[tuple]) -> List[tuple]:
     """
     根据进(0)/出(1)标记构建进出区间。
-    - 遇到「进」时记录为区间起点（连续多次「进」取第一次）
+    - 遇到「进」时记录为区间起点；若上一次「进」尚未配到「出」，连续「进」说明上一段缺少离开记录，改从新的「进」重新配对
     - 遇到「出」时与最近的「进」配对形成区间（无配对的「出」忽略）
     - 若所有 mark 都为 None，回退到按下标两两配对的旧逻辑
     """
@@ -659,8 +683,7 @@ def build_intervals_from_marks(time_mark_pairs: List[tuple]) -> List[tuple]:
 
     for t, mark in time_mark_pairs:
         if mark == 0:  # 进
-            if current_in is None:
-                current_in = t
+            current_in = t
         elif mark == 1:  # 出
             if current_in is not None:
                 if t > current_in:
