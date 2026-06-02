@@ -40,14 +40,17 @@
           </div>
           <div class="profile-row">
             <span class="profile-label">入厂时间</span>
-            <span class="profile-value">{{ profile.entryDate || '-' }}</span>
+            <span class="profile-value">
+              {{ profile.entryDate || '-' }}
+              <span class="profile-value-sub">（与人事信息库同步，按身份证号匹配）</span>
+            </span>
           </div>
           <div class="profile-row">
             <span class="profile-label">带薪休假剩余</span>
             <span class="profile-value">
               <template v-if="profile.paidLeaveRemaining != null">
                 {{ formatPaidLeave(profile.paidLeaveRemaining) }}
-                <span v-if="profile.paidLeaveDetail" class="profile-value-sub">（应得{{ profile.paidLeaveDetail.entitlement }}天，固定扣除{{ profile.paidLeaveDetail.deducted }}天，本年已用{{ profile.paidLeaveDetail.used }}天）</span>
+                <span v-if="profile.paidLeaveDetail" class="profile-value-sub">（工龄{{ formatServiceYears(profile.paidLeaveDetail.serviceYears) }}，应得{{ profile.paidLeaveDetail.entitlement }}天，固定扣除{{ profile.paidLeaveDetail.deducted }}天，本年已用{{ profile.paidLeaveDetail.used }}天）</span>
               </template>
               <template v-else>{{ '-' }}</template>
             </span>
@@ -191,6 +194,19 @@ function formatPaidLeave(days) {
   const v = Number(days)
   if (Number.isNaN(v)) return '-'
   return `${v} 天`
+}
+
+function formatServiceYears(years) {
+  if (years == null || years === '') return '-'
+  const v = Number(years)
+  if (Number.isNaN(v)) return '-'
+  const months = Math.round(v * 12)
+  const y = Math.floor(months / 12)
+  const m = months % 12
+  if (y > 0 && m > 0) return `${y}年${m}个月`
+  if (y > 0) return `${y}年`
+  if (m > 0) return `${m}个月`
+  return '不足1个月'
 }
 
 onMounted(fetchProfile)

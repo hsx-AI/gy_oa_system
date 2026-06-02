@@ -13,6 +13,74 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["认证"])
 
 
+def _format_entry_date(value) -> str:
+    """入厂时间展示：精确到月份（YYYY-MM）；仅有年份时显示 YYYY。"""
+    if value is None:
+        return ""
+    if hasattr(value, "strftime"):
+        raw = value.strftime("%Y-%m-%d")
+    else:
+        raw = str(value).strip()[:10]
+    if not raw:
+        return ""
+    if len(raw) >= 7 and raw[4] == "-":
+        return raw[:7]
+    if len(raw) >= 4 and raw[:4].isdigit():
+        return raw[:4]
+    return raw
+
+
+def _parse_entry_date_for_seniority(value):
+    """解析入厂日期用于工龄（精确到日；仅 YYYY-MM 时按当月 1 日）。"""
+    from datetime import date as dt_date, datetime as dt_datetime
+
+    if value is None:
+        return None
+    if isinstance(value, dt_date):
+        return value
+    if isinstance(value, dt_datetime):
+        return value.date()
+    if hasattr(value, "year") and hasattr(value, "month"):
+        try:
+            day = int(getattr(value, "day", 1) or 1)
+            return dt_date(int(value.year), int(value.month), day)
+        except (TypeError, ValueError):
+            return None
+    text = str(value).strip()[:10]
+    if not text:
+        return None
+    try:
+        if len(text) >= 10 and text[4] == "-":
+            return dt_date.fromisoformat(text[:10])
+        if len(text) >= 7 and text[4] == "-":
+            y, m = int(text[:4]), int(text[5:7])
+            return dt_date(y, m, 1)
+        if len(text) >= 4 and text[:4].isdigit():
+            return dt_date(int(text[:4]), 1, 1)
+    except (TypeError, ValueError):
+        return None
+    return None
+
+
+def _service_months(entry, today) -> int:
+    """入厂至今完整工龄月数（未满月不计入下一月）。"""
+    months = (today.year - entry.year) * 12 + (today.month - entry.month)
+    if today.day < entry.day:
+        months -= 1
+    return max(0, months)
+
+
+def _paid_leave_entitlement_by_months(service_months: int) -> int:
+    """工龄对应带薪年休假应得天数：<1年0；1~9年5；10~19年10；20年及以上15。"""
+    if service_months < 12:
+        return 0
+    if service_months < 120:
+        return 5
+    if service_months < 240:
+        return 10
+    return 15
+
+
 class LoginRequest(BaseModel):
     """登录请求模型"""
     admin: str  # 用户名（姓名）
@@ -279,38 +347,40 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
         except Exception as e:
             logger.debug(f"换休票预扣减查询失败: {e}")
         hxp_available = max(0.0, total - hxp_pending)
-        # 入厂时间 rcnf：只展示年份，不展示 -01-01
-        rcnf_val = r.get("rcnf")
-        if hasattr(rcnf_val, "strftime"):
-            raw = rcnf_val.strftime("%Y-%m-%d")
-        elif rcnf_val is not None and str(rcnf_val).strip():
-            raw = str(rcnf_val).strip()[:10]
-        else:
-            raw = ""
-        if raw and len(raw) >= 4 and raw.endswith("-01-01"):
-            entry_date = raw[:4]  # 仅年份
-        else:
-            entry_date = raw
-        # 带薪休假剩余：工龄 1~9年5天、10~19年10天、20年以上15天；公司固定扣除3天（高温假）；本年已用从 qj 表统计（仅带薪休假/年休假，已通过，按0.25天进位）
+        entry_date = _format_entry_date(r.get("rcnf"))
+        entry_raw_for_seniority = r.get("rcnf")
+        mobile = ""
+        sfzh_clean = (r.get("sfzh") or "").strip().replace(" ", "")
+        if sfzh_clean:
+            try:
+                demo_rows = db_demo.execute_query(
+                    "SELECT mobile, factory_entry_date FROM employee_info WHERE id_card = %s LIMIT 1",
+                    (sfzh_clean,),
+                )
+                if demo_rows:
+                    mobile = str(demo_rows[0].get("mobile") or "").strip()
+                    fed = demo_rows[0].get("factory_entry_date")
+                    if fed is not None:
+                        entry_raw_for_seniority = fed
+                        demo_entry = _format_entry_date(fed)
+                        if demo_entry:
+                            entry_date = demo_entry
+            except Exception as e:
+                logger.debug("demo 库 employee_info 查询失败: %s", e)
+        # 带薪休假：按入厂年月精确计算工龄（月），再对应应得天数
         paid_leave_remaining = None
         paid_leave_detail = None
         try:
-            entry_year = int(entry_date[:4]) if entry_date and len(entry_date) >= 4 and entry_date[:4].isdigit() else None
-            if entry_year is not None:
-                from datetime import date
-                current_year = date.today().year
-                years = current_year - entry_year
-                if years < 1:
-                    entitlement = 0
-                elif years < 10:
-                    entitlement = 5
-                elif years < 20:
-                    entitlement = 10
-                else:
-                    entitlement = 15
+            from datetime import date
+
+            entry_dt = _parse_entry_date_for_seniority(entry_raw_for_seniority)
+            if entry_dt is not None:
+                today = date.today()
+                service_months = _service_months(entry_dt, today)
+                entitlement = _paid_leave_entitlement_by_months(service_months)
                 deducted = 3  # 固定高温假公休
                 available = max(0, entitlement - deducted)
-                # 本年已通过的带薪休假/年休假天数（qj 表，最小单位 0.25 天，不够进位）
+                current_year = today.year
                 qj_rows = db.execute_query(
                     "SELECT COALESCE(SUM(CAST(tian AS DECIMAL(10,4))), 0) AS total FROM qj WHERE xm = %s AND qjzt = 4 AND YEAR(timefrom) = %s AND (TRIM(COALESCE(qjfs,'')) LIKE %s OR TRIM(COALESCE(qjfs,'')) LIKE %s OR TRIM(COALESCE(qjfs,'')) = %s OR TRIM(COALESCE(qjfs,'')) = %s)",
                     (name, current_year, "%带薪%", "%年休假%", "带薪休假", "年休假"),
@@ -324,22 +394,11 @@ async def get_profile(name: str = Query(..., description="员工姓名")):
                     "deducted": deducted,
                     "used": round(used_rounded, 2),
                     "remaining": round(remaining, 2),
+                    "serviceMonths": service_months,
+                    "serviceYears": round(service_months / 12, 1),
                 }
         except Exception as e:
             logger.debug(f"带薪休假计算失败: {e}")
-        # 手机号：demo 库 employee_info，以身份证号 id_card 与 yggl.sfzh 关联
-        mobile = ""
-        sfzh_clean = (r.get("sfzh") or "").strip().replace(" ", "")
-        if sfzh_clean:
-            try:
-                demo_rows = db_demo.execute_query(
-                    "SELECT mobile FROM employee_info WHERE id_card = %s LIMIT 1",
-                    (sfzh_clean,),
-                )
-                if demo_rows:
-                    mobile = str(demo_rows[0].get("mobile") or "").strip()
-            except Exception as e:
-                logger.debug("demo 库 employee_info 手机号查询失败: %s", e)
         return {
             "success": True,
             "data": {
