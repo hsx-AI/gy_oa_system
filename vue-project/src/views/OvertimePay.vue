@@ -18,39 +18,41 @@
       <template v-else>
         <div class="filter-section card">
           <div class="filter-form">
-            <div class="form-item" v-if="scope !== 'self'">
-              <label class="form-label">科室</label>
-              <select v-model="selectedLsys" class="form-select" :disabled="!lsysList.length || scope === 'lsys'">
-                <option value="">全员</option>
-                <option v-for="d in lsysList" :key="d" :value="d">{{ d }}</option>
-              </select>
+            <div class="filter-fields">
+              <div class="form-item" v-if="scope !== 'self'">
+                <label class="form-label">科室</label>
+                <select v-model="selectedLsys" class="form-select" :disabled="!lsysList.length || scope === 'lsys'">
+                  <option value="">全员</option>
+                  <option v-for="d in lsysList" :key="d" :value="d">{{ d }}</option>
+                </select>
+              </div>
+              <div class="form-item" v-if="scope === 'self'">
+                <label class="form-label">范围</label>
+                <span class="scope-self-label">本人</span>
+              </div>
+              <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
+                <label class="form-label">年份</label>
+                <select v-model="filterYear" class="form-select" :disabled="isDateRangeMode">
+                  <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}年</option>
+                </select>
+              </div>
+              <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
+                <label class="form-label">月份</label>
+                <select v-model="filterMonth" class="form-select" :disabled="isDateRangeMode">
+                  <option value="">全年</option>
+                  <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
+                </select>
+              </div>
+              <div class="form-item">
+                <label class="form-label">开始日期</label>
+                <input v-model="dateFrom" type="date" class="form-date" />
+              </div>
+              <div class="form-item">
+                <label class="form-label">结束日期</label>
+                <input v-model="dateTo" type="date" class="form-date" />
+              </div>
             </div>
-            <div class="form-item" v-if="scope === 'self'">
-              <label class="form-label">范围</label>
-              <span class="scope-self-label">本人</span>
-            </div>
-            <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
-              <label class="form-label">年份</label>
-              <select v-model="filterYear" class="form-select" :disabled="isDateRangeMode">
-                <option v-for="y in yearOptions" :key="y" :value="y">{{ y }}年</option>
-              </select>
-            </div>
-            <div :class="['form-item', { 'form-item--disabled': isDateRangeMode }]">
-              <label class="form-label">月份</label>
-              <select v-model="filterMonth" class="form-select" :disabled="isDateRangeMode">
-                <option value="">全年</option>
-                <option v-for="m in 12" :key="m" :value="m">{{ m }}月</option>
-              </select>
-            </div>
-            <div class="form-item">
-              <label class="form-label">开始日期</label>
-              <input v-model="dateFrom" type="date" class="form-date" />
-            </div>
-            <div class="form-item">
-              <label class="form-label">结束日期</label>
-              <input v-model="dateTo" type="date" class="form-date" />
-            </div>
-            <div class="form-item form-actions">
+            <div class="filter-toolbar">
               <button class="btn btn-primary" @click="fetchData" :disabled="loading">
                 <svg v-if="loading" class="loading-icon" viewBox="0 0 24 24">
                   <circle cx="12" cy="12" r="10" stroke="currentColor" stroke-width="3" fill="none" stroke-dasharray="31.4" stroke-linecap="round">
@@ -59,44 +61,47 @@
                 </svg>
                 <span>{{ loading ? '加载中...' : '查询' }}</span>
               </button>
-              <button
-                type="button"
-                class="btn btn-outline"
-                :disabled="(!filterMonth && !isDateRangeMode) || exportLoading"
-                @click="downloadExcel"
-              >
-                <span v-if="exportLoading">生成中...</span>
-                <span v-else>下载 Excel 工资报表</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-outline"
-                :disabled="overtimeHoursExportLoading"
-                @click="downloadOvertimeHoursExcel"
-              >
-                <span v-if="overtimeHoursExportLoading">生成中...</span>
-                <span v-else>导出全部加班时长</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-outline"
-                :disabled="isDateRangeMode || fullAttendanceExportLoading"
-                :title="isDateRangeMode ? '满勤名单请使用年份/月份筛选' : ''"
-                @click="downloadFullAttendanceExcel"
-              >
-                <span v-if="fullAttendanceExportLoading">生成中...</span>
-                <span v-else>导出满勤名单</span>
-              </button>
-              <button
-                type="button"
-                class="btn btn-outline"
-                :disabled="isDateRangeMode || !filterMonth || attendanceReportLoading"
-                :title="isDateRangeMode ? '考勤表请使用年份/月份筛选' : ''"
-                @click="downloadAttendanceReportWord"
-              >
-                <span v-if="attendanceReportLoading">生成中...</span>
-                <span v-else>下载考勤表(Word)</span>
-              </button>
+              <div class="filter-toolbar-exports">
+                <span class="toolbar-exports-label">导出</span>
+                <button
+                  type="button"
+                  class="btn btn-outline"
+                  :disabled="(!filterMonth && !isDateRangeMode) || exportLoading"
+                  @click="downloadExcel"
+                >
+                  <span v-if="exportLoading">生成中...</span>
+                  <span v-else>工资报表</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline"
+                  :disabled="overtimeHoursExportLoading"
+                  @click="downloadOvertimeHoursExcel"
+                >
+                  <span v-if="overtimeHoursExportLoading">生成中...</span>
+                  <span v-else>全部加班时长</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline"
+                  :disabled="isDateRangeMode || fullAttendanceExportLoading"
+                  :title="isDateRangeMode ? '满勤名单请使用年份/月份筛选' : ''"
+                  @click="downloadFullAttendanceExcel"
+                >
+                  <span v-if="fullAttendanceExportLoading">生成中...</span>
+                  <span v-else>满勤名单</span>
+                </button>
+                <button
+                  type="button"
+                  class="btn btn-outline"
+                  :disabled="isDateRangeMode || !filterMonth || attendanceReportLoading"
+                  :title="isDateRangeMode ? '考勤表请使用年份/月份筛选' : ''"
+                  @click="downloadAttendanceReportWord"
+                >
+                  <span v-if="attendanceReportLoading">生成中...</span>
+                  <span v-else>考勤表 Word</span>
+                </button>
+              </div>
             </div>
           </div>
           <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「下载 Excel 工资报表」「导出全部加班时长」均支持时间段；工资报表需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
@@ -486,9 +491,36 @@ onMounted(async () => {
 }
 .filter-form {
   display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+.filter-fields {
+  display: flex;
   flex-wrap: wrap;
   align-items: flex-end;
   gap: var(--spacing-lg);
+}
+.filter-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-md);
+  width: 100%;
+  padding-top: var(--spacing-md);
+  border-top: 1px solid var(--color-border-lighter);
+}
+.filter-toolbar-exports {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--spacing-sm);
+  margin-left: auto;
+}
+.toolbar-exports-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  margin-right: var(--spacing-xs);
+  white-space: nowrap;
 }
 .form-item {
   display: flex;
@@ -523,11 +555,18 @@ onMounted(async () => {
   color: var(--color-text-secondary);
 }
 .btn {
-  padding: var(--spacing-sm) var(--spacing-lg);
+  height: 40px;
+  padding: 0 var(--spacing-lg);
   border-radius: var(--radius-base);
   font-size: var(--font-size-sm);
+  font-weight: var(--font-weight-medium);
   cursor: pointer;
   border: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--spacing-xs);
+  white-space: nowrap;
 }
 .btn-primary {
   background: var(--color-primary);
@@ -619,5 +658,23 @@ onMounted(async () => {
   text-align: center;
   padding: var(--spacing-xl);
   color: var(--color-text-secondary);
+}
+
+@media (max-width: 768px) {
+  .filter-toolbar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .filter-toolbar-exports {
+    margin-left: 0;
+    width: 100%;
+  }
+  .filter-toolbar .btn-primary {
+    width: 100%;
+  }
+  .filter-toolbar-exports .btn-outline {
+    flex: 1 1 calc(50% - var(--spacing-xs));
+    min-width: 0;
+  }
 }
 </style>

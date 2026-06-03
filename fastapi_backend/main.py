@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, attendance_exception, rotor_blade_balance
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, attendance_exception, rotor_blade_balance, personnel_visualization
 import logging
 import time
 
@@ -86,6 +86,7 @@ app.include_router(seal_apply.router, prefix=settings.API_PREFIX)  # 部门用�
 app.include_router(bid_template.router, prefix=settings.API_PREFIX)  # 工艺投标模板库
 app.include_router(attendance_exception.router, prefix=settings.API_PREFIX)  # 打卡异常申请
 app.include_router(rotor_blade_balance.router, prefix=settings.API_PREFIX)  # 转轮叶片配重计算结果追溯
+app.include_router(personnel_visualization.router, prefix=settings.API_PREFIX)  # 人员出勤可视化
 
 @app.on_event("startup")
 async def startup_event():

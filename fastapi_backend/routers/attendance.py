@@ -19,7 +19,13 @@ from attendance_db import attendance_db
 from database import db
 from utils.excel_processor import ExcelProcessor
 from utils.helpers import normalize_qj_tian_days
-from routers.suggestions import get_attendance_exception_keys
+from routers.suggestions import (
+    _is_female_employee,
+    _is_march8_pm_interval,
+    _suggestion_handled,
+    _suggestion_under_review,
+    get_attendance_exception_keys,
+)
 from routers.approvers import _get_user_info, _jb_match
 from routers.db_manager import _get_admin1
 
@@ -77,6 +83,15 @@ def _can_see_attendance_exceptions(current_user: str) -> tuple:
         lsys = (user.get("lsys") or "").strip()
         return True, lsys if lsys else None, False, False
     return False, None, False, False
+
+
+def _can_export_suggestion_attendance_report_all(current_user: str) -> bool:
+    user = _get_user_info((current_user or "").strip())
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    lsys = (user.get("lsys") or "").strip()
+    return lsys == "综合技术室" and (_jb_match(jb, "主任") or _jb_match(jb, "副主任"))
 
 
 def _parse_date_only(val) -> Optional[date_type]:
@@ -837,6 +852,431 @@ async def export_attendance_exceptions(
         raise
     except Exception as e:
         logger.error(f"导出考勤异常失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
+
+
+def _fmt_dt_text(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(val, date_type):
+        return val.strftime("%Y-%m-%d")
+    return str(val).strip()
+
+
+def _fmt_time_text(val) -> str:
+    if val is None:
+        return ""
+    if isinstance(val, datetime):
+        return val.strftime("%H:%M:%S")
+    return str(val).strip()
+
+
+def _status_text(value, approved_value=4, pending_values=(0, 1, 3, 5), rejected_value=22) -> str:
+    try:
+        v = int(value) if value is not None else None
+    except Exception:
+        v = None
+    if v == approved_value:
+        return "已通过"
+    if v == rejected_value:
+        return "已驳回"
+    if v in pending_values:
+        return "审核中"
+    return f"状态{value}" if value is not None else "未知"
+
+
+def _kqyc_status_text(first_status, second_status, processed_to_trip=None) -> str:
+    try:
+        fs = int(first_status or 0)
+        ss = int(second_status or 0)
+        pt = int(processed_to_trip or 0)
+    except Exception:
+        fs, ss, pt = 0, 0, 0
+    if fs == 2 or ss == 2:
+        return "已驳回"
+    if fs == 1 and ss == 1:
+        return "已通过" + ("，已转市内公出" if pt == 1 else "")
+    if fs == 1:
+        return "一级已通过，二级待审批"
+    return "一级待审批"
+
+
+def _biztrip_type_text(raw) -> str:
+    s = str(raw or "").strip()
+    if not s:
+        return "境内公出"
+    return s
+
+
+def _overlap_where(start_col: str, end_col: str) -> str:
+    return f"{start_col} < %s AND {end_col} >= %s"
+
+
+def _query_suggestion_process_rows(names: List[str], start_dt: str, end_dt: str):
+    if not names:
+        return {}, {}, {}, {}, {}, {}, {}
+    ph = ",".join(["%s"] * len(names))
+
+    def by_name(rows, field="xm"):
+        out = {}
+        for r in rows or []:
+            n = (r.get(field) or "").strip()
+            if n:
+                out.setdefault(n, []).append(r)
+        return out
+
+    jiaban_approved = by_name(db.execute_query(
+        f"SELECT xm, timefrom, timeto, spr, spr2, jiabanzt, hx FROM jiaban "
+        f"WHERE xm IN ({ph}) AND jiabanzt = 4 AND {_overlap_where('timefrom', 'timeto')}",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    jiaban_pending = by_name(db.execute_query(
+        f"SELECT xm, timefrom, timeto, spr, spr2, jiabanzt, hx FROM jiaban "
+        f"WHERE xm IN ({ph}) AND jiabanzt IN (0,1,3,5) AND {_overlap_where('timefrom', 'timeto')}",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    qj_approved = by_name(db.execute_query(
+        f"SELECT xm, timefrom, timeto, qjfs, spr, spr2, qjzt, sptime, sp2time, sctime FROM qj "
+        f"WHERE xm IN ({ph}) AND qjzt = 4 AND {_overlap_where('timefrom', 'timeto')}",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    qj_pending = by_name(db.execute_query(
+        f"SELECT xm, timefrom, timeto, qjfs, spr, spr2, qjzt, sptime, sp2time, sctime FROM qj "
+        f"WHERE xm IN ({ph}) AND qjzt IN (0,1,3) AND {_overlap_where('timefrom', 'timeto')}",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    gcsqb_approved = by_name(db.execute_query(
+        f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime, gclx, gcdd, szr, bld, szrzt, bldzt, szrpztime, bldpztime "
+        f"FROM gcsqb WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
+        f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    gcsqb_pending = by_name(db.execute_query(
+        f"SELECT gcr AS xm, yjcfsj, yjfhsj, gcsj, sjfhtime, gclx, gcdd, szr, bld, szrzt, bldzt, szrpztime, bldpztime "
+        f"FROM gcsqb WHERE gcr IN ({ph}) AND (bldzt != 2 OR szrzt != 2) AND bldzt != 22 AND szrzt != 22 "
+        f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    kqyc_rows = by_name(db.execute_query(
+        f"SELECT applicant AS xm, attendance_date, time_from, time_to, reason_type, description, "
+        f"first_approver, second_approver, first_status, second_status, first_approve_time, second_approve_time, "
+        f"processed_to_trip, processed_at, apply_time "
+        f"FROM attendance_exception WHERE applicant IN ({ph}) "
+        f"AND CONCAT(attendance_date, ' ', time_from) < %s AND CONCAT(attendance_date, ' ', time_to) >= %s",
+        tuple(names) + (end_dt, start_dt),
+    ) or [])
+    for n, rows in kqyc_rows.items():
+        for r in rows:
+            if int(r.get("first_status") or 0) == 1 and int(r.get("second_status") or 0) == 1:
+                continue
+            if int(r.get("first_status") or 0) == 2 or int(r.get("second_status") or 0) == 2:
+                continue
+            qj_pending.setdefault(n, []).append({
+                "xm": n,
+                "timefrom": f"{r.get('attendance_date')} {r.get('time_from')}",
+                "timeto": f"{r.get('attendance_date')} {r.get('time_to')}",
+            })
+    return jiaban_approved, jiaban_pending, qj_approved, qj_pending, gcsqb_approved, gcsqb_pending, kqyc_rows
+
+
+def _row_intersects(row: dict, start_key: str, end_key: str, day_start: datetime, day_end: datetime) -> bool:
+    s = _parse_datetime_for_excel(row.get(start_key))
+    e = _parse_datetime_for_excel(row.get(end_key))
+    if not s or not e:
+        return False
+    return s < day_end and e >= day_start
+
+
+def _flow_for_day(name: str, date_str: str, qj_rows, gcsqb_rows, kqyc_rows) -> str:
+    day_start = datetime.strptime(f"{date_str} 00:00:00", "%Y-%m-%d %H:%M:%S")
+    day_end = day_start + timedelta(days=1)
+    parts = []
+    for r in qj_rows or []:
+        if not _row_intersects(r, "timefrom", "timeto", day_start, day_end):
+            continue
+        qjzt = r.get("qjzt")
+        st = _status_text(qjzt)
+        approvers = []
+        if r.get("spr"):
+            approvers.append(f"一级{r.get('spr')}" + (f"({_fmt_dt_text(r.get('sptime'))})" if r.get("sptime") else ""))
+        if r.get("spr2"):
+            approvers.append(f"二级{r.get('spr2')}" + (f"({_fmt_dt_text(r.get('sp2time'))})" if r.get("sp2time") else ""))
+        parts.append(
+            f"请假[{r.get('qjfs') or ''}] {st}：{_fmt_dt_text(r.get('timefrom'))}~{_fmt_dt_text(r.get('timeto'))}"
+            + (f"；审批：{'，'.join(approvers)}" if approvers else "")
+        )
+    for r in gcsqb_rows or []:
+        start = r.get("yjcfsj") or r.get("gcsj")
+        end = r.get("yjfhsj") or r.get("sjfhtime") or start
+        if not _row_intersects({"s": start, "e": end}, "s", "e", day_start, day_end):
+            continue
+        szrzt = _status_text(r.get("szrzt"), approved_value=2, pending_values=(0, 1), rejected_value=22)
+        bldzt = _status_text(r.get("bldzt"), approved_value=2, pending_values=(0, 1), rejected_value=22)
+        parts.append(
+            f"公出[{_biztrip_type_text(r.get('gclx'))}] {start}~{end}；地点：{r.get('gcdd') or ''}；"
+            f"室主任{r.get('szr') or ''}({szrzt}{',' + _fmt_dt_text(r.get('szrpztime')) if r.get('szrpztime') else ''})，"
+            f"部领导{r.get('bld') or ''}({bldzt}{',' + _fmt_dt_text(r.get('bldpztime')) if r.get('bldpztime') else ''})"
+        )
+    for r in kqyc_rows or []:
+        kdate = str(r.get("attendance_date") or "")[:10]
+        if kdate != date_str:
+            continue
+        st = _kqyc_status_text(r.get("first_status"), r.get("second_status"), r.get("processed_to_trip"))
+        parts.append(
+            f"打卡异常申请[{r.get('reason_type') or ''}] {st}：{kdate} {r.get('time_from')}~{r.get('time_to')}；"
+            f"一级{r.get('first_approver') or ''}({_fmt_dt_text(r.get('first_approve_time')) or '待'})，"
+            f"二级{r.get('second_approver') or ''}({_fmt_dt_text(r.get('second_approve_time')) or '待'})"
+            + (f"；转公出时间：{_fmt_dt_text(r.get('processed_at'))}" if r.get("processed_at") else "")
+        )
+    return "\n".join([p for p in parts if p]) or "未查询到处理流程"
+
+
+def _name_initial_sort_key(name: str) -> str:
+    text = (name or "").strip()
+    if not text:
+        return ""
+    try:
+        from pypinyin import lazy_pinyin, Style
+        return "".join(lazy_pinyin(text, style=Style.FIRST_LETTER)).upper()
+    except Exception:
+        return text
+
+
+def _payload_first_time(payload: dict) -> str:
+    suggestions = payload.get("suggestions") or []
+    first_suggestion = min((_fmt_dt_text(s.get("start_time")) for s in suggestions if s.get("start_time")), default="")
+    rec = payload.get("record") or {}
+    first_punch = ""
+    date_str = str(rec.get("attendance_date") or "")[:10]
+    for i in range(1, 11):
+        t = _fmt_time_text(rec.get(f"time_{i}"))
+        if t:
+            first_punch = f"{date_str} {t}" if date_str else t
+            break
+    return first_suggestion or first_punch
+
+
+@router.get("/suggestion-attendance-report/export")
+async def export_suggestion_attendance_report(
+    start_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
+    end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
+    current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
+):
+    """
+    导出日期段打卡与智能建议处理报表。
+    每人每天一行：打卡记录 + 缺勤标记 + 是否完成处理 + 处理流程。
+    权限同考勤异常管理。
+    """
+    allowed, filter_lsys, _, include_buban = _can_see_attendance_exceptions(current_user or "")
+    can_export_all = _can_export_suggestion_attendance_report_all(current_user or "")
+    if not allowed and not can_export_all:
+        raise HTTPException(status_code=403, detail="仅班组长/主任/副主任、部长/副部长或打卡管理员可导出")
+    if can_export_all:
+        filter_lsys = None
+        include_buban = True
+    try:
+        sd = datetime.strptime(start_date[:10], "%Y-%m-%d").date()
+        ed = datetime.strptime(end_date[:10], "%Y-%m-%d").date()
+    except Exception:
+        raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+    if sd > ed:
+        raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+    if (ed - sd).days > 370:
+        raise HTTPException(status_code=400, detail="单次导出日期范围不能超过 370 天")
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Alignment, Border, Font, PatternFill, Side
+        from openpyxl.utils import get_column_letter
+    except ImportError:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
+
+    try:
+        start_dt = f"{sd} 00:00:00"
+        end_dt = f"{ed + timedelta(days=1)} 00:00:00"
+        params = [str(sd), str(ed)]
+        lsys_cond = ""
+        buban_cond = "" if include_buban else " AND TRIM(COALESCE(department,'')) != '部办'"
+        if filter_lsys:
+            lsys_cond = " AND TRIM(COALESCE(department,'')) = %s"
+            params.append(filter_lsys)
+
+        records = db.execute_query(
+            f"""
+            SELECT *
+            FROM attendance_records
+            WHERE attendance_date >= %s AND attendance_date <= %s
+              AND TRIM(COALESCE(department,'')) NOT IN ('其他部门员工','其他部门成员')
+              {buban_cond}
+              {lsys_cond}
+            ORDER BY attendance_date, department, employee_name
+            """,
+            tuple(params),
+        ) or []
+
+        sugg_params = [start_dt, end_dt]
+        sugg_lsys_cond = ""
+        sugg_buban_cond = "" if include_buban else " AND TRIM(COALESCE(s.department,'')) != '部办'"
+        if filter_lsys:
+            sugg_lsys_cond = " AND TRIM(COALESCE(s.department,'')) = %s"
+            sugg_params.append(filter_lsys)
+        suggestion_rows = db.execute_query(
+            f"""
+            SELECT s.employee_name, s.department, DATE(s.start_time) AS date, s.day_type, s.message,
+                   s.start_time, s.end_time, s.status, y.xbie
+            FROM attendance_suggestions s
+            LEFT JOIN yggl y ON y.name COLLATE utf8mb4_unicode_ci = s.employee_name COLLATE utf8mb4_unicode_ci
+            WHERE s.start_time >= %s AND s.start_time < %s
+              AND TRIM(COALESCE(s.department,'')) NOT IN ('其他部门员工','其他部门成员')
+              {sugg_buban_cond}
+              {sugg_lsys_cond}
+            ORDER BY s.start_time, s.department, s.employee_name
+            """,
+            tuple(sugg_params),
+        ) or []
+
+        keys = {}
+        for r in records:
+            date_str = str(r.get("attendance_date") or "")[:10]
+            name = (r.get("employee_name") or "").strip()
+            dept = (r.get("department") or "").strip()
+            if date_str and name:
+                keys[(name, dept, date_str)] = {"record": r, "suggestions": []}
+        for s in suggestion_rows:
+            st = s.get("status") if s.get("status") is not None else 0
+            if int(st or 0) != 1:
+                continue
+            date_str = str(s.get("date") or "")[:10]
+            name = (s.get("employee_name") or "").strip()
+            dept = (s.get("department") or "").strip()
+            if not date_str or not name:
+                continue
+            if ("女" in (s.get("xbie") or "") or _is_female_employee(name)) and _is_march8_pm_interval(date_str, s.get("start_time"), s.get("end_time")):
+                continue
+            keys.setdefault((name, dept, date_str), {"record": None, "suggestions": []})["suggestions"].append(s)
+
+        names = sorted({k[0] for k in keys})
+        jiaban_ok, jiaban_pending, qj_ok, qj_pending, gcsqb_ok, gcsqb_pending, kqyc_rows = _query_suggestion_process_rows(names, start_dt, end_dt)
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "打卡与智能建议"
+        headers = ["日期", "姓名", "科室"] + [f"打卡{i}" for i in range(1, 11)] + [
+            "缺勤标记", "是否完成处理", "处理流程", "智能建议"
+        ]
+        ws.append(headers)
+
+        fill_header = PatternFill("solid", fgColor="D9EAF7")
+        fill_absent = PatternFill("solid", fgColor="F8CBAD")
+        fill_normal = PatternFill("solid", fgColor="C6E0B4")
+        fill_pending = PatternFill("solid", fgColor="FFE699")
+        fill_missing = PatternFill("solid", fgColor="F4B084")
+        thin = Side(style="thin", color="7F7F7F")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for c in ws[1]:
+            c.font = Font(bold=True)
+            c.alignment = Alignment(horizontal="center", vertical="center")
+            c.fill = fill_header
+            c.border = border
+
+        sorted_items = sorted(
+            keys.items(),
+            key=lambda x: (_name_initial_sort_key(x[0][0]), x[0][0], x[0][2], _payload_first_time(x[1])),
+        )
+        for (name, dept, date_str), payload in sorted_items:
+            rec = payload.get("record") or {}
+            suggestions_for_day = payload.get("suggestions") or []
+            qj_all = (qj_ok.get(name, []) or []) + (qj_pending.get(name, []) or [])
+            gcsqb_all = (gcsqb_ok.get(name, []) or []) + (gcsqb_pending.get(name, []) or [])
+            flow = _flow_for_day(name, date_str, qj_all, gcsqb_all, kqyc_rows.get(name, []))
+            punch_values = []
+            for i in range(1, 11):
+                t = _fmt_time_text(rec.get(f"time_{i}"))
+                mark = rec.get(f"time_{i}_mark")
+                if t and mark is not None:
+                    mark_text = "进" if str(mark) == "0" else "出" if str(mark) == "1" else ""
+                    if mark_text:
+                        t = f"{t}({mark_text})"
+                punch_values.append(t)
+
+            absent = bool(suggestions_for_day)
+            suggestion_text = "\n".join([
+                f"{_fmt_dt_text(s.get('start_time'))}~{_fmt_dt_text(s.get('end_time'))} {s.get('message') or ''}"
+                for s in suggestions_for_day
+            ])
+            if not absent:
+                done_text = "已完成"
+            else:
+                suggestion_states = []
+                for s in suggestions_for_day:
+                    st = s.get("status") if s.get("status") is not None else 0
+                    handled = _suggestion_handled(
+                        s.get("start_time"), s.get("end_time"), int(st or 0),
+                        jiaban_ok.get(name, []), qj_ok.get(name, []), gcsqb_ok.get(name, []),
+                    )
+                    under_review = (not handled) and _suggestion_under_review(
+                        s.get("start_time"), s.get("end_time"), int(st or 0),
+                        jiaban_pending.get(name, []), qj_pending.get(name, []), gcsqb_pending.get(name, []),
+                    )
+                    if handled:
+                        suggestion_states.append("已完成")
+                    elif under_review:
+                        suggestion_states.append("审核中")
+                    else:
+                        suggestion_states.append("未处理")
+                if not suggestion_states or "未处理" in suggestion_states:
+                    done_text = "未处理"
+                elif "审核中" in suggestion_states:
+                    done_text = "审核中"
+                else:
+                    done_text = "已完成"
+
+            ws.append([
+                date_str,
+                name,
+                dept,
+                *punch_values,
+                "是" if absent else "否",
+                done_text,
+                flow if absent or flow != "未查询到处理流程" else "",
+                suggestion_text,
+            ])
+            row_idx = ws.max_row
+            absent_cell = ws.cell(row=row_idx, column=14)
+            done_cell = ws.cell(row=row_idx, column=15)
+            absent_cell.fill = fill_absent if absent else fill_normal
+            if done_text == "已完成":
+                done_cell.fill = fill_normal
+            elif done_text == "审核中":
+                done_cell.fill = fill_pending
+            else:
+                done_cell.fill = fill_missing
+
+        for row in ws.iter_rows():
+            for c in row:
+                c.border = border
+                c.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+        widths = [13, 12, 20] + [14] * 10 + [11, 13, 48, 54]
+        for idx, width in enumerate(widths, 1):
+            ws.column_dimensions[get_column_letter(idx)].width = width
+        ws.freeze_panes = "A2"
+        ws.auto_filter.ref = ws.dimensions
+
+        buf = BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        filename_ascii = f"attendance_suggestion_report_{sd}_{ed}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+        return StreamingResponse(
+            buf,
+            media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="{filename_ascii}"'},
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"导出打卡与智能建议报表失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"导出失败: {str(e)}")
 
 

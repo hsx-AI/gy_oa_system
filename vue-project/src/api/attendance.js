@@ -658,6 +658,20 @@ export function exportLeaveHandlerTable(params) {
   })
 }
 
+/**
+ * 导出日期段打卡与智能建议处理报表
+ * @param {Object} params - { start_date, end_date, current_user }
+ */
+export function exportSuggestionAttendanceReport(params) {
+  return request({
+    url: '/attendance/suggestion-attendance-report/export',
+    method: 'get',
+    params,
+    responseType: 'blob',
+    timeout: 180000
+  })
+}
+
 // ==================== 公出节假日换休票 API ====================
 
 /** 提交公出节假日换休票申请（FormData，含文件上传） */

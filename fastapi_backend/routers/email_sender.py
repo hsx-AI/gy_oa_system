@@ -952,6 +952,49 @@ def _create_auto_reminder_result_notifications(log_entry: dict):
             logger.warning(f"写入自动发送结果通知失败 recipient={name}: {e}")
 
 
+def _create_mail_result_notifications(
+    title: str,
+    description: str,
+    source_key_parts: List[str],
+    target_year: int = 0,
+    target_month: int = 0,
+    trigger_label: str = "",
+    source_time: Optional[str] = None,
+):
+    """写入邮件发送成功通知，供首页待办和重要信息审阅复用。"""
+    _ensure_auto_reminder_notice_table()
+    recipients = _get_auto_reminder_notice_recipients()
+    if not recipients:
+        return
+
+    st = (source_time or datetime.now().strftime("%Y-%m-%d %H:%M:%S")).strip()
+    key_seed = "|".join(str(x or "") for x in ([title, st] + list(source_key_parts or [])))
+    source_key = hashlib.sha256(key_seed.encode("utf-8")).hexdigest()
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    for name in recipients:
+        try:
+            db.execute_update(
+                """
+                INSERT IGNORE INTO auto_reminder_result_notifications
+                (recipient_name, title, description, target_year, target_month, trigger_label, source_time, source_key, is_read, created_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, 0, %s)
+                """,
+                (
+                    name,
+                    (title or "邮件发送成功")[:120],
+                    description or "",
+                    int(target_year or 0),
+                    int(target_month or 0),
+                    (trigger_label or "")[:120],
+                    st,
+                    source_key,
+                    now,
+                ),
+            )
+        except Exception as e:
+            logger.warning(f"写入邮件发送结果通知失败 recipient={name}: {e}")
+
+
 @router.get("/auto-reminder-config")
 async def get_auto_reminder_config_api(current_user: str = Query(...)):
     _require_admin(current_user)
@@ -1680,6 +1723,27 @@ async def _run_shift_schedule_email_once_locked(
                     f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人"
                 )
                 recipient_total = len(all_recipients)
+                week_start_min = min(report["week_start"] for report in reports)
+                week_end_max = max(report["week_end"] for report in reports)
+                dept_names = "、".join(report["department"] for report in reports)
+                _create_mail_result_notifications(
+                    "排班邮件发送成功",
+                    (
+                        f"{week_start_min.strftime('%Y-%m-%d')}至{week_end_max.strftime('%Y-%m-%d')}，"
+                        f"{dept_names}周排班邮件已向{unit}发送成功，"
+                        f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人。"
+                    ),
+                    [
+                        "shift_schedule",
+                        trigger_label,
+                        unit,
+                        week_start_min.strftime("%Y-%m-%d"),
+                        ",".join(report["department"] for report in reports),
+                    ],
+                    target_year=week_start_min.year,
+                    target_month=week_start_min.month,
+                    trigger_label=trigger_label,
+                )
                 for report in reports:
                     sent += 1
                     _record_shift_schedule_email_log(
@@ -1855,7 +1919,7 @@ async def shift_schedule_email_background_loop():
 # ==================== 管理人员待办邮件提醒 ====================
 
 TODO_REMINDER_THRESHOLD = 10
-TODO_REMINDER_INTERVAL_DAYS = 3
+TODO_REMINDER_INTERVAL_DAYS = 2
 TODO_REMINDER_CHECK_SECONDS = TODO_REMINDER_INTERVAL_DAYS * 24 * 3600
 
 
@@ -2292,7 +2356,7 @@ def _get_todo_reminder_recipients() -> List[Dict]:
 
 
 async def run_todo_email_reminder_once() -> dict:
-    """扫描管理人员待办，超过阈值且距离上次提醒已满 3 天则发送邮件。"""
+    """扫描管理人员待办，超过阈值且距离上次提醒已满间隔天数则发送邮件。"""
     lock_name = "oa_todo_email_reminder_run"
     lock_conn = _try_acquire_mysql_lock(lock_name, "TodoReminder")
     if not lock_conn:
@@ -2358,6 +2422,23 @@ async def _run_todo_email_reminder_once_locked() -> dict:
             _record_todo_reminder_result(item["name"], sent_at, item["count"])
         for item in failures:
             _record_todo_reminder_result(item["name"], None, 0, item["error"])
+        if sent:
+            sent_names = "、".join(item["name"] for item in sent[:5])
+            if len(sent) > 5:
+                sent_names += f"等{len(sent)}人"
+            _create_mail_result_notifications(
+                "待办提醒邮件发送成功",
+                f"管理人员待办过多提醒邮件已发送成功，共 {len(sent)} 封；提醒对象：{sent_names}。",
+                [
+                    "todo_reminder",
+                    sent_at.strftime("%Y-%m-%d %H:%M:%S"),
+                    ",".join(item["name"] for item in sent),
+                ],
+                target_year=sent_at.year,
+                target_month=sent_at.month,
+                trigger_label=f"待办超过{TODO_REMINDER_THRESHOLD}条自动提醒",
+                source_time=sent_at.strftime("%Y-%m-%d %H:%M:%S"),
+            )
         if failures:
             logger.warning("[TodoReminder] 部分待办提醒发送失败: %s", failures[:3])
         logger.info("[TodoReminder] 已发送 %s 封待办提醒，检查 %s 人", len(sent), checked)
@@ -2375,7 +2456,7 @@ async def _run_todo_email_reminder_once_locked() -> dict:
 
 
 async def todo_reminder_background_loop():
-    """后台循环：每 3 天检查一次，单人 3 天内最多提醒一次。"""
+    """后台循环：按 TODO_REMINDER_INTERVAL_DAYS 周期检查，单人同周期内最多提醒一次。"""
     logger.info("[TodoReminder] 管理人员待办邮件提醒后台任务已启动")
     print("[System] 管理人员待办邮件提醒后台任务已启动")
     await asyncio.sleep(300)

@@ -41,6 +41,18 @@
             </svg>
             <span>考勤智能填报</span>
           </router-link>
+          <router-link to="/attendance/personnel-visualization" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <rect x="3" y="4" width="18" height="14" rx="2" />
+              <path d="M7 18v2" />
+              <path d="M17 18v2" />
+              <circle cx="8" cy="10" r="2" />
+              <path d="M5.5 15a3 3 0 0 1 5 0" />
+              <circle cx="16" cy="10" r="2" />
+              <path d="M13.5 15a3 3 0 0 1 5 0" />
+            </svg>
+            <span>人员出勤可视化</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/attendance/business-trip" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 13.255A23.931 23.931 0 0112 15c-3.183 0-6.22-.62-9-1.745M16 6V4a2 2 0 00-2-2h-4a2 2 0 00-2 2v2m4 6h.01M5 20h14a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
@@ -60,6 +72,15 @@
               <line x1="6" y1="20" x2="6" y2="14" />
             </svg>
             <span>统计汇总</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/reports-hub" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M8 13h8" />
+              <path d="M8 17h6" />
+            </svg>
+            <span>报表汇聚</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">

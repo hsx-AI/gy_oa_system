@@ -27,6 +27,12 @@ const routes = [
     component: Attendance
   },
   {
+    path: '/attendance/personnel-visualization',
+    name: 'PersonnelVisualization',
+    component: () => import('../views/attendance/PersonnelVisualization.vue'),
+    meta: { title: '人员出勤可视化' }
+  },
+  {
     path: '/upload',
     name: 'UploadAttendance',
     component: UploadAttendance
@@ -47,6 +53,12 @@ const routes = [
     path: '/statistics',
     name: 'Statistics',
     component: Statistics
+  },
+  {
+    path: '/reports-hub',
+    name: 'ReportsHub',
+    component: () => import('../views/ReportsHub.vue'),
+    meta: { title: '报表汇聚' }
   },
   {
     path: '/leader-dashboard',
@@ -349,7 +361,7 @@ router.beforeEach(async (to, _from, next) => {
     const u = JSON.parse(raw)
     const lsys = (u.dept || u.lsys || '').trim()
     if (lsys === '其他部门成员') {
-      const allowed = ['/file/numbering', '/file/tech-category', '/file/workno']
+      const allowed = ['/file/numbering', '/file/tech-category', '/file/workno', '/attendance/personnel-visualization']
       if (!allowed.includes(to.path)) {
         next('/file/numbering')
         return

@@ -1028,8 +1028,8 @@ async def get_leader_briefing(
     days: int = Query(7, ge=1, le=30, description="最近 N 天"),
 ):
     """
-    部长首页「重要信息审阅」：最近 N 天内审批通过的换休票获取 + 公出记录。
-    仅部长可调用。
+    首页「重要信息审阅」：最近 N 天内审批通过的换休票获取 + 公出记录。
+    部长/副部长级别可调用（含经理/副经理/经理助理）。
     """
     from routers.approvers import _get_user_info, _jb_match
 
@@ -1039,8 +1039,8 @@ async def get_leader_briefing(
     jb = (user.get("jb") or "").strip()
     admin1 = (_get_admin1() or "").strip()
     is_admin = bool(admin1 and (name or "").strip() == admin1)
-    if not (is_admin or _jb_match(jb, "部长")):
-        raise HTTPException(status_code=403, detail="仅部长可查看")
+    if not (is_admin or _jb_match(jb, "部长") or _jb_match(jb, "副部长")):
+        raise HTTPException(status_code=403, detail="仅部长/副经理级别可查看")
 
     items = []
 
@@ -1188,6 +1188,46 @@ async def get_leader_briefing(
             })
     except Exception as e:
         logger.warning(f"leader-briefing 查公出失败: {e}")
+
+    try:
+        from routers.email_sender import _ensure_auto_reminder_notice_table
+
+        _ensure_auto_reminder_notice_table()
+        mail_rows = db.execute_query(
+            """SELECT DISTINCT title, description, target_year, target_month,
+                      trigger_label, source_time, created_at
+               FROM auto_reminder_result_notifications
+               WHERE created_at >= DATE_SUB(NOW(), INTERVAL %s DAY)
+               ORDER BY created_at DESC
+               LIMIT 50""",
+            (days,),
+        )
+        seen_mail = set()
+        for r in mail_rows or []:
+            title = (r.get("title") or "邮件发送成功").strip()
+            desc = (r.get("description") or "").strip()
+            source_time = r.get("source_time") or r.get("created_at")
+            if hasattr(source_time, "strftime"):
+                time_value = source_time.strftime("%Y-%m-%d %H:%M:%S")
+            else:
+                time_value = str(source_time or "")[:19]
+            dedupe_key = (title, desc, time_value)
+            if dedupe_key in seen_mail:
+                continue
+            seen_mail.add(dedupe_key)
+            at = time_value[:10]
+            year = r.get("target_year") or (at[:4] if len(at) >= 4 else "")
+            trigger = (r.get("trigger_label") or "").strip()
+            suffix = f"（{trigger}）" if trigger else ""
+            items.append({
+                "type": "mail",
+                "time": time_value,
+                "name": "",
+                "year": str(year or ""),
+                "text": f"{at}，{title}：{desc}{suffix}",
+            })
+    except Exception as e:
+        logger.warning(f"leader-briefing 查邮件发送通知失败: {e}")
 
     items.sort(key=lambda x: x.get("time", ""), reverse=True)
     return {"success": True, "items": items}

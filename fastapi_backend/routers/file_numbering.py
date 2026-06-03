@@ -15,6 +15,7 @@ import uuid
 from io import BytesIO
 
 from routers.department_policy import _can_upload_policy
+from routers.approvers import _get_user_info, _jb_match
 
 logger = logging.getLogger(__name__)
 
@@ -812,16 +813,29 @@ _EXPORT_TABLE_LABELS = {
 }
 
 
+def _can_export_bianhao_excel(name: str) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    if _can_upload_policy(n):
+        return True
+    user = _get_user_info(n)
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    return _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+
+
 @router.get("/export/excel")
 async def export_bianhao_excel(
     table: str = Query(..., description="tech|jsgl|manage|gygch|scszh"),
     name: str = Query(..., description="当前用户姓名"),
 ):
-    """导出各类型编号台账（全量）。仅 yggl 综合技术室且主任/副主任可用，与制度上传权限一致。"""
+    """导出各类型编号台账（全量）。综合技术室主任/副主任、经理/副经理可用。"""
     if table not in _EXPORT_TABLE_LABELS:
         raise HTTPException(status_code=400, detail="无效表格类型")
-    if not _can_upload_policy((name or "").strip()):
-        raise HTTPException(status_code=403, detail="仅综合技术室主任/副主任可导出")
+    if not _can_export_bianhao_excel((name or "").strip()):
+        raise HTTPException(status_code=403, detail="仅经理/副经理/综合技术室主任/副主任可导出")
     try:
         from openpyxl import Workbook
     except ImportError:

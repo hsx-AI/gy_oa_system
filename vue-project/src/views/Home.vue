@@ -199,9 +199,9 @@
       </article>
     </section>
 
-    <!-- 重要信息审阅（仅部长可见） -->
+    <!-- 重要信息审阅（部长/副部长级别可见，含经理/副经理） -->
     <section
-      v-if="isHomeModuleVisible('briefing') && isBuzhang && briefingItems.length > 0"
+      v-if="isHomeModuleVisible('briefing') && canSeeBriefing && briefingItems.length > 0"
       class="home-tile home-tile--briefing briefing-section"
       data-home-module-id="briefing"
       :style="homeModuleStyle('briefing')"
@@ -772,6 +772,104 @@
       </article>
     </section>
 
+    <!-- 人员出勤可视化缩略瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('personnelVisual')"
+      class="home-tile home-tile--personnel-visual"
+      data-home-module-id="personnelVisual"
+      :style="homeModuleStyle('personnelVisual')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'personnelVisual' }"
+        title="拖动调整位置"
+        aria-label="拖动调整人员出勤可视化位置"
+        @pointerdown="startHomeTileDrag($event, 'personnelVisual')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card personnel-visual-card">
+        <header class="dashboard-card__header personnel-visual-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--personnel-visual" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <rect x="3" y="4" width="18" height="14" rx="2"/>
+                <path d="M8 18v2m8-2v2M7 9h3m4 0h3M7 13h10"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">人员出勤可视化</span>
+            <span class="dashboard-card__badge" v-if="personnelVisualSummary.total">{{ personnelVisualSummary.total }}</span>
+          </h2>
+          <div class="personnel-visual-actions">
+            <button type="button" class="wall-preview-refresh" title="刷新" @click="loadPersonnelVisualPreview">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <router-link to="/attendance/personnel-visualization" class="wall-preview-viewall">
+              查看全部
+            </router-link>
+          </div>
+        </header>
+        <div class="personnel-visual-body" @click="router.push('/attendance/personnel-visualization')">
+          <div v-if="personnelVisualLoading" class="dashboard-empty"><p>加载中...</p></div>
+          <div v-else-if="personnelVisualError" class="dashboard-empty"><p>{{ personnelVisualError }}</p></div>
+          <template v-else>
+            <div class="personnel-mini-summary">
+              <select
+                v-if="personnelVisualAvailableDepartments.length > 1"
+                v-model="personnelVisualSelectedDept"
+                class="personnel-mini-dept-select"
+                title="切换科室"
+                @click.stop
+                @change="loadPersonnelVisualPreview"
+              >
+                <option v-for="dept in personnelVisualAvailableDepartments" :key="dept" :value="dept">{{ dept }}</option>
+              </select>
+              <span v-else class="personnel-mini-dept">{{ personnelVisualScene.department || userLsys || '本科室' }}</span>
+              <span>在岗 {{ personnelVisualSummary.present }}</span>
+              <span>公出 {{ personnelVisualSummary.businessTrip }}</span>
+              <span>请假 {{ personnelVisualSummary.leave }}</span>
+              <span>暂无 {{ personnelVisualSummary.noRecord }}</span>
+            </div>
+            <div v-if="personnelVisualPeople.length" class="personnel-mini-office">
+              <div class="personnel-mini-desks">
+                <article
+                  v-for="(person, index) in personnelVisualPeople"
+                  :key="person.gh || person.name || index"
+                  class="personnel-mini-desk"
+                  :class="[`personnel-mini-desk--${person.status || 'no_record'}`, `personnel-mini-desk--${personnelGenderClass(person)}`]"
+                  :style="{ '--desk-delay': `${index * 0.1}s` }"
+                  :title="`${person.name || ''}：${person.statusLabel || ''}`"
+                >
+                  <div class="personnel-mini-name">{{ person.name }}</div>
+                  <div class="personnel-mini-workstation">
+                    <div class="personnel-mini-screen"><span></span></div>
+                    <div class="personnel-mini-worker">
+                      <i class="hair"></i><i class="head"></i><i class="body"></i><i class="arm arm-left"></i><i class="arm arm-right"></i>
+                    </div>
+                    <div v-if="person.status === 'business_trip'" class="personnel-mini-trip">
+                      <i></i><b></b>
+                    </div>
+                    <div v-if="person.status === 'leave'" class="personnel-mini-leave">假</div>
+                    <div class="personnel-mini-table"></div>
+                  </div>
+                </article>
+              </div>
+            </div>
+            <div v-else class="dashboard-empty"><p>暂无人员数据</p></div>
+          </template>
+        </div>
+      </article>
+    </section>
+
     <div v-if="homeLayoutEditorVisible" class="modal-overlay" @click.self="closeHomeLayoutEditor">
       <div class="home-layout-modal">
         <div class="home-layout-modal__header">
@@ -838,6 +936,7 @@ import { getMySealApplications } from '@/api/seal'
 import { getLeaderBriefing } from '@/api/admin'
 import { getContacts } from '@/api/contacts'
 import { getWallList, likeWall } from '@/api/feedback'
+import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
@@ -972,7 +1071,84 @@ async function doWallLike(id) {
   } catch { /* ignore */ }
 }
 
-const isBuzhang = ref(false)
+// 人员出勤可视化首页缩略
+const personnelVisualLoading = ref(false)
+const personnelVisualError = ref('')
+const personnelVisualSelectedDept = ref('')
+const personnelVisualScene = ref({
+  department: '',
+  generatedAt: '',
+  people: [],
+  availableDepartments: [],
+  summary: { total: 0, present: 0, businessTrip: 0, leave: 0, leavePending: 0, noRecord: 0 },
+})
+
+const personnelVisualAvailableDepartments = computed(() =>
+  (personnelVisualScene.value.availableDepartments || []).filter(Boolean)
+)
+
+const personnelVisualSummary = computed(() => ({
+  total: 0,
+  present: 0,
+  businessTrip: 0,
+  leave: 0,
+  leavePending: 0,
+  noRecord: 0,
+  ...(personnelVisualScene.value.summary || {}),
+}))
+
+const personnelVisualPeople = computed(() => {
+  const order = { present: 0, business_trip: 1, leave: 2, no_record: 3 }
+  return [...(personnelVisualScene.value.people || [])]
+    .sort((a, b) => (order[a.status] ?? 9) - (order[b.status] ?? 9))
+})
+
+function todayLocalDate() {
+  const d = new Date()
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function personnelGenderClass(person) {
+  if (person?.gender === 'female' || String(person?.xbie || '').includes('女')) return 'female'
+  if (person?.gender === 'male' || String(person?.xbie || '').includes('男')) return 'male'
+  return 'unknown'
+}
+
+async function loadPersonnelVisualPreview() {
+  const currentUser = (userName.value || '').trim()
+  if (!currentUser) {
+    personnelVisualError.value = '未获取到当前登录用户'
+    return
+  }
+  personnelVisualLoading.value = true
+  personnelVisualError.value = ''
+  try {
+    const res = await getPersonnelAttendanceScene({
+      current_user: currentUser,
+      department: personnelVisualSelectedDept.value || undefined,
+      target_date: todayLocalDate(),
+    })
+    if (res?.success) {
+      personnelVisualScene.value = res
+      if (!personnelVisualSelectedDept.value && res.department) {
+        personnelVisualSelectedDept.value = res.department
+      }
+    } else {
+      personnelVisualError.value = res?.message || '加载失败'
+      personnelVisualScene.value = { ...personnelVisualScene.value, people: [] }
+    }
+  } catch (e) {
+    personnelVisualError.value = e?.response?.data?.detail || e?.message || '加载失败'
+    personnelVisualScene.value = { ...personnelVisualScene.value, people: [] }
+  } finally {
+    personnelVisualLoading.value = false
+  }
+}
+
+const canSeeBriefing = ref(false)
 const briefingItems = ref([])
 const briefingTrackRef = ref(null)
 const briefingDays = ref(7)
@@ -985,6 +1161,7 @@ const briefingFilterOptions = [
   { value: 'trip_domestic', label: '境内公出' },
   { value: 'trip_abroad', label: '境外公出' },
   { value: 'hxp_all', label: '换休票' },
+  { value: 'mail', label: '邮件' },
 ]
 let marqueeTimer = null
 let marqueeOffset = 0
@@ -1060,6 +1237,9 @@ const briefingFilteredItems = computed(() => {
   if (mode === 'hxp_all') {
     return arr.filter(i => ['hxp', 'hxp_batch', 'hxp_overtime'].includes(i?.type))
   }
+  if (mode === 'mail') {
+    return arr.filter(i => i?.type === 'mail')
+  }
   if (mode === 'trip_city' || mode === 'trip_domestic' || mode === 'trip_abroad') {
     return arr.filter(i => getTripScopeFromItem(i) === mode)
   }
@@ -1077,6 +1257,7 @@ function briefingTagLabel(type) {
   if (type === 'hxp_overtime') return '加班换休'
   if (type === 'hxp' || type === 'hxp_batch') return '换休票'
   if (type === 'trip') return '公出'
+  if (type === 'mail') return '邮件'
   return '消息'
 }
 
@@ -1095,6 +1276,8 @@ function goBriefingDetail(item) {
     router.push({ path: '/attendance/manual', query: q })
   } else if (item.type === 'hxp_batch') {
     router.push('/admin/hxp-manage')
+  } else if (item.type === 'mail') {
+    router.push('/admin/email')
   }
 }
 
@@ -1113,7 +1296,7 @@ async function fetchBriefing() {
         startMarquee()
       }
     }
-  } catch { /* 非部长会403，忽略 */ }
+  } catch { /* 无权限会403，忽略 */ }
 }
 
 /** 根据 permission 字段判断当前用户是否可见该卡片 */
@@ -1242,6 +1425,15 @@ const rawFeatureGroups = [
         iconPath: 'M9 11l3 3L22 4M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11'
       },
       {
+        id: 'personnel-visualization',
+        title: '人员出勤可视化',
+        description: '以办公室工位动画查看本科室在岗、公出和打卡状态',
+        path: '/attendance/personnel-visualization',
+        color: 'linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%)',
+        tag: '新功能',
+        iconPath: 'M3 4h18v14H3V4zm4 14v2m10-2v2M8 8a2 2 0 100 4 2 2 0 000-4zm8 0a2 2 0 100 4 2 2 0 000-4z'
+      },
+      {
         id: 'businesstrip',
         title: '公出管理',
         description: '公出申请提交、审批与外出记录统计',
@@ -1256,6 +1448,15 @@ const rawFeatureGroups = [
         path: '/statistics',
         color: 'linear-gradient(135deg, #fa709a 0%, #fee140 100%)',
         iconPath: 'M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z'
+      },
+      {
+        id: 'reports-hub',
+        title: '报表汇聚',
+        description: '集中导出考勤、绩效、排班和台账报表',
+        path: '/reports-hub',
+        color: 'linear-gradient(135deg, #0f766e 0%, #84cc16 100%)',
+        tag: '新功能',
+        iconPath: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M8 13h8M8 17h6'
       },
       {
         id: 'hxp-records',
@@ -1590,9 +1791,10 @@ const HOME_LAYOUT_MODULES = [
   { id: 'todo', label: '待办事项', description: '需要我处理的待办与审批' },
   { id: 'request', label: '我的申请流程', description: '我提交的待审批 / 审批中申请' },
   { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
-  { id: 'briefing', label: '重要信息审阅', description: '部长可见的重要换休、公出信息滚动审阅' },
+  { id: 'briefing', label: '重要信息审阅', description: '部长/副经理级别可见的重要换休、公出信息滚动审阅' },
   { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },
   { id: 'wall', label: '吐槽墙', description: '匿名吐槽与互动' },
+  { id: 'personnelVisual', label: '人员出勤可视化', description: '本科室在岗、公出、请假状态办公室缩略预览' },
   { id: 'favorites', label: '常用功能', description: '用户自定义的常用功能入口' },
   { id: 'newFeatures', label: '新增功能', description: '最近上线的新功能入口' },
   { id: 'shortcuts', label: '全部功能', description: '按分类平铺展示全部可用功能' },
@@ -1658,7 +1860,7 @@ const homeLayoutDrag = reactive({
 })
 
 function isHomeModuleConfigurable(id) {
-  if (id === 'briefing') return isBuzhang.value
+  if (id === 'briefing') return canSeeBriefing.value
   return true
 }
 
@@ -1758,7 +1960,7 @@ function startHomeTileDrag(event, id) {
 }
 
 function isHomeModuleRuntimeAvailable(id) {
-  if (id === 'briefing') return isBuzhang.value && briefingItems.value.length > 0
+  if (id === 'briefing') return canSeeBriefing.value && briefingItems.value.length > 0
   if (id === 'newFeatures') return newFeatureItems.value.length > 0
   if (id === 'inboxBoard') return canAccessInboxBoard.value
   return true
@@ -1835,6 +2037,15 @@ watch(
   () => isHomeModuleVisible('contactsCard'),
   (vis, was) => {
     if (vis && was === false) void loadContactsHome()
+  }
+)
+
+watch(
+  () => isHomeModuleVisible('personnelVisual'),
+  (vis, was) => {
+    if (vis && was === false && !personnelVisualScene.value.people?.length) {
+      void loadPersonnelVisualPreview()
+    }
   }
 )
 
@@ -2244,11 +2455,14 @@ onMounted(() => {
   userJb.value = info.jb || ''
   userLsys.value = (info.lsys || info.dept || '').trim()
   const jb = (info.jb || '').trim()
-  isBuzhang.value = jbMatch(jb, '部长')
+  canSeeBriefing.value = isMinisterLevel(jb)
   refreshWorkplaceTodos()
   fetchRequestList()
   loadWallList()
-  if (isBuzhang.value) fetchBriefing()
+  if (isHomeModuleVisible('personnelVisual')) {
+    loadPersonnelVisualPreview()
+  }
+  if (canSeeBriefing.value) fetchBriefing()
   getUploadConfig().then(res => {
     if (res && res.success) {
       dakaman.value = res.dakaman != null ? String(res.dakaman).trim() : ''
@@ -4127,6 +4341,435 @@ async function navigateTo(feature) {
   100% { transform: translate(-50%, -20px) scale(0.5); opacity: 0; }
 }
 
+/* ========== 人员出勤可视化首页缩略 ========== */
+.home-tile--personnel-visual {
+  margin-bottom: 0;
+}
+
+.personnel-visual-card {
+  background: #fff;
+  border-color: var(--color-border-lighter);
+}
+
+.dashboard-card__icon--personnel-visual {
+  background: linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%);
+}
+
+.personnel-visual-card__header {
+  align-items: center;
+}
+
+.personnel-visual-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.personnel-visual-body {
+  flex: 1;
+  min-height: 0;
+  padding: 9px 12px 12px;
+  cursor: pointer;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.personnel-mini-summary {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+  margin-bottom: 6px;
+  color: #475569;
+  font-size: 11px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+
+.personnel-mini-summary span {
+  flex: 0 0 auto;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #f1f5f9;
+}
+
+.personnel-mini-summary .personnel-mini-dept {
+  min-width: 0;
+  max-width: 128px;
+  overflow: hidden;
+  color: #0f172a;
+  text-overflow: ellipsis;
+  background: #e0f2fe;
+}
+
+.personnel-mini-dept-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 128px;
+  padding: 3px 18px 3px 7px;
+  border: none;
+  border-radius: 999px;
+  background: #e0f2fe url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 24 24' fill='none' stroke='%230f172a' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'/%3E%3C/svg%3E") no-repeat right 5px center;
+  color: #0f172a;
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+}
+
+.personnel-mini-dept-select:focus {
+  outline: 2px solid rgba(14, 165, 233, 0.45);
+  outline-offset: 1px;
+}
+
+.personnel-mini-office {
+  position: relative;
+  flex: 1;
+  height: auto;
+  min-height: 0;
+  overflow: hidden auto;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(248,250,252,.98), rgba(226,232,240,.88)),
+    #f8fafc;
+  box-shadow: inset 0 0 0 1px rgba(148,163,184,.2);
+  scrollbar-width: thin;
+  scrollbar-color: rgba(59,130,246,.45) rgba(226,232,240,.8);
+}
+
+.personnel-mini-office::-webkit-scrollbar {
+  width: 6px;
+}
+
+.personnel-mini-office::-webkit-scrollbar-track {
+  background: rgba(226,232,240,.8);
+  border-radius: 999px;
+}
+
+.personnel-mini-office::-webkit-scrollbar-thumb {
+  background: rgba(59,130,246,.45);
+  border-radius: 999px;
+}
+
+.personnel-mini-office::-webkit-scrollbar-thumb:hover {
+  background: rgba(37,99,235,.62);
+}
+
+.personnel-mini-office::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 1px;
+  background: rgba(148,163,184,.32);
+}
+
+.personnel-mini-desks {
+  position: relative;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(48px, 1fr));
+  grid-auto-rows: 34px;
+  gap: 4px;
+  padding: 7px;
+  min-height: 100%;
+}
+
+.personnel-mini-desk {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 1px solid rgba(148,163,184,.28);
+  border-left: 3px solid #94a3b8;
+  border-radius: 6px;
+  background: rgba(255,255,255,.86);
+  box-shadow: 0 4px 10px rgba(15,23,42,.06);
+  animation: personnel-desk-in .38s ease both;
+  animation-delay: var(--desk-delay);
+}
+
+.personnel-mini-desk--present { border-left-color: #10b981; }
+.personnel-mini-desk--business_trip {
+  border-left-color: #f59e0b;
+  background: #fff7ed;
+}
+.personnel-mini-desk--leave {
+  border-left-color: #8b5cf6;
+  background: #f5f3ff;
+}
+
+@keyframes personnel-desk-in {
+  from { opacity: 0; transform: translateY(8px) scale(.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.personnel-mini-name {
+  position: relative;
+  z-index: 6;
+  margin: 2px 4px 0;
+  padding: 1px 3px;
+  overflow: hidden;
+  border-radius: 4px;
+  color: #0b1220;
+  background: rgba(255,255,255,.82);
+  font-size: 9px;
+  font-weight: 800;
+  line-height: 1.25;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  box-shadow: 0 1px 4px rgba(15,23,42,.08);
+}
+
+.personnel-mini-workstation {
+  position: absolute;
+  inset: 12px 2px 2px;
+}
+
+.personnel-mini-table {
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  bottom: 2px;
+  height: 11px;
+  border-radius: 4px 4px 6px 6px;
+  background: linear-gradient(180deg, #c08457, #8b5e3c);
+  box-shadow: inset 0 3px rgba(255,255,255,.15);
+}
+
+.personnel-mini-screen {
+  position: absolute;
+  left: 50%;
+  bottom: 14px;
+  z-index: 2;
+  width: 18px;
+  height: 12px;
+  transform: translateX(-50%);
+  border: 2px solid #1f2937;
+  border-radius: 3px;
+  background: linear-gradient(135deg, #0ea5e9, #22c55e);
+}
+
+.personnel-mini-desk--no_record .personnel-mini-screen {
+  background: #cbd5e1;
+}
+
+.personnel-mini-screen span {
+  position: absolute;
+  inset: 2px;
+  border-radius: 2px;
+  background: rgba(255,255,255,.28);
+  animation: personnel-screen-glow 1.8s ease-in-out infinite;
+}
+
+.personnel-mini-desk--no_record .personnel-mini-screen span {
+  animation: none;
+  opacity: .35;
+}
+
+@keyframes personnel-screen-glow {
+  0%, 100% { opacity: .24; }
+  50% { opacity: .76; }
+}
+
+.personnel-mini-worker {
+  position: absolute;
+  left: 50%;
+  bottom: 7px;
+  z-index: 3;
+  width: 18px;
+  height: 26px;
+  transform: translateX(-50%);
+}
+
+.personnel-mini-desk--business_trip .personnel-mini-worker {
+  left: 30%;
+  animation: personnel-walk 1.15s ease-in-out infinite;
+}
+
+.personnel-mini-desk--leave .personnel-mini-worker {
+  opacity: .78;
+}
+
+.personnel-mini-desk--no_record .personnel-mini-worker {
+  opacity: .36;
+  filter: grayscale(.35);
+}
+
+@keyframes personnel-walk {
+  0%, 100% { transform: translateX(-50%) translateY(0); }
+  50% { transform: translateX(-50%) translateY(-4px); }
+}
+
+.personnel-mini-worker i {
+  position: absolute;
+  display: block;
+}
+
+.personnel-mini-worker .head {
+  left: 50%;
+  top: 1px;
+  width: 9px;
+  height: 9px;
+  transform: translateX(-50%);
+  border-radius: 50%;
+  background: #f6c99f;
+}
+
+.personnel-mini-worker .hair {
+  left: 5px;
+  right: 5px;
+  top: 1px;
+  z-index: 2;
+  height: 4px;
+  border-radius: 7px 7px 4px 4px;
+  background: #334155;
+}
+
+.personnel-mini-desk--female .hair {
+  left: 4px;
+  right: 4px;
+  height: 6px;
+  border-radius: 9px 9px 5px 5px;
+  background: #3f2f46;
+}
+
+.personnel-mini-worker .body {
+  left: 50%;
+  top: 10px;
+  width: 12px;
+  height: 12px;
+  transform: translateX(-50%);
+  border-radius: 8px 8px 5px 5px;
+  background: #2563eb;
+}
+
+.personnel-mini-desk--female .body {
+  width: 11px;
+  background: #db2777;
+}
+
+.personnel-mini-desk--business_trip .body { background: #ea580c; }
+.personnel-mini-desk--leave .body { background: #7c3aed; }
+.personnel-mini-desk--no_record .body { background: #94a3b8; }
+
+.personnel-mini-worker .arm {
+  top: 12px;
+  width: 4px;
+  height: 10px;
+  border-radius: 6px;
+  background: #f6c99f;
+  transform-origin: top center;
+}
+
+.personnel-mini-worker .arm-left {
+  left: 3px;
+  animation: personnel-typing-left .72s ease-in-out infinite;
+}
+
+.personnel-mini-worker .arm-right {
+  right: 3px;
+  animation: personnel-typing-right .72s ease-in-out infinite;
+}
+
+.personnel-mini-desk--business_trip .arm,
+.personnel-mini-desk--leave .arm,
+.personnel-mini-desk--no_record .arm {
+  animation: none;
+}
+
+@keyframes personnel-typing-left {
+  0%, 100% { transform: rotate(18deg); }
+  50% { transform: rotate(36deg); }
+}
+
+@keyframes personnel-typing-right {
+  0%, 100% { transform: rotate(-18deg); }
+  50% { transform: rotate(-36deg); }
+}
+
+.personnel-mini-trip {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+
+.personnel-mini-trip i {
+  position: absolute;
+  left: 40%;
+  right: 7px;
+  top: 21px;
+  border-top: 1px dashed #f59e0b;
+}
+
+.personnel-mini-trip b {
+  position: absolute;
+  right: 6px;
+  top: 6px;
+  width: 11px;
+  height: 11px;
+  color: #0284c7;
+  animation: personnel-plane-float 2.1s ease-in-out infinite;
+}
+
+.personnel-mini-trip b::before,
+.personnel-mini-trip b::after {
+  content: '';
+  position: absolute;
+  background: currentColor;
+}
+
+.personnel-mini-trip b::before {
+  left: 1px;
+  top: 5px;
+  width: 10px;
+  height: 1px;
+  transform: rotate(-30deg);
+}
+
+.personnel-mini-trip b::after {
+  left: 5px;
+  top: 1px;
+  width: 1px;
+  height: 10px;
+  transform: rotate(-30deg);
+}
+
+@keyframes personnel-plane-float {
+  0%, 100% { transform: translate(0, 0) rotate(0deg); }
+  50% { transform: translate(-8px, 5px) rotate(-8deg); }
+}
+
+.personnel-mini-leave {
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  z-index: 5;
+  width: 15px;
+  height: 15px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #8b5cf6;
+  color: #fff;
+  font-size: 9px;
+  font-weight: 900;
+  box-shadow: 0 6px 14px rgba(124,58,237,.24);
+  animation: personnel-leave-pulse 1.9s ease-in-out infinite;
+}
+
+@keyframes personnel-leave-pulse {
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-2px) scale(1.06); }
+}
+
 /* ========== 重要信息审阅 ========== */
 .briefing-section {
   margin-bottom: 0;
@@ -4324,6 +4967,12 @@ async function navigateTo(feature) {
   background: #d1fae5;
 }
 
+.briefing-item--mail .briefing-tag,
+.briefing-modal__item--mail .briefing-tag {
+  color: #4338ca;
+  background: #e0e7ff;
+}
+
 .briefing-text {
   flex: 1;
   min-width: 0;
@@ -4433,6 +5082,13 @@ async function navigateTo(feature) {
 }
 .briefing-modal__item--trip:hover {
   background: #e0f2fe;
+}
+.briefing-modal__item--mail {
+  background: #eef2ff;
+  border-left-color: #4f46e5;
+}
+.briefing-modal__item--mail:hover {
+  background: #e0e7ff;
 }
 
 .briefing-modal__item--hxp .briefing-tag {

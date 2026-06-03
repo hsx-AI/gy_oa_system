@@ -184,7 +184,7 @@
             <p><strong>状态：</strong>{{ todoReminderResult.message || '—' }}</p>
             <p>检查人数：{{ todoReminderResult.checked || 0 }}</p>
             <p>发送邮件：{{ todoReminderResult.sent || 0 }} 封</p>
-            <p v-if="todoReminderResult.skippedOverThreshold">跳过（3天内已发）：{{ todoReminderResult.skippedOverThreshold }} 人</p>
+            <p v-if="todoReminderResult.skippedOverThreshold">跳过（2天内已发）：{{ todoReminderResult.skippedOverThreshold }} 人</p>
             <p v-if="todoReminderResult.failures?.length">
               失败：{{ todoReminderResult.failures.map(f => f.name).join('、') }}
             </p>
