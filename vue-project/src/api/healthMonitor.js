@@ -20,6 +20,16 @@ export function saveShiftEmailFeatureConfig(data) {
   return request({ url: '/health-monitor/shift-email-config', method: 'post', data })
 }
 
+/** 获取打卡自动拉取与建议截止日配置 */
+export function getAttendanceFetchConfig(params) {
+  return request({ url: '/health-monitor/attendance-fetch-config', method: 'get', params })
+}
+
+/** 保存打卡自动拉取配置（支持多条每日执行时间） */
+export function saveAttendanceFetchConfig(data) {
+  return request({ url: '/health-monitor/attendance-fetch-config', method: 'post', data })
+}
+
 /** 手动触发一次管理人员待办邮件提醒（仅 admin1） */
 export function runTodoReminder(params) {
   return request({ url: '/email/run-todo-reminder', method: 'post', params })

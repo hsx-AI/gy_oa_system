@@ -324,6 +324,11 @@ async def get_upload_config():
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
     admin1 = _get_admin1()
     personnel_archive_url = (getattr(settings, "PERSONNEL_ARCHIVE_URL", None) or "").strip()
+    from routers.attendance_scheduler_config import (
+        get_manual_upload_default_cutoff,
+        resolve_suggestion_cutoff_date,
+    )
+    cutoff_mode = get_manual_upload_default_cutoff()
     return {
         "success": True,
         "dakaman": dakaman or "",
@@ -331,6 +336,9 @@ async def get_upload_config():
         "admin1": admin1 or "",
         "fetchReportUrl": fetch_url,
         "personnelArchiveUrl": personnel_archive_url,
+        "suggestionCutoff": cutoff_mode,
+        "suggestionCutoffLabel": "今日" if cutoff_mode == "today" else "前一日",
+        "attendanceDataDate": resolve_suggestion_cutoff_date(cutoff_mode),
     }
 
 
@@ -639,9 +647,8 @@ async def fetch_and_upload(
                 pass
 
 
-async def run_fetch_and_upload_report():
-    """供定时任务调用（执行时刻见 SCHEDULER_HOUR/MINUTE）：拉取报表并导入，智能建议截止日为「前一天」。
-    建议在次日凌晨运行，以处理前一天的完整打卡数据。失败时最多重试 3 次。"""
+async def run_fetch_and_upload_report(suggestion_cutoff: Optional[str] = None):
+    """供定时任务调用：拉取报表并导入；每条任务的 suggestion_cutoff 决定智能建议截止日。失败时最多重试 3 次。"""
     import asyncio
     import httpx
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -694,9 +701,14 @@ async def run_fetch_and_upload_report():
                     await asyncio.sleep(retry_delay_seconds)
                 continue
             attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-            yesterday_str = (datetime.now() - timedelta(days=1)).strftime("%Y-%m-%d")
+            from routers.attendance_scheduler_config import resolve_suggestion_cutoff_date
+            cutoff_str = resolve_suggestion_cutoff_date(suggestion_cutoff)
+            records_copy = list(mapped_records)
             loop = asyncio.get_event_loop()
-            loop.run_in_executor(None, lambda: _generate_suggestions_bg(list(mapped_records), yesterday_str))
+            loop.run_in_executor(
+                None,
+                lambda rec=records_copy, cut=cutoff_str: _generate_suggestions_bg(rec, cut),
+            )
             logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
             return
         except Exception as e:

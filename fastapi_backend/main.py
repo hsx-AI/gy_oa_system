@@ -96,29 +96,9 @@ async def startup_event():
     print(f"[System] API文档地址: http://localhost:8000/docs")
     logger.info(f"API文档地址: http://localhost:8000/docs")
     logger.debug("调试日志已开启，将显示详细调试信息")
-    # 定时从打卡服务器拉取报表并上传
-    fetch_url = getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or ""
-    if (fetch_url or "").strip():
-        try:
-            from apscheduler.schedulers.asyncio import AsyncIOScheduler
-            from apscheduler.triggers.cron import CronTrigger
-            from routers.attendance import run_fetch_and_upload_report
-            tz = settings.SCHEDULER_TIMEZONE
-            hour = getattr(settings, "SCHEDULER_HOUR", 0)
-            minute = getattr(settings, "SCHEDULER_MINUTE", 0)
-            scheduler = AsyncIOScheduler(timezone=tz)
-            scheduler.add_job(
-                run_fetch_and_upload_report,
-                CronTrigger(hour=hour, minute=minute, timezone=tz),
-                id="fetch_attendance_report",
-            )
-            scheduler.start()
-            time_str = f"{hour}:{minute:02d}"
-            logger.info("已启用每日 %s（%s）自动拉取打卡报表任务", time_str, tz)
-            print(f"[System] 已启用每日 {time_str}（{tz}）自动拉取打卡报表任务")
-        except Exception as e:
-            logger.warning("启用每日拉取打卡报表任务失败: %s", e)
-            print(f"[System] 警告: 定时拉取打卡报表任务未启用: {e}")
+    # 定时从打卡服务器拉取报表并上传（时间与建议截止日见 webconfig / 系统管理员页）
+    from routers.attendance_scheduler_config import init_attendance_fetch_scheduler
+    init_attendance_fetch_scheduler()
     # 考勤异常提醒自动发送后台任务
     import asyncio as _asyncio
     from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop, shift_schedule_email_background_loop

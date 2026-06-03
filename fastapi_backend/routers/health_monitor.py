@@ -39,6 +39,18 @@ class ShiftEmailFeatureConfigRequest(BaseModel):
     departments: Optional[List[ShiftEmailDeptSettingsItem]] = None
 
 
+class AttendanceFetchScheduleItem(BaseModel):
+    hour: int = Field(0, ge=0, le=23)
+    minute: int = Field(0, ge=0, le=59)
+    enabled: bool = True
+    suggestion_cutoff: str = "yesterday"
+
+
+class AttendanceFetchConfigRequest(BaseModel):
+    current_user: str
+    schedules: List[AttendanceFetchScheduleItem] = Field(default_factory=list)
+
+
 def _require_admin1(current_user: str) -> None:
     admin1 = _get_admin1()
     if not admin1 or (current_user or "").strip() != admin1:
@@ -167,15 +179,13 @@ async def _check_attendance_fetch_service() -> dict:
 
 
 async def _check_scheduler() -> dict:
-    """每日拉取任务配置状态（不探测实际调度，仅看配置是否就绪；执行时间来自 SCHEDULER_HOUR/SCHEDULER_MINUTE）"""
+    """每日拉取任务配置状态（执行时间与建议截止日来自 webconfig）"""
+    from routers.attendance_scheduler_config import get_scheduler_status_message
+
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
     if not fetch_url:
         return {"status": "unconfigured", "message": "未配置 ATTENDANCE_REPORT_FETCH_URL"}
-    tz = getattr(settings, "SCHEDULER_TIMEZONE", "Asia/Shanghai")
-    hour = getattr(settings, "SCHEDULER_HOUR", 0)
-    minute = getattr(settings, "SCHEDULER_MINUTE", 0)
-    time_str = f"{hour}:{minute:02d}"
-    return {"status": "ok", "message": f"已配置，每日 {time_str}（{tz}）执行"}
+    return {"status": "ok", "message": get_scheduler_status_message()}
 
 
 def _format_bytes(size: Any) -> str:
@@ -360,3 +370,30 @@ async def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
         updated_by=req.current_user,
     )
     return {"success": True, "message": "排班邮件配置已保存", **data}
+
+
+@router.get("/attendance-fetch-config")
+async def get_attendance_fetch_config(
+    current_user: str = Query(..., description="当前登录用户，用于权限校验"),
+):
+    """获取打卡自动拉取与智能建议截止日配置。仅 admin1 可访问。"""
+    _require_admin1(current_user)
+    from routers.attendance_scheduler_config import get_attendance_fetch_config_for_api
+
+    return {"success": True, **get_attendance_fetch_config_for_api()}
+
+
+@router.post("/attendance-fetch-config")
+async def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
+    """保存打卡自动拉取配置（支持多条每日执行时间）。仅 admin1 可访问。"""
+    _require_admin1(req.current_user)
+    from routers.attendance_scheduler_config import save_attendance_fetch_config
+
+    try:
+        data = save_attendance_fetch_config(
+            [s.model_dump() for s in req.schedules],
+            updated_by=req.current_user,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {"success": True, "message": "打卡配置已保存并已更新定时任务", **data}

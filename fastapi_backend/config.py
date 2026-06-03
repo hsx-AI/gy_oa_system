@@ -46,11 +46,6 @@ class Settings(BaseSettings):
 
     # 打卡服务器报表拉取：GET 请求 URL，返回当天报表；远端可能很慢（数分钟或更久），超时见 attendance 路由 httpx 配置
     ATTENDANCE_REPORT_FETCH_URL: str = "http://10.42.60.250:6648/run?token=18400021209"
-    # 定时任务时区（拉取打卡报表按此时区执行），如 Asia/Shanghai、UTC
-    SCHEDULER_TIMEZONE: str = "Asia/Shanghai"
-    # 每日拉取打卡数据的时间点（时、分）。例如 0 点 = hour=0, minute=0；凌晨 1:30 = hour=1, minute=30
-    SCHEDULER_HOUR: int = 0
-    SCHEDULER_MINUTE: int = 0
     # 打卡数据自动获取服务健康检查 URL（GET 返回 {"status":"ok"} 表示正常）
     ATTENDANCE_FETCH_HEALTH_URL: str = "http://10.42.60.250:6648/health?token=18400021209"
 

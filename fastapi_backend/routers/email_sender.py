@@ -1132,8 +1132,9 @@ async def _execute_auto_send(year: int, month: int, trigger_label: str):
     _append_auto_reminder_log(log_entry)
 
 
-def _has_already_sent_for_month(target_year: int, target_month: int) -> bool:
-    """检查数据库日志中是否已经成功发送过该目标月份的提醒"""
+def _has_already_sent_for_schedule(target_year: int, target_month: int, trigger_label: str) -> bool:
+    """检查同一目标月份、同一触发计划是否已经成功发送过。"""
+    normalized_trigger = (trigger_label or "").strip()
     try:
         rows = db.execute_query(
             "SELECT auto_reminder_log FROM webconfig WHERE id = %s LIMIT 1", ("1",)
@@ -1144,10 +1145,11 @@ def _has_already_sent_for_month(target_year: int, target_month: int) -> bool:
             if (entry.get("status") == "ok"
                     and entry.get("year") == target_year
                     and entry.get("month") == target_month
+                    and (entry.get("trigger") or "").strip() == normalized_trigger
                     and (entry.get("personal_sent", 0) > 0 or entry.get("leader_sent", 0) > 0)):
                 return True
     except Exception as e:
-        logger.warning(f"[AutoReminder] 检查已发送记录失败: {e}")
+        logger.warning(f"[AutoReminder] 检查计划已发送记录失败: {e}")
     return False
 
 
@@ -1200,14 +1202,14 @@ async def _execute_auto_send_with_month_lock(year: int, month: int, trigger_labe
         })
         return
     try:
-        if _has_already_sent_for_month(year, month):
+        if _has_already_sent_for_schedule(year, month, trigger_label):
             _append_auto_reminder_log({
                 "time": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "trigger": trigger_label,
                 "year": year,
                 "month": month,
                 "status": "skipped",
-                "message": f"已跳过：{year}年{month}月提醒已由之前的计划发送",
+                "message": f"已跳过：{year}年{month}月提醒已由同一计划发送",
             })
             return
 
@@ -1249,43 +1251,15 @@ async def auto_reminder_background_loop():
                 else:
                     target_year, target_month = now.year, now.month - 1
 
-                sch_run_key = f"{now.strftime('%Y-%m-%d')}_{d}_{h}:{m:02d}"
+                sch_run_key = f"{now.strftime('%Y-%m-%d')}_{d}_{h}:{m:02d}_{scope}"
                 if sch_run_key in last_triggered:
                     continue
                 last_triggered[sch_run_key] = True
-
-                target_key = f"sent_{target_year}_{target_month}"
-                if target_key in last_triggered:
-                    day_label = "最后一天" if d == -1 else f"{d}号"
-                    logger.info(
-                        f"[AutoReminder] 跳过: {target_year}年{target_month}月已由其他计划发送过 "
-                        f"(计划: 每月{day_label} {h}:{m:02d})"
-                    )
-                    continue
-
-                if _has_already_sent_for_month(target_year, target_month):
-                    last_triggered[target_key] = True
-                    day_label = "最后一天" if d == -1 else f"{d}号"
-                    logger.info(
-                        f"[AutoReminder] 跳过: {target_year}年{target_month}月已发送过（数据库记录） "
-                        f"(计划: 每月{day_label} {h}:{m:02d})"
-                    )
-                    _append_auto_reminder_log({
-                        "time": now.strftime("%Y-%m-%d %H:%M:%S"),
-                        "trigger": f"每月{day_label} {h}:{m:02d}",
-                        "year": target_year,
-                        "month": target_month,
-                        "status": "skipped",
-                        "message": f"已跳过：{target_year}年{target_month}月提醒已由之前的计划发送",
-                    })
-                    continue
 
                 if len(last_triggered) > 200:
                     keys = sorted(last_triggered.keys())
                     for k in keys[:100]:
                         del last_triggered[k]
-
-                last_triggered[target_key] = True
 
                 day_label = "最后一天" if d == -1 else f"{d}号"
                 month_label = "本月" if scope == "current" else "上月"

@@ -29,6 +29,63 @@
         <section class="card admin-config-card">
           <div class="config-card-head">
             <div>
+              <h2 class="section-title">打卡数据配置</h2>
+              <p class="section-desc">
+                配置每日自动拉取并处理数据的时间（可多条）；每条任务可单独设置智能建议截止日（今日 / 前一日）。时区：{{ attendanceFetchTimezone || 'Asia/Shanghai' }}（来自服务端配置）。
+              </p>
+            </div>
+            <div class="config-actions">
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="attendanceFetchLoading || attendanceFetchSaving" @click="addAttendanceSchedule">新增时间</button>
+              <button type="button" class="btn btn-primary btn-sm" :disabled="attendanceFetchLoading || attendanceFetchSaving" @click="saveAttendanceFetchConfig">
+                {{ attendanceFetchSaving ? '保存中…' : '保存配置' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="attendanceFetchLoading" class="status-message">正在加载打卡配置…</div>
+          <template v-else>
+            <p class="email-settings-hint attendance-schedule-intro">
+              每条任务独立设置执行时间与建议截止日；拉取完成后仅生成到该条所选的今日或前一日，避免未上传日期被误判为全员缺勤。
+            </p>
+            <h3 class="email-settings-title">每日自动拉取任务</h3>
+            <p v-if="!attendanceSchedules.length" class="email-settings-hint">暂无任务，请点击「新增时间」。</p>
+            <div v-else class="attendance-schedule-list">
+              <div v-for="(row, idx) in attendanceSchedules" :key="'sch-' + idx" class="attendance-schedule-row">
+                <label class="schedule-enable">
+                  <input v-model="row.enabled" type="checkbox">
+                  <span>启用</span>
+                </label>
+                <label class="schedule-time-field">
+                  <span>时</span>
+                  <select v-model.number="row.hour" class="schedule-time-select">
+                    <option v-for="h in hourOptions" :key="h" :value="h">{{ String(h).padStart(2, '0') }}</option>
+                  </select>
+                </label>
+                <label class="schedule-time-field">
+                  <span>分</span>
+                  <select v-model.number="row.minute" class="schedule-time-select">
+                    <option v-for="m in minuteOptions" :key="m" :value="m">{{ String(m).padStart(2, '0') }}</option>
+                  </select>
+                </label>
+                <label class="schedule-cutoff-field">
+                  <span>建议截止</span>
+                  <select v-model="row.suggestion_cutoff" class="schedule-cutoff-select">
+                    <option value="today">今日</option>
+                    <option value="yesterday">前一日</option>
+                  </select>
+                </label>
+                <span class="schedule-preview">
+                  每日 {{ String(row.hour).padStart(2, '0') }}:{{ String(row.minute).padStart(2, '0') }} 执行，建议至{{ row.suggestion_cutoff === 'today' ? '今日' : '前一日' }}
+                </span>
+                <button type="button" class="btn btn-secondary btn-sm" :disabled="attendanceSchedules.length <= 1" @click="removeAttendanceSchedule(idx)">删除</button>
+              </div>
+            </div>
+          </template>
+          <p v-if="attendanceFetchMessage" class="config-message">{{ attendanceFetchMessage }}</p>
+        </section>
+
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
               <h2 class="section-title">排班邮件配置</h2>
               <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间与收件人（固定 17:00 发送）。</p>
             </div>
@@ -162,6 +219,8 @@ import {
   getHealthOverview,
   getShiftEmailFeatureConfig,
   saveShiftEmailFeatureConfig,
+  getAttendanceFetchConfig,
+  saveAttendanceFetchConfig as saveAttendanceFetchConfigApi,
   runTodoReminder,
 } from '@/api/healthMonitor'
 
@@ -176,6 +235,14 @@ const shiftEmailLoading = ref(false)
 const shiftEmailSaving = ref(false)
 const shiftEmailItems = ref([])
 const shiftEmailMessage = ref('')
+const attendanceFetchLoading = ref(false)
+const attendanceFetchSaving = ref(false)
+const attendanceFetchMessage = ref('')
+const attendanceSchedules = ref([])
+const attendanceFetchTimezone = ref('Asia/Shanghai')
+
+const hourOptions = Array.from({ length: 24 }, (_, i) => i)
+const minuteOptions = Array.from({ length: 60 }, (_, i) => i)
 
 const emailSendWeekdayOptions = [
   { value: 0, label: '周一' },
@@ -397,6 +464,75 @@ function setAllShiftEmailEnabled(enabled) {
   })
 }
 
+function mapAttendanceSchedule(row) {
+  return {
+    hour: Number.isFinite(Number(row?.hour)) ? Number(row.hour) : 0,
+    minute: Number.isFinite(Number(row?.minute)) ? Number(row.minute) : 0,
+    enabled: row?.enabled !== false,
+    suggestion_cutoff: row?.suggestion_cutoff === 'today' ? 'today' : 'yesterday',
+  }
+}
+
+async function fetchAttendanceFetchConfig() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (user.name || user.userName || '').trim()
+  if (!name) return
+  attendanceFetchLoading.value = true
+  attendanceFetchMessage.value = ''
+  try {
+    const res = await getAttendanceFetchConfig({ current_user: name })
+    attendanceFetchTimezone.value = res?.timezone || 'Asia/Shanghai'
+    const rows = (res?.schedules || []).map(mapAttendanceSchedule)
+    attendanceSchedules.value = rows.length ? rows : [{ hour: 0, minute: 0, enabled: true, suggestion_cutoff: 'yesterday' }]
+  } catch (e) {
+    console.error(e)
+    attendanceSchedules.value = [{ hour: 0, minute: 0, enabled: true, suggestion_cutoff: 'yesterday' }]
+    attendanceFetchMessage.value = e?.response?.data?.detail || e?.message || '打卡配置加载失败'
+  } finally {
+    attendanceFetchLoading.value = false
+  }
+}
+
+function addAttendanceSchedule() {
+  if (attendanceSchedules.value.length >= 24) {
+    attendanceFetchMessage.value = '最多添加 24 条执行时间'
+    return
+  }
+  attendanceSchedules.value.push({ hour: 0, minute: 0, enabled: true, suggestion_cutoff: 'yesterday' })
+}
+
+function removeAttendanceSchedule(index) {
+  if (attendanceSchedules.value.length <= 1) return
+  attendanceSchedules.value.splice(index, 1)
+}
+
+async function saveAttendanceFetchConfig() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (user.name || user.userName || '').trim()
+  if (!name) return
+  const enabledRows = attendanceSchedules.value.filter((r) => r.enabled)
+  if (!enabledRows.length) {
+    attendanceFetchMessage.value = '请至少启用一条拉取时间'
+    return
+  }
+  attendanceFetchSaving.value = true
+  attendanceFetchMessage.value = ''
+  try {
+    const res = await saveAttendanceFetchConfigApi({
+      current_user: name,
+      schedules: attendanceSchedules.value.map(mapAttendanceSchedule),
+    })
+    attendanceFetchTimezone.value = res?.timezone || attendanceFetchTimezone.value
+    attendanceSchedules.value = (res?.schedules || []).map(mapAttendanceSchedule)
+    attendanceFetchMessage.value = res?.message || '打卡配置已保存'
+    await fetchOverview()
+  } catch (e) {
+    attendanceFetchMessage.value = e?.response?.data?.detail || e?.message || '保存打卡配置失败'
+  } finally {
+    attendanceFetchSaving.value = false
+  }
+}
+
 async function saveShiftEmailConfig() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = (user.name || user.userName || '').trim()
@@ -462,7 +598,7 @@ onMounted(async () => {
     const res = await getHealthMonitorPermission({ current_user: name })
     canAccess.value = !!(res && res.canAccess)
     if (canAccess.value) {
-      await Promise.all([fetchOverview(), fetchShiftEmailConfig()])
+      await Promise.all([fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig()])
     }
   } catch {
     canAccess.value = false
@@ -696,6 +832,66 @@ onMounted(async () => {
   margin: 0;
   font-size: 0.82rem;
   color: var(--color-text-tertiary);
+}
+.attendance-schedule-intro {
+  margin: 0 0 var(--spacing-md);
+}
+.attendance-schedule-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.attendance-schedule-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-layout);
+}
+.schedule-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  min-width: 64px;
+}
+.schedule-time-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.schedule-time-select {
+  min-width: 72px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--color-bg-container);
+}
+.schedule-cutoff-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
+}
+.schedule-cutoff-select {
+  min-width: 96px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--color-bg-container);
+}
+.schedule-preview {
+  flex: 1 1 140px;
+  font-size: 0.85rem;
+  color: var(--color-text-secondary);
 }
 .shift-email-preview-panel {
   margin-top: var(--spacing-lg);

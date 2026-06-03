@@ -102,8 +102,13 @@
         <div class="data-date-row">
           <label class="data-date-label">考勤数据截止日期</label>
           <input type="date" v-model="attendanceDataDate" class="data-date-input">
+          <select v-model="attendanceCutoffPreset" class="data-date-preset" @change="applyCutoffPreset">
+            <option value="custom">自定义日期</option>
+            <option value="today">今日</option>
+            <option value="yesterday">前一日</option>
+          </select>
           <span class="data-date-hint">
-            手动上传时：智能建议仅生成到此日期，避免未上传日期被误判为全员缺勤。定时自动拉取以<strong>任务运行当日</strong>为截止日（与表单无关）。
+            手动上传/拉取最新数据时：智能建议仅生成到此日期，避免未上传日期被误判为全员缺勤。默认取管理员页第一条已启用任务的截止日（当前：{{ suggestionCutoffLabel }}）；各条定时自动拉取按各自任务上的「建议截止」执行。
           </span>
         </div>
 
@@ -259,6 +264,31 @@ const uploadStatus = ref('ready') // ready, uploading, success, error
 const uploadProgress = ref(0)
 const uploadError = ref('') // 存储上传错误信息
 const attendanceDataDate = ref(new Date().toISOString().slice(0, 10))
+const attendanceCutoffPreset = ref('yesterday')
+const suggestionCutoffLabel = ref('前一日')
+
+function formatLocalDate(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
+function dateForCutoffPreset(preset) {
+  const now = new Date()
+  if (preset === 'today') return formatLocalDate(now)
+  if (preset === 'yesterday') {
+    const d = new Date(now)
+    d.setDate(d.getDate() - 1)
+    return formatLocalDate(d)
+  }
+  return attendanceDataDate.value
+}
+
+function applyCutoffPreset() {
+  if (attendanceCutoffPreset.value === 'custom') return
+  attendanceDataDate.value = dateForCutoffPreset(attendanceCutoffPreset.value)
+}
 
 const uploadHistory = ref([])
 
@@ -377,7 +407,11 @@ onMounted(async () => {
   try {
     const res = await getUploadConfig()
     if (res.success && res.fetchReportUrl) fetchReportUrl.value = (res.fetchReportUrl || '').trim()
+    if (res.suggestionCutoffLabel) suggestionCutoffLabel.value = res.suggestionCutoffLabel
+    const preset = (res.suggestionCutoff || res.manualSuggestionCutoff) === 'today' ? 'today' : 'yesterday'
+    attendanceCutoffPreset.value = preset
     if (res.attendanceDataDate) attendanceDataDate.value = res.attendanceDataDate
+    else applyCutoffPreset()
   } catch {
     fetchReportUrl.value = ''
   }
@@ -618,6 +652,13 @@ const formatFileSize = (bytes) => {
   border: 1px solid var(--color-border-base);
   border-radius: var(--radius-sm);
   font-size: var(--font-size-sm);
+}
+.data-date-preset {
+  padding: 4px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-sm);
+  font-size: var(--font-size-sm);
+  background: var(--color-bg-container);
 }
 .data-date-hint {
   font-size: 12px;
