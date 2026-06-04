@@ -379,10 +379,13 @@
             </div>
             <div class="form-group">
               <label>项目名称</label>
-              <select v-model="form.xmname">
-                <option value="">请选择项目</option>
-                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ formatProjectOptionLabel(item) }}</option>
-              </select>
+              <SearchableSelect
+                v-model="form.xmname"
+                :options="gzhList"
+                :format-label="formatProjectOptionLabel"
+                value-key="gzhname"
+                placeholder="输入项目名称或工作号搜索"
+              />
             </div>
           </template>
           <template v-else-if="currentTab === 'jsgl'">
@@ -396,10 +399,13 @@
             </div>
             <div class="form-group">
               <label>项目名称</label>
-              <select v-model="form.xmname">
-                <option value="">请选择项目</option>
-                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ formatProjectOptionLabel(item) }}</option>
-              </select>
+              <SearchableSelect
+                v-model="form.xmname"
+                :options="gzhList"
+                :format-label="formatProjectOptionLabel"
+                value-key="gzhname"
+                placeholder="输入项目名称或工作号搜索"
+              />
             </div>
             <div class="form-group">
               <label>分类</label>
@@ -494,6 +500,7 @@
 <script setup>
 import { ref, reactive, watch, computed, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
+import SearchableSelect from '@/components/SearchableSelect.vue'
 import { getGzhList, getBianhaoFlList, addBianhaoTech, getBianhaoTechList, getJsglFenlei, getBianhaogljsList, addBianhaogljs, getGlFenlei, getBianhaoglList, addBianhaogl, addBianhaoGygch, getBianhaoGygchList, getScszhFenlei, addBianhaoScszh, getBianhaoScszhList, uploadNumberingPdf, deleteNumberingPdf, getNumberingFileUrl, exportBianhaoExcel } from '@/api/fileNumbering'
 import { getPolicyUploadPermission } from '@/api/departmentPolicy'
 import { getStatisticsPermission } from '@/api/attendance'
