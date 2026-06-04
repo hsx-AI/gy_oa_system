@@ -177,8 +177,14 @@ const cityOptions = [
 const newsTypes = [
   { label: '即时', value: 'scroll' },
   { label: '要闻', value: 'import' },
+  { label: '时政', value: 'politics' },
   { label: '国际', value: 'world' },
   { label: '财经', value: 'finance' },
+  { label: '社会', value: 'society' },
+  { label: '生活', value: 'life' },
+  { label: '健康', value: 'health' },
+  { label: '文娱', value: 'ent' },
+  { label: '体育', value: 'sports' },
 ]
 
 const selectedLocation = ref('101050101')
