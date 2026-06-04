@@ -175,13 +175,13 @@ const cityOptions = [
 ]
 
 const newsTypes = [
-  { label: '国际', value: 'guoji' },
+  { label: '新闻', value: 'news' },
   { label: '军事', value: 'junshi' },
   { label: '科技', value: 'keji' },
 ]
 
 const selectedLocation = ref('101050101')
-const selectedNewsType = ref('guoji')
+const selectedNewsType = ref('news')
 const summary = ref({})
 const weatherNow = ref(null)
 const hourlyForecast = ref(null)
