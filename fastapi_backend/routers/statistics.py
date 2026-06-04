@@ -3727,6 +3727,7 @@ async def get_work_intensity(
     year: int = Query(..., description="年份（日期区间模式仍需传入以保持兼容）"),
     month: Optional[int] = Query(None, description="月份，不传则全年；与 date_from/date_to 互斥"),
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
+    current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
@@ -3747,6 +3748,9 @@ async def get_work_intensity(
     传入 date_from + date_to 时按自定义日期区间统计（忽略 month），区间结束日晚于今天时按今天截断。
     """
     try:
+        if not _can_access_holiday_duty_attendance(current_user):
+            raise HTTPException(status_code=403, detail="无权限查看工作强度统计")
+
         HOURS_PER_DAY = 8
 
         today = date.today()

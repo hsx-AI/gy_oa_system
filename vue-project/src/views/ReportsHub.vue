@@ -407,7 +407,7 @@ const canHolidayDuty = computed(() => canAccessLeaderDashboard({
   admin1: uploadConfig.value.admin1,
   admin2: uploadConfig.value.admin2,
 }))
-const canWorkIntensityExport = computed(() => Number(statisticsPermission.value.level || 1) >= 2)
+const canWorkIntensityExport = computed(() => canHolidayDuty.value)
 
 const reports = computed(() => [
   {
@@ -754,11 +754,11 @@ function wiExportFileName(wi) {
 }
 
 async function exportWorkIntensity() {
-  const level = Number(statisticsPermission.value.level || 1)
-  if (level < 2) throw new Error('无工作强度统计导出权限')
+  if (!canWorkIntensityExport.value) throw new Error('无工作强度统计导出权限')
   const params = {
     year: Number(filters.wiYear),
     intensity_formula: filters.wiFormula,
+    current_user: currentUserName.value,
   }
   const lsys = wiScopeLsys()
   if (lsys) params.lsys = lsys

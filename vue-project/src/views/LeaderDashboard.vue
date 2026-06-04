@@ -607,6 +607,7 @@ const canAccessLeaderOvertimeEntry = computed(() => {
   }
 })
 const lsys = ref('')
+const currentUserName = ref('')
 const permLevel = ref(1)
 /** 部长/副部长可选任意科室；组长/主任仅本科室，与 lsys 一致 */
 const selectedLsys = ref('')
@@ -982,6 +983,7 @@ async function loadLeaderWorkIntensity(lsysToUse) {
   const wiParams = {
     year: filterYear.value,
     intensity_formula: wiIntensityFormula.value,
+    current_user: currentUserName.value,
   }
   if (lsysToUse) wiParams.lsys = lsysToUse
   const useWiRange = wiUseDateRange.value && wiDateFrom.value && wiDateTo.value
@@ -1006,7 +1008,7 @@ async function loadLeaderWorkIntensity(lsysToUse) {
     const maxM = year < today.getFullYear() ? 12 : today.getMonth() + 1
     const monthPromises = []
     for (let m = 1; m <= maxM; m++) {
-      const mp = { year, month: m, intensity_formula: wiIntensityFormula.value }
+      const mp = { year, month: m, intensity_formula: wiIntensityFormula.value, current_user: currentUserName.value }
       if (lsysToUse) mp.lsys = lsysToUse
       monthPromises.push(
         getLeaderWorkIntensity(mp)
@@ -1524,6 +1526,7 @@ const loadPermission = async () => {
     const user = JSON.parse(savedUser)
     const name = user.name || user.userName
     if (!name) return
+    currentUserName.value = name
     const res = await getStatisticsPermission({ name })
     if (res.success) {
       permLevel.value = res.level ?? 1
