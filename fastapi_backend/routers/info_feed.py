@@ -144,7 +144,7 @@ async def weather_daily(days: str, location: str = Query(...)):
 
 
 @router.get("/news/list")
-async def news_list(type: str = Query("junshi"), page: str = Query("1")):
+async def news_list(type: str = Query("scroll"), page: str = Query("1")):
     return _get_cached(f"news:list:{type}:{page}")
 
 

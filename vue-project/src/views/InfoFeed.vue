@@ -175,12 +175,14 @@ const cityOptions = [
 ]
 
 const newsTypes = [
-  { label: '军事', value: 'junshi' },
-  { label: '科技', value: 'keji' },
+  { label: '即时', value: 'scroll' },
+  { label: '要闻', value: 'import' },
+  { label: '国际', value: 'world' },
+  { label: '财经', value: 'finance' },
 ]
 
 const selectedLocation = ref('101050101')
-const selectedNewsType = ref('junshi')
+const selectedNewsType = ref('scroll')
 const summary = ref({})
 const weatherNow = ref(null)
 const hourlyForecast = ref(null)
