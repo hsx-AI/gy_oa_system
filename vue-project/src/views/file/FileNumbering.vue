@@ -381,7 +381,7 @@
               <label>项目名称</label>
               <select v-model="form.xmname">
                 <option value="">请选择项目</option>
-                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ item.gzhname }}</option>
+                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ formatProjectOptionLabel(item) }}</option>
               </select>
             </div>
           </template>
@@ -398,7 +398,7 @@
               <label>项目名称</label>
               <select v-model="form.xmname">
                 <option value="">请选择项目</option>
-                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ item.gzhname }}</option>
+                <option v-for="item in gzhList" :key="item.id" :value="item.gzhname">{{ formatProjectOptionLabel(item) }}</option>
               </select>
             </div>
             <div class="form-group">
@@ -664,6 +664,15 @@ const canSeeAllFiles = computed(() => permissionLevel.value === 3)
 
 const bianhaoFlList = ref([])
 const gzhList = ref([])
+
+/** 项目下拉展示：项目名称（工作号），便于区分同名项目 */
+function formatProjectOptionLabel(item) {
+  const name = (item?.gzhname || '').trim()
+  const gzh = (item?.gzh || '').trim()
+  if (!name) return gzh || '—'
+  if (!gzh) return name
+  return `${name}（${gzh}）`
+}
 
 function getCurrentUser() {
   try {
