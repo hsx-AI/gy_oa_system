@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 import json
 import os
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -25,6 +26,11 @@ class PushDataRequest(BaseModel):
     type: str
     key: str
     data: Any
+
+
+class ClearCacheRequest(BaseModel):
+    scope: str = "news"
+    clear_media: bool = True
 
 
 def _now_text() -> str:
@@ -82,6 +88,44 @@ async def push_media(name: str = Form(...), file: UploadFile = File(...)):
         raise HTTPException(status_code=400, detail="文件为空")
     target.write_bytes(content)
     return {"success": True, "status": "ok", "url": f"/api/info-feed/uploads/{safe_name}"}
+
+
+@router.post("/push/clear")
+async def clear_cache(req: ClearCacheRequest):
+    store = _load_store()
+    if req.scope == "all":
+        removed_keys = len(store)
+        store = {}
+    elif req.scope == "news":
+        old_count = len(store)
+        store = {k: v for k, v in store.items() if not k.startswith("news:")}
+        removed_keys = old_count - len(store)
+    else:
+        raise HTTPException(status_code=400, detail="scope 仅支持 news/all")
+    _save_store(store)
+
+    removed_media = 0
+    if req.clear_media and MEDIA_DIR.exists():
+        for path in MEDIA_DIR.iterdir():
+            try:
+                if path.is_file() or path.is_symlink():
+                    path.unlink()
+                    removed_media += 1
+                elif path.is_dir():
+                    shutil.rmtree(path)
+                    removed_media += 1
+            except Exception:
+                pass
+        MEDIA_DIR.mkdir(parents=True, exist_ok=True)
+
+    return {
+        "success": True,
+        "status": "ok",
+        "scope": req.scope,
+        "removedKeys": removed_keys,
+        "removedMedia": removed_media,
+        "time": _now_text(),
+    }
 
 
 @router.get("/weather/now")
