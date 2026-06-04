@@ -46,6 +46,9 @@
         </div>
 
         <div v-if="weatherNow?.now" class="current-weather">
+          <div class="weather-visual" :class="weatherIconClass(weatherNow.now.text)">
+            {{ weatherIcon(weatherNow.now.text) }}
+          </div>
           <div class="temp-block">
             <span class="temp">{{ weatherNow.now.temp }}</span>
             <span class="unit">°C</span>
@@ -74,6 +77,7 @@
         <div v-if="dailyItems.length" class="daily-list">
           <div v-for="day in dailyItems" :key="day.fxDate" class="daily-item">
             <span class="date">{{ shortDate(day.fxDate) }}</span>
+            <span class="mini-weather-icon" :class="weatherIconClass(day.textDay)">{{ weatherIcon(day.textDay) }}</span>
             <strong>{{ day.textDay }}</strong>
             <span>{{ day.tempMin }}° / {{ day.tempMax }}°</span>
           </div>
@@ -92,6 +96,7 @@
       <div v-if="hourlyItems.length" class="hourly-scroll">
         <div v-for="hour in hourlyItems" :key="hour.fxTime" class="hourly-item">
           <span>{{ hourLabel(hour.fxTime) }}</span>
+          <span class="mini-weather-icon" :class="weatherIconClass(hour.text)">{{ weatherIcon(hour.text) }}</span>
           <strong>{{ hour.temp }}°</strong>
           <small>{{ hour.text }}</small>
         </div>
@@ -163,16 +168,7 @@ import {
   getWeatherHourly,
   getWeatherNow,
 } from '@/api/infoFeed'
-
-const cityOptions = [
-  { name: '哈尔滨', location: '101050101' },
-  { name: '北京', location: '101010100' },
-  { name: '上海', location: '101020100' },
-  { name: '广州', location: '101280101' },
-  { name: '深圳', location: '101280601' },
-  { name: '成都', location: '101270101' },
-  { name: '杭州', location: '101210101' },
-]
+import { DEFAULT_WEATHER_LOCATION, cityOptions, weatherIcon } from '@/utils/infoFeedDisplay'
 
 const newsTypes = [
   { label: '即时', value: 'scroll' },
@@ -187,7 +183,7 @@ const newsTypes = [
   { label: '体育', value: 'sports' },
 ]
 
-const selectedLocation = ref('101050101')
+const selectedLocation = ref(DEFAULT_WEATHER_LOCATION)
 const selectedNewsType = ref('scroll')
 const summary = ref({})
 const weatherNow = ref(null)
@@ -215,6 +211,17 @@ function hourLabel(value) {
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value.slice(11, 16)
   return `${String(date.getHours()).padStart(2, '0')}:00`
+}
+
+function weatherIconClass(text = '') {
+  const value = String(text)
+  if (/雷|电/.test(value)) return 'weather-visual--storm'
+  if (/雪|冻雨|冰粒/.test(value)) return 'weather-visual--snow'
+  if (/雨|阵雨|暴雨|小雨|中雨|大雨/.test(value)) return 'weather-visual--rain'
+  if (/雾|霾|沙|尘|浮尘|扬沙/.test(value)) return 'weather-visual--fog'
+  if (/阴|云/.test(value)) return 'weather-visual--cloud'
+  if (/晴/.test(value)) return 'weather-visual--sun'
+  return 'weather-visual--default'
 }
 
 async function loadSummary() {
@@ -386,6 +393,22 @@ onMounted(refreshAll)
   gap: 22px;
   align-items: center;
 }
+.weather-visual {
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  display: grid;
+  place-items: center;
+  font-size: 40px;
+  line-height: 1;
+  box-shadow: 0 14px 30px rgba(15, 23, 42, 0.12);
+}
+.weather-visual--sun { background: linear-gradient(135deg, #fff7ad, #f59e0b); }
+.weather-visual--cloud { background: linear-gradient(135deg, #e2e8f0, #94a3b8); }
+.weather-visual--rain, .weather-visual--storm { background: linear-gradient(135deg, #dbeafe, #2563eb); }
+.weather-visual--snow { background: linear-gradient(135deg, #f8fafc, #7dd3fc); }
+.weather-visual--fog { background: linear-gradient(135deg, #f1f5f9, #94a3b8); }
+.weather-visual--default { background: linear-gradient(135deg, #ecfeff, #14b8a6); }
 .temp-block {
   display: flex;
   align-items: flex-start;
@@ -437,12 +460,21 @@ onMounted(refreshAll)
 }
 .daily-item {
   display: grid;
-  grid-template-columns: 52px 1fr auto;
+  grid-template-columns: 52px 32px 1fr auto;
   gap: 10px;
   align-items: center;
   padding: 9px 10px;
   background: #f8fafc;
   border-radius: 6px;
+}
+.mini-weather-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: inline-grid;
+  place-items: center;
+  font-size: 18px;
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,0.45);
 }
 .daily-item strong {
   color: #1e293b;

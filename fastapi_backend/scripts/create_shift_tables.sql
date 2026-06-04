@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS shift_config (
   weekend_night INT NOT NULL DEFAULT 2 COMMENT '周末夜班安排人数',
   email_recipients TEXT NULL COMMENT '排班邮件收件人JSON [{name,email}]',
   email_send_weekday INT NOT NULL DEFAULT 4 COMMENT '排班邮件自动发送星期几(0=周一…6=周日)，固定17:00',
+  email_include_send_day TINYINT(1) NOT NULL DEFAULT 0 COMMENT '排班邮件区间是否含发送当天(0=否,次日始;1=是,发送日至下周同日前一天)',
   updated_by VARCHAR(50) NULL COMMENT '最后修改人',
   updated_at DATETIME NULL COMMENT '最后修改时间',
   UNIQUE KEY uk_dept (department)

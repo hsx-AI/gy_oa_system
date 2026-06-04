@@ -875,6 +875,7 @@ const config = reactive({
   weekend_night: 2,
   email_recipients: [],
   email_send_weekday: 4,
+  email_include_send_day: false,
   email_feature_enabled: true,
 })
 
@@ -904,11 +905,22 @@ const emailSendWeekdayOptions = [
 
 const emailSendWeekdayLabel = (wd) => emailSendWeekdayOptions.find((o) => o.value === wd)?.label || '周五'
 
+function shiftEmailRangeText(sendWeekdayPython, includeSendDay) {
+  const sendWd = Number.isFinite(Number(sendWeekdayPython)) ? Number(sendWeekdayPython) : 4
+  const sendLabel = emailSendWeekdayLabel(sendWd)
+  if (includeSendDay) {
+    const endLabel = emailSendWeekdayLabel((sendWd + 6) % 7)
+    return `排班区间为${sendLabel}至${endLabel}（共 7 天，含发送日）`
+  }
+  const startLabel = emailSendWeekdayLabel((sendWd + 1) % 7)
+  return `排班区间为${startLabel}至下${sendLabel}（共 7 天）`
+}
+
 const emailSendScheduleHint = computed(() => {
   const sendWd = Number(config.email_send_weekday)
   const sendLabel = emailSendWeekdayLabel(Number.isFinite(sendWd) ? sendWd : 4)
-  const startLabel = emailSendWeekdayLabel((sendWd + 1) % 7)
-  return `邮件于每周${sendLabel} 17:00 自动发送，排班区间为${startLabel}至下${sendLabel}（共 7 天）。`
+  const rangeText = shiftEmailRangeText(sendWd, config.email_include_send_day)
+  return `邮件于每周${sendLabel} 17:00 自动发送，${rangeText}。`
 })
 
 const shiftEmailFeatureEnabled = computed(() => config.email_feature_enabled !== false)
@@ -1023,10 +1035,16 @@ function weekEndDate(nowDate = sendCountdownNow.value) {
   return end
 }
 
-function nextEmailScheduleRange(nowDate = sendCountdownNow.value, sendWeekdayPython = config.email_send_weekday) {
+function nextEmailScheduleRange(
+  nowDate = sendCountdownNow.value,
+  sendWeekdayPython = config.email_send_weekday,
+  includeSendDay = config.email_include_send_day,
+) {
   const target = nextConfiguredSendTime(nowDate, sendWeekdayPython)
   const start = startOfLocalDay(target)
-  start.setDate(start.getDate() + 1)
+  if (!includeSendDay) {
+    start.setDate(start.getDate() + 1)
+  }
   const end = new Date(start)
   end.setDate(end.getDate() + 6)
   return { start, end }
@@ -1488,6 +1506,7 @@ async function loadSchedule() {
     config.weekend_night = 2
     config.email_feature_enabled = true
     config.email_send_weekday = 4
+    config.email_include_send_day = false
     setEmailRecipients([])
     clearChangedDates()
     return
@@ -1539,6 +1558,7 @@ async function loadSchedule() {
     config.weekend_night = c.weekend_night ?? 2
     config.email_feature_enabled = c.email_feature_enabled !== false
     config.email_send_weekday = Number.isFinite(Number(c.email_send_weekday)) ? Number(c.email_send_weekday) : 4
+    config.email_include_send_day = !!c.email_include_send_day
     setEmailRecipients(c.email_recipients || [])
     loadNextWeekScheduleCompletion()
   } catch (e) {

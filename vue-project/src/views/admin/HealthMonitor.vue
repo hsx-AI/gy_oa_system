@@ -87,7 +87,7 @@
           <div class="config-card-head">
             <div>
               <h2 class="section-title">排班邮件配置</h2>
-              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间与收件人（固定 17:00 发送）。</p>
+              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间、排班区间是否含发送当天与收件人（固定 17:00 发送）。</p>
             </div>
             <div class="config-actions">
               <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">功能全选</button>
@@ -128,10 +128,17 @@
                   <span class="dept-email-name">{{ item.department }}</span>
                   <label class="dept-email-send">
                     <span>自动发送</span>
-                    <select v-model.number="item.email_send_weekday" class="email-send-select">
+                    <select v-model.number="item.email_send_weekday" class="email-send-select" @click.stop>
                       <option v-for="opt in emailSendWeekdayOptions" :key="opt.value" :value="opt.value">
                         每周{{ opt.label }} 17:00
                       </option>
+                    </select>
+                  </label>
+                  <label class="dept-email-include-send">
+                    <span>含发送日</span>
+                    <select v-model="item.email_include_send_day" class="email-include-send-select" @click.stop>
+                      <option :value="false">否</option>
+                      <option :value="true">是</option>
                     </select>
                   </label>
                 </div>
@@ -267,11 +274,25 @@ const recipientUnitOptions = [
   '其他',
 ]
 
+function shiftEmailRangeHint(sendWeekday, includeSendDay) {
+  const sendWd = Number.isFinite(Number(sendWeekday)) ? Number(sendWeekday) : 4
+  const sendLabel = emailSendWeekdayOptions.find((o) => o.value === sendWd)?.label || '周五'
+  if (includeSendDay) {
+    const endWd = (sendWd + 6) % 7
+    const endLabel = emailSendWeekdayOptions.find((o) => o.value === endWd)?.label || ''
+    return `${sendLabel}至${endLabel}（7天，含发送日）`
+  }
+  const startWd = (sendWd + 1) % 7
+  const startLabel = emailSendWeekdayOptions.find((o) => o.value === startWd)?.label || ''
+  return `${startLabel}至下${sendLabel}（7天）`
+}
+
 function mapShiftEmailItem(item) {
   return {
     department: item.department,
     enabled: !!item.enabled,
     email_send_weekday: Number.isFinite(Number(item.email_send_weekday)) ? Number(item.email_send_weekday) : 4,
+    email_include_send_day: !!item.email_include_send_day,
     email_recipients: (item.email_recipients || []).map((r) => ({
       name: (r?.name || '').trim(),
       email: (r?.email || '').trim(),
@@ -311,6 +332,7 @@ const shiftEmailPreviewLines = computed(() => {
   const buckets = new Map()
   for (const item of shiftEmailEnabledItems.value) {
     const wd = item.email_send_weekday
+    const includeSend = !!item.email_include_send_day
     const leaders = item.leader_recipients || []
     const config = item.email_recipients || []
     const units = new Set()
@@ -327,10 +349,11 @@ const shiftEmailPreviewLines = computed(() => {
     )
 
     for (const unit of units) {
-      const key = `${wd}|${unit}`
+      const key = `${wd}|${includeSend ? 1 : 0}|${unit}`
       if (!buckets.has(key)) {
         buckets.set(key, {
           sendWeekday: wd,
+          includeSendDay: includeSend,
           unit,
           departments: [],
           configNames: new Set(),
@@ -368,7 +391,8 @@ const shiftEmailPreviewLines = computed(() => {
       const toPart = configPart ? `收件人（${configPart}）` : '收件人（未配置）'
       const ccSuffix = ccPart ? `，抄送${ccPart}` : ''
 
-      return `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表，${toPart}${ccSuffix}。`
+      const rangeHint = shiftEmailRangeHint(bucket.sendWeekday, bucket.includeSendDay)
+      return `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表（${rangeHint}），${toPart}${ccSuffix}。`
     })
 })
 
@@ -550,6 +574,7 @@ async function saveShiftEmailConfig() {
     departmentsPayload.push({
       department: item.department,
       email_send_weekday: item.email_send_weekday,
+      email_include_send_day: !!item.email_include_send_day,
       email_recipients: parsed.recipients,
     })
   }
@@ -769,7 +794,8 @@ onMounted(async () => {
   font-weight: 600;
   font-size: 0.92rem;
 }
-.dept-email-send {
+.dept-email-send,
+.dept-email-include-send {
   display: inline-flex;
   align-items: center;
   gap: 8px;
@@ -778,6 +804,12 @@ onMounted(async () => {
 }
 .email-send-select {
   min-width: 168px;
+}
+.email-include-send-select {
+  min-width: 56px;
+}
+.email-send-select,
+.email-include-send-select {
   padding: 4px 8px;
   border: 1px solid var(--color-border-base);
   border-radius: 6px;

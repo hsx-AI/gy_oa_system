@@ -682,6 +682,77 @@
       </div>
     </div>
 
+    <!-- 天气新闻预览瓦片 -->
+    <section
+      v-if="isHomeModuleVisible('infoFeed')"
+      class="home-tile home-tile--info-feed"
+      data-home-module-id="infoFeed"
+      :style="homeModuleStyle('infoFeed')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'infoFeed' }"
+        title="拖动调整天气新闻位置"
+        aria-label="拖动调整天气新闻位置"
+        @pointerdown="startHomeTileDrag($event, 'infoFeed')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card info-feed-preview-card">
+        <header class="dashboard-card__header info-feed-preview-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--info-feed" aria-hidden="true">
+              {{ weatherIcon(homeWeatherNow?.now?.text) }}
+            </span>
+            <span class="dashboard-card__title-text">天气新闻</span>
+            <span class="dashboard-card__badge" v-if="homeNewsItems.length">{{ homeNewsItems.length }}</span>
+          </h2>
+          <div class="wall-preview-actions">
+            <button type="button" class="wall-preview-refresh" title="刷新" @click="loadInfoFeedHome">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="23 4 23 10 17 10"/>
+                <polyline points="1 20 1 14 7 14"/>
+                <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <router-link to="/info-feed" class="wall-preview-viewall">查看全部</router-link>
+          </div>
+        </header>
+        <div class="info-feed-preview-body" @click="router.push('/info-feed')">
+          <div v-if="infoFeedHomeLoading" class="dashboard-empty"><p>加载中...</p></div>
+          <template v-else>
+            <div class="info-feed-weather-mini" v-if="homeWeatherNow?.now">
+              <div class="info-feed-weather-icon" :class="weatherIconClass(homeWeatherNow.now.text)">
+                {{ weatherIcon(homeWeatherNow.now.text) }}
+              </div>
+              <div>
+                <strong>{{ homeWeatherNow.now.temp }}°C</strong>
+                <span>{{ homeWeatherNow.now.text }} · {{ homeWeatherNow.now.windDir || '-' }} {{ homeWeatherNow.now.windScale || '-' }}级</span>
+                <small>哈尔滨电机厂有限责任公司</small>
+              </div>
+            </div>
+            <div v-else class="dashboard-empty"><p>暂无天气缓存</p></div>
+            <div class="info-feed-news-mini" v-if="homeNewsItems.length">
+              <button
+                v-for="item in homeNewsItems"
+                :key="item.uniquekey || item.title"
+                type="button"
+                @click.stop="router.push('/info-feed')"
+              >
+                <span>{{ item.category || '新闻' }}</span>
+                <strong>{{ item.title }}</strong>
+              </button>
+            </div>
+          </template>
+        </div>
+      </article>
+    </section>
+
     <!-- 吐槽墙预览瓦片 -->
     <section
       v-if="isHomeModuleVisible('wall')"
@@ -938,10 +1009,12 @@ import { getContacts } from '@/api/contacts'
 import { getWallList, likeWall } from '@/api/feedback'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getDbManagerPermission } from '@/api/dbManager'
+import { getNewsList, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
+import { DEFAULT_WEATHER_LOCATION, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
 
@@ -1013,6 +1086,36 @@ const wallBarrageRows = computed(() => {
     }
   })
 })
+
+const infoFeedHomeLoading = ref(false)
+const homeWeatherNow = ref(null)
+const homeNewsList = ref(null)
+const homeNewsItems = computed(() => (homeNewsList.value?.result?.data || homeNewsList.value?.data || []).slice(0, 3))
+
+function weatherIconClass(text = '') {
+  const value = String(text)
+  if (/雷|电/.test(value)) return 'weather-visual--storm'
+  if (/雪|冻雨|冰粒/.test(value)) return 'weather-visual--snow'
+  if (/雨|阵雨|暴雨|小雨|中雨|大雨/.test(value)) return 'weather-visual--rain'
+  if (/雾|霾|沙|尘|浮尘|扬沙/.test(value)) return 'weather-visual--fog'
+  if (/阴|云/.test(value)) return 'weather-visual--cloud'
+  if (/晴/.test(value)) return 'weather-visual--sun'
+  return 'weather-visual--default'
+}
+
+async function loadInfoFeedHome() {
+  infoFeedHomeLoading.value = true
+  try {
+    const [weather, news] = await Promise.allSettled([
+      getWeatherNow(DEFAULT_WEATHER_LOCATION),
+      getNewsList({ type: 'scroll', page: '1' }),
+    ])
+    homeWeatherNow.value = weather.status === 'fulfilled' ? weather.value : null
+    homeNewsList.value = news.status === 'fulfilled' ? news.value : null
+  } finally {
+    infoFeedHomeLoading.value = false
+  }
+}
 
 function wallResolveLabel(v) {
   return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'
@@ -1793,6 +1896,7 @@ const HOME_LAYOUT_MODULES = [
   { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
   { id: 'briefing', label: '重要信息审阅', description: '部长/副经理级别可见的重要换休、公出信息滚动审阅' },
   { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },
+  { id: 'infoFeed', label: '天气新闻', description: '哈电实时天气与最新新闻摘要' },
   { id: 'wall', label: '吐槽墙', description: '匿名吐槽与互动' },
   { id: 'personnelVisual', label: '人员出勤可视化', description: '本科室在岗、公出、请假状态办公室缩略预览' },
   { id: 'favorites', label: '常用功能', description: '用户自定义的常用功能入口' },
@@ -2045,6 +2149,15 @@ watch(
   (vis, was) => {
     if (vis && was === false && !personnelVisualScene.value.people?.length) {
       void loadPersonnelVisualPreview()
+    }
+  }
+)
+
+watch(
+  () => isHomeModuleVisible('infoFeed'),
+  (vis, was) => {
+    if (vis && was === false && !homeWeatherNow.value && !homeNewsItems.value.length) {
+      void loadInfoFeedHome()
     }
   }
 )
@@ -2458,6 +2571,9 @@ onMounted(() => {
   canSeeBriefing.value = isMinisterLevel(jb)
   refreshWorkplaceTodos()
   fetchRequestList()
+  if (isHomeModuleVisible('infoFeed')) {
+    loadInfoFeedHome()
+  }
   loadWallList()
   if (isHomeModuleVisible('personnelVisual')) {
     loadPersonnelVisualPreview()
@@ -4084,6 +4200,111 @@ async function navigateTo(feature) {
 .home-wall-section {
   margin-bottom: 0;
 }
+
+/* ========== 天气新闻首页预览 ========== */
+.info-feed-preview-card {
+  min-height: 230px;
+  overflow: hidden;
+}
+
+.dashboard-card__icon--info-feed {
+  background: linear-gradient(135deg, #fde68a, #38bdf8);
+  color: #0f172a;
+  font-size: 20px;
+}
+
+.info-feed-preview-card__header {
+  align-items: center;
+}
+
+.info-feed-preview-body {
+  display: grid;
+  gap: 12px;
+  cursor: pointer;
+}
+
+.info-feed-weather-mini {
+  display: grid;
+  grid-template-columns: 62px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, #ecfeff, #f8fafc);
+  border: 1px solid rgba(14, 116, 144, 0.14);
+}
+
+.info-feed-weather-icon {
+  width: 58px;
+  height: 58px;
+  border-radius: 18px;
+  display: grid;
+  place-items: center;
+  font-size: 32px;
+  box-shadow: 0 10px 22px rgba(15, 23, 42, 0.12);
+}
+
+.info-feed-weather-mini strong {
+  display: block;
+  font-size: 24px;
+  line-height: 1;
+  color: #0f766e;
+  margin-bottom: 5px;
+}
+
+.info-feed-weather-mini span,
+.info-feed-weather-mini small {
+  display: block;
+  color: #475569;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.info-feed-news-mini {
+  display: grid;
+  gap: 8px;
+}
+
+.info-feed-news-mini button {
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 8px;
+  align-items: center;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid #e2e8f0;
+  border-radius: 10px;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+}
+
+.info-feed-news-mini button:hover {
+  border-color: #14b8a6;
+  background: #f0fdfa;
+}
+
+.info-feed-news-mini span {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.info-feed-news-mini strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: #1e293b;
+  font-size: 13px;
+}
+
+.weather-visual--sun { background: linear-gradient(135deg, #fff7ad, #f59e0b); }
+.weather-visual--cloud { background: linear-gradient(135deg, #e2e8f0, #94a3b8); }
+.weather-visual--rain, .weather-visual--storm { background: linear-gradient(135deg, #dbeafe, #2563eb); }
+.weather-visual--snow { background: linear-gradient(135deg, #f8fafc, #7dd3fc); }
+.weather-visual--fog { background: linear-gradient(135deg, #f1f5f9, #94a3b8); }
+.weather-visual--default { background: linear-gradient(135deg, #ecfeff, #14b8a6); }
 
 /* 吐槽墙瓦片：与其他卡片一致的纯白卡片样式 */
 .wall-preview-card {

@@ -1817,12 +1817,19 @@ async def run_shift_schedule_email_api(
     scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
     target_week_start = None
     if week_date:
-        from routers.shift_schedule import _parse_iso_date, _week_range_for_send_day, _get_shift_email_send_weekday
+        from routers.shift_schedule import (
+            _parse_iso_date,
+            _week_range_for_send_day,
+            _get_shift_email_send_weekday,
+            _get_shift_email_include_send_day,
+        )
         anchor = _parse_iso_date(week_date)
         if not anchor:
             raise HTTPException(status_code=400, detail="week_date 格式应为 YYYY-MM-DD")
-        send_wd = _get_shift_email_send_weekday(scoped_department or department or "")
-        target_week_start, _ = _week_range_for_send_day(anchor, send_wd)
+        dept_key = scoped_department or department or ""
+        send_wd = _get_shift_email_send_weekday(dept_key)
+        include_send = _get_shift_email_include_send_day(dept_key)
+        target_week_start, _ = _week_range_for_send_day(anchor, send_wd, include_send)
     result = await run_shift_schedule_email_once(
         "手动触发周排班邮件",
         target_week_start=target_week_start,
