@@ -40,6 +40,8 @@ class Settings(BaseSettings):
     
     # API配置
     API_PREFIX: str = "/api"
+    SERVER_HOST: str = "0.0.0.0"
+    SERVER_PORT: int = 8000
 
     # 上传文件存储路径（相对于项目根目录）
     UPLOAD_DIR: str = "uploads"

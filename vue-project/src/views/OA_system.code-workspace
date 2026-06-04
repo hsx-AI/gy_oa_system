@@ -2,6 +2,9 @@
 	"folders": [
 		{
 			"path": "../../.."
+		},
+		{
+			"path": "../../../../oa_turn/OA_turn"
 		}
 	],
 	"settings": {}

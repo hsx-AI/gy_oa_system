@@ -34,6 +34,15 @@
             </svg>
             <span>通讯录</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/info-feed" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 15a4 4 0 0 0 4 4h10a4 4 0 0 0 1.2-7.82A6 6 0 0 0 6.2 9.1 4 4 0 0 0 3 15z" />
+              <path d="M8 22v-1" />
+              <path d="M12 22v-1" />
+              <path d="M16 22v-1" />
+            </svg>
+            <span>天气新闻</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/attendance" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 11l3 3L22 4" />

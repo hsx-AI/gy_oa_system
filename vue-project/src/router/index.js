@@ -283,6 +283,12 @@ const routes = [
     meta: { title: '部门通讯录' }
   },
   {
+    path: '/info-feed',
+    name: 'InfoFeed',
+    component: () => import('@/views/InfoFeed.vue'),
+    meta: { title: '天气新闻' }
+  },
+  {
     path: '/seal/apply',
     name: 'SealApply',
     component: () => import('@/views/seal/SealApply.vue'),
