@@ -177,10 +177,13 @@ const cityOptions = [
 const newsTypes = [
   { label: '头条', value: 'top' },
   { label: '国内', value: 'guonei' },
-  { label: '科技', value: 'keji' },
   { label: '国际', value: 'guoji' },
   { label: '财经', value: 'caijing' },
+  { label: '娱乐', value: 'yule' },
   { label: '体育', value: 'tiyu' },
+  { label: '军事', value: 'junshi' },
+  { label: '科技', value: 'keji' },
+  { label: '社会', value: 'shehui' },
 ]
 
 const selectedLocation = ref('101050101')
