@@ -1300,6 +1300,32 @@ def _resolve_jiaban_period_filter(
     return cond, (f"{y}%", y), y, None, None
 
 
+def _resolve_export_period(
+    year: Optional[int],
+    month: Optional[int],
+    date_from: Optional[str],
+    date_to: Optional[str],
+) -> Tuple[int, date, date]:
+    """解析导出统计区间：自定义闭区间、指定月或全年。"""
+    import calendar
+
+    if date_from or date_to:
+        if not date_from or not date_to:
+            raise HTTPException(status_code=400, detail="date_from 与 date_to 需同时传入")
+        ds = _parse_date(date_from)
+        de = _parse_date(date_to)
+        if not ds or not de:
+            raise HTTPException(status_code=400, detail="日期格式无效，请使用 YYYY-MM-DD")
+        if ds > de:
+            raise HTTPException(status_code=400, detail="开始日期不能晚于结束日期")
+        return ds.year, ds, de
+
+    y = year if year is not None else datetime.now().year
+    if month is not None:
+        return y, date(y, int(month), 1), date(y, int(month), calendar.monthrange(y, int(month))[1])
+    return y, date(y, 1, 1), date(y, 12, 31)
+
+
 def _load_holiday_festival_map_span(
     year: int,
     range_start: Optional[date] = None,
@@ -1713,6 +1739,210 @@ async def get_overtime_hours_export(
         return {"success": True, "all": list_all, "byDept": by_dept}
     except Exception as e:
         logger.error(f"全部加班时长导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dept/leave-hours-export")
+async def get_leave_hours_export(
+    year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
+):
+    """
+    导出全部请假时长（qjzt=4），按统计区间重叠比例分摊天数/小时。
+    以 yggl 名单为准，无记录者各项为 0。
+    返回: { success, all: [{ name, totalDays, totalHours, times }], byDept: [...] }
+    """
+    try:
+        if not year and not (date_from and date_to):
+            raise HTTPException(status_code=400, detail="请传入 year，或同时传入 date_from 与 date_to")
+        _y, period_start, period_end = _resolve_export_period(year, month, date_from, date_to)
+        ps_str = period_start.strftime("%Y-%m-%d")
+        pe_str = period_end.strftime("%Y-%m-%d")
+        ov = _leave_overlap_sql_bounds()
+
+        query = f"""
+            SELECT qj.xm AS emp_name,
+                   qj.timefrom,
+                   qj.timeto,
+                   qj.timefromdate,
+                   CAST(COALESCE(qj.tian, 0) AS DECIMAL(10,2)) AS tian,
+                   qj.xiaoshi
+            FROM qj
+            INNER JOIN yggl ON qj.xm = yggl.name
+            WHERE qj.qjzt = 4
+              {ov}
+              AND RIGHT(TRIM(yggl.name), 1) != '1'
+              AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
+              AND (COALESCE(yggl.zaizhi,0)=0)
+        """
+        rows = db.execute_query(query, (pe_str, ps_str))
+
+        per_employee: Dict[str, Dict[str, float]] = defaultdict(
+            lambda: {"totalDays": 0.0, "totalHours": 0.0, "times": 0}
+        )
+        for r in rows or []:
+            emp_name = (r.get("emp_name") or "").strip()
+            if not emp_name:
+                continue
+            ls_d, le_d = _qj_leave_date_bounds(r)
+            if not ls_d or not le_d:
+                continue
+            try:
+                tian_f = float(r.get("tian") or 0)
+            except (TypeError, ValueError):
+                tian_f = 0.0
+            days = _allocate_leave_tian_to_period(tian_f, ls_d, le_d, period_start, period_end)
+            frac = _leave_overlap_fraction(ls_d, le_d, period_start, period_end)
+            hours = _qj_hx_row_total_hours(r) * frac
+            if days <= 0 and hours <= 0:
+                continue
+            agg = per_employee[emp_name]
+            agg["totalDays"] += days
+            agg["totalHours"] += hours
+            agg["times"] += 1
+
+        yggl_rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
+            f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+            "AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
+        )
+
+        def _row_from_agg(emp_name: str) -> Dict[str, Any]:
+            agg = per_employee.get(emp_name, {})
+            return {
+                "name": emp_name,
+                "totalDays": round(float(agg.get("totalDays") or 0), 2),
+                "totalHours": round(float(agg.get("totalHours") or 0), 2),
+                "times": int(agg.get("times") or 0),
+            }
+
+        list_all = [_row_from_agg((r.get("name") or "").strip()) for r in yggl_rows or [] if (r.get("name") or "").strip()]
+        lsys_list = sorted({(r.get("lsys") or "").strip() for r in (yggl_rows or []) if r.get("lsys")})
+        by_dept = []
+        for lsys in lsys_list:
+            dept_list = []
+            for r in yggl_rows or []:
+                emp_name = (r.get("name") or "").strip()
+                emp_lsys = (r.get("lsys") or "").strip()
+                if emp_name and emp_lsys == lsys:
+                    dept_list.append(_row_from_agg(emp_name))
+            by_dept.append({"lsys": lsys, "list": dept_list})
+
+        if current_user and scope == "self":
+            list_all = [x for x in list_all if (x.get("name") or "").strip() == (current_user or "").strip()]
+            by_dept = []
+        elif scope == "lsys" and scope_lsys:
+            lsys_val = (scope_lsys or "").strip()
+            by_dept = [x for x in by_dept if (x.get("lsys") or "").strip() == lsys_val]
+            dept_names = {n.get("name") for d in by_dept for n in (d.get("list") or [])}
+            list_all = [x for x in list_all if (x.get("name") or "") in dept_names]
+
+        return {"success": True, "all": list_all, "byDept": by_dept}
+    except Exception as e:
+        logger.error(f"全部请假时长导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dept/business-trip-hours-export")
+async def get_business_trip_hours_export(
+    year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
+):
+    """
+    导出全部公出时长（bldzt=2 且 szrzt=2），按区间并集计天数，避免重复公出记录叠加。
+    返回: { success, all: [{ name, totalDays, totalHours, times }], byDept: [...] }
+    """
+    try:
+        if not year and not (date_from and date_to):
+            raise HTTPException(status_code=400, detail="请传入 year，或同时传入 date_from 与 date_to")
+        _y, period_start, period_end = _resolve_export_period(year, month, date_from, date_to)
+        ps_str = period_start.strftime("%Y-%m-%d")
+        pe_str = period_end.strftime("%Y-%m-%d")
+
+        query = """
+            SELECT gcsqb.gcr AS emp_name,
+                   gcsqb.gcsj,
+                   gcsqb.yjcfsj,
+                   gcsqb.wpsj,
+                   gcsqb.sjfhtime,
+                   gcsqb.yjfhsj
+            FROM gcsqb
+            INNER JOIN yggl ON gcsqb.gcr = yggl.name
+            WHERE gcsqb.bldzt = 2 AND gcsqb.szrzt = 2
+              AND COALESCE(gcsqb.gcsj, gcsqb.yjcfsj, gcsqb.wpsj) <= %s
+              AND COALESCE(gcsqb.sjfhtime, gcsqb.yjfhsj, gcsqb.gcsj, gcsqb.yjcfsj, gcsqb.wpsj) >= %s
+              AND RIGHT(TRIM(yggl.name), 1) != '1'
+              AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
+              AND (COALESCE(yggl.zaizhi,0)=0)
+        """
+        rows = db.execute_query(query, (pe_str, ps_str))
+
+        intervals_by_employee: Dict[str, List[Tuple[date, date]]] = defaultdict(list)
+        times_by_employee: Dict[str, int] = defaultdict(int)
+        for r in rows or []:
+            emp_name = (r.get("emp_name") or "").strip()
+            start_d = _parse_date(r.get("gcsj") or r.get("yjcfsj") or r.get("wpsj"))
+            end_d = _parse_date(r.get("sjfhtime") or r.get("yjfhsj") or r.get("gcsj") or r.get("yjcfsj") or r.get("wpsj"))
+            if not emp_name or not start_d or not end_d or end_d < start_d:
+                continue
+            if start_d > period_end or end_d < period_start:
+                continue
+            intervals_by_employee[emp_name].append((max(start_d, period_start), min(end_d, period_end)))
+            times_by_employee[emp_name] += 1
+
+        yggl_rows = db.execute_query(
+            "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
+            f"{_EXCL_OTHER}{_EXCL_BUBAN_MANAGERS}"
+            "AND RIGHT(TRIM(name), 1) != '1' AND (COALESCE(zaizhi,0)=0)",
+        )
+
+        def _row_from_agg(emp_name: str) -> Dict[str, Any]:
+            days = _merge_intervals_days(intervals_by_employee.get(emp_name, []))
+            return {
+                "name": emp_name,
+                "totalDays": round(float(days or 0), 2),
+                "totalHours": round(float(days or 0) * 8.0, 2),
+                "times": int(times_by_employee.get(emp_name, 0) or 0),
+            }
+
+        list_all = [_row_from_agg((r.get("name") or "").strip()) for r in yggl_rows or [] if (r.get("name") or "").strip()]
+        lsys_list = sorted({(r.get("lsys") or "").strip() for r in (yggl_rows or []) if r.get("lsys")})
+        by_dept = []
+        for lsys in lsys_list:
+            dept_list = []
+            for r in yggl_rows or []:
+                emp_name = (r.get("name") or "").strip()
+                emp_lsys = (r.get("lsys") or "").strip()
+                if emp_name and emp_lsys == lsys:
+                    dept_list.append(_row_from_agg(emp_name))
+            by_dept.append({"lsys": lsys, "list": dept_list})
+
+        if current_user and scope == "self":
+            list_all = [x for x in list_all if (x.get("name") or "").strip() == (current_user or "").strip()]
+            by_dept = []
+        elif scope == "lsys" and scope_lsys:
+            lsys_val = (scope_lsys or "").strip()
+            by_dept = [x for x in by_dept if (x.get("lsys") or "").strip() == lsys_val]
+            dept_names = {n.get("name") for d in by_dept for n in (d.get("list") or [])}
+            list_all = [x for x in list_all if (x.get("name") or "") in dept_names]
+
+        return {"success": True, "all": list_all, "byDept": by_dept}
+    except Exception as e:
+        logger.error(f"全部公出时长导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

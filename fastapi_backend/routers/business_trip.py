@@ -6,7 +6,7 @@
   lxdh=联系电话, wpsj=委派时间, gcryxm=公出人员姓名, xmmc=项目名称
   yjfhsj=预计返回时间, tzdbh=通知单编号, bcgczrs=本次公出总人数
   gcdd=公出地点, qkje=请款金额, gcrw=公出任务, bld=部领导, szr=室主任
-  bldzt=部领导状态, szrzt=室主任状态, gcr=公出人(申请人), sqsj=申请时间
+  bldzt=部领导状态, szrzt=室主任状态, gcr=公出人(申请人)
   lsysjm=隶属于室简称
 """
 from fastapi import APIRouter, HTTPException, Query
@@ -254,17 +254,31 @@ def _trip_status(bldzt, szrzt) -> tuple:
     return "审批中", "status-processing"
 
 
+def _trip_flow_person(bldzt, szrzt, szr, bld, status: str) -> str:
+    """审批中返回当前待审批人；已驳回返回执行驳回的审批人。"""
+    bldzt = bldzt if bldzt is not None else 0
+    szrzt = szrzt if szrzt is not None else 0
+    if status == "审批中":
+        if szrzt == 1:
+            return (szr or "").strip()
+        if bldzt == 1:
+            return (bld or "").strip()
+    elif status == "已驳回":
+        if szrzt == 22:
+            return (szr or "").strip()
+        if bldzt == 22:
+            return (bld or "").strip()
+    return ""
+
+
 def _row_to_record(row) -> dict:
     """将 gcsqb 一行转为前端所需记录结构"""
     bldzt = 0 if row.get("bldzt") is None else int(row.get("bldzt"))
     szrzt = 0 if row.get("szrzt") is None else int(row.get("szrzt"))
     status, status_class = _trip_status(bldzt, szrzt)
-    current_approver = ""
-    if status == "审批中":
-        if szrzt == 1:
-            current_approver = (row.get("szr") or "").strip()
-        elif bldzt == 1:
-            current_approver = (row.get("bld") or "").strip()
+    current_approver = _trip_flow_person(
+        bldzt, szrzt, row.get("szr"), row.get("bld"), status
+    )
     # 列表「出发时间」：已做返回登记用 gcsj，否则用登记时的预计出发 yjcfsj
     start_display = _fmt_dt(row.get("gcsj")) or _fmt_dt(row.get("yjcfsj"))
     # 「实际返回」：仅 sjfhtime；未返回登记时前端可用 expectedReturnTime 显示预计
@@ -496,16 +510,14 @@ def _row_to_detail_payload(row: dict) -> dict:
     fhdj = row.get("fhdj_status")
     fhdj_txt = "已返回登记" if fhdj == 1 else ("未登记" if fhdj == 0 or fhdj is None else str(fhdj))
 
-    # 当前审批人（仅当审批中才显示）
-    current_approver = "—"
-    if status_txt == "审批中":
-        try:
-            if int(szrzt) == 1:
-                current_approver = _fmt_detail_val(row.get("szr"))
-            elif int(bldzt) == 1:
-                current_approver = _fmt_detail_val(row.get("bld"))
-        except Exception:
-            current_approver = "—"
+    # 当前审批人 / 驳回人
+    current_approver = _trip_flow_person(
+        int(bldzt) if bldzt is not None else 0,
+        int(szrzt) if szrzt is not None else 0,
+        row.get("szr"),
+        row.get("bld"),
+        status_txt,
+    )
 
     expected_start = row.get("yjcfsj")
     expected_end = row.get("yjfhsj")
@@ -560,7 +572,9 @@ def _row_to_detail_payload(row: dict) -> dict:
     ]
 
     if status_txt == "审批中":
-        items.append(("当前审批人", current_approver))
+        items.append(("当前审批人", _fmt_detail_val(current_approver) if current_approver else "—"))
+    elif is_rejected:
+        items.append(("驳回人", _fmt_detail_val(current_approver) if current_approver else "—"))
     if is_rejected and row.get("bhyy"):
         items.append(("驳回原因", _fmt_detail_val(row.get("bhyy"))))
 
@@ -1000,20 +1014,21 @@ async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
 
         _raise_if_overlap(req.name, yjcfsj or req.startTime, yjfhsj or req.endTime, exclude_id=item_id)
 
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        db.execute_update(
+        affected = db.execute_update(
             """UPDATE gcsqb SET gclx=%s, wpdw=%s, gzh=%s, gcdw=%s, lxdh=%s, wpsj=%s,
                yjfhsj=%s, yjcfsj=%s, xmmc=%s, tzdbh=%s, bcgczrs=%s, gcdd=%s, qkje=%s,
                gcrw=%s, szr=%s, bld=%s, szrzt=%s, bldzt=1,
-               bhyy=NULL, szrpztime=NULL, bldpztime=NULL, sqsj=%s
+               bhyy=NULL, szrpztime=NULL, bldpztime=NULL
                WHERE id=%s AND gcr=%s AND (bldzt=22 OR szrzt=22)""",
             (gclx, req.targetUnit or "", req.workNo or "无", req.department or "",
              req.phone or "", wpsj, yjfhsj, yjcfsj, req.projectName or "无",
              req.noticeNo or "", str(req.totalPeople), req.location or "",
              qkje, req.task or "", req.responsiblePerson or "", req.deptLeader or "",
-             szrzt_init, now,
+             szrzt_init,
              item_id, req.name.strip())
         )
+        if affected <= 0:
+            raise HTTPException(status_code=500, detail="重新提交未生效，请刷新后重试")
         return {"success": True, "message": "已重新提交"}
     except HTTPException:
         raise

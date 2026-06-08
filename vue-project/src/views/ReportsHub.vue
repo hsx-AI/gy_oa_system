@@ -313,7 +313,9 @@ import {
   exportLeaveHandlerTable,
   exportSuggestionAttendanceReport,
   getDeptLsysList,
+  getBusinessTripHoursExport,
   getFullAttendanceExport,
+  getLeaveHoursExport,
   getOvertimeHoursExport,
   getOvertimePayExport,
   getLeaderWorkIntensity,
@@ -451,6 +453,24 @@ const reports = computed(() => [
     title: '全部加班时长',
     source: '其他绩效激励统计',
     group: 'incentive',
+    kind: 'period',
+    canUse: canLeaderExports.value,
+    scopeText: scopeLabel.value,
+  },
+  {
+    id: 'leave-hours',
+    title: '全部请假时长',
+    source: '统计汇总 / 月度统计趋势',
+    group: 'attendance',
+    kind: 'period',
+    canUse: canLeaderExports.value,
+    scopeText: scopeLabel.value,
+  },
+  {
+    id: 'business-trip-hours',
+    title: '全部公出时长',
+    source: '统计汇总 / 月度统计趋势',
+    group: 'attendance',
     kind: 'period',
     canUse: canLeaderExports.value,
     scopeText: scopeLabel.value,
@@ -700,6 +720,26 @@ function sheetFromOvertimeHoursList(list) {
   return XLSX.utils.aoa_to_sheet([['姓名', '加班总时长(小时)', '其他绩效激励时长(小时)', '换休票时长(小时)', '加班次数'], ...rows])
 }
 
+function sheetFromLeaveHoursList(list) {
+  const rows = (list || []).map((item) => [
+    item.name || '',
+    item.totalDays ?? 0,
+    item.totalHours ?? 0,
+    item.times ?? 0,
+  ])
+  return XLSX.utils.aoa_to_sheet([['姓名', '请假天数(天)', '请假时长(小时)', '请假次数'], ...rows])
+}
+
+function sheetFromBusinessTripHoursList(list) {
+  const rows = (list || []).map((item) => [
+    item.name || '',
+    item.totalDays ?? 0,
+    item.totalHours ?? 0,
+    item.times ?? 0,
+  ])
+  return XLSX.utils.aoa_to_sheet([['姓名', '公出天数(天)', '公出时长(小时)', '公出次数'], ...rows])
+}
+
 function appendDeptSheets(wb, byDept, sheetBuilder) {
   for (const dept of byDept || []) {
     const sheetName = (dept.lsys || '科室').slice(0, 31)
@@ -888,6 +928,24 @@ async function exportOvertimeHours() {
   XLSX.writeFile(wb, `全部加班时长_${periodLabel()}.xlsx`)
 }
 
+async function exportLeaveHours() {
+  const res = await getLeaveHoursExport(buildPeriodParams())
+  if (!res?.success || res.all === undefined) throw new Error('获取请假时长数据失败')
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, sheetFromLeaveHoursList(res.all || []), overtimePermission.value.scope === 'self' ? '本人' : '全员')
+  appendDeptSheets(wb, res.byDept, sheetFromLeaveHoursList)
+  XLSX.writeFile(wb, `全部请假时长_${periodLabel()}.xlsx`)
+}
+
+async function exportBusinessTripHours() {
+  const res = await getBusinessTripHoursExport(buildPeriodParams())
+  if (!res?.success || res.all === undefined) throw new Error('获取公出时长数据失败')
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(wb, sheetFromBusinessTripHoursList(res.all || []), overtimePermission.value.scope === 'self' ? '本人' : '全员')
+  appendDeptSheets(wb, res.byDept, sheetFromBusinessTripHoursList)
+  XLSX.writeFile(wb, `全部公出时长_${periodLabel()}.xlsx`)
+}
+
 async function exportFullAttendance() {
   const params = { year: Number(filters.year) }
   if (filters.leaderMonth) params.month = Number(filters.leaderMonth)
@@ -1006,6 +1064,10 @@ async function runExport(id) {
       await exportOvertimePay()
     } else if (id === 'overtime-hours') {
       await exportOvertimeHours()
+    } else if (id === 'leave-hours') {
+      await exportLeaveHours()
+    } else if (id === 'business-trip-hours') {
+      await exportBusinessTripHours()
     } else if (id === 'full-attendance') {
       await exportFullAttendance()
     } else if (id === 'attendance-report') {

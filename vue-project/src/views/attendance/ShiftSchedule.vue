@@ -103,16 +103,6 @@
           <button type="button" class="btn btn-outline btn-sm" @click="showConfigPanel = !showConfigPanel" title="排班规则配置">
             ⚙ 配置
           </button>
-          <button
-            v-if="shiftEmailFeatureEnabled"
-            type="button"
-            class="btn btn-outline btn-sm"
-            @click="handleSendScheduleEmail"
-            :disabled="saving || sendingScheduleEmail || !selectedDept"
-            title="手动发送本周六至下周五周排班邮件"
-          >
-            {{ sendingScheduleEmail ? '发送中…' : '发送邮件' }}
-          </button>
           <button type="button" class="btn btn-outline btn-sm" @click="handleCopyLastMonth" :disabled="saving">复制上月</button>
           <button type="button" class="btn btn-danger-outline btn-sm" @click="handleClear" :disabled="saving">清空</button>
           <button type="button" class="btn btn-primary btn-sm" @click="handleAutoSchedule" :disabled="saving">自动排班</button>
@@ -669,7 +659,6 @@ const dayPlans = reactive({})
 const businessTrips = reactive({})
 const loading = ref(false)
 const saving = ref(false)
-const sendingScheduleEmail = ref(false)
 const dirty = ref(false)
 const plansDirty = ref(false)
 const effectiveDirty = computed(() => dirty.value || plansDirty.value)
@@ -697,6 +686,25 @@ function getChangedDateRange() {
 
 function getChangedDates() {
   return [...changedShiftDates, ...changedPlanDates].filter(Boolean).sort()
+}
+
+function confirmResendScheduleEmail(sentWeeks) {
+  if (!sentWeeks.length) return false
+  const ranges = sentWeeks.map(w => `${w.weekStart} 至 ${w.weekEnd}`).join('、')
+  const firstConfirm = confirm(
+    `注意：您正在修改已经邮件通知过的排班（${ranges}）。\n\n`
+    + '保存排班本身不会自动通知收件人。\n'
+    + '如果选择重新发送，系统会立即向已配置收件人和抄送人发出正式邮件，无法撤回。\n\n'
+    + '是否进入重新发送确认？',
+  )
+  if (!firstConfirm) return false
+  const typed = prompt(
+    `请再次确认是否重新发送排班邮件。\n\n`
+    + `涉及范围：${ranges}\n`
+    + '邮件发出后无法撤回。若确认发送，请输入：重新发送',
+    '',
+  )
+  return (typed || '').trim() === '重新发送'
 }
 
 /** 单击单元格四选一：班次 + 值班位置 */
@@ -1876,9 +1884,7 @@ async function handleSave() {
     }
     const sentWeeks = await getChangedSentWeeksForPrompt()
     if (sentWeeks.length) {
-      const ranges = sentWeeks.map(w => `${w.weekStart} 至 ${w.weekEnd}`).join('、')
-      const shouldResend = confirm(`您正在修改已经邮件通知过的排班（${ranges}），请问是否发送邮件通知收件人？`)
-      if (shouldResend) resendWeeks = sentWeeks
+      if (confirmResendScheduleEmail(sentWeeks)) resendWeeks = sentWeeks
     }
     await Promise.all(tasks)
     let resendError = ''
@@ -1999,26 +2005,6 @@ async function handleSaveConfig() {
     alert('配置已保存')
   } catch (e) {
     alert(e?.response?.data?.detail || '保存配置失败')
-  }
-}
-
-async function handleSendScheduleEmail() {
-  if (!isManager.value || !selectedDept.value || !shiftEmailFeatureEnabled.value || sendingScheduleEmail.value) return
-  const { start, end } = nextEmailScheduleRange(sendCountdownNow.value)
-  if (!confirm(`确认发送 ${selectedDept.value} ${toYMD(start)} 至 ${toYMD(end)} 的周排班邮件吗？`)) return
-  sendingScheduleEmail.value = true
-  try {
-    const res = await runShiftScheduleEmail({
-      current_user: getCurrentUser(),
-      department: selectedDept.value,
-      week_date: toYMD(start),
-      force: true,
-    })
-    alert(res?.message || '排班邮件发送完成')
-  } catch (e) {
-    alert(e?.response?.data?.detail || e?.message || '发送排班邮件失败')
-  } finally {
-    sendingScheduleEmail.value = false
   }
 }
 

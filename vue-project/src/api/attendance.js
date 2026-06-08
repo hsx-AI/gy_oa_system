@@ -432,6 +432,16 @@ export function getOvertimeHoursExport(params) {
   return request({ url: '/dept/overtime-hours-export', method: 'get', params })
 }
 
+/** 全部请假时长导出（全员+各科室） */
+export function getLeaveHoursExport(params) {
+  return request({ url: '/dept/leave-hours-export', method: 'get', params })
+}
+
+/** 全部公出时长导出（全员+各科室） */
+export function getBusinessTripHoursExport(params) {
+  return request({ url: '/dept/business-trip-hours-export', method: 'get', params })
+}
+
 /** 全部科室列表（管理驾驶舱部长/副部长下拉用） */
 export function getDeptLsysList() {
   return request({ url: '/dept/lsys-list', method: 'get' })

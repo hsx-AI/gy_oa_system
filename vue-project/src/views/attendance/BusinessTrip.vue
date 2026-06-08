@@ -95,7 +95,7 @@
                   <th>实际返回时间</th>
                   <th>审批状态</th>
                   <th>返回登记</th>
-                  <th>当前审批人</th>
+                  <th>审批人</th>
                   <th>驳回原因</th>
                   <th>操作</th>
                 </tr>
@@ -116,7 +116,7 @@
                     <span v-else-if="r.status === '已通过'" class="status-tag status-processing">未登记</span>
                     <span v-else>—</span>
                   </td>
-                  <td>{{ r.status === '审批中' && r.currentApprover ? r.currentApprover : '—' }}</td>
+                  <td>{{ r.currentApprover || '—' }}</td>
                   <td class="reject-reason-cell">{{ r.status === '已驳回' && r.rejectReason ? r.rejectReason : '—' }}</td>
                   <td>
                     <button
