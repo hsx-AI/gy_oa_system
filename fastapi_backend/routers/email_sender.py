@@ -1434,6 +1434,48 @@ def _get_shift_dept_leader_recipients(department: str) -> List[dict]:
     return leaders
 
 
+def _get_shift_manager_cc_recipients() -> List[dict]:
+    """排班邮件固定抄送 yggl.jb 为经理/副经理且已配置企业邮箱的在职人员。"""
+    try:
+        rows = db.execute_query(
+            """
+            SELECT name, jb, enterprise_email
+            FROM yggl
+            WHERE name IS NOT NULL AND TRIM(name) != ''
+              AND COALESCE(zaizhi, 0) = 0
+              AND enterprise_email IS NOT NULL AND TRIM(enterprise_email) != ''
+              AND (
+                TRIM(COALESCE(jb, '')) = %s
+                OR TRIM(COALESCE(jb, '')) LIKE %s
+                OR TRIM(COALESCE(jb, '')) = %s
+                OR TRIM(COALESCE(jb, '')) LIKE %s
+              )
+            ORDER BY jb, name
+            """,
+            ("经理", "经理%", "副经理", "副经理%"),
+        )
+    except Exception as e:
+        logger.warning("[ShiftScheduleEmail] 查询经理/副经理抄送人失败: %s", e)
+        return []
+
+    recipients = []
+    seen = set()
+    for r in rows or []:
+        email = (r.get("enterprise_email") or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        recipients.append({
+            "name": (r.get("name") or "").strip(),
+            "email": email,
+            "jb": (r.get("jb") or "").strip(),
+        })
+    return recipients
+
+
 def _resolve_shift_schedule_email_scope(current_user: str, requested_department: Optional[str]) -> Optional[str]:
     """管理员可发全部/指定科室；科室主任、副主任、班组长只能发本科室。"""
     user = (current_user or "").strip()
@@ -1502,9 +1544,11 @@ def _build_shift_schedule_email_body(report: dict) -> str:
     week_start = report["week_start"]
     week_end = report["week_end"]
     return (
-        "<p>各位领导同事您好：</p>"
-        f"<p>以下为{report['department']} {week_start.month}月{week_start.day}日"
-        f"至{week_end.month}月{week_end.day}日排班计划，附件为周排班表。</p>"
+        "<p>各位领导、同事好：</p>"
+        f"<p>服务分厂已为大家整理好{report['department']} {week_start.month}月{week_start.day}日"
+        f"至{week_end.month}月{week_end.day}日周排班计划，便于各项生产服务保障工作提前衔接、顺畅开展。"
+        "详细排班见下表，附件中同步提供周排班表，方便留存和转发。</p>"
+        "<p>如后续排班有调整，请以系统中最新保存的排班为准。感谢大家的配合与支持。</p>"
         f"{report['html_table']}"
     )
 
@@ -1522,9 +1566,11 @@ def _build_merged_shift_schedule_subject(reports: List[dict], unit: str) -> str:
 def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
     dept_names = "、".join(r["department"] for r in reports)
     parts = [
-        "<p>各位领导同事您好：</p>",
-        f"<p>以下为向<strong>{unit}</strong>发送的周排班计划，包含<strong>{dept_names}</strong>，"
-        f"共 {len(reports)} 个科室排班表（见附件）。</p>",
+        "<p>各位领导、同事好：</p>",
+        f"<p>服务分厂已为大家整理好本次向<strong>{unit}</strong>发送的周排班计划，"
+        f"包含<strong>{dept_names}</strong>共 {len(reports)} 个科室排班表，"
+        "便于各项生产服务保障工作提前衔接、顺畅开展。详细排班见下表，附件中同步提供对应周排班表，方便留存和转发。</p>",
+        "<p>如后续排班有调整，请以系统中最新保存的排班为准。感谢大家的配合与支持。</p>",
     ]
     for report in reports:
         week_start = report["week_start"]
@@ -1643,6 +1689,7 @@ async def _run_shift_schedule_email_once_locked(
     mail_sent = 0
     now_dt = datetime.now()
     jobs = []
+    manager_cc = _get_shift_manager_cc_recipients()
 
     for dept in [d for d in departments if d]:
         week_start = target_week_start or _shift_schedule_target_week(dept, now_dt)
@@ -1684,7 +1731,13 @@ async def _run_shift_schedule_email_once_locked(
 
     for bucket in buckets.values():
         to_emails = sorted(bucket["to_emails"])
-        cc_emails = sorted(bucket["cc_emails"])
+        cc_set = set(bucket["cc_emails"])
+        for item in manager_cc:
+            email = (item.get("email") or "").strip()
+            if email:
+                cc_set.add(email)
+        cc_set -= set(to_emails)
+        cc_emails = sorted(cc_set)
         reports = bucket["reports"]
         unit = bucket["unit"]
         if not reports:
