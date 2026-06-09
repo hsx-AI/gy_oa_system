@@ -726,32 +726,27 @@
         <div class="info-feed-preview-body" @click="router.push('/info-feed')">
           <div v-if="infoFeedHomeLoading" class="dashboard-empty"><p>加载中...</p></div>
           <template v-else>
-            <div class="info-feed-weather-block">
-              <div class="info-feed-weather-mini" v-if="homeWeatherNow?.now">
-                <div class="info-feed-weather-icon" :class="weatherIconClass(homeWeatherNow.now.text)">
-                  {{ weatherIcon(homeWeatherNow.now.text) }}
-                </div>
-                <div>
+            <div
+              v-if="homeWeatherNow?.now || homeForecastLine"
+              class="info-feed-weather-mini"
+            >
+              <div
+                class="info-feed-weather-icon"
+                :class="weatherIconClass(homeWeatherNow?.now?.text || homeDailyItems[0]?.textDay)"
+              >
+                {{ weatherIcon(homeWeatherNow?.now?.text || homeDailyItems[0]?.textDay) }}
+              </div>
+              <div class="info-feed-weather-text">
+                <template v-if="homeWeatherNow?.now">
                   <strong>{{ homeWeatherNow.now.temp }}°C</strong>
                   <span>{{ homeWeatherNow.now.text }} · {{ homeWeatherNow.now.windDir || '-' }} {{ homeWeatherNow.now.windScale || '-' }}级</span>
-                  <small>哈尔滨电机厂有限责任公司 · {{ homeWeatherNow.updateTime || '实时天气' }}</small>
-                </div>
+                </template>
+                <small v-if="homeForecastLine" class="info-feed-forecast-line">预报 {{ homeForecastLine }}</small>
+                <small>哈尔滨电机厂有限责任公司<template v-if="homeWeatherNow?.updateTime"> · {{ homeWeatherNow.updateTime }}</template></small>
               </div>
-              <div v-if="homeDailyItems.length" class="info-feed-forecast-mini">
-                <div
-                  v-for="day in homeDailyItems"
-                  :key="day.fxDate"
-                  class="info-feed-forecast-day"
-                >
-                  <span class="info-feed-forecast-date">{{ shortWeatherDate(day.fxDate) }}</span>
-                  <span class="info-feed-forecast-icon" :class="weatherIconClass(day.textDay)">{{ weatherIcon(day.textDay) }}</span>
-                  <span class="info-feed-forecast-temp">{{ day.tempMin }}°~{{ day.tempMax }}°</span>
-                  <small>{{ day.textDay }}</small>
-                </div>
-              </div>
-              <div v-if="!homeWeatherNow?.now && !homeDailyItems.length" class="dashboard-empty">
-                <p>等待中转服务推送天气数据</p>
-              </div>
+            </div>
+            <div v-else class="dashboard-empty">
+              <p>等待中转服务推送天气数据</p>
             </div>
             <div class="info-feed-news-mini" v-if="homeNewsItems.length">
               <button
@@ -1108,7 +1103,12 @@ const infoFeedHomeLoading = ref(false)
 const homeWeatherNow = ref(null)
 const homeWeatherDaily = ref(null)
 const homeNewsList = ref(null)
-const homeDailyItems = computed(() => (homeWeatherDaily.value?.daily || []).slice(0, 4))
+const homeDailyItems = computed(() => (homeWeatherDaily.value?.daily || []).slice(0, 3))
+const homeForecastLine = computed(() =>
+  homeDailyItems.value
+    .map((day) => `${shortWeatherDate(day.fxDate)} ${day.tempMin}~${day.tempMax}°${day.textDay || ''}`)
+    .join(' · ')
+)
 const homeNewsItems = computed(() => (homeNewsList.value?.result?.data || homeNewsList.value?.data || []).slice(0, 3))
 
 function weatherIconClass(text = '') {
@@ -4225,13 +4225,8 @@ async function navigateTo(feature) {
 
 /* ========== 天气新闻首页预览 ========== */
 .info-feed-preview-card {
-  min-height: 280px;
+  min-height: 230px;
   overflow: hidden;
-}
-
-.info-feed-weather-block {
-  display: grid;
-  gap: 10px;
 }
 
 .dashboard-card__icon--info-feed {
@@ -4279,6 +4274,10 @@ async function navigateTo(feature) {
   margin-bottom: 5px;
 }
 
+.info-feed-weather-text {
+  min-width: 0;
+}
+
 .info-feed-weather-mini span,
 .info-feed-weather-mini small {
   display: block;
@@ -4287,52 +4286,14 @@ async function navigateTo(feature) {
   line-height: 1.45;
 }
 
-.info-feed-forecast-mini {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.info-feed-forecast-day {
-  display: grid;
-  gap: 4px;
-  justify-items: center;
-  padding: 8px 6px;
-  border-radius: 10px;
-  background: #fff;
-  border: 1px solid #e2e8f0;
-  text-align: center;
-}
-
-.info-feed-forecast-date {
-  color: #64748b;
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.info-feed-forecast-icon {
-  width: 30px;
-  height: 30px;
-  border-radius: 10px;
-  display: grid;
-  place-items: center;
-  font-size: 18px;
-}
-
-.info-feed-forecast-temp {
-  color: #0f766e;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.info-feed-forecast-day small {
-  color: #94a3b8;
-  font-size: 11px;
-  line-height: 1.2;
+.info-feed-forecast-line {
+  color: #0f766e !important;
+  font-size: 11px !important;
+  line-height: 1.35 !important;
+  margin: 2px 0 4px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  max-width: 100%;
 }
 
 .info-feed-news-mini {
