@@ -726,17 +726,33 @@
         <div class="info-feed-preview-body" @click="router.push('/info-feed')">
           <div v-if="infoFeedHomeLoading" class="dashboard-empty"><p>加载中...</p></div>
           <template v-else>
-            <div class="info-feed-weather-mini" v-if="homeWeatherNow?.now">
-              <div class="info-feed-weather-icon" :class="weatherIconClass(homeWeatherNow.now.text)">
-                {{ weatherIcon(homeWeatherNow.now.text) }}
+            <div class="info-feed-weather-block">
+              <div class="info-feed-weather-mini" v-if="homeWeatherNow?.now">
+                <div class="info-feed-weather-icon" :class="weatherIconClass(homeWeatherNow.now.text)">
+                  {{ weatherIcon(homeWeatherNow.now.text) }}
+                </div>
+                <div>
+                  <strong>{{ homeWeatherNow.now.temp }}°C</strong>
+                  <span>{{ homeWeatherNow.now.text }} · {{ homeWeatherNow.now.windDir || '-' }} {{ homeWeatherNow.now.windScale || '-' }}级</span>
+                  <small>哈尔滨电机厂有限责任公司 · {{ homeWeatherNow.updateTime || '实时天气' }}</small>
+                </div>
               </div>
-              <div>
-                <strong>{{ homeWeatherNow.now.temp }}°C</strong>
-                <span>{{ homeWeatherNow.now.text }} · {{ homeWeatherNow.now.windDir || '-' }} {{ homeWeatherNow.now.windScale || '-' }}级</span>
-                <small>哈尔滨电机厂有限责任公司</small>
+              <div v-if="homeDailyItems.length" class="info-feed-forecast-mini">
+                <div
+                  v-for="day in homeDailyItems"
+                  :key="day.fxDate"
+                  class="info-feed-forecast-day"
+                >
+                  <span class="info-feed-forecast-date">{{ shortWeatherDate(day.fxDate) }}</span>
+                  <span class="info-feed-forecast-icon" :class="weatherIconClass(day.textDay)">{{ weatherIcon(day.textDay) }}</span>
+                  <span class="info-feed-forecast-temp">{{ day.tempMin }}°~{{ day.tempMax }}°</span>
+                  <small>{{ day.textDay }}</small>
+                </div>
+              </div>
+              <div v-if="!homeWeatherNow?.now && !homeDailyItems.length" class="dashboard-empty">
+                <p>等待中转服务推送天气数据</p>
               </div>
             </div>
-            <div v-else class="dashboard-empty"><p>暂无天气缓存</p></div>
             <div class="info-feed-news-mini" v-if="homeNewsItems.length">
               <button
                 v-for="item in homeNewsItems"
@@ -744,10 +760,11 @@
                 type="button"
                 @click.stop="router.push('/info-feed')"
               >
-                <span>{{ item.category || '新闻' }}</span>
+                <span>{{ item.category || '国际' }}</span>
                 <strong>{{ item.title }}</strong>
               </button>
             </div>
+            <div v-else class="dashboard-empty"><p>等待中转服务推送国际新闻</p></div>
           </template>
         </div>
       </article>
@@ -1009,12 +1026,12 @@ import { getContacts } from '@/api/contacts'
 import { getWallList, likeWall } from '@/api/feedback'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { getNewsList, getWeatherNow } from '@/api/infoFeed'
+import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
-import { DEFAULT_WEATHER_LOCATION, weatherIcon } from '@/utils/infoFeedDisplay'
+import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
 
@@ -1089,7 +1106,9 @@ const wallBarrageRows = computed(() => {
 
 const infoFeedHomeLoading = ref(false)
 const homeWeatherNow = ref(null)
+const homeWeatherDaily = ref(null)
 const homeNewsList = ref(null)
+const homeDailyItems = computed(() => (homeWeatherDaily.value?.daily || []).slice(0, 4))
 const homeNewsItems = computed(() => (homeNewsList.value?.result?.data || homeNewsList.value?.data || []).slice(0, 3))
 
 function weatherIconClass(text = '') {
@@ -1106,11 +1125,13 @@ function weatherIconClass(text = '') {
 async function loadInfoFeedHome() {
   infoFeedHomeLoading.value = true
   try {
-    const [weather, news] = await Promise.allSettled([
+    const [weather, daily, news] = await Promise.allSettled([
       getWeatherNow(DEFAULT_WEATHER_LOCATION),
-      getNewsList({ type: 'scroll', page: '1' }),
+      getWeatherDaily('7d', DEFAULT_WEATHER_LOCATION),
+      getNewsList({ type: DEFAULT_NEWS_TYPE, page: '1' }),
     ])
     homeWeatherNow.value = weather.status === 'fulfilled' ? weather.value : null
+    homeWeatherDaily.value = daily.status === 'fulfilled' ? daily.value : null
     homeNewsList.value = news.status === 'fulfilled' ? news.value : null
   } finally {
     infoFeedHomeLoading.value = false
@@ -1897,7 +1918,7 @@ const HOME_LAYOUT_MODULES = [
   { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
   { id: 'briefing', label: '重要信息审阅', description: '部长/副经理级别可见的重要换休、公出信息滚动审阅' },
   { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },
-  { id: 'infoFeed', label: '天气新闻', description: '哈电实时天气与最新新闻摘要' },
+  { id: 'infoFeed', label: '天气新闻', description: '哈电实时天气、预报与国际新闻摘要' },
   { id: 'wall', label: '吐槽墙', description: '匿名吐槽与互动' },
   { id: 'personnelVisual', label: '人员出勤可视化', description: '本科室在岗、公出、请假状态办公室缩略预览' },
   { id: 'favorites', label: '常用功能', description: '用户自定义的常用功能入口' },
@@ -4204,8 +4225,13 @@ async function navigateTo(feature) {
 
 /* ========== 天气新闻首页预览 ========== */
 .info-feed-preview-card {
-  min-height: 230px;
+  min-height: 280px;
   overflow: hidden;
+}
+
+.info-feed-weather-block {
+  display: grid;
+  gap: 10px;
 }
 
 .dashboard-card__icon--info-feed {
@@ -4259,6 +4285,54 @@ async function navigateTo(feature) {
   color: #475569;
   font-size: 12px;
   line-height: 1.45;
+}
+
+.info-feed-forecast-mini {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.info-feed-forecast-day {
+  display: grid;
+  gap: 4px;
+  justify-items: center;
+  padding: 8px 6px;
+  border-radius: 10px;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  text-align: center;
+}
+
+.info-feed-forecast-date {
+  color: #64748b;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.info-feed-forecast-icon {
+  width: 30px;
+  height: 30px;
+  border-radius: 10px;
+  display: grid;
+  place-items: center;
+  font-size: 18px;
+}
+
+.info-feed-forecast-temp {
+  color: #0f766e;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.info-feed-forecast-day small {
+  color: #94a3b8;
+  font-size: 11px;
+  line-height: 1.2;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
 }
 
 .info-feed-news-mini {

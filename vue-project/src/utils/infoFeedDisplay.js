@@ -1,4 +1,19 @@
 export const DEFAULT_WEATHER_LOCATION = '126.66,45.72'
+export const DEFAULT_NEWS_TYPE = 'world'
+
+export function shortWeatherDate(value) {
+  if (!value) return '-'
+  const parts = String(value).split('-')
+  if (parts.length !== 3) return value
+  const today = new Date()
+  const todayText = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  if (value === todayText) return '今天'
+  const tomorrow = new Date(today)
+  tomorrow.setDate(today.getDate() + 1)
+  const tomorrowText = `${tomorrow.getFullYear()}-${String(tomorrow.getMonth() + 1).padStart(2, '0')}-${String(tomorrow.getDate()).padStart(2, '0')}`
+  if (value === tomorrowText) return '明天'
+  return `${parts[1]}/${parts[2]}`
+}
 
 export const cityOptions = [
   { name: '哈尔滨电机厂有限责任公司', location: DEFAULT_WEATHER_LOCATION },

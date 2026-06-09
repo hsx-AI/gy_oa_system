@@ -3,7 +3,7 @@
     <div class="page-header">
       <div>
         <h1 class="page-title">天气新闻</h1>
-        <p class="page-subtitle">来自公网中转电脑定时推送的实时天气、天气预报和新闻缓存</p>
+        <p class="page-subtitle">来自公网中转电脑定时推送的实时天气、天气预报与国际新闻缓存</p>
       </div>
       <button type="button" class="refresh-btn" :disabled="loading" @click="refreshAll">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -64,7 +64,7 @@
             <div><span>能见度</span><strong>{{ weatherNow.now.vis || '-' }} km</strong></div>
           </div>
         </div>
-        <div v-else class="empty-state">暂无实时天气缓存</div>
+        <div v-else class="empty-state">等待中转服务推送实时天气</div>
       </div>
 
       <div class="forecast-panel panel">
@@ -82,7 +82,7 @@
             <span>{{ day.tempMin }}° / {{ day.tempMax }}°</span>
           </div>
         </div>
-        <div v-else class="empty-state">暂无天气预报缓存</div>
+        <div v-else class="empty-state">等待中转服务推送天气预报</div>
       </div>
     </section>
 
@@ -108,8 +108,8 @@
       <div class="news-main panel">
         <div class="panel-head">
           <div>
-            <h2>新闻</h2>
-            <p>选择分类查看已推送列表</p>
+            <h2>国际新闻</h2>
+            <p>默认展示国际栏目，也可切换其他分类</p>
           </div>
           <div class="news-tabs">
             <button
@@ -141,7 +141,7 @@
             </div>
           </button>
         </div>
-        <div v-else class="empty-state">暂无该分类新闻缓存</div>
+        <div v-else class="empty-state">等待中转服务推送该分类新闻</div>
       </div>
 
       <aside class="news-detail panel">
@@ -168,13 +168,13 @@ import {
   getWeatherHourly,
   getWeatherNow,
 } from '@/api/infoFeed'
-import { DEFAULT_WEATHER_LOCATION, cityOptions, weatherIcon } from '@/utils/infoFeedDisplay'
+import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, cityOptions, weatherIcon } from '@/utils/infoFeedDisplay'
 
 const newsTypes = [
-  { label: '即时', value: 'scroll' },
+  { label: '国际', value: 'world' },
   { label: '要闻', value: 'import' },
   { label: '时政', value: 'politics' },
-  { label: '国际', value: 'world' },
+  { label: '即时', value: 'scroll' },
   { label: '财经', value: 'finance' },
   { label: '社会', value: 'society' },
   { label: '生活', value: 'life' },
@@ -184,7 +184,7 @@ const newsTypes = [
 ]
 
 const selectedLocation = ref(DEFAULT_WEATHER_LOCATION)
-const selectedNewsType = ref('scroll')
+const selectedNewsType = ref(DEFAULT_NEWS_TYPE)
 const summary = ref({})
 const weatherNow = ref(null)
 const hourlyForecast = ref(null)
