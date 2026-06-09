@@ -1357,8 +1357,9 @@ watch([briefingFilter, briefingItems], async () => {
 })
 
 function briefingTagLabel(type) {
-  if (type === 'hxp_overtime') return '加班换休'
-  if (type === 'hxp' || type === 'hxp_batch') return '换休票'
+  if (type === 'hxp_overtime') return '值班换休'
+  if (type === 'hxp') return '公出节假日领取'
+  if (type === 'hxp_batch') return '系统批量增加'
   if (type === 'trip') return '公出'
   if (type === 'mail') return '邮件'
   return '消息'

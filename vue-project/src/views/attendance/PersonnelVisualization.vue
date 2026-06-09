@@ -68,7 +68,7 @@
         </div>
         <div class="status-board">
           <span class="board-title">今日状态</span>
-          <span>{{ summary.present }} 在岗 / {{ summary.businessTrip }} 公出 / {{ summary.leave }} 请假</span>
+          <span>{{ summary.present }} 在岗 / {{ summary.businessTrip }} 公出 / {{ summary.leave }} 请假 / {{ summary.noRecord }} 缺勤</span>
         </div>
       </div>
 
@@ -535,7 +535,7 @@ onMounted(loadScene)
   position: absolute;
   right: 38px;
   top: 34px;
-  min-width: 210px;
+  min-width: 280px;
   padding: 12px 16px;
   border-radius: 8px;
   background: #0f172a;

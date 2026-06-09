@@ -8,6 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from attendance_db import attendance_db
 from database import db
 from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
 from routers.db_manager import _get_admin1
@@ -170,6 +171,7 @@ async def get_personnel_scene(
                 "availableDepartments": available_departments,
                 "people": [],
                 "summary": {"total": 0, "present": 0, "businessTrip": 0, "leave": 0, "leavePending": 0, "noRecord": 0},
+                "generatedAt": attendance_db.get_latest_successful_upload_time() or "",
             }
         if selected_all and not can_view_all:
             raise HTTPException(status_code=403, detail="无权限查看全员")
@@ -363,7 +365,7 @@ async def get_personnel_scene(
             "availableDepartments": available_departments,
             "people": result_people,
             "summary": summary,
-            "generatedAt": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "generatedAt": attendance_db.get_latest_successful_upload_time() or "",
         }
     except HTTPException:
         raise

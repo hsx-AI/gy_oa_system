@@ -4,6 +4,7 @@
 """
 import logging
 import uuid
+from datetime import datetime
 from typing import List, Dict, Optional
 from database import db
 
@@ -302,13 +303,36 @@ class AttendanceDatabase:
     def log_upload(self, filename: str, records_count: int, status: str, message: str = ""):
         """记录上传日志"""
         try:
+            upload_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             sql = """
-                INSERT INTO upload_logs (filename, records_count, status, message)
-                VALUES (%s, %s, %s, %s)
+                INSERT INTO upload_logs (filename, upload_time, records_count, status, message)
+                VALUES (%s, %s, %s, %s, %s)
             """
-            db.execute_update(sql, (filename, records_count, status, message))
+            db.execute_update(sql, (filename, upload_time, records_count, status, message))
         except Exception as e:
             logger.error(f"记录上传日志失败: {str(e)}")
+
+    def get_latest_successful_upload_time(self) -> Optional[str]:
+        """获取最近一次成功上传打卡数据的时间（upload_logs.upload_time）。"""
+        try:
+            rows = db.execute_query(
+                """
+                SELECT upload_time
+                FROM upload_logs
+                WHERE status = %s
+                  AND upload_time IS NOT NULL
+                  AND TRIM(upload_time) <> ''
+                ORDER BY id DESC
+                LIMIT 1
+                """,
+                ("成功",),
+            )
+            if rows and rows[0].get("upload_time"):
+                return str(rows[0]["upload_time"]).strip()[:19]
+            return None
+        except Exception as e:
+            logger.error(f"查询最近上传时间失败: {str(e)}")
+            return None
 
     # ==================== 智能建议表 ====================
 
