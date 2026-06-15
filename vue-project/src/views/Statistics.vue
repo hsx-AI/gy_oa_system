@@ -142,7 +142,7 @@
           </div>
         </div>
 
-        <div v-if="workIntensity.totalPeople" class="work-intensity-card card">
+        <div v-if="ENABLE_WORK_INTENSITY_IN_STATISTICS && workIntensity.totalPeople" class="work-intensity-card card">
           <div class="work-intensity-header">
             <h3 class="work-intensity-title">
               <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -594,6 +594,8 @@ const permLsys = ref('')
 const deptEmployeeList = ref([])
 const currentUserName = ref('')
 const currentUserInfo = ref({})
+// 临时下线：统计汇总中的工作强度模块暂不展示、不请求接口。上线时改为 true。
+const ENABLE_WORK_INTENSITY_IN_STATISTICS = false
 
 // 查询参数
 const queryParams = ref({
@@ -1215,10 +1217,14 @@ const fetchData = async () => {
       fullAttendance.value = null
     }
 
-    try {
-      await fetchWorkIntensity()
-    } catch (e) {
-      console.error('获取工作强度失败:', e)
+    if (ENABLE_WORK_INTENSITY_IN_STATISTICS) {
+      try {
+        await fetchWorkIntensity()
+      } catch (e) {
+        console.error('获取工作强度失败:', e)
+        workIntensity.value = {}
+      }
+    } else {
       workIntensity.value = {}
     }
 
