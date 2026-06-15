@@ -823,8 +823,13 @@ async function loadGzhOnly() {
 }
 
 async function loadJsglFenlei() {
+  const bz = (form.value.bz || '').trim()
+  if (!bz) {
+    jsglFenleiList.value = []
+    return
+  }
   try {
-    const res = await getJsglFenlei()
+    const res = await getJsglFenlei({ ssks: bz })
     jsglFenleiList.value = (res.list || []).filter(Boolean)
   } catch {
     jsglFenleiList.value = []
@@ -1051,6 +1056,7 @@ watch(currentTab, async (tab) => {
   } else if (tab === 'jsgl') {
     jsglPage.value = 1
     if (!(form.value.bz || '').trim()) await loadUserDept()
+    await loadJsglFenlei()
     await loadJsglList()
   } else if (tab === 'manage') {
     managePage.value = 1
@@ -1068,7 +1074,6 @@ watch(currentTab, async (tab) => {
 })
 
 onMounted(async () => {
-  await loadJsglFenlei()
   await loadGlFenlei()
   await loadScszhFenlei()
   if (currentTab.value === 'tech') {
@@ -1076,6 +1081,7 @@ onMounted(async () => {
     await loadTechList()
   } else if (currentTab.value === 'jsgl') {
     await loadUserDept()
+    await loadJsglFenlei()
     await loadJsglList()
   } else if (currentTab.value === 'manage') {
     await loadUserDept()
@@ -1103,6 +1109,7 @@ watch(showModal, async (visible) => {
   } else if (currentTab.value === 'jsgl') {
     await loadUserDept()
     await loadGzhOnly()
+    await loadJsglFenlei()
     form.value.fenlei = ''
   } else if (currentTab.value === 'manage') {
     await loadUserDept()

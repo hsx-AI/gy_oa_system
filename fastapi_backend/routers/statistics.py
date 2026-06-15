@@ -109,6 +109,53 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     return bool(_jb_match(jb, "部长") or _jb_match(jb, "副部长"))
 
 
+def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[str], requested_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
+    """
+    统计汇总中的工作强度范围：
+    - 驾驶舱权限：沿用原请求范围；
+    - 主任/副主任/组长：仅可查本科室，若传 name 则必须属于本科室；
+    - 普通员工：仅本人。
+    返回 (lsys, name)，后续计算先按 lsys 拉员工，再按 name 收窄。
+    """
+    user_name = (current_user or "").strip()
+    if not user_name:
+        raise HTTPException(status_code=403, detail="缺少当前用户信息")
+
+    try:
+        from routers.approvers import _get_user_info, _jb_match, can_access_leader_dashboard
+    except Exception:
+        raise HTTPException(status_code=403, detail="无法校验工作强度权限")
+
+    user = _get_user_info(user_name)
+    if not user:
+        return None, user_name
+
+    user_lsys = (user.get("lsys") or "").strip()
+    req_lsys = (requested_lsys or "").strip() or None
+    req_name = (requested_name or "").strip() or None
+
+    if can_access_leader_dashboard(user_name):
+        return req_lsys, req_name
+
+    jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "组长") or _jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb)):
+        scope_lsys = user_lsys
+        if req_lsys and req_lsys != user_lsys:
+            raise HTTPException(status_code=403, detail="无权限查看其他科室工作强度")
+        if req_name:
+            rows = db.execute_query(
+                "SELECT 1 FROM yggl WHERE TRIM(name)=%s AND TRIM(lsys)=%s "
+                "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
+                "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+                (req_name, user_lsys),
+            )
+            if not rows:
+                raise HTTPException(status_code=403, detail="无权限查看该员工工作强度")
+        return scope_lsys, req_name
+
+    return user_lsys or None, user_name
+
+
 INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}
 
 
@@ -3958,6 +4005,7 @@ async def get_work_intensity(
     month: Optional[int] = Query(None, description="月份，不传则全年；与 date_from/date_to 互斥"),
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
+    name: Optional[str] = Query(None, description="统计汇总页单员工工作强度；普通员工仅可查本人"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
     date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD，与 date_from 同时传则按闭区间统计"),
     intensity_formula: str = Query(
@@ -3978,8 +4026,7 @@ async def get_work_intensity(
     传入 date_from + date_to 时按自定义日期区间统计（忽略 month），区间结束日晚于今天时按今天截断。
     """
     try:
-        if not _can_access_holiday_duty_attendance(current_user):
-            raise HTTPException(status_code=403, detail="无权限查看工作强度统计")
+        scoped_lsys, scoped_name = _work_intensity_scope(current_user, lsys, name)
 
         HOURS_PER_DAY = 8
 
@@ -4001,8 +4048,8 @@ async def get_work_intensity(
             else:
                 workdays = _count_workdays_between(ds, d_end_eff)
             expected_hours = workdays * HOURS_PER_DAY
-            staff = _get_staff_with_dept(lsys)
-            trip_map = _get_trip_days_by_person_range(ds, de, lsys)
+            staff = _get_staff_with_dept(None)
+            trip_map = _get_trip_days_by_person_range(ds, de, None)
             range_meta = {
                 "rangeMode": True,
                 "dateFrom": ds.isoformat(),
@@ -4018,8 +4065,8 @@ async def get_work_intensity(
             else:
                 workdays = _count_workdays_in_month(year, month)
             expected_hours = workdays * HOURS_PER_DAY
-            staff = _get_staff_with_dept(lsys)
-            trip_map = _get_trip_days_by_person(year, month, lsys)
+            staff = _get_staff_with_dept(None)
+            trip_map = _get_trip_days_by_person(year, month, None)
             range_meta = {"rangeMode": False}
             import calendar as _cal
             month_first = date(year, month, 1)
@@ -4037,8 +4084,8 @@ async def get_work_intensity(
             else:
                 workdays = sum(_count_workdays_in_month(year, m) for m in range(1, 13))
             expected_hours = workdays * HOURS_PER_DAY
-            staff = _get_staff_with_dept(lsys)
-            trip_map = _get_trip_days_by_person(year, None, lsys)
+            staff = _get_staff_with_dept(None)
+            trip_map = _get_trip_days_by_person(year, None, None)
             range_meta = {"rangeMode": False}
             year_first = date(year, 1, 1)
             year_last = date(year, 12, 31)
@@ -4059,18 +4106,15 @@ async def get_work_intensity(
             formula = "a"
         uses_leave_deduction = formula in ("b", "c")
         if formula == "b":
-            leave_days_map = _get_leave_days_by_person_period(leave_ps, leave_pe, lsys)
+            leave_days_map = _get_leave_days_by_person_period(leave_ps, leave_pe, None)
         elif formula == "c":
             leave_days_map = _get_leave_days_by_person_period(
-                leave_ps, leave_pe, lsys, qjfs_allowlist=_WI_FORMULA_C_QJFS
+                leave_ps, leave_pe, None, qjfs_allowlist=_WI_FORMULA_C_QJFS
             )
         else:
             leave_days_map = {}
 
         person_list = []
-        dept_agg = defaultdict(
-            lambda: {"ot": 0.0, "leave_h": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0}
-        )
 
         for s in staff:
             name = s["name"]
@@ -4100,6 +4144,47 @@ async def get_work_intensity(
                 row_p["leaveHours"] = round(leave_h, 2)
             person_list.append(row_p)
 
+        person_list.sort(key=lambda x: (-x["intensity"], -x["actualHours"], x["name"]))
+
+        rank_info = None
+        dept_rank_maps = {}
+        dept_total_maps = {}
+        for p in person_list:
+            dept_rank_maps.setdefault(p["lsys"], []).append(p)
+        for dept_name, dept_people in dept_rank_maps.items():
+            dept_total_maps[dept_name] = len(dept_people)
+            for idx, p in enumerate(dept_people):
+                p["deptRank"] = idx + 1
+                p["deptTotal"] = len(dept_people)
+        rank_list = [{**p, "rank": idx + 1} for idx, p in enumerate(person_list)]
+        if scoped_name:
+            target = next((p for p in person_list if p["name"] == scoped_name), None)
+            if target:
+                rank_info = {
+                    "name": scoped_name,
+                    "lsys": target["lsys"],
+                    "rank": next((idx + 1 for idx, p in enumerate(person_list) if p["name"] == scoped_name), None),
+                    "total": len(person_list),
+                    "deptRank": target.get("deptRank"),
+                    "deptTotal": target.get("deptTotal"),
+                }
+
+        if scoped_name:
+            visible_person_list = [p for p in person_list if p["name"] == scoped_name]
+        elif scoped_lsys:
+            visible_person_list = [p for p in person_list if p["lsys"] == scoped_lsys]
+        else:
+            visible_person_list = person_list
+
+        dept_agg = defaultdict(
+            lambda: {"ot": 0.0, "leave_h": 0.0, "trip_days": 0.0, "trip_holiday_days": 0.0, "count": 0}
+        )
+        for row_p in visible_person_list:
+            dept = row_p["lsys"]
+            ot = float(row_p.get("overtimeHours") or 0)
+            leave_h = float(row_p.get("leaveHours") or 0)
+            trip_d = float(row_p.get("tripDays") or 0)
+            trip_holiday_d = float(row_p.get("tripHolidayDays") or 0)
             da = dept_agg[dept]
             da["ot"] += ot
             if uses_leave_deduction:
@@ -4108,15 +4193,13 @@ async def get_work_intensity(
             da["trip_holiday_days"] += trip_holiday_d
             da["count"] += 1
 
-        person_list.sort(key=lambda x: -x["intensity"])
-
-        total_ot = sum(p["overtimeHours"] for p in person_list)
-        total_leave_h = sum(float(p.get("leaveHours") or 0) for p in person_list) if uses_leave_deduction else 0.0
-        total_trip_d = sum(p["tripDays"] for p in person_list)
-        total_trip_holiday_d = sum(p.get("tripHolidayDays", 0) for p in person_list)
+        total_ot = sum(p["overtimeHours"] for p in visible_person_list)
+        total_leave_h = sum(float(p.get("leaveHours") or 0) for p in visible_person_list) if uses_leave_deduction else 0.0
+        total_trip_d = sum(p["tripDays"] for p in visible_person_list)
+        total_trip_holiday_d = sum(p.get("tripHolidayDays", 0) for p in visible_person_list)
         total_trip_h = total_trip_d * HOURS_PER_DAY
         total_trip_holiday_h = total_trip_holiday_d * HOURS_PER_DAY
-        total_actual = expected_hours * len(staff) - total_trip_h + total_trip_holiday_h
+        total_actual = expected_hours * len(visible_person_list) - total_trip_h + total_trip_holiday_h
         if uses_leave_deduction:
             overall_intensity = round((total_ot - total_leave_h) / total_actual, 4) if total_actual > 0 else 0
         else:
@@ -4148,16 +4231,18 @@ async def get_work_intensity(
             "success": True,
             "workdays": workdays,
             "expectedHoursPerPerson": expected_hours,
-            "totalPeople": len(staff),
+            "totalPeople": len(visible_person_list),
             "totalOvertimeHours": round(total_ot, 2),
             "totalActualHours": round(total_actual, 2),
             "totalLeaveHours": round(total_leave_h, 2) if uses_leave_deduction else None,
             "overallIntensity": overall_intensity,
+            "rankInfo": rank_info,
+            "rankList": rank_list,
             "intensityFormula": formula,
             "overtimeCalcMethod": "suggestion",
             "overtimeCalcNote": "工作日按 7:30 前 + 17:30 后识别（不足 1 小时也计）；休息日同智能建议；非 jiaban 申报",
             "byDept": dept_list,
-            "byPerson": person_list,
+            "byPerson": visible_person_list,
             **range_meta,
         }
     except HTTPException:

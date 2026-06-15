@@ -1291,6 +1291,14 @@ def _dict_get_ci(row: Optional[dict], *keys: str):
     return None
 
 
+def _yggl_real_name_sql(alias: str, fallback_expr: str) -> str:
+    """导出姓名：优先 yggl.真实姓名，否则回退到 name 或业务表姓名。"""
+    return (
+        f"COALESCE(NULLIF(TRIM({alias}.`真实姓名`), ''), "
+        f"NULLIF(TRIM({alias}.name), ''), {fallback_expr})"
+    )
+
+
 def _leave_handler_category_from_gclx(raw) -> str:
     """
     异常处理表「请假类别」中公出一行的展示文案：与 gcsqb.gclx 一致。
@@ -1341,7 +1349,7 @@ async def export_leave_handler_table(
 ):
     """
     导出异常处理表：按月全员请假信息 + 公出信息，XLS（Excel）格式。
-    列顺序：A 员工代码(string) B 姓名(string) C 部门(string，固定「智能制造工艺部」)
+    列顺序：A 员工代码(string) B 姓名(string，优先 yggl.真实姓名) C 部门(string，固定「智能制造工艺部」)
     D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string)。
     请假走 qj.qjfs；公出走 gcsqb.gclx（市内公出/境内公出/境外公出），gclx 为空时默认「境内公出」。
     数据来源：qj 表（已通过 qjzt=4 + 审核中 qjzt IN(0,1,3)）+ gcsqb 表（已通过+审核中，排除驳回 bldzt/szrzt=22）。
@@ -1366,8 +1374,9 @@ async def export_leave_handler_table(
         end_date = f"{year}-{month:02d}-{last_day:02d}"
 
         # 全员请假：已通过(qjzt=4) + 审核中(qjzt IN 0,1,3)，排除驳回；按月份筛选
-        sql = """
-            SELECT qj.xm AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
+        xm_expr = _yggl_real_name_sql("yggl", "qj.xm")
+        sql = f"""
+            SELECT {xm_expr} AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
                    TRIM(yggl.gh) AS gh
             FROM qj
             LEFT JOIN yggl ON qj.xm = yggl.name
@@ -1380,8 +1389,8 @@ async def export_leave_handler_table(
 
         # 公出：已通过 + 审核中，排除驳回(bldzt=22 或 szrzt=22)
         try:
-            gcsqb_sql = """
-                SELECT g.gcr AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto,
+            gcsqb_sql = f"""
+                SELECT {_yggl_real_name_sql('y', 'g.gcr')} AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto,
                        NULLIF(TRIM(COALESCE(g.gclx, '')), '') AS gclx, TRIM(y.gh) AS gh
                 FROM gcsqb g
                 LEFT JOIN yggl y ON g.gcr = y.name
@@ -1430,7 +1439,8 @@ async def export_leave_handler_table(
                 pass
             if not is_weekend and not is_holiday:
                 female_rows = db.execute_query(
-                    "SELECT TRIM(gh) AS gh, name AS xm FROM yggl "
+                    "SELECT TRIM(gh) AS gh, "
+                    "COALESCE(NULLIF(TRIM(`真实姓名`), ''), name) AS xm FROM yggl "
                     "WHERE (xbie LIKE %s OR xbie = %s) AND name IS NOT NULL AND TRIM(name) != '' "
                     "AND RIGHT(TRIM(name), 1) != '1' AND (lsys IS NULL OR RIGHT(TRIM(lsys), 1) != '1') "
                     "AND (TRIM(lsys) != %s OR lsys IS NULL) "

@@ -141,6 +141,101 @@
             </div>
           </div>
         </div>
+
+        <div v-if="workIntensity.totalPeople" class="work-intensity-card card">
+          <div class="work-intensity-header">
+            <h3 class="work-intensity-title">
+              <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M13 2L3 14h8l-1 8 10-12h-8l1-8z"/>
+              </svg>
+              {{ isAllStaffQuery ? '科室工作强度' : '员工工作强度' }}
+            </h3>
+            <div class="work-intensity-formula-tabs" aria-label="工作强度口径">
+              <button
+                v-for="item in workIntensityFormulaOptions"
+                :key="item.value"
+                type="button"
+                class="tab-btn tab-btn-sm"
+                :class="{ active: workIntensityFormula === item.value }"
+                @click="setWorkIntensityFormula(item.value)"
+              >
+                {{ item.label }}
+              </button>
+            </div>
+          </div>
+          <p class="section-hint">{{ workIntensityFormulaDesc }}</p>
+          <div class="work-intensity-grid">
+            <div class="work-intensity-metric work-intensity-main">
+              <span class="wi-metric-label">工作强度</span>
+              <span class="wi-metric-value">{{ percent(workIntensity.overallIntensity) }}</span>
+            </div>
+            <div v-if="workIntensity.rankInfo?.rank" class="work-intensity-metric work-intensity-rank">
+              <span class="wi-metric-label">全体排名</span>
+              <span class="wi-metric-value">{{ workIntensity.rankInfo.rank }}<em>/{{ workIntensity.rankInfo.total }}</em></span>
+              <span class="wi-metric-note">{{ workIntensity.rankInfo.lsys }}：{{ workIntensity.rankInfo.deptRank || '-' }}/{{ workIntensity.rankInfo.deptTotal || '-' }}</span>
+            </div>
+            <div v-if="workIntensity.totalLeaveHours != null" class="work-intensity-metric">
+              <span class="wi-metric-label">扣减请假</span>
+              <span class="wi-metric-value">{{ workIntensity.totalLeaveHours ?? 0 }}<em>h</em></span>
+            </div>
+          </div>
+          <div v-if="workIntensityHasPersonData" class="work-intensity-list">
+            <div class="work-intensity-list-head">
+              <h4>{{ workIntensityRankScopeTitle }}</h4>
+              <span>{{ workIntensityRankScope === 'dept' ? workIntensityOwnDeptLabel : '全体' }}</span>
+            </div>
+            <div class="wi-person-filters">
+              <label class="wi-person-filter-item">
+                <span>排名范围</span>
+                <select v-model="workIntensityRankScope" class="form-input wi-job-filter-select">
+                  <option value="all">全体总排名</option>
+                  <option value="dept">本科室排名</option>
+                </select>
+              </label>
+              <label class="wi-person-filter-item">
+                <span>员工级别</span>
+                <select v-model="workIntensityJobFilter" class="form-input wi-job-filter-select">
+                  <option
+                    v-for="opt in workIntensityVisibleJobFilters"
+                    :key="opt.value || 'all'"
+                    :value="opt.value"
+                  >{{ opt.label }}</option>
+                </select>
+              </label>
+            </div>
+            <div v-if="workIntensityPersonList.length" class="work-intensity-table-wrap">
+              <table class="work-intensity-table wi-person-table">
+                <thead>
+                  <tr>
+                    <th class="th-rank">排名</th>
+                    <th>姓名</th>
+                    <th>科室</th>
+                    <th v-if="workIntensityUsesLeave">请假(h)</th>
+                    <th>工作强度</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr
+                    v-for="(person, idx) in workIntensityPersonList"
+                    :key="`${person.name}-${idx}`"
+                    :class="{ 'is-current-person': person.name === queryParams.name }"
+                  >
+                    <td class="td-rank">{{ idx + 1 }}</td>
+                    <td>
+                      <span :class="{ 'masked-name': isWorkIntensityNameMasked(person) }">
+                        {{ workIntensityDisplayName(person) }}
+                      </span>
+                    </td>
+                    <td>{{ person.lsys || '-' }}</td>
+                    <td v-if="workIntensityUsesLeave" class="td-num">{{ person.leaveHours ?? 0 }}</td>
+                    <td class="td-num td-intensity">{{ percent(person.intensity) }}</td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-else class="work-intensity-empty">当前筛选条件下暂无人员</p>
+          </div>
+        </div>
       </div>
 
       <!-- 满勤统计卡片 -->
@@ -490,13 +585,15 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
-import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear } from '@/api/attendance'
+import { ref, computed, onMounted, watch } from 'vue'
+import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear, getLeaderWorkIntensity } from '@/api/attendance'
 
 // 权限：1=仅自己 2=科室下拉 3=全部输入
 const permLevel = ref(1)
 const permLsys = ref('')
 const deptEmployeeList = ref([])
+const currentUserName = ref('')
+const currentUserInfo = ref({})
 
 // 查询参数
 const queryParams = ref({
@@ -517,6 +614,15 @@ const selectedLeaveMonth = ref('')
 const selectedBusinessTripMonth = ref('')
 // 满勤统计
 const fullAttendance = ref(null)
+const workIntensity = ref({})
+const workIntensityFormula = ref('a')
+const workIntensityJobFilter = ref('')
+const workIntensityRankScope = ref('all')
+const workIntensityFormulaOptions = [
+  { value: 'a', label: '口径 A' },
+  { value: 'b', label: '口径 B' },
+  { value: 'c', label: '口径 C' }
+]
 // 科室成员横向对比（班组长/主任/副主任可见）：按人合并加班/请假/公出
 const deptMemberLeave = ref([])
 const deptMemberOvertime = ref([])
@@ -590,6 +696,202 @@ function trendChartTitle(month) {
   return `${trendChartTypes.find(t => t.type === trendChartType.value)?.label || ''} ${v} 天`
 }
 function round2(v) { return Math.round(v * 100) / 100 }
+function percent(v) { return `${(Number(v || 0) * 100).toFixed(1)}%` }
+
+const workIntensityFormulaDesc = computed(() => {
+  if (workIntensityFormula.value === 'b') {
+    return '口径 B：在 A 基础上考虑了请假时间。'
+  }
+  if (workIntensityFormula.value === 'c') {
+    return '口径 C：在 B 的基础上考虑了主观请假。'
+  }
+  return '口径 A：综合衡量员工工作状态计算工作强度。'
+})
+
+const workIntensityUsesLeave = computed(() => workIntensityFormula.value === 'b' || workIntensityFormula.value === 'c')
+const workIntensityOwnDeptLabel = computed(() => workIntensity.value?.rankInfo?.lsys || permLsys.value || '')
+const workIntensityRankScopeTitle = computed(() => workIntensityRankScope.value === 'dept' ? '本科室个人排名' : '全体个人排名')
+
+const WI_JOB_CATEGORY_ORDER = ['部领导', '总师', '责任工艺师', '主任及副主任', '班组长', '无']
+const WI_JOB_FILTER_ALL_MANAGERS = '全体管理人员'
+const WI_JOB_FILTER_ZHUREN_ZRZE = '主任/主任责'
+const WI_JOB_FILTER_FUZHUREN = '副主任'
+const WORK_INTENSITY_FIXED_JOB_FILTERS = [
+  { value: '', label: '全部职务' },
+  { value: WI_JOB_FILTER_ALL_MANAGERS, label: '全体管理人员' },
+  { value: WI_JOB_FILTER_ZHUREN_ZRZE, label: '主任/主任责' },
+  { value: WI_JOB_FILTER_FUZHUREN, label: '副主任' },
+]
+
+function wiJobMatchesZhurenOrZrze(jbRaw) {
+  const jb = (jbRaw || '').trim()
+  if (!jb || jb.includes('副主任')) return false
+  return jb.includes('主任')
+}
+
+function wiJobMatchesFuzhurenOnly(jbRaw) {
+  return (jbRaw || '').trim().includes('副主任')
+}
+
+function wiJobIsBuLingdao(jb) {
+  const s = jb || ''
+  return s.includes('副部长') || s.includes('部长') || s.includes('副经理') || s.includes('经理')
+}
+
+function isWorkIntensityPrivilegedJb(jbRaw) {
+  const jb = (jbRaw || '').trim()
+  if (!jb) return false
+  return (
+    jb.includes('副部长')
+    || jb.includes('部长')
+    || jb.includes('经理助理')
+    || jb.includes('副经理')
+    || jb.includes('经理')
+  )
+}
+
+const canSeeAllWorkIntensityNames = computed(() => {
+  return isWorkIntensityPrivilegedJb(currentUserInfo.value?.jb)
+})
+
+const currentUserDeptForMask = computed(() => {
+  return (workIntensity.value?.rankInfo?.lsys || currentUserInfo.value?.lsys || permLsys.value || '').trim()
+})
+
+function isWorkIntensityNameMasked(person) {
+  const rowName = (person?.name || '').trim()
+  if (!rowName || rowName === currentUserName.value) return false
+  if (canSeeAllWorkIntensityNames.value) return false
+  return (person?.lsys || '').trim() !== currentUserDeptForMask.value
+}
+
+function maskWorkIntensityName(name) {
+  const s = (name || '').trim()
+  if (!s) return '-'
+  return '*'.repeat(s.length)
+}
+
+function workIntensityDisplayName(person) {
+  return isWorkIntensityNameMasked(person) ? maskWorkIntensityName(person?.name) : (person?.name || '-')
+}
+
+function wiJobDisplayCategory(jbRaw, lsysRaw) {
+  const jb = (jbRaw || '').trim()
+  const dept = (lsysRaw || '').trim()
+  if (dept === '部办') {
+    if (wiJobIsBuLingdao(jb)) return '部领导'
+    return '总师'
+  }
+  if (jb.includes('返聘')) return '无'
+  if (jb.includes('责任工艺师') || jb.includes('责任师') || jb.includes('责工师')) return '责任工艺师'
+  if (jb.includes('副主任') || jb.includes('主任责') || jb.includes('主任')) return '主任及副主任'
+  if (jb.includes('班组长') || jb.includes('组长')) return '班组长'
+  if (!jb || jb === '无' || jb.includes('员工')) return '无'
+  return '无'
+}
+
+function workIntensityJobMatches(person, filter) {
+  if (!filter) return true
+  if (filter === WI_JOB_FILTER_ALL_MANAGERS) {
+    const c = wiJobDisplayCategory(person?.jb, person?.lsys)
+    return c === '主任及副主任' || c === '班组长'
+  }
+  if (filter === WI_JOB_FILTER_ZHUREN_ZRZE) return wiJobMatchesZhurenOrZrze(person?.jb)
+  if (filter === WI_JOB_FILTER_FUZHUREN) return wiJobMatchesFuzhurenOnly(person?.jb)
+  return wiJobDisplayCategory(person?.jb, person?.lsys) === filter
+}
+
+const workIntensityRawPersonList = computed(() => {
+  if (Array.isArray(workIntensity.value?.rankList) && workIntensity.value.rankList.length) {
+    return workIntensity.value.rankList
+  }
+  return workIntensity.value?.byPerson || []
+})
+
+const workIntensityCurrentUserRow = computed(() => {
+  const name = (currentUserName.value || '').trim()
+  if (!name) return null
+  return workIntensityRawPersonList.value.find((row) => (row?.name || '').trim() === name) || null
+})
+
+function workIntensityCurrentJobFilterDeptScope() {
+  return workIntensityRankScope.value === 'dept' ? workIntensityOwnDeptLabel.value : ''
+}
+
+function workIntensityJobFilterIncludesUser(person, filter, rankScope, deptScope) {
+  if (!person) return false
+  if (rankScope === 'dept' && deptScope && (person?.lsys || '').trim() !== deptScope) return false
+  if (!filter) return true
+  return workIntensityJobMatches(person, filter)
+}
+
+function workIntensityCanUseJobFilter(filter) {
+  return workIntensityJobFilterIncludesUser(
+    workIntensityCurrentUserRow.value,
+    filter,
+    workIntensityRankScope.value,
+    workIntensityCurrentJobFilterDeptScope(),
+  )
+}
+
+const workIntensityHasPersonData = computed(() => workIntensityRawPersonList.value.length > 0)
+
+const workIntensityJobOptions = computed(() => {
+  const categories = new Set()
+  for (const row of workIntensityRawPersonList.value) {
+    const cat = wiJobDisplayCategory(row?.jb, row?.lsys)
+    if (cat) categories.add(cat)
+  }
+  return WI_JOB_CATEGORY_ORDER.filter((x) => categories.has(x) && x !== '无' && workIntensityCanUseJobFilter(x))
+})
+
+const workIntensityVisibleJobFilters = computed(() => {
+  const fixed = WORK_INTENSITY_FIXED_JOB_FILTERS.filter((opt) => workIntensityCanUseJobFilter(opt.value))
+  const dynamic = workIntensityJobOptions.value.map((jb) => ({ value: jb, label: jb }))
+  return [...fixed, ...dynamic]
+})
+
+function workIntensityFirstAvailableJobFilter() {
+  const visible = workIntensityVisibleJobFilters.value
+  return visible.length ? visible[0].value : ''
+}
+
+watch(
+  [workIntensityVisibleJobFilters, workIntensityRankScope],
+  () => {
+    if (!workIntensityCanUseJobFilter(workIntensityJobFilter.value)) {
+      workIntensityJobFilter.value = workIntensityFirstAvailableJobFilter()
+    }
+  },
+)
+
+const workIntensityPersonList = computed(() => {
+  const list = workIntensityRawPersonList.value
+  const deptScope = workIntensityRankScope.value === 'dept' ? workIntensityOwnDeptLabel.value : ''
+  return [...list].filter((row) => {
+    if (deptScope && (row?.lsys || '').trim() !== deptScope) return false
+    return workIntensityJobMatches(row, workIntensityJobFilter.value)
+  }).sort((a, b) => {
+    if (workIntensityRankScope.value === 'dept') {
+      const adr = Number(a.deptRank || 0)
+      const bdr = Number(b.deptRank || 0)
+      if (adr && bdr) return adr - bdr
+    }
+    const ar = Number(a.rank || 0)
+    const br = Number(b.rank || 0)
+    if (ar && br) return ar - br
+    return (Number(b.intensity || 0) - Number(a.intensity || 0)) || String(a.name || '').localeCompare(String(b.name || ''), 'zh-Hans-CN')
+  })
+})
+
+async function setWorkIntensityFormula(value) {
+  const next = value === 'b' || value === 'c' ? value : 'a'
+  if (workIntensityFormula.value === next) return
+  workIntensityFormula.value = next
+  if (yearTotal.value) {
+    await fetchWorkIntensity()
+  }
+}
 
 // 过滤后的加班记录
 const filteredOvertimeRecords = computed(() => {
@@ -748,6 +1050,8 @@ const loadPermission = async () => {
     const user = JSON.parse(savedUser)
     const name = user.name || user.userName
     if (!name) return
+    currentUserName.value = name
+    currentUserInfo.value = user
     const res = await getStatisticsPermission({ name })
     if (res.success) {
       permLevel.value = res.level ?? 1
@@ -767,6 +1071,7 @@ const loadPermission = async () => {
   } catch (e) {
     // 降级为1级
     const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    currentUserInfo.value = user
     queryParams.value.name = user.name || user.userName || ''
   }
 }
@@ -802,6 +1107,30 @@ function deptFullAttendanceNames(d) {
 
 // 是否当前为「全员」汇总（2级且未选具体员工）
 const isAllStaffQuery = computed(() => permLevel.value === 2 && !(queryParams.value.name || '').trim())
+
+const fetchWorkIntensity = async () => {
+  const currentUser = currentUserName.value || (JSON.parse(localStorage.getItem('userInfo') || '{}').name || JSON.parse(localStorage.getItem('userInfo') || '{}').userName || '')
+  if (!currentUser) {
+    workIntensity.value = {}
+    return
+  }
+  const year = queryParams.value.year
+  const month = queryParams.value.month
+  const name = (queryParams.value.name || '').trim()
+  const params = {
+    year,
+    current_user: currentUser,
+    intensity_formula: workIntensityFormula.value
+  }
+  if (month) params.month = month
+  if (name) {
+    params.name = name
+  } else if (permLsys.value) {
+    params.lsys = permLsys.value
+  }
+  const res = await getLeaderWorkIntensity(params)
+  workIntensity.value = res?.success ? res : {}
+}
 
 // 获取数据
 const fetchData = async () => {
@@ -885,6 +1214,14 @@ const fetchData = async () => {
     } catch (e) {
       fullAttendance.value = null
     }
+
+    try {
+      await fetchWorkIntensity()
+    } catch (e) {
+      console.error('获取工作强度失败:', e)
+      workIntensity.value = {}
+    }
+
     selectedOvertimeMonth.value = month || ''
     selectedLeaveMonth.value = month || ''
     selectedBusinessTripMonth.value = month || ''
@@ -1136,6 +1473,218 @@ const fetchData = async () => {
 .summary-net {
   font-size: 0.8rem;
   opacity: 0.7;
+}
+
+/* 工作强度 */
+.work-intensity-card {
+  padding: var(--spacing-xl);
+  margin-top: var(--spacing-xl);
+}
+
+.work-intensity-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-lg);
+  flex-wrap: wrap;
+  margin-bottom: var(--spacing-sm);
+}
+
+.work-intensity-title {
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+  font-size: var(--font-size-lg);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.work-intensity-formula-tabs {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-sm);
+}
+
+.work-intensity-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--spacing-md);
+  margin-top: var(--spacing-lg);
+}
+
+.work-intensity-metric {
+  padding: var(--spacing-lg);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-spotlight);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-sm);
+}
+
+.work-intensity-main {
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
+
+.work-intensity-rank {
+  background: #eef2ff;
+  border-color: #c7d2fe;
+}
+
+.wi-metric-label {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.wi-metric-value {
+  font-size: var(--font-size-xl);
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+
+.work-intensity-main .wi-metric-value {
+  color: #c2410c;
+}
+
+.work-intensity-rank .wi-metric-value {
+  color: #4338ca;
+}
+
+.wi-metric-value em {
+  margin-left: 2px;
+  font-size: var(--font-size-sm);
+  font-style: normal;
+  font-weight: var(--font-weight-medium);
+  color: var(--color-text-secondary);
+}
+
+.wi-metric-note {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+
+.work-intensity-list {
+  margin-top: var(--spacing-xl);
+  border-top: 1px solid var(--color-border-lighter);
+  padding-top: var(--spacing-lg);
+}
+
+.work-intensity-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  margin-bottom: var(--spacing-md);
+}
+
+.work-intensity-list-head h4 {
+  margin: 0;
+  font-size: var(--font-size-base);
+  font-weight: var(--font-weight-semibold);
+  color: var(--color-text-primary);
+}
+
+.work-intensity-list-head span {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.work-intensity-empty {
+  margin: var(--spacing-md) 0 0;
+  padding: var(--spacing-lg);
+  text-align: center;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-tertiary);
+  background: var(--color-bg-secondary);
+  border-radius: var(--radius-md);
+}
+
+.wi-person-filters {
+  display: flex;
+  align-items: center;
+  gap: var(--spacing-md);
+  margin: 0 0 var(--spacing-md);
+}
+
+.wi-person-filter-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+
+.wi-job-filter-select {
+  min-width: 132px;
+  height: 32px;
+  padding: 0 10px;
+}
+
+.work-intensity-table-wrap {
+  overflow-x: auto;
+}
+
+.work-intensity-table {
+  width: 100%;
+  min-width: 720px;
+  border-collapse: collapse;
+  font-size: var(--font-size-sm);
+}
+
+.work-intensity-table th,
+.work-intensity-table td {
+  padding: 8px 14px;
+  text-align: center;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--color-border-lighter);
+  font-size: var(--font-size-sm);
+}
+
+.work-intensity-table th {
+  background: var(--color-bg-spotlight);
+  font-weight: 600;
+  color: var(--color-text-secondary);
+}
+
+.work-intensity-table .th-rank,
+.work-intensity-table .td-rank {
+  width: 56px;
+}
+
+.work-intensity-table .td-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.work-intensity-table tbody tr:hover {
+  background: var(--color-bg-spotlight);
+}
+.work-intensity-table tbody tr.is-current-person {
+  background: #fff7ed;
+}
+
+.work-intensity-table tbody tr.is-current-person td {
+  color: var(--color-text-primary);
+  font-weight: var(--font-weight-medium);
+}
+
+.masked-name {
+  display: inline-block;
+  min-width: 3em;
+  color: var(--color-text-tertiary);
+  letter-spacing: 0;
+  user-select: none;
+}
+
+.td-num {
+  font-variant-numeric: tabular-nums;
+}
+
+.td-intensity {
+  color: #c2410c;
+  font-weight: var(--font-weight-semibold);
 }
 
 /* 满勤统计 */

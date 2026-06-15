@@ -112,7 +112,7 @@
               <h3 class="shift-email-preview-panel-title">邮件发送信息汇总</h3>
               <p class="shift-email-preview-intro">
                 按发送时间与收件人单位合并发送：同一单位、同一发送时间只发一封邮件（可含多个科室附件）。
-                排班表收件人为邮件收件人；各科室主任/副主任/班组长（已配置企业邮箱）为抄送。
+                排班表收件人为邮件收件人；各科室主任/副主任/班组长及公司经理/副经理/经理助理（已配置企业邮箱）为抄送。
               </p>
               <ul class="shift-email-preview-list">
                 <li v-for="(line, idx) in shiftEmailPreviewLines" :key="'pv-' + idx">
@@ -241,6 +241,7 @@ const todoReminderResult = ref(null)
 const shiftEmailLoading = ref(false)
 const shiftEmailSaving = ref(false)
 const shiftEmailItems = ref([])
+const shiftEmailCompanyLeaders = ref([])
 const shiftEmailMessage = ref('')
 const attendanceFetchLoading = ref(false)
 const attendanceFetchSaving = ref(false)
@@ -330,6 +331,11 @@ function normalizeRecipientUnit(unit) {
 
 const shiftEmailPreviewLines = computed(() => {
   const buckets = new Map()
+  const companyLeaders = shiftEmailCompanyLeaders.value || []
+  const companyLeaderNames = companyLeaders.map((l) => (l?.name || '').trim()).filter(Boolean)
+  const companyLeaderEmails = new Set(
+    companyLeaders.map((l) => (l?.email || '').trim().toLowerCase()).filter(Boolean),
+  )
   for (const item of shiftEmailEnabledItems.value) {
     const wd = item.email_send_weekday
     const includeSend = !!item.email_include_send_day
@@ -344,9 +350,10 @@ const shiftEmailPreviewLines = computed(() => {
     }
     if (!units.size) continue
 
-    const leaderEmails = new Set(
-      leaders.map((l) => (l.email || '').trim().toLowerCase()).filter(Boolean),
-    )
+    const leaderEmails = new Set([
+      ...leaders.map((l) => (l.email || '').trim().toLowerCase()).filter(Boolean),
+      ...companyLeaderEmails,
+    ])
 
     for (const unit of units) {
       const key = `${wd}|${includeSend ? 1 : 0}|${unit}`
@@ -387,9 +394,14 @@ const shiftEmailPreviewLines = computed(() => {
       const ccPart = bucket.leadersByDept
         .map(({ dept, names }) => `${dept}管理人员（${names.join('、')}）`)
         .join('；')
+      const ccPieces = []
+      if (ccPart) ccPieces.push(ccPart)
+      if (companyLeaderNames.length) {
+        ccPieces.push(`公司领导（${companyLeaderNames.join('、')}）`)
+      }
 
       const toPart = configPart ? `收件人（${configPart}）` : '收件人（未配置）'
-      const ccSuffix = ccPart ? `，抄送${ccPart}` : ''
+      const ccSuffix = ccPieces.length ? `，抄送${ccPieces.join('；')}` : ''
 
       const rangeHint = shiftEmailRangeHint(bucket.sendWeekday, bucket.includeSendDay)
       return `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表（${rangeHint}），${toPart}${ccSuffix}。`
@@ -473,9 +485,15 @@ async function fetchShiftEmailConfig() {
   try {
     const res = await getShiftEmailFeatureConfig({ current_user: name })
     shiftEmailItems.value = (res?.items || []).map(mapShiftEmailItem)
+    shiftEmailCompanyLeaders.value = (res?.company_leader_recipients || []).map((r) => ({
+      name: (r?.name || '').trim(),
+      email: (r?.email || '').trim(),
+      jb: (r?.jb || '').trim(),
+    }))
   } catch (e) {
     console.error(e)
     shiftEmailItems.value = []
+    shiftEmailCompanyLeaders.value = []
     shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '排班邮件配置加载失败'
   } finally {
     shiftEmailLoading.value = false
@@ -588,6 +606,11 @@ async function saveShiftEmailConfig() {
       departments: departmentsPayload,
     })
     shiftEmailItems.value = (res?.items || []).map(mapShiftEmailItem)
+    shiftEmailCompanyLeaders.value = (res?.company_leader_recipients || []).map((r) => ({
+      name: (r?.name || '').trim(),
+      email: (r?.email || '').trim(),
+      jb: (r?.jb || '').trim(),
+    }))
     shiftEmailMessage.value = res?.message || '排班邮件配置已保存'
   } catch (e) {
     shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '保存排班邮件功能配置失败'

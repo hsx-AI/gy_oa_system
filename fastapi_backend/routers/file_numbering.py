@@ -306,27 +306,75 @@ def _str(v):
 
 # ==================== 技术管理编号 bianhaogljs ====================
 # 固定分类（仅此三种）: 车间技术交底、工艺技术评审、工艺设计问题反馈单
+# 前缀「艺X」按编号科室(bz)变化，如焊接工艺室→艺焊、汽发工艺室→艺汽、水发工艺室→艺发
 
-FENLEI_JSGL = [
-    {"value": "艺水-JJ-", "label": "车间技术交底"},
-    {"value": "艺水-PS-", "label": "工艺技术评审"},
-    {"value": "FKD-艺水-", "label": "工艺设计问题反馈单"},
+DEPT_JSGL_YI_PREFIX = {
+    "部办": "艺部",
+    "综合技术室": "艺综",
+    "工具技术室": "艺工",
+    "数控编程室": "艺数",
+    "智能制造技术室": "艺智",
+    "水发工艺室": "艺发",
+    "水轮机工艺室": "艺轮",
+    "汽发工艺室": "艺汽",
+    "焊接工艺室": "艺焊",
+    "非标技术室": "艺非",
+}
+
+JSGL_FENLEI_LABELS = [
+    ("JJ", "车间技术交底"),
+    ("PS", "工艺技术评审"),
+    ("FKD", "工艺设计问题反馈单"),
 ]
+
+
+def _lsys_to_yi_prefix(lsys: str) -> str:
+    """科室名称 → 技术管理编号前缀，如 焊接工艺室 → 艺焊。"""
+    lsys = (lsys or "").strip()
+    if not lsys:
+        raise HTTPException(status_code=400, detail="科室名称为空，无法生成编号前缀")
+    if lsys in DEPT_JSGL_YI_PREFIX:
+        return DEPT_JSGL_YI_PREFIX[lsys]
+    name = lsys
+    for suffix in ("工艺室", "技术室", "室"):
+        if name.endswith(suffix):
+            name = name[: -len(suffix)]
+            break
+    chars = [c for c in name if "\u4e00" <= c <= "\u9fff"]
+    if not chars:
+        raise HTTPException(status_code=400, detail=f"科室「{lsys}」无法生成编号前缀")
+    return f"艺{chars[-1]}"
+
+
+def _build_jsgl_fenlei(lsys: str) -> list:
+    prefix = _lsys_to_yi_prefix(lsys)
+    out = []
+    for kind, label in JSGL_FENLEI_LABELS:
+        if kind == "FKD":
+            value = f"FKD-{prefix}-"
+        else:
+            value = f"{prefix}-{kind}-"
+        out.append({"value": value, "label": label})
+    return out
 
 
 class BianhaoJsglRequest(BaseModel):
     xm: str
     bz: str
     xmname: str
-    fenlei: str  # 艺水-JJ- / 艺水-PS- / FKD-艺水-
+    fenlei: str  # 如 艺焊-JJ- / 艺焊-PS- / FKD-艺焊-
     neirong: str
     content: str = ""
 
 
 @router.get("/bianhao-jsgl/fenlei")
-async def get_jsgl_fenlei():
-    """技术管理固定分类选项"""
-    return {"success": True, "list": FENLEI_JSGL}
+async def get_jsgl_fenlei(ssks: str = Query(..., description="所属科室")):
+    """技术管理固定分类选项（前缀随科室变化）"""
+    ssks = (ssks or "").strip()
+    if not ssks:
+        raise HTTPException(status_code=400, detail="所属科室不能为空")
+    prefix = _lsys_to_yi_prefix(ssks)
+    return {"success": True, "prefix": prefix, "list": _build_jsgl_fenlei(ssks)}
 
 
 @router.post("/bianhaogljs/add")
@@ -335,7 +383,11 @@ async def add_bianhaogljs(req: BianhaoJsglRequest):
     try:
         if not req.neirong.strip():
             raise HTTPException(status_code=400, detail="编号内容不能为空")
-        if req.fenlei not in [f["value"] for f in FENLEI_JSGL]:
+        bz = (req.bz or "").strip()
+        if not bz:
+            raise HTTPException(status_code=400, detail="所属科室不能为空")
+        valid_fenlei = {f["value"] for f in _build_jsgl_fenlei(bz)}
+        if req.fenlei not in valid_fenlei:
             raise HTTPException(status_code=400, detail="无效分类")
         gzh_rows = db.execute_query("SELECT gzh FROM gzh WHERE gzhname=%s AND ssks=%s LIMIT 1", (req.xmname, req.bz))
         gzh_val = (gzh_rows[0]["gzh"] or "").strip() if gzh_rows else ""
@@ -346,7 +398,7 @@ async def add_bianhaogljs(req: BianhaoJsglRequest):
         )
         next_num = 1 if not max_rows else (max_rows[0].get("bianhao2") or 0) + 1
         bianhao3 = str(next_num).zfill(3)
-        fenleihao = next((f["label"] for f in FENLEI_JSGL if f["value"] == req.fenlei), "")
+        fenleihao = next((f["label"] for f in _build_jsgl_fenlei(bz) if f["value"] == req.fenlei), "")
         sql = """INSERT INTO bianhaogljs (xm,bz,fenlei,gzh,cpname,neirong,bhtime,bhyear,bianhao1,bianhao2,bianhao3,fenleihao,yj)
                  VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,'0')"""
         bhtime = _format_bhtime()
@@ -370,14 +422,14 @@ async def get_bianhaogljs_list(
 ):
     """技术管理编号列表，按编制时间倒序；可按 bz 筛选所在科室"""
     try:
-        fenlei_map = {"1": "FKD-艺水-", "2": "艺水-JJ-", "3": "艺水-PS-"}
+        fenlei_px_map = {"1": "FKD-%", "2": "%-JJ-", "3": "%-PS-"}
         where, params = [], ()
         if (bz or "").strip():
             where.append("bz=%s")
             params = (bz.strip(),)
-        if px and px in fenlei_map:
-            where.append("fenlei=%s")
-            params = params + (fenlei_map[px],) if isinstance(params, tuple) else (fenlei_map[px],)
+        if px and px in fenlei_px_map:
+            where.append("fenlei LIKE %s")
+            params = params + (fenlei_px_map[px],) if isinstance(params, tuple) else (fenlei_px_map[px],)
         kc, kp = _keyword_sql_clause(keyword, _JSGL_KW_LHS)
         if kc:
             where.append(kc)

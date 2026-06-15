@@ -32,9 +32,9 @@ export function getBianhaoTechList(params) {
   return request({ url: `${P}/bianhao/tech/list`, method: 'get', params })
 }
 
-/** 技术管理分类选项 */
-export function getJsglFenlei() {
-  return request({ url: `${P}/bianhao-jsgl/fenlei`, method: 'get' })
+/** 技术管理分类选项（按科室生成前缀） */
+export function getJsglFenlei(params) {
+  return request({ url: `${P}/bianhao-jsgl/fenlei`, method: 'get', params })
 }
 
 /** 技术管理编号-添加 */

@@ -253,6 +253,50 @@ def _get_shift_dept_leader_recipients(department: str) -> List[dict]:
     return leaders
 
 
+def _is_shift_company_leader_jb(jb: str) -> bool:
+    """公司级领导：经理 / 副经理 / 经理助理。"""
+    from routers.approvers import _jb_match
+
+    j = (jb or "").strip()
+    if not j:
+        return False
+    if _jb_match(j, "经理"):
+        return True
+    if j == "副经理" or j.startswith("副经理"):
+        return True
+    return False
+
+
+def _get_shift_company_leader_recipients() -> List[dict]:
+    """全公司领导抄送：yggl.jb 为经理/副经理/经理助理且已配置企业邮箱。"""
+    rows = db.execute_query(
+        "SELECT name, jb, enterprise_email FROM yggl "
+        "WHERE name IS NOT NULL AND TRIM(name) != '' "
+        "AND COALESCE(zaizhi,0) = 0",
+        (),
+    )
+    leaders = []
+    seen = set()
+    for r in rows or []:
+        jb = (r.get("jb") or "").strip()
+        if not _is_shift_company_leader_jb(jb):
+            continue
+        email = (r.get("enterprise_email") or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        leaders.append({
+            "name": (r.get("name") or "").strip(),
+            "email": email,
+            "jb": jb,
+        })
+    leaders.sort(key=lambda x: (x.get("jb") or "", x.get("name") or ""))
+    return leaders
+
+
 def _get_shift_email_feature_config_items() -> dict:
     departments = _get_shift_departments()
     enabled, configured = _load_shift_email_feature_config(departments)
@@ -276,6 +320,7 @@ def _get_shift_email_feature_config_items() -> dict:
         "departments": departments,
         "enabledDepartments": [dept for dept in departments if dept in enabled],
         "configured": configured,
+        "company_leader_recipients": _get_shift_company_leader_recipients(),
         "items": items,
     }
 

@@ -1415,23 +1415,13 @@ def _get_shift_config_recipients(department: str) -> List[dict]:
 
 
 def _get_shift_dept_leader_recipients(department: str) -> List[dict]:
-    from routers.approvers import _jb_match
-    rows = db.execute_query(
-        "SELECT name, jb, enterprise_email FROM yggl "
-        "WHERE lsys = %s AND name IS NOT NULL AND TRIM(name) != '' "
-        "AND COALESCE(zaizhi,0) = 0",
-        (department,),
-    )
-    leaders = []
-    for r in rows or []:
-        jb = (r.get("jb") or "").strip()
-        if not (_jb_match(jb, "主任") or _jb_match(jb, "副主任") or _jb_match(jb, "组长")):
-            continue
-        email = (r.get("enterprise_email") or "").strip()
-        if not email:
-            continue
-        leaders.append({"name": (r.get("name") or "").strip(), "email": email, "jb": jb})
-    return leaders
+    from routers.shift_schedule import _get_shift_dept_leader_recipients as _load_dept_leaders
+    return _load_dept_leaders(department)
+
+
+def _get_shift_company_leader_recipients() -> List[dict]:
+    from routers.shift_schedule import _get_shift_company_leader_recipients as _load_company_leaders
+    return _load_company_leaders()
 
 
 def _resolve_shift_schedule_email_scope(current_user: str, requested_department: Optional[str]) -> Optional[str]:
@@ -1506,7 +1496,7 @@ def _build_shift_schedule_email_body(report: dict) -> str:
         f"<p>已为大家整理好{report['department']} {week_start.month}月{week_start.day}日"
         f"至{week_end.month}月{week_end.day}日周排班计划，便于各项生产服务保障工作提前衔接、顺畅开展。"
         "详细排班见下表，附件中同步提供周排班表，方便留存和转发。</p>"
-        "<p>如后续排班有调整，请以系统中最新保存的排班为准。感谢大家的配合与支持。</p>"
+        "<p>如后续排班有调整，系统会自动更新并发送邮件。感谢大家的配合与支持。</p>"
         f"{report['html_table']}"
     )
 
@@ -1528,7 +1518,7 @@ def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
         f"<p>已为大家整理好本次向<strong>{unit}</strong>发送的周排班计划，"
         f"包含<strong>{dept_names}</strong>共 {len(reports)} 个科室排班表，"
         "便于各项生产服务保障工作提前衔接、顺畅开展。详细排班见下表，附件中同步提供对应周排班表，方便留存和转发。</p>",
-        "<p>如后续排班有调整，请以系统中最新保存的排班为准。感谢大家的配合与支持。</p>",
+        "<p>如后续排班有调整，系统会自动更新并发送邮件。感谢大家的配合与支持。</p>",
     ]
     for report in reports:
         week_start = report["week_start"]
@@ -1582,7 +1572,12 @@ def _collect_shift_email_send_buckets(jobs: List[dict]) -> dict:
                 email = (item.get("email") or "").strip()
                 if email:
                     bucket["cc_emails"].add(email)
+    company_leaders = _get_shift_company_leader_recipients()
     for bucket in buckets.values():
+        for item in company_leaders:
+            email = (item.get("email") or "").strip()
+            if email:
+                bucket["cc_emails"].add(email)
         bucket["cc_emails"] -= bucket["to_emails"]
     return buckets
 
