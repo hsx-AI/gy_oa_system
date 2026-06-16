@@ -6,6 +6,7 @@
     "dev": "vite --host 0.0.0.0 --port 3000",
     "build": "vite build",
     "build:watch": "vite build --watch",
+    "deploy:linux": "vite build && chmod -R o+rX dist",
     "preview": "vite preview --host 0.0.0.0 --port 4173"
   },
   "dependencies": {
