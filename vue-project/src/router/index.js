@@ -293,6 +293,13 @@ const routes = [
     name: 'SealApply',
     component: () => import('@/views/seal/SealApply.vue'),
     meta: { title: '部门用印申请' }
+  },
+  // 路由保留：服务器端测试时可浏览器直接访问 /ai-assistant；上线前入口已在 App.vue / Home.vue 注释屏蔽
+  {
+    path: '/ai-assistant',
+    name: 'AiAssistant',
+    component: () => import('@/views/AiAssistant.vue'),
+    meta: { title: '智能制造工艺部AI助手' }
   }
   // 未来可以添加更多路由：
   // {
