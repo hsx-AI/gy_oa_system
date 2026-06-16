@@ -55,7 +55,17 @@ def _get_collection():
     try:
         import chromadb
         CHROMA_DIR.mkdir(parents=True, exist_ok=True)
-        _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
+        # 关闭匿名 telemetry：其后台 httpx/posthog 客户端在跨线程/执行上下文时会抛出
+        # "Cannot send a request, as the client has been closed."，且对本系统无用。
+        try:
+            from chromadb.config import Settings as _ChromaSettings
+            _chroma_client = chromadb.PersistentClient(
+                path=str(CHROMA_DIR),
+                settings=_ChromaSettings(anonymized_telemetry=False),
+            )
+        except Exception:
+            # 兼容旧版本 chromadb：无 Settings 时退回默认构造
+            _chroma_client = chromadb.PersistentClient(path=str(CHROMA_DIR))
         _collection = _chroma_client.get_or_create_collection(
             name=COLLECTION_NAME,
             metadata={"hnsw:space": "cosine", "description": "部门制度向量库"}
@@ -185,38 +195,62 @@ def remove_from_index(policy_id: str) -> bool:
         return False
 
 
+def _reset_clients():
+    """重置缓存的模型与 Chroma 客户端，下次调用时重新创建。
+    用于从 'client has been closed' 等失效状态中恢复。"""
+    global _model, _chroma_client, _collection
+    _model = None
+    _chroma_client = None
+    _collection = None
+
+
+def _do_search(query: str, top_k: int) -> List[Tuple[str, float, str]]:
+    coll = _get_collection()
+    model = _get_model()
+    q_emb = model.encode([query.strip()], normalize_embeddings=True)
+    n_results = min(top_k * 3, 150)  # 多取一些，便于按 policy 去重后保留 top_k
+    results = coll.query(
+        query_embeddings=q_emb.tolist(),
+        n_results=n_results,
+        include=["metadatas", "distances", "documents"],
+    )
+    ids = results.get("ids", [[]])[0] or []
+    dists = results.get("distances", [[]])[0] or []
+    docs = results.get("documents", [[]])[0] or []
+    metadatas = results.get("metadatas", [[]])[0] or []
+    seen = {}
+    for i, chunk_id in enumerate(ids):
+        meta = metadatas[i] if i < len(metadatas) else {}
+        policy_id = meta.get("policy_id") or (chunk_id.split("_c")[0] if "_c" in str(chunk_id) else chunk_id)
+        d = float(dists[i] if i < len(dists) else 1.0)
+        # 余弦距离：distance = 1 - cos_sim，故 cos_sim = 1 - distance，直接作为相关性
+        score = max(0.0, min(1.0, 1.0 - d))
+        doc_text = docs[i] if i < len(docs) else ""
+        snippet = (doc_text or "").strip()
+        if policy_id not in seen or score > seen[policy_id][1]:
+            seen[policy_id] = (snippet, score)
+    out = [(pid, sc, sn) for pid, (sn, sc) in seen.items()]
+    out.sort(key=lambda x: -x[1])
+    return out[:top_k]
+
+
 def search(query: str, top_k: int = 20) -> List[Tuple[str, float, str]]:
-    """向量检索，返回 [(policy_id, score, snippet), ...]，snippet 为匹配到的切片原文"""
+    """向量检索，返回 [(policy_id, score, snippet), ...]，snippet 为匹配到的切片原文。
+    遇到客户端被关闭（'client has been closed' / 'cannot send a request'）等失效错误时，
+    重置缓存的 client/model 并重试一次，以兼容跨线程（如 SSE 流式生成器）调用场景。"""
     if not (query or "").strip():
         return []
     try:
-        coll = _get_collection()
-        model = _get_model()
-        q_emb = model.encode([query.strip()], normalize_embeddings=True)
-        n_results = min(top_k * 3, 150)  # 多取一些，便于按 policy 去重后保留 top_k
-        results = coll.query(
-            query_embeddings=q_emb.tolist(),
-            n_results=n_results,
-            include=["metadatas", "distances", "documents"],
-        )
-        ids = results.get("ids", [[]])[0] or []
-        dists = results.get("distances", [[]])[0] or []
-        docs = results.get("documents", [[]])[0] or []
-        metadatas = results.get("metadatas", [[]])[0] or []
-        seen = {}
-        for i, chunk_id in enumerate(ids):
-            meta = metadatas[i] if i < len(metadatas) else {}
-            policy_id = meta.get("policy_id") or (chunk_id.split("_c")[0] if "_c" in str(chunk_id) else chunk_id)
-            d = float(dists[i] if i < len(dists) else 1.0)
-            # 余弦距离：distance = 1 - cos_sim，故 cos_sim = 1 - distance，直接作为相关性
-            score = max(0.0, min(1.0, 1.0 - d))
-            doc_text = docs[i] if i < len(docs) else ""
-            snippet = (doc_text or "").strip()
-            if policy_id not in seen or score > seen[policy_id][1]:
-                seen[policy_id] = (snippet, score)
-        out = [(pid, sc, sn) for pid, (sn, sc) in seen.items()]
-        out.sort(key=lambda x: -x[1])
-        return out[:top_k]
+        return _do_search(query, top_k)
     except Exception as e:
+        msg = str(e).lower()
+        if "closed" in msg or "cannot send a request" in msg:
+            logger.warning(f"向量检索客户端失效，重置后重试: {e}")
+            _reset_clients()
+            try:
+                return _do_search(query, top_k)
+            except Exception as e2:
+                logger.error(f"向量检索重试仍失败: {e2}")
+                raise
         logger.error(f"向量检索失败: {e}")
         raise

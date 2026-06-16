@@ -52,6 +52,23 @@ class AttendanceFetchConfigRequest(BaseModel):
     schedules: List[AttendanceFetchScheduleItem] = Field(default_factory=list)
 
 
+class DeepseekKeyRequest(BaseModel):
+    current_user: str
+    deepseek_api_key: str = ""
+    clear: bool = False
+
+
+class LlmModelRequest(BaseModel):
+    current_user: str
+    name: str
+    base_url: str
+    model: str
+
+
+class ActivateRequest(BaseModel):
+    current_user: str
+
+
 def _require_admin1(current_user: str) -> None:
     admin1 = _get_admin1()
     if not admin1 or (current_user or "").strip() != admin1:
@@ -398,3 +415,144 @@ async def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     return {"success": True, "message": "打卡配置已保存并已更新定时任务", **data}
+
+
+# ==================== 大模型配置（DeepSeek 开关 + 多本地模型管理） ====================
+
+def _ensure_llm_models_table() -> None:
+    """确保本地大模型候选表存在。"""
+    db.execute_update(
+        """
+        CREATE TABLE IF NOT EXISTS llm_models (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(100) NOT NULL,
+            base_url VARCHAR(512) NOT NULL,
+            model VARCHAR(128) NOT NULL,
+            is_active TINYINT NOT NULL DEFAULT 0,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+
+
+def _mask_key(key: str) -> str:
+    k = (key or "").strip()
+    if not k:
+        return ""
+    if len(k) <= 8:
+        return "****"
+    return f"{k[:4]}****{k[-4:]}"
+
+
+@router.get("/llm-config")
+async def get_llm_config_api(current_user: str = Query(..., description="当前登录用户，用于权限校验")):
+    """获取大模型配置：DeepSeek 开关状态 + 本地候选模型列表 + 当前生效模型。仅 admin1。"""
+    _require_admin1(current_user)
+    _ensure_llm_models_table()
+
+    key = ""
+    base_url = ""
+    model = ""
+    rows = db.execute_query(
+        "SELECT deepseek_api_key, llm_base_url, llm_model FROM webconfig WHERE id=%s LIMIT 1", ("1",)
+    )
+    if rows:
+        key = (rows[0].get("deepseek_api_key") or "").strip()
+        base_url = (rows[0].get("llm_base_url") or "").strip()
+        model = (rows[0].get("llm_model") or "").strip()
+
+    models = db.execute_query(
+        "SELECT id, name, base_url, model, is_active FROM llm_models ORDER BY id"
+    ) or []
+
+    # 首次访问且候选表为空时，把 webconfig 中已有的本地模型作为初始候选并标记为选中
+    if not models and base_url and model:
+        db.execute_update(
+            "INSERT INTO llm_models (name, base_url, model, is_active) VALUES (%s, %s, %s, 1)",
+            (f"本地 {model}", base_url, model),
+        )
+        models = db.execute_query(
+            "SELECT id, name, base_url, model, is_active FROM llm_models ORDER BY id"
+        ) or []
+
+    return {
+        "success": True,
+        "deepseek_configured": bool(key),
+        "deepseek_key_masked": _mask_key(key),
+        "provider": "deepseek" if key else "local",
+        "active": {"base_url": base_url, "model": model},
+        "models": models,
+    }
+
+
+@router.post("/llm-config")
+async def save_llm_config_api(req: DeepseekKeyRequest):
+    """保存/清空 DeepSeek API Key（webconfig.deepseek_api_key）。为空时系统使用本地模型。仅 admin1。"""
+    _require_admin1(req.current_user)
+    key = (req.deepseek_api_key or "").strip()
+    if req.clear:
+        db.execute_update("UPDATE webconfig SET deepseek_api_key='' WHERE id=%s", ("1",))
+        return {"success": True, "deepseek_configured": False,
+                "message": "已清空 DeepSeek 密钥，系统将使用本地模型"}
+    if not key:
+        raise HTTPException(status_code=400, detail="请输入要保存的 DeepSeek 密钥；如需停用请点击清空")
+    db.execute_update("UPDATE webconfig SET deepseek_api_key=%s WHERE id=%s", (key, "1"))
+    return {"success": True, "deepseek_configured": True,
+            "message": "DeepSeek 密钥已更新，系统将优先使用联网 DeepSeek 模型"}
+
+
+@router.post("/llm-models")
+async def add_llm_model_api(req: LlmModelRequest):
+    """新增一个本地大模型候选。仅 admin1。"""
+    _require_admin1(req.current_user)
+    _ensure_llm_models_table()
+    name = (req.name or "").strip()
+    base_url = (req.base_url or "").strip()
+    model = (req.model or "").strip()
+    if not (name and base_url and model):
+        raise HTTPException(status_code=400, detail="请填写完整：名称 / base_url / 模型名")
+    db.execute_update(
+        "INSERT INTO llm_models (name, base_url, model, is_active) VALUES (%s, %s, %s, 0)",
+        (name, base_url, model),
+    )
+    return {"success": True, "message": f"已添加本地模型「{name}」"}
+
+
+@router.delete("/llm-models/{model_id}")
+async def delete_llm_model_api(
+    model_id: int,
+    current_user: str = Query(..., description="当前登录用户，用于权限校验"),
+):
+    """删除一个本地大模型候选。仅 admin1。"""
+    _require_admin1(current_user)
+    _ensure_llm_models_table()
+    db.execute_update("DELETE FROM llm_models WHERE id=%s", (model_id,))
+    return {"success": True, "message": "已删除该本地模型"}
+
+
+@router.post("/llm-models/{model_id}/activate")
+async def activate_llm_model_api(model_id: int, req: ActivateRequest):
+    """将某个本地模型设为当前生效模型（写入 webconfig.llm_base_url / llm_model）。仅 admin1。
+    注意：仅当 DeepSeek 密钥为空时，本地模型才会实际生效。"""
+    _require_admin1(req.current_user)
+    _ensure_llm_models_table()
+    rows = db.execute_query(
+        "SELECT name, base_url, model FROM llm_models WHERE id=%s LIMIT 1", (model_id,)
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="该本地模型不存在")
+    name = (rows[0].get("name") or "").strip()
+    base_url = (rows[0].get("base_url") or "").strip()
+    model = (rows[0].get("model") or "").strip()
+    db.execute_update("UPDATE llm_models SET is_active=0", ())
+    db.execute_update("UPDATE llm_models SET is_active=1 WHERE id=%s", (model_id,))
+    db.execute_update(
+        "UPDATE webconfig SET llm_base_url=%s, llm_model=%s WHERE id=%s", (base_url, model, "1")
+    )
+
+    deepseek_key = ""
+    drows = db.execute_query("SELECT deepseek_api_key FROM webconfig WHERE id=%s LIMIT 1", ("1",))
+    if drows:
+        deepseek_key = (drows[0].get("deepseek_api_key") or "").strip()
+    extra = "（当前 DeepSeek 密钥非空，仍会优先使用联网模型；清空密钥后本地模型即生效）" if deepseek_key else "，已立即生效"
+    return {"success": True, "message": f"已切换本地模型为「{name}」{extra}"}

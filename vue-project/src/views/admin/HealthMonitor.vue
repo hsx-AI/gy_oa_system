@@ -29,6 +29,67 @@
         <section class="card admin-config-card">
           <div class="config-card-head">
             <div>
+              <h2 class="section-title">大模型配置</h2>
+              <p class="section-desc">
+                配置智能助手所用大模型。优先级：填写 DeepSeek 密钥时使用联网 DeepSeek；密钥为空时使用下方选中的本地模型（写入 webconfig 的 llm_base_url / llm_model）。
+              </p>
+            </div>
+            <div class="config-actions">
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="llmLoading" @click="fetchLlmConfig">刷新</button>
+            </div>
+          </div>
+          <div v-if="llmLoading" class="status-message">正在加载大模型配置…</div>
+          <template v-else>
+            <div class="llm-active-banner" :class="llmConfig.provider === 'deepseek' ? 'is-deepseek' : 'is-local'">
+              <span class="llm-active-label">当前生效</span>
+              <strong v-if="llmConfig.provider === 'deepseek'">联网 DeepSeek</strong>
+              <strong v-else>本地模型：{{ llmConfig.active.model || '未设置' }}</strong>
+              <span v-if="llmConfig.provider === 'local' && llmConfig.active.base_url" class="llm-active-url">{{ llmConfig.active.base_url }}</span>
+            </div>
+
+            <h3 class="email-settings-title">联网 DeepSeek 密钥</h3>
+            <p class="email-settings-hint">
+              {{ llmConfig.deepseek_configured ? `已配置（${llmConfig.deepseek_key_masked}），系统优先使用联网模型` : '未配置，系统将使用本地模型' }}
+            </p>
+            <div class="llm-key-row">
+              <input v-model.trim="deepseekKeyInput" type="password" autocomplete="new-password" class="recipient-input llm-key-input" placeholder="输入新的 DeepSeek API Key">
+              <button type="button" class="btn btn-primary btn-sm" :disabled="llmSaving" @click="saveDeepseekKeyAction">更新密钥</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving || !llmConfig.deepseek_configured" @click="clearDeepseekKeyAction">清空（用本地）</button>
+            </div>
+
+            <h3 class="email-settings-title">本地大模型候选</h3>
+            <p v-if="!llmConfig.models.length" class="email-settings-hint">暂无本地模型，请在下方添加后点击「选用」。</p>
+            <div v-else class="llm-model-list">
+              <div v-for="m in llmConfig.models" :key="m.id" class="llm-model-row" :class="{ 'is-active': m.is_active }">
+                <div class="llm-model-info">
+                  <div class="llm-model-line">
+                    <span class="llm-model-name">{{ m.name }}</span>
+                    <span v-if="m.is_active" class="llm-model-badge">当前选中</span>
+                  </div>
+                  <span class="llm-model-meta">{{ m.model }} · {{ m.base_url }}</span>
+                </div>
+                <div class="llm-model-ops">
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving || m.is_active" @click="activateModel(m)">{{ m.is_active ? '已选用' : '选用' }}</button>
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving" @click="deleteModel(m)">删除</button>
+                </div>
+              </div>
+            </div>
+
+            <h3 class="email-settings-title">添加本地模型</h3>
+            <div class="llm-add-row">
+              <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 本地 Qwen3-8B">
+              <input v-model.trim="newModel.base_url" type="text" class="recipient-input recipient-input-email" placeholder="base_url，如 http://127.0.0.1:11434/v1">
+              <input v-model.trim="newModel.model" type="text" class="recipient-input" placeholder="模型名，如 qwen3:8b">
+              <button type="button" class="btn btn-primary btn-sm" :disabled="llmSaving" @click="addModel">添加</button>
+            </div>
+
+            <p v-if="llmMessage" class="config-message">{{ llmMessage }}</p>
+          </template>
+        </section>
+
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
               <h2 class="section-title">打卡数据配置</h2>
               <p class="section-desc">
                 配置每日自动拉取并处理数据的时间（可多条）；每条任务可单独设置智能建议截止日（今日 / 前一日）。时区：{{ attendanceFetchTimezone || 'Asia/Shanghai' }}（来自服务端配置）。
@@ -229,6 +290,11 @@ import {
   getAttendanceFetchConfig,
   saveAttendanceFetchConfig as saveAttendanceFetchConfigApi,
   runTodoReminder,
+  getLlmConfig,
+  saveDeepseekKey,
+  addLlmModel,
+  deleteLlmModel,
+  activateLlmModel,
 } from '@/api/healthMonitor'
 
 const router = useRouter()
@@ -248,6 +314,24 @@ const attendanceFetchSaving = ref(false)
 const attendanceFetchMessage = ref('')
 const attendanceSchedules = ref([])
 const attendanceFetchTimezone = ref('Asia/Shanghai')
+
+const llmLoading = ref(false)
+const llmSaving = ref(false)
+const llmMessage = ref('')
+const llmConfig = ref({
+  provider: 'local',
+  deepseek_configured: false,
+  deepseek_key_masked: '',
+  active: { base_url: '', model: '' },
+  models: [],
+})
+const deepseekKeyInput = ref('')
+const newModel = ref({ name: '', base_url: '', model: '' })
+
+function currentName() {
+  const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  return (user.name || user.userName || '').trim()
+}
 
 const hourOptions = Array.from({ length: 24 }, (_, i) => i)
 const minuteOptions = Array.from({ length: 60 }, (_, i) => i)
@@ -619,6 +703,125 @@ async function saveShiftEmailConfig() {
   }
 }
 
+async function fetchLlmConfig() {
+  const name = currentName()
+  if (!name) return
+  llmLoading.value = true
+  llmMessage.value = ''
+  try {
+    const res = await getLlmConfig({ current_user: name })
+    llmConfig.value = {
+      provider: res?.provider || 'local',
+      deepseek_configured: !!res?.deepseek_configured,
+      deepseek_key_masked: res?.deepseek_key_masked || '',
+      active: { base_url: res?.active?.base_url || '', model: res?.active?.model || '' },
+      models: (res?.models || []).map((m) => ({ ...m, is_active: !!m.is_active })),
+    }
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '大模型配置加载失败'
+  } finally {
+    llmLoading.value = false
+  }
+}
+
+async function saveDeepseekKeyAction() {
+  const name = currentName()
+  if (!name) return
+  if (!deepseekKeyInput.value) {
+    llmMessage.value = '请输入要保存的 DeepSeek 密钥'
+    return
+  }
+  llmSaving.value = true
+  llmMessage.value = ''
+  try {
+    const res = await saveDeepseekKey({ current_user: name, deepseek_api_key: deepseekKeyInput.value, clear: false })
+    deepseekKeyInput.value = ''
+    llmMessage.value = res?.message || '已保存'
+    await fetchLlmConfig()
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '保存失败'
+  } finally {
+    llmSaving.value = false
+  }
+}
+
+async function clearDeepseekKeyAction() {
+  const name = currentName()
+  if (!name) return
+  if (!window.confirm('确定清空 DeepSeek 密钥并改用本地模型？')) return
+  llmSaving.value = true
+  llmMessage.value = ''
+  try {
+    const res = await saveDeepseekKey({ current_user: name, deepseek_api_key: '', clear: true })
+    llmMessage.value = res?.message || '已清空'
+    await fetchLlmConfig()
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '清空失败'
+  } finally {
+    llmSaving.value = false
+  }
+}
+
+async function addModel() {
+  const name = currentName()
+  if (!name) return
+  if (!newModel.value.name || !newModel.value.base_url || !newModel.value.model) {
+    llmMessage.value = '请填写完整：名称 / base_url / 模型名'
+    return
+  }
+  llmSaving.value = true
+  llmMessage.value = ''
+  try {
+    const res = await addLlmModel({
+      current_user: name,
+      name: newModel.value.name,
+      base_url: newModel.value.base_url,
+      model: newModel.value.model,
+    })
+    newModel.value = { name: '', base_url: '', model: '' }
+    llmMessage.value = res?.message || '已添加'
+    await fetchLlmConfig()
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '添加失败'
+  } finally {
+    llmSaving.value = false
+  }
+}
+
+async function deleteModel(m) {
+  const name = currentName()
+  if (!name) return
+  if (!window.confirm(`确定删除本地模型「${m.name}」？`)) return
+  llmSaving.value = true
+  llmMessage.value = ''
+  try {
+    const res = await deleteLlmModel(m.id, { current_user: name })
+    llmMessage.value = res?.message || '已删除'
+    await fetchLlmConfig()
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '删除失败'
+  } finally {
+    llmSaving.value = false
+  }
+}
+
+async function activateModel(m) {
+  const name = currentName()
+  if (!name) return
+  llmSaving.value = true
+  llmMessage.value = ''
+  try {
+    const res = await activateLlmModel(m.id, { current_user: name })
+    llmMessage.value = res?.message || '已切换'
+    await fetchLlmConfig()
+    await fetchOverview()
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '切换失败'
+  } finally {
+    llmSaving.value = false
+  }
+}
+
 async function triggerTodoReminder() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = (user.name || user.userName || '').trim()
@@ -646,7 +849,7 @@ onMounted(async () => {
     const res = await getHealthMonitorPermission({ current_user: name })
     canAccess.value = !!(res && res.canAccess)
     if (canAccess.value) {
-      await Promise.all([fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig()])
+      await Promise.all([fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig(), fetchLlmConfig()])
     }
   } catch {
     canAccess.value = false
@@ -982,6 +1185,104 @@ onMounted(async () => {
   background: rgba(255, 255, 255, 0.75);
   border-radius: 6px;
   border: 1px solid #dbeafe;
+}
+.llm-active-banner {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+.llm-active-banner.is-deepseek {
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  color: #1d4ed8;
+}
+.llm-active-banner.is-local {
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  color: #166534;
+}
+.llm-active-label {
+  font-size: 0.78rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.7);
+}
+.llm-active-url {
+  font-size: 0.8rem;
+  opacity: 0.8;
+  word-break: break-all;
+}
+.llm-key-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.llm-key-input {
+  flex: 1;
+  min-width: 240px;
+}
+.llm-model-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.llm-model-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-layout);
+}
+.llm-model-row.is-active {
+  border-color: #22c55e;
+  background: #f0fdf4;
+}
+.llm-model-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 200px;
+}
+.llm-model-line {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.llm-model-name {
+  font-weight: 600;
+  font-size: 0.92rem;
+}
+.llm-model-badge {
+  font-size: 0.72rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #dcfce7;
+  color: #166534;
+}
+.llm-model-meta {
+  font-size: 0.8rem;
+  color: var(--color-text-tertiary);
+  word-break: break-all;
+}
+.llm-model-ops {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.llm-add-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .status-grid {
   display: grid;

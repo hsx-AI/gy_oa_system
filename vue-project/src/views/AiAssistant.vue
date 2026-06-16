@@ -12,14 +12,18 @@
         </span>
         <div>
           <h1 class="ai-page__title">智能制造工艺部 AI 助手</h1>
-          <p class="ai-page__subtitle">本地大模型驱动 · 整合考勤/制度/报表资源 · 支持智能检索与报表下载</p>
+          <p class="ai-page__subtitle">大模型驱动 · 整合全系统数据资源 · 按角色权限安全问答 · 流式输出</p>
         </div>
       </div>
       <div class="ai-page__tags">
-        <span class="ai-page__tag">制度检索</span>
-        <span class="ai-page__tag">考勤查询</span>
-        <span class="ai-page__tag">报表下载</span>
-        <span class="ai-page__tag">流式问答</span>
+        <span class="ai-page__tag">制度智能检索</span>
+        <span class="ai-page__tag">工艺知识库</span>
+        <span class="ai-page__tag">考勤/请假/公出查询</span>
+        <span class="ai-page__tag">部门人员职级</span>
+        <span class="ai-page__tag">数据统计分析</span>
+        <span class="ai-page__tag">报表导出</span>
+        <span class="ai-page__tag">排班/节假日</span>
+        <span class="ai-page__tag">天气/新闻</span>
       </div>
     </header>
 

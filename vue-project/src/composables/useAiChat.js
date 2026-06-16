@@ -1,6 +1,6 @@
 // AI 助手对话逻辑：基于 fetch + ReadableStream 解析后端 SSE 流式输出。
 // 每次调用返回独立的会话状态，可在首页卡片与独立页面分别使用。
-import { ref } from 'vue'
+import { ref, reactive } from 'vue'
 
 const CHAT_URL = '/api/ai-assistant/chat-stream'
 
@@ -53,10 +53,12 @@ export function useAiChat() {
       tools: [], attachments: [], error: '', streaming: false,
     })
 
-    const assistant = {
-      id: nextId(), role: 'assistant', content: '',
+    // 使用 reactive：直接修改该对象属性即可触发视图更新（普通对象 push 进 ref 数组后，
+    // 修改原始引用不会触发依赖更新，会导致 status/流式正文不实时刷新）
+    const assistant = reactive({
+      id: nextId(), role: 'assistant', content: '', reasoning: '', status: '',
       tools: [], attachments: [], error: '', streaming: true,
-    }
+    })
     messages.value.push(assistant)
     loading.value = true
 
@@ -137,14 +139,23 @@ export function useAiChat() {
       case 'attachment':
         assistant.attachments.push({ label: evt.label, url: evt.url, filename: evt.filename })
         break
+      case 'status':
+        assistant.status = evt.text || ''
+        break
+      case 'reasoning':
+        assistant.reasoning = (assistant.reasoning || '') + (evt.text || '')
+        break
       case 'chunk':
         assistant.content += evt.text || ''
+        assistant.status = ''
         break
       case 'error':
         assistant.error = evt.message || '模型调用出错'
+        assistant.status = ''
         break
       case 'done':
         assistant.streaming = false
+        assistant.status = ''
         break
       default:
         break

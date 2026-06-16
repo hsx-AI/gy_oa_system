@@ -13,7 +13,7 @@
           </svg>
         </div>
         <h3 class="ai-chat__welcome-title">智能制造工艺部 AI 助手</h3>
-        <p class="ai-chat__welcome-sub">基于本地大模型，整合考勤、制度、报表等数据资源，随时为你解答与处理。</p>
+        <p class="ai-chat__welcome-sub">大模型驱动，整合考勤、制度、知识库、报表等全系统数据资源，并按你的角色权限安全作答。</p>
         <div class="ai-chat__suggestions">
           <button
             v-for="(s, idx) in suggestions"
@@ -47,6 +47,19 @@
             </span>
           </div>
 
+          <!-- 思考过程（思维链） -->
+          <div v-if="msg.reasoning" class="ai-reason">
+            <button type="button" class="ai-reason__toggle" @click="toggleReasoning(msg)">
+              <svg class="ai-reason__caret" :class="{ 'is-open': isReasoningOpen(msg) }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                <polyline points="9 18 15 12 9 6"/>
+              </svg>
+              <span class="ai-reason__title">
+                {{ msg.streaming && !msg.content ? '正在思考…' : '思考过程' }}
+              </span>
+            </button>
+            <div v-show="isReasoningOpen(msg)" class="ai-reason__body">{{ msg.reasoning }}</div>
+          </div>
+
           <!-- 正文 -->
           <div
             v-if="msg.content"
@@ -54,9 +67,10 @@
             v-html="renderMarkdown(msg.content)"
           ></div>
 
-          <!-- 流式光标 / 加载 -->
-          <div v-if="msg.streaming && !msg.content && (!msg.tools || !msg.tools.length)" class="ai-msg__typing">
-            <span></span><span></span><span></span>
+          <!-- 流式光标 / 加载（展示后端实时工作状态） -->
+          <div v-if="msg.streaming && !msg.content && !msg.reasoning" class="ai-msg__typing">
+            <span class="ai-msg__dots"><span></span><span></span><span></span></span>
+            <span v-if="msg.status" class="ai-msg__status">{{ msg.status }}</span>
           </div>
 
           <!-- 附件（报表下载） -->
@@ -122,7 +136,7 @@
 </template>
 
 <script setup>
-import { ref, watch, nextTick, onMounted } from 'vue'
+import { ref, reactive, watch, nextTick, onMounted } from 'vue'
 import { useAiChat } from '@/composables/useAiChat'
 import { renderMarkdown } from '@/utils/renderMarkdown'
 
@@ -132,17 +146,29 @@ const props = defineProps({
 
 const { messages, loading, send, stop } = useAiChat()
 
+// 思考过程展开状态：用户未手动设置时，流式中默认展开、完成后默认折叠
+const reasoningOpen = reactive({})
+function isReasoningOpen(msg) {
+  if (msg.id in reasoningOpen) return reasoningOpen[msg.id]
+  return !!msg.streaming
+}
+function toggleReasoning(msg) {
+  reasoningOpen[msg.id] = !isReasoningOpen(msg)
+}
+
 const draft = ref('')
 const scrollEl = ref(null)
 const inputEl = ref(null)
 
-const placeholder = '输入你的问题，例如：查询我本月加班、导出请假报表、公出有哪些规定…'
+const placeholder = '输入你的问题，例如：查询我本月加班、导出全部门请假报表、部门男女比例、某工艺问题怎么处理…'
 
 const suggestions = [
   '查询我本月的加班记录',
-  '我今年公出了多少天？',
-  '帮我导出今年的请假报表',
+  '我们部门一共有多少人？男女比例如何？',
+  '帮我导出全部门今年的加班报表',
   '公出（出差）报销有哪些规定？',
+  '关于焊接变形的工艺问题怎么处理？',
+  '2026 年端午节是哪天？',
 ]
 
 function onSend() {
@@ -312,6 +338,42 @@ defineExpose({ send })
 .ai-tool-chip__dot.is-spin { animation: aiPulse 1s ease-in-out infinite; }
 .ai-tool-chip__summary { opacity: 0.8; }
 
+/* 思考过程（思维链） */
+.ai-reason {
+  margin-bottom: 8px;
+  border-left: 2px solid var(--color-border, #e5e7eb);
+  padding-left: 10px;
+}
+.ai-reason__toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  padding: 2px 0;
+  cursor: pointer;
+  color: var(--color-text-tertiary, #8c8c8c);
+  font-size: 12px;
+}
+.ai-reason__toggle:hover { color: var(--color-primary, #1890ff); }
+.ai-reason__caret {
+  width: 13px;
+  height: 13px;
+  transition: transform 0.18s ease;
+}
+.ai-reason__caret.is-open { transform: rotate(90deg); }
+.ai-reason__title { font-weight: 500; }
+.ai-reason__body {
+  margin-top: 4px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--color-text-tertiary, #8c8c8c);
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 260px;
+  overflow-y: auto;
+}
+
 /* 正文 markdown */
 .ai-msg__content :deep(.md-p) { margin: 0 0 8px; }
 .ai-msg__content :deep(.md-p:last-child) { margin-bottom: 0; }
@@ -355,14 +417,24 @@ defineExpose({ send })
 }
 
 /* typing */
-.ai-msg__typing { display: inline-flex; gap: 4px; padding: 4px 0; }
-.ai-msg__typing span {
+.ai-msg__typing { display: inline-flex; align-items: center; gap: 8px; padding: 4px 0; }
+.ai-msg__dots { display: inline-flex; gap: 4px; }
+.ai-msg__dots span {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--color-text-quaternary, #c0c4cc);
   animation: aiBounce 1.2s infinite ease-in-out;
 }
-.ai-msg__typing span:nth-child(2) { animation-delay: 0.15s; }
-.ai-msg__typing span:nth-child(3) { animation-delay: 0.3s; }
+.ai-msg__dots span:nth-child(2) { animation-delay: 0.15s; }
+.ai-msg__dots span:nth-child(3) { animation-delay: 0.3s; }
+.ai-msg__status {
+  font-size: 12.5px;
+  color: var(--color-text-tertiary, #6b7280);
+  animation: aiStatusFade 0.25s ease;
+}
+@keyframes aiStatusFade {
+  from { opacity: 0; transform: translateY(2px); }
+  to { opacity: 1; transform: translateY(0); }
+}
 
 /* 附件 */
 .ai-msg__attachments { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }

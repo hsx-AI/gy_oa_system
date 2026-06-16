@@ -34,3 +34,28 @@ export function saveAttendanceFetchConfig(data) {
 export function runTodoReminder(params) {
   return request({ url: '/email/run-todo-reminder', method: 'post', params })
 }
+
+/** 获取大模型配置（DeepSeek 开关 + 本地候选模型列表 + 当前生效模型） */
+export function getLlmConfig(params) {
+  return request({ url: '/health-monitor/llm-config', method: 'get', params })
+}
+
+/** 保存/清空 DeepSeek API Key */
+export function saveDeepseekKey(data) {
+  return request({ url: '/health-monitor/llm-config', method: 'post', data })
+}
+
+/** 新增一个本地大模型候选 */
+export function addLlmModel(data) {
+  return request({ url: '/health-monitor/llm-models', method: 'post', data })
+}
+
+/** 删除一个本地大模型候选 */
+export function deleteLlmModel(modelId, params) {
+  return request({ url: `/health-monitor/llm-models/${modelId}`, method: 'delete', params })
+}
+
+/** 将某个本地模型设为当前生效模型 */
+export function activateLlmModel(modelId, data) {
+  return request({ url: `/health-monitor/llm-models/${modelId}/activate`, method: 'post', data })
+}
