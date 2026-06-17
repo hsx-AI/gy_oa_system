@@ -102,6 +102,13 @@
             </svg>
             <span>报表汇聚</span>
           </router-link>
+          <router-link to="/confidentiality-ledger" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <span>保密审批台账</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="1" x2="12" y2="23" />

@@ -61,6 +61,12 @@ const routes = [
     meta: { title: '报表汇聚' }
   },
   {
+    path: '/confidentiality-ledger',
+    name: 'ConfidentialityLedger',
+    component: () => import('../views/ConfidentialityLedger.vue'),
+    meta: { title: '保密审批台账' }
+  },
+  {
     path: '/leader-dashboard',
     name: 'LeaderDashboard',
     component: LeaderDashboard
@@ -374,7 +380,7 @@ router.beforeEach(async (to, _from, next) => {
     const u = JSON.parse(raw)
     const lsys = (u.dept || u.lsys || '').trim()
     if (lsys === '其他部门成员') {
-      const allowed = ['/file/numbering', '/file/tech-category', '/file/workno', '/attendance/personnel-visualization']
+      const allowed = ['/file/numbering', '/file/tech-category', '/file/workno', '/attendance/personnel-visualization', '/confidentiality-ledger']
       if (!allowed.includes(to.path)) {
         next('/file/numbering')
         return

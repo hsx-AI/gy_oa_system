@@ -324,6 +324,7 @@ import {
   getUploadConfig,
 } from '@/api/attendance'
 import { exportBianhaoExcel } from '@/api/fileNumbering'
+import { exportConfidentialityLedger } from '@/api/confidentialityLedger'
 import { getDepartments, getShiftHolidayOptions } from '@/api/shift'
 import { canAccessLeaderDashboard, isDirectorLevel, isMinisterLevel, isMinisterOrDeptLeader } from '@/utils/roleMatch'
 
@@ -538,6 +539,15 @@ const reports = computed(() => [
     kind: 'numbering',
     canUse: canNumberingExport.value,
     scopeText: '经理/副经理/综合技术室主任权限',
+  },
+  {
+    id: 'confidentiality-ledger',
+    title: '保密审批台账',
+    source: '智能制造工艺部论文保密审批台账',
+    group: 'admin',
+    kind: 'none',
+    canUse: true,
+    scopeText: '全员可导出',
   },
 ])
 
@@ -1086,6 +1096,9 @@ async function runExport(id) {
     } else if (id === 'file-numbering') {
       const blob = await exportBianhaoExcel({ table: filters.numberingTable, name: currentUserName.value })
       saveBlob(blob, `文件编号_${filters.numberingTable}.xlsx`)
+    } else if (id === 'confidentiality-ledger') {
+      const blob = await exportConfidentialityLedger()
+      saveBlob(blob, '智能制造工艺部论文保密审批台账.xlsx')
     }
     showToast('导出已开始', 'success')
   } catch (e) {
