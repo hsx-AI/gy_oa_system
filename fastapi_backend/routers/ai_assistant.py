@@ -26,7 +26,7 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlencode, quote
@@ -112,7 +112,11 @@ DB_SCHEMA_HINT = (
     "可据此检索同类工艺问题并给出处理建议（用 LIKE 模糊匹配 title/problem_desc/measures）。\n"
     "- holiday 节假日表：year(年份), date(日期 YYYY-MM-DD), type(类型,如 holiday/workday), festival(节日名称)。\n"
     "- dept_policy 制度表：title(标题), issue_time(发布时间)。\n"
-    "- 排班表：shift_schedule(排班明细), shift_day_plan(每日计划), shift_day_lock(日锁定), shift_config(排班配置)。\n"
+    "- 排班表：shift_schedule 排班明细字段 department(科室), employee_name(姓名), shift_date(日期), "
+    "shift_type(班次:白班/夜班/白+夜/休息/空), shift_location(值班位置:准备组/服务组), year, month；"
+    "shift_day_plan 每日计划字段 department, plan_date, content；"
+    "shift_config 排班配置字段 department, workday_day, workday_night, weekend_day, weekend_night。"
+    "查询排班情况优先使用 query_shift_schedule，不要猜测 date/name/start_time/end_time 等不存在字段。\n"
     "【隐私表 · 受权限控制】（非高层仅可聚合统计，不可查逐条个人明细）\n"
     "- jiaban 加班表：xm(姓名), xb(性别), jb(职级), bz(部门), jiabanfs(加班方式), timedate(加班日期文本), "
     "timefrom/timeto(起止datetime), tian1(时长/小时,文本), jbf(其他绩效小时,double), "
@@ -418,6 +422,59 @@ def _safe_tool_arguments(raw: str) -> str:
         return json.dumps(json.loads(s), ensure_ascii=False, allow_nan=False)
     except Exception:
         return "{}"
+
+
+def _has_tool_context(messages: List[Dict[str, Any]]) -> bool:
+    return any(
+        isinstance(m, dict) and (m.get("role") == "tool" or m.get("tool_calls"))
+        for m in messages
+    )
+
+
+def _tool_content_as_plain_text(content: str) -> str:
+    text = _clean_text(content or "").strip()
+    if not text:
+        return ""
+    try:
+        data = json.loads(text)
+        text = json.dumps(data, ensure_ascii=False, allow_nan=False)
+    except Exception:
+        pass
+    return text.replace('"', "'")
+
+
+def _plain_messages_for_answer(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
+    """把 tool-calling 历史压成普通对话消息，兼容不完整支持 OpenAI tool roles 的网关。"""
+    out: List[Dict[str, str]] = []
+    pending_tool_names: Dict[str, str] = {}
+    for m in messages:
+        if not isinstance(m, dict):
+            continue
+        role = m.get("role")
+        if role in ("system", "user"):
+            content = _clean_text(m.get("content") or "").strip()
+            if content:
+                out.append({"role": role, "content": content})
+            continue
+        if role == "assistant":
+            for tc in (m.get("tool_calls") or []):
+                if not isinstance(tc, dict):
+                    continue
+                fid = str(tc.get("id") or "")
+                fn = ((tc.get("function") or {}).get("name") or "tool").strip()
+                if fid:
+                    pending_tool_names[fid] = fn
+            content = _clean_text(m.get("content") or "").strip()
+            if content:
+                out.append({"role": "assistant", "content": content})
+            continue
+        if role == "tool":
+            tool_id = str(m.get("tool_call_id") or "")
+            tool_name = pending_tool_names.get(tool_id, "工具")
+            content = _tool_content_as_plain_text(m.get("content") or "")
+            if content:
+                out.append({"role": "user", "content": f"【{tool_name} 查询结果】\n{content}"})
+    return out
 
 
 def _llm_request_kwargs(cfg: dict, **extra) -> dict:
@@ -913,6 +970,126 @@ def skill_query_database(args: Dict[str, Any], current_user: str) -> Dict[str, A
     }
 
 
+def _resolve_shift_department(raw: str, current_user: str) -> str:
+    dept = (raw or "").strip()
+    aliases = {
+        "智能室": "智能制造技术室",
+        "智能制造室": "智能制造技术室",
+        "智能制造": "智能制造技术室",
+        "综合室": "综合技术室",
+        "综合技术": "综合技术室",
+        "水轮机": "水轮机工艺室",
+        "水发": "水发工艺室",
+        "汽发": "汽发工艺室",
+        "焊接": "焊接工艺室",
+        "工具": "工具技术室",
+        "非标": "非标技术室",
+        "数控": "数控编程室",
+    }
+    if dept in aliases:
+        return aliases[dept]
+    if not dept:
+        return _get_user_dept(current_user).get("lsys", "")
+    try:
+        rows = db.execute_query(
+            "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
+            "AND COALESCE(zaizhi,0)=0 AND (lsys=%s OR lsys LIKE %s) LIMIT 5",
+            (dept, f"%{dept}%"),
+        )
+        candidates = [(r.get("lsys") or "").strip() for r in rows or [] if (r.get("lsys") or "").strip()]
+        if dept in candidates:
+            return dept
+        if len(candidates) == 1:
+            return candidates[0]
+    except Exception as e:
+        logger.debug("解析排班科室失败: %s", e)
+    return dept
+
+
+def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """查询科室近期排班和每日计划。"""
+    department = _resolve_shift_department(args.get("department") or args.get("lsys") or "", current_user)
+    if not department:
+        return {"ok": False, "message": "缺少科室名称，且无法识别当前用户所属科室"}
+
+    today = datetime.now().date()
+    start_raw = (args.get("start_date") or "").strip()
+    end_raw = (args.get("end_date") or "").strip()
+    try:
+        start_day = datetime.strptime(start_raw, "%Y-%m-%d").date() if start_raw else today
+    except Exception:
+        start_day = today
+    days = int(args.get("days") or 14)
+    days = max(1, min(days, 31))
+    try:
+        end_day = datetime.strptime(end_raw, "%Y-%m-%d").date() if end_raw else start_day + timedelta(days=days - 1)
+    except Exception:
+        end_day = start_day + timedelta(days=days - 1)
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+    if (end_day - start_day).days > 60:
+        end_day = start_day + timedelta(days=60)
+
+    ds_lo = start_day.strftime("%Y-%m-%d")
+    ds_hi = end_day.strftime("%Y-%m-%d")
+    try:
+        rows = db.execute_query(
+            "SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
+            "WHERE department=%s AND shift_date >= %s AND shift_date <= %s "
+            "AND shift_type IS NOT NULL AND TRIM(shift_type) != '' AND shift_type != '休息' "
+            "ORDER BY shift_date ASC, employee_name ASC",
+            (department, ds_lo, ds_hi),
+        ) or []
+        plan_rows = db.execute_query(
+            "SELECT plan_date, content FROM shift_day_plan "
+            "WHERE department=%s AND plan_date >= %s AND plan_date <= %s "
+            "AND content IS NOT NULL AND TRIM(content) != '' ORDER BY plan_date ASC",
+            (department, ds_lo, ds_hi),
+        ) or []
+    except Exception as e:
+        logger.warning("查询排班失败: %s", e)
+        return {"ok": False, "message": f"查询排班失败：{e}"}
+
+    by_date: Dict[str, Dict[str, Any]] = {}
+    for r in rows:
+        sd = r.get("shift_date")
+        date_text = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
+        item = by_date.setdefault(date_text, {"date": date_text, "day": [], "night": [], "other": []})
+        name = (r.get("employee_name") or "").strip()
+        shift_type = (r.get("shift_type") or "").strip()
+        location = (r.get("shift_location") or "").strip()
+        label = name + (f"({location})" if location else "")
+        if shift_type == "白班":
+            item["day"].append(label)
+        elif shift_type == "夜班":
+            item["night"].append(label)
+        elif shift_type == "白+夜":
+            item["day"].append(label)
+            item["night"].append(label)
+        else:
+            item["other"].append(f"{label}:{shift_type}")
+
+    plans = []
+    for r in plan_rows:
+        pd = r.get("plan_date")
+        plans.append({
+            "date": pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10],
+            "content": (r.get("content") or "").strip()[:300],
+        })
+
+    schedule = list(by_date.values())
+    return {
+        "ok": True,
+        "department": department,
+        "start_date": ds_lo,
+        "end_date": ds_hi,
+        "row_count": len(rows),
+        "schedule": schedule,
+        "plans": plans,
+        "message": f"查询到 {department} {ds_lo} 至 {ds_hi} 的排班记录 {len(rows)} 条、每日计划 {len(plans)} 条",
+    }
+
+
 def _parse_chart_spec(args: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]], str, str, str]:
     """解析并校验图表参数，返回 (chart_type, labels, series, title, x_label, y_label)。"""
     chart_type = (args.get("chart_type") or "line").strip().lower()
@@ -1311,6 +1488,7 @@ SKILL_FUNCS = {
     "query_department": skill_query_department,
     "generate_report": skill_generate_report,
     "query_database": skill_query_database,
+    "query_shift_schedule": skill_query_shift_schedule,
     "get_info_feed": skill_get_info_feed,
     "create_document": skill_create_document,
     "create_chart": skill_create_chart,
@@ -1324,6 +1502,7 @@ SKILL_LABELS = {
     "query_department": "部门人员查询",
     "generate_report": "生成报表下载",
     "query_database": "数据库智能查询",
+    "query_shift_schedule": "排班情况查询",
     "get_info_feed": "天气/新闻",
     "create_document": "生成文档",
     "create_chart": "生成图表",
@@ -1430,10 +1609,27 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "query_shift_schedule",
+            "description": "查询某科室近期排班情况和值班每日计划。用户问排班、值班、白班、夜班、最近/本周/下周排班时优先使用本工具，不要用 query_database 猜排班表字段。科室简称如“智能室”应传 department='智能室'，工具会映射到真实科室。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "科室名称或简称，如“智能室”“智能制造技术室”“综合室”。不填则用当前登录用户所在科室"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；不填默认今天"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；不填按 days 计算"},
+                    "days": {"type": "integer", "description": "查询天数，默认14，最多31"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_database",
             "description": (
                 "通用只读数据库查询。当用户的问题超出其他专用工具的能力范围时使用——"
                 "例如统计男女比例、各科室人数分布、按性别/职级/科室分组聚合、跨表统计等。"
+                "查询排班/值班/白班/夜班情况时优先使用 query_shift_schedule，不要用本工具猜排班字段。"
                 "你需要根据系统提供的表结构编写一条标准 MySQL SELECT 语句。"
                 "仅支持只读查询，不能修改数据；敏感字段（密码/身份证/邮箱授权码等）不可访问。"
                 "涉及具体个人的加班/请假/公出明细应优先使用对应的专用查询工具（受权限控制），"
@@ -1444,7 +1640,7 @@ TOOLS = [
                 "properties": {
                     "sql": {
                         "type": "string",
-                        "description": "完整的 MySQL SELECT 语句（只读）。可用表：yggl, jiaban, qj, gcsqb, dept_policy。请严格按系统给出的表结构编写。",
+                        "description": "完整的 MySQL SELECT 语句（只读）。可用表：yggl, jiaban, qj, gcsqb, dept_policy, tech_problem_manual, holiday, shift_schedule, shift_day_plan, shift_config。请严格按系统给出的表结构编写。",
                     },
                     "purpose": {"type": "string", "description": "本次查询要回答的问题简述"},
                 },
@@ -1728,6 +1924,8 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "9. 当问题超出专用工具的能力（如男女比例、各科室人数分布、按职级/性别分组统计、"
         "员工职级/邮箱/排班/节假日、工艺问题知识库检索等），调用 query_database 编写只读 SELECT 查询，"
         "严格依据下方表结构编写，禁止查询敏感字段；写不出合规 SQL 时如实说明。\n"
+        "9a. 查询排班/值班/白班/夜班/每日计划时，优先调用 query_shift_schedule；"
+        "不要用 query_database 猜测排班表字段，也不要在最终回答中输出 <｜DSML｜tool_calls> 等工具调用标记。\n"
         "10. 当用户咨询工艺/技术问题时，可检索 tech_problem_manual 知识库中的同类问题"
         "（problem_desc/cause_analysis/measures），并结合检索到的处理措施给出专业建议。\n"
         "11. 当用户询问天气或新闻时，调用 get_info_feed 获取系统中转的实时信息后作答。\n"
@@ -1829,6 +2027,12 @@ async def chat_stream(req: ChatRequest):
                 except Exception as api_err:
                     err_s = str(api_err)
                     if "json_invalid" in err_s or "JSON decode" in err_s or "400" in err_s:
+                        if _has_tool_context(messages):
+                            logger.warning(
+                                "工具结果后的继续规划请求被模型网关拒绝，改为直接生成最终回答(%s, user=%s, msgs=%d): %s",
+                                provider, current_user, len(messages), err_s,
+                            )
+                            break
                         logger.error("大模型请求体异常(%s, user=%s, msgs=%d): %s",
                                        provider, current_user, len(messages), err_s)
                         yield _sse({"type": "error", "message":
@@ -1911,13 +2115,15 @@ async def chat_stream(req: ChatRequest):
         # DeepSeek 优先用 reasoner 模型：先流式输出思维链(reasoning_content)，再输出正文，
         # 让前端能看到"思考过程"。reasoner 不可用时回退普通对话模型。本地模型直接流式。
         def _emit_final(model2):
-            kwargs = _llm_request_kwargs(cfg, model=model2, messages=messages, stream=True)
+            final_messages = _plain_messages_for_answer(messages) if _has_tool_context(messages) else messages
+            kwargs = _llm_request_kwargs(cfg, model=model2, messages=final_messages, stream=True)
             if provider != "deepseek":
                 kwargs["temperature"] = LLM_TEMPERATURE_ANSWER
                 if extra_body:
                     kwargs["extra_body"] = extra_body
             stream = client.chat.completions.create(**kwargs)
             produced = False
+            suppress_tool_markup = False
             for event in stream:
                 if not getattr(event, "choices", None):
                     continue
@@ -1931,6 +2137,14 @@ async def chat_stream(req: ChatRequest):
                 if rc:
                     yield _sse({"type": "reasoning", "text": rc})
                 piece = getattr(delta, "content", None) or ""
+                if piece and ("<｜DSML" in piece or "<|DSML" in piece):
+                    piece = re.split(r"<[｜|]DSML", piece, maxsplit=1)[0]
+                    suppress_tool_markup = True
+                if suppress_tool_markup:
+                    if piece:
+                        produced = True
+                        yield _sse({"type": "chunk", "text": piece})
+                    continue
                 if piece:
                     produced = True
                     yield _sse({"type": "chunk", "text": piece})
