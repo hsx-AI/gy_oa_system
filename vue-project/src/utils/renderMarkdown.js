@@ -17,6 +17,13 @@ function normalizeLinkUrl(u) {
   return m ? m[1] : u
 }
 
+function isBlockedGeneratedChartUrl(u) {
+  const s = String(u || '')
+  return /^https?:\/\//i.test(s)
+    && /(via\.placeholder\.com|placehold\.co|quickchart\.io|image-charts\.com|chart\.googleapis\.com|placeholder|chart)/i.test(s)
+    && !/^https?:\/\/[^/]+\/api\/ai-assistant\//i.test(s)
+}
+
 function inlineFormat(text) {
   let s = text
   // 行内代码
@@ -27,7 +34,10 @@ function inlineFormat(text) {
   s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
   // 链接 [text](url)
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g,
-    (_m, label, url) => `<a href="${normalizeLinkUrl(url)}" target="_blank" rel="noopener" class="md-link">${label}</a>`)
+    (_m, label, url) => {
+      if (isBlockedGeneratedChartUrl(url)) return '（图表请使用下方本地生成的附件下载）'
+      return `<a href="${normalizeLinkUrl(url)}" target="_blank" rel="noopener" class="md-link">${label}</a>`
+    })
   return s
 }
 

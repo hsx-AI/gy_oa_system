@@ -26,10 +26,12 @@ from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import StreamingResponse, FileResponse
 from typing import Optional, List, Dict, Any, Tuple
 from pydantic import BaseModel
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, date
 from io import BytesIO
 from pathlib import Path
 from urllib.parse import urlencode, quote
+from collections import defaultdict
+import calendar
 import os
 import re
 import json
@@ -99,6 +101,27 @@ _DANGEROUS_PATTERNS = [
 ]
 
 DEFAULT_QUERY_LIMIT = 500
+
+SHIFT_BUSINESS_DEPARTMENTS = [
+    "水轮机工艺室",
+    "水发工艺室",
+    "汽发工艺室",
+    "焊接工艺室",
+    "综合技术室",
+    "非标技术室",
+    "工具技术室",
+    "智能制造技术室",
+    "数控编程室",
+]
+
+DEPARTMENT_KNOWLEDGE = (
+    "组织结构知识：本部门为智能制造工艺部。下设 9 个科室："
+    "水轮机工艺室（简称水轮机室）、水发工艺室（简称水发室）、汽发工艺室（简称汽发室）、"
+    "焊接工艺室（简称焊艺室）、综合技术室（简称综合室）、非标技术室（简称非标室）、"
+    "工具技术室（简称工具室）、智能制造技术室（简称智能室）、数控编程室（简称数控室/编程室）。"
+    "除此之外，部门领导层和总师组成部门办公室“部办”。"
+    "用户使用简称提问时，应先映射为上述数据库中的正式科室名称再查询。"
+)
 
 # 提供给大模型的安全表结构说明（仅含可查询字段）
 DB_SCHEMA_HINT = (
@@ -309,6 +332,19 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
             )
         return out
 
+    if fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary"):
+        for k in ("scope", "start_date", "end_date", "count", "message", "metric", "metric_label", "unit",
+                  "totals", "chart_hint"):
+            if k in result:
+                out[k] = result[k]
+        rows = result.get("rows") or []
+        if _small_enough(len(rows)):
+            out["rows"] = rows
+        else:
+            out["rows_sample"] = rows[:LLM_TOOL_SAMPLE_ROWS]
+            out["rows_count"] = len(rows)
+        return out
+
     if fname in ("query_overtime", "query_leave", "query_business_trip"):
         for k in ("name", "year", "month", "total_hours", "total_days", "total_count", "by_type", "message"):
             if k in result:
@@ -321,6 +357,19 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
             out["records_sample"] = records[:LLM_TOOL_SAMPLE_ROWS]
             out["monthly_breakdown"] = _monthly_breakdown(records)
             out["_hint"] = f"共 {n} 条记录，已附样本与按月分布；导出完整明细请 generate_report。"
+        return out
+
+    if fname == "query_business_trip_summary":
+        for k in ("scope", "trip_type", "start_date", "end_date", "raw_record_count", "person_count",
+                  "total_days", "by_department", "message"):
+            if k in result:
+                out[k] = result[k]
+        people = result.get("by_person") or []
+        if _small_enough(len(people)):
+            out["by_person"] = people
+        else:
+            out["by_person_sample"] = people[:LLM_TOOL_SAMPLE_ROWS]
+            out["_hint"] = f"共 {len(people)} 人，已附前 {len(out['by_person_sample'])} 人样本；总天数以 total_days 为准。"
         return out
 
     if fname == "search_policy":
@@ -441,6 +490,17 @@ def _tool_content_as_plain_text(content: str) -> str:
     except Exception:
         pass
     return text.replace('"', "'")
+
+
+def _strip_external_chart_links(text: str) -> str:
+    """模型偶尔会编造外部图表/占位图链接；图表必须由 create_chart 本地生成。"""
+    if not text:
+        return text
+    s = text
+    s = re.sub(r"!\[[^\]]*\]\(\s*https?://[^)\s]*(?:placeholder|chart|quickchart|image-charts)[^)]*\)", "", s, flags=re.I)
+    s = re.sub(r"\[[^\]]*(?:图表|折线图|下载|PNG|图片)[^\]]*\]\(\s*https?://[^)]*\)", "（图表请点击下方本地生成的附件下载）", s, flags=re.I)
+    s = re.sub(r"https?://(?:via\.placeholder\.com|placehold\.co|quickchart\.io|image-charts\.com|chart\.googleapis\.com)[^\s)）]+", "", s, flags=re.I)
+    return s
 
 
 def _plain_messages_for_answer(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -826,6 +886,502 @@ def skill_query_business_trip(args: Dict[str, Any], current_user: str) -> Dict[s
     }
 
 
+def _parse_db_date(v) -> Optional[date]:
+    if v is None:
+        return None
+    if hasattr(v, "date"):
+        return v.date()
+    s = str(v).strip()[:10]
+    if len(s) == 10 and s[4] == "-" and s[7] == "-":
+        try:
+            return datetime.strptime(s, "%Y-%m-%d").date()
+        except Exception:
+            return None
+    return None
+
+
+def _merge_date_intervals(intervals: List[Tuple[date, date]]) -> List[Tuple[date, date]]:
+    items = sorted((s, e) for s, e in intervals if s and e and e >= s)
+    if not items:
+        return []
+    merged: List[Tuple[date, date]] = []
+    cur_s, cur_e = items[0]
+    for s, e in items[1:]:
+        if s <= cur_e + timedelta(days=1):
+            cur_e = max(cur_e, e)
+        else:
+            merged.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+    merged.append((cur_s, cur_e))
+    return merged
+
+
+def _merged_interval_days(intervals: List[Tuple[date, date]]) -> int:
+    return sum((e - s).days + 1 for s, e in _merge_date_intervals(intervals))
+
+
+def _trip_period_from_args(args: Dict[str, Any]) -> Tuple[date, date]:
+    today = datetime.now().date()
+    start_raw = (args.get("start_date") or "").strip()
+    end_raw = (args.get("end_date") or "").strip()
+    try:
+        end_day = datetime.strptime(end_raw, "%Y-%m-%d").date() if end_raw else today
+    except Exception:
+        end_day = today
+    try:
+        start_day = datetime.strptime(start_raw, "%Y-%m-%d").date() if start_raw else None
+    except Exception:
+        start_day = None
+    if start_day is None:
+        months = int(args.get("months") or args.get("months_back") or 3)
+        months = max(1, min(months, 24))
+        start_day = end_day - timedelta(days=months * 31 - 1)
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+    return start_day, end_day
+
+
+def skill_query_business_trip_summary(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """按统计页口径汇总部门/科室公出天数，后端完成区间合并与裁剪。"""
+    start_day, end_day = _trip_period_from_args(args)
+    dept = _resolve_shift_department(args.get("department") or args.get("lsys") or "", current_user)
+    scope_info = _get_data_scope(current_user)
+    person_filter = ""
+    scope = (args.get("scope") or "").strip().lower()
+    if dept == "__ALL__" or scope == "all":
+        dept = ""
+    elif not dept:
+        if scope_info.get("scope") == "all":
+            dept = ""
+        else:
+            dept = scope_info.get("lsys") or ""
+    if scope_info.get("scope") == "dept":
+        own_dept = scope_info.get("lsys") or ""
+        if dept and dept != own_dept:
+            return {"ok": False, "message": f"权限不足：您只能查询本科室（{own_dept}）公出汇总。"}
+        dept = own_dept
+    elif scope_info.get("scope") != "all":
+        person_filter = (current_user or "").strip()
+        dept = scope_info.get("lsys") or dept
+    trip_type = (args.get("trip_type") or args.get("gclx") or "").strip()
+    if trip_type and trip_type not in ("市内公出", "境内公出", "境外公出"):
+        trip_type = ""
+
+    ds_lo = start_day.strftime("%Y-%m-%d")
+    ds_hi = end_day.strftime("%Y-%m-%d")
+    where = [
+        "RIGHT(TRIM(g.gcr),1) != '1'",
+        "g.bldzt = 2",
+        "g.szrzt = 2",
+        "COALESCE(g.gcsj, g.yjcfsj) <= %s",
+        "COALESCE(g.sjfhtime, g.yjfhsj) >= %s",
+    ]
+    params: List[Any] = [ds_hi, ds_lo]
+    if dept:
+        where.append("y.lsys = %s")
+        params.append(dept)
+    if person_filter:
+        where.append("g.gcr = %s")
+        params.append(person_filter)
+    if trip_type:
+        where.append("COALESCE(NULLIF(TRIM(g.gclx), ''), '境内公出') = %s")
+        params.append(trip_type)
+
+    sql = f"""
+        SELECT g.gcr, g.gclx, g.gcsj, g.sjfhtime, g.yjfhsj, g.yjcfsj, y.lsys
+        FROM gcsqb g
+        INNER JOIN yggl y ON g.gcr = y.name
+          AND y.lsys IS NOT NULL AND y.lsys != ''
+          AND RIGHT(TRIM(y.name),1) != '1'
+          AND RIGHT(TRIM(y.lsys),1) != '1'
+          AND TRIM(y.lsys) NOT IN ('其他部门员工','其他部门成员')
+          AND COALESCE(y.zaizhi,0) = 0
+        WHERE {' AND '.join(where)}
+    """
+    try:
+        rows = db.execute_query(sql, tuple(params)) or []
+    except Exception as e:
+        logger.warning("公出汇总查询失败: %s", e)
+        return {"ok": False, "message": f"公出汇总查询失败：{e}"}
+
+    by_person_intervals: Dict[Tuple[str, str], List[Tuple[date, date]]] = defaultdict(list)
+    raw_records = 0
+    for r in rows:
+        name = (r.get("gcr") or "").strip()
+        lsys = (r.get("lsys") or "").strip()
+        start = _parse_db_date(r.get("gcsj") or r.get("yjcfsj"))
+        end = _parse_db_date(r.get("sjfhtime") or r.get("yjfhsj"))
+        if not name or not lsys or not start or not end or end < start:
+            continue
+        clipped_start = max(start, start_day)
+        clipped_end = min(end, end_day)
+        if clipped_end >= clipped_start:
+            raw_records += 1
+            by_person_intervals[(name, lsys)].append((clipped_start, clipped_end))
+
+    by_department_acc: Dict[str, float] = defaultdict(float)
+    by_person = []
+    for (name, lsys), intervals in by_person_intervals.items():
+        days = _merged_interval_days(intervals)
+        if days <= 0:
+            continue
+        by_department_acc[lsys] += days
+        by_person.append({
+            "name": name,
+            "lsys": lsys,
+            "days": round(days, 2),
+            "merged_intervals": [
+                {"start": s.strftime("%Y-%m-%d"), "end": e.strftime("%Y-%m-%d")}
+                for s, e in _merge_date_intervals(intervals)
+            ],
+        })
+    by_person.sort(key=lambda x: (-x["days"], x["lsys"], x["name"]))
+    by_department = [
+        {"lsys": k, "days": round(v, 2)}
+        for k, v in sorted(by_department_acc.items(), key=lambda x: (-x[1], x[0]))
+    ]
+    total_days = round(sum(x["days"] for x in by_department), 2)
+    return {
+        "ok": True,
+        "scope": dept or "全部门",
+        "trip_type": trip_type or "全部公出类型",
+        "start_date": ds_lo,
+        "end_date": ds_hi,
+        "raw_record_count": raw_records,
+        "person_count": len(by_person),
+        "total_days": total_days,
+        "by_department": by_department,
+        "by_person": by_person[:50],
+        "message": (
+            f"{dept or '全部门'} {ds_lo} 至 {ds_hi} 已审批通过公出："
+            f"{raw_records} 条，{len(by_person)} 人，合计 {total_days} 天。"
+            "天数已按人合并重叠区间并裁剪到查询区间。"
+        ),
+    }
+
+
+def _parse_period_args(args: Dict[str, Any]) -> Tuple[date, date]:
+    today = datetime.now().date()
+    year = int(args.get("year") or today.year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    start_raw = (args.get("start_date") or "").strip()
+    end_raw = (args.get("end_date") or "").strip()
+    if start_raw or end_raw:
+        try:
+            start_day = datetime.strptime(start_raw, "%Y-%m-%d").date() if start_raw else date(year, 1, 1)
+        except Exception:
+            start_day = date(year, 1, 1)
+        try:
+            end_day = datetime.strptime(end_raw, "%Y-%m-%d").date() if end_raw else today
+        except Exception:
+            end_day = today
+    elif month:
+        start_day = date(year, month, 1)
+        end_day = date(year, month, calendar.monthrange(year, month)[1])
+    else:
+        start_day = date(year, 1, 1)
+        end_day = date(year, 12, 31)
+    if end_day < start_day:
+        start_day, end_day = end_day, start_day
+    return start_day, end_day
+
+
+def _months_between(start_day: date, end_day: date) -> List[Tuple[int, int, date, date]]:
+    out: List[Tuple[int, int, date, date]] = []
+    cur = date(start_day.year, start_day.month, 1)
+    while cur <= end_day:
+        last = date(cur.year, cur.month, calendar.monthrange(cur.year, cur.month)[1])
+        out.append((cur.year, cur.month, max(start_day, cur), min(end_day, last)))
+        if cur.month == 12:
+            cur = date(cur.year + 1, 1, 1)
+        else:
+            cur = date(cur.year, cur.month + 1, 1)
+    return out
+
+
+def _leave_bounds(row: Dict[str, Any]) -> Tuple[Optional[date], Optional[date]]:
+    start = _parse_db_date(row.get("timefrom") or row.get("timefromdate"))
+    end = _parse_db_date(row.get("timeto") or row.get("timefrom") or row.get("timefromdate"))
+    return start, end
+
+
+def _allocate_days_to_period(total_days: float, start: date, end: date, period_start: date, period_end: date) -> float:
+    if not start or not end or end < start or total_days <= 0:
+        return 0.0
+    ov_s = max(start, period_start)
+    ov_e = min(end, period_end)
+    if ov_e < ov_s:
+        return 0.0
+    total_span = (end - start).days + 1
+    ov_span = (ov_e - ov_s).days + 1
+    if total_span <= 0:
+        return 0.0
+    return total_days * ov_span / total_span
+
+
+def _visible_scope_filter(current_user: str, requested_dept: str = "", requested_name: str = "") -> Tuple[Optional[str], str, str]:
+    scope_info = _get_data_scope(current_user)
+    scope = scope_info.get("scope")
+    own_dept = scope_info.get("lsys") or ""
+    req_dept = _resolve_shift_department(requested_dept, current_user) if requested_dept else ""
+    if req_dept == "__ALL__":
+        req_dept = ""
+    req_name = (requested_name or "").strip()
+    if scope == "all":
+        return None, req_dept, req_name
+    if scope == "dept":
+        if req_dept and req_dept != own_dept:
+            return f"权限不足：您只能查询本科室（{own_dept}）统计。", "", ""
+        if req_name and not _can_access_person(scope_info, current_user, req_name):
+            return f"权限不足：您只能查询本科室（{own_dept}）人员统计。", "", ""
+        return None, own_dept, req_name
+    if req_name and req_name != current_user:
+        return "权限不足：您只能查询本人统计。", "", ""
+    return None, own_dept, current_user
+
+
+def _staff_rows_for_scope(dept: str = "", name: str = "") -> List[Dict[str, Any]]:
+    where = [
+        "name IS NOT NULL AND TRIM(name) != ''",
+        "RIGHT(TRIM(name),1) != '1'",
+        "RIGHT(TRIM(lsys),1) != '1'",
+        "TRIM(lsys) NOT IN ('其他部门员工','其他部门成员')",
+        "COALESCE(zaizhi,0) = 0",
+    ]
+    params: List[Any] = []
+    if dept:
+        where.append("lsys = %s")
+        params.append(dept)
+    if name:
+        where.append("name = %s")
+        params.append(name)
+    rows = db.execute_query(
+        "SELECT name, lsys, jb FROM yggl WHERE " + " AND ".join(where) + " ORDER BY lsys, name",
+        tuple(params),
+    ) or []
+    return [
+        {"name": (r.get("name") or "").strip(), "lsys": (r.get("lsys") or "").strip(), "jb": (r.get("jb") or "").strip()}
+        for r in rows if (r.get("name") or "").strip()
+    ]
+
+
+def _overtime_hours_by_person(start_day: date, end_day: date, names: Optional[List[str]] = None) -> Dict[str, float]:
+    where = [
+        "jiabanzt = 4",
+        "RIGHT(TRIM(xm),1) != '1'",
+        "SUBSTRING(timedate,1,10) >= %s",
+        "SUBSTRING(timedate,1,10) <= %s",
+    ]
+    params: List[Any] = [start_day.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")]
+    if names is not None:
+        if not names:
+            return {}
+        ph = ",".join(["%s"] * len(names))
+        where.append(f"xm IN ({ph})")
+        params.extend(names)
+    rows = db.execute_query(
+        "SELECT xm AS name, SUM(CAST(COALESCE(NULLIF(tian1,''), jbf, 0) AS DECIMAL(10,2))) AS hours "
+        "FROM jiaban WHERE " + " AND ".join(where) + " GROUP BY xm",
+        tuple(params),
+    ) or []
+    return {(r.get("name") or "").strip(): round(float(r.get("hours") or 0), 2) for r in rows if r.get("name")}
+
+
+def _leave_days_by_person(start_day: date, end_day: date, names: Optional[List[str]] = None) -> Dict[str, float]:
+    where = [
+        "qjzt = 4",
+        "RIGHT(TRIM(xm),1) != '1'",
+        "COALESCE(DATE(timeto), DATE(timefrom), DATE(timefromdate)) >= %s",
+        "COALESCE(DATE(timefrom), DATE(timefromdate)) <= %s",
+    ]
+    params: List[Any] = [start_day.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")]
+    if names is not None:
+        if not names:
+            return {}
+        ph = ",".join(["%s"] * len(names))
+        where.append(f"xm IN ({ph})")
+        params.extend(names)
+    rows = db.execute_query(
+        "SELECT xm AS name, timefrom, timeto, timefromdate, CAST(COALESCE(NULLIF(tian,''),0) AS DECIMAL(10,2)) AS days "
+        "FROM qj WHERE " + " AND ".join(where),
+        tuple(params),
+    ) or []
+    acc: Dict[str, float] = defaultdict(float)
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        s, e = _leave_bounds(r)
+        if not name or not s or not e:
+            continue
+        acc[name] += _allocate_days_to_period(float(r.get("days") or 0), s, e, start_day, end_day)
+    return {k: round(v, 2) for k, v in acc.items()}
+
+
+def _trip_days_by_person(start_day: date, end_day: date, names: Optional[List[str]] = None) -> Dict[str, float]:
+    where = [
+        "bldzt = 2",
+        "szrzt = 2",
+        "RIGHT(TRIM(gcr),1) != '1'",
+        "COALESCE(gcsj, yjcfsj) <= %s",
+        "COALESCE(sjfhtime, yjfhsj) >= %s",
+    ]
+    params: List[Any] = [end_day.strftime("%Y-%m-%d"), start_day.strftime("%Y-%m-%d")]
+    if names is not None:
+        if not names:
+            return {}
+        ph = ",".join(["%s"] * len(names))
+        where.append(f"gcr IN ({ph})")
+        params.extend(names)
+    rows = db.execute_query(
+        "SELECT gcr AS name, gcsj, sjfhtime, yjfhsj, yjcfsj FROM gcsqb WHERE " + " AND ".join(where),
+        tuple(params),
+    ) or []
+    intervals: Dict[str, List[Tuple[date, date]]] = defaultdict(list)
+    for r in rows:
+        name = (r.get("name") or "").strip()
+        s = _parse_db_date(r.get("gcsj") or r.get("yjcfsj"))
+        e = _parse_db_date(r.get("sjfhtime") or r.get("yjfhsj"))
+        if name and s and e and e >= s:
+            cs, ce = max(s, start_day), min(e, end_day)
+            if ce >= cs:
+                intervals[name].append((cs, ce))
+    return {name: round(_merged_interval_days(items), 2) for name, items in intervals.items()}
+
+
+def skill_query_dept_comparison(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """科室横向对比：加班、请假、公出总量与人均。"""
+    start_day, end_day = _parse_period_args(args)
+    err, dept, name_filter = _visible_scope_filter(current_user, args.get("department") or args.get("lsys") or "", "")
+    if err:
+        return {"ok": False, "message": err}
+    staff = _staff_rows_for_scope(dept=dept, name=name_filter)
+    names = [r["name"] for r in staff]
+    by_name_dept = {r["name"]: r["lsys"] for r in staff}
+    person_count: Dict[str, int] = defaultdict(int)
+    for r in staff:
+        person_count[r["lsys"]] += 1
+    ot = _overtime_hours_by_person(start_day, end_day, names)
+    lv = _leave_days_by_person(start_day, end_day, names)
+    tr = _trip_days_by_person(start_day, end_day, names)
+    acc: Dict[str, Dict[str, float]] = defaultdict(lambda: {"overtime_hours": 0.0, "leave_days": 0.0, "trip_days": 0.0})
+    for n, v in ot.items():
+        if n in by_name_dept:
+            acc[by_name_dept[n]]["overtime_hours"] += v
+    for n, v in lv.items():
+        if n in by_name_dept:
+            acc[by_name_dept[n]]["leave_days"] += v
+    for n, v in tr.items():
+        if n in by_name_dept:
+            acc[by_name_dept[n]]["trip_days"] += v
+    rows = []
+    for lsys in sorted(person_count.keys()):
+        pc = person_count[lsys]
+        data = acc[lsys]
+        rows.append({
+            "lsys": lsys,
+            "person_count": pc,
+            "overtime_hours": round(data["overtime_hours"], 2),
+            "leave_days": round(data["leave_days"], 2),
+            "trip_days": round(data["trip_days"], 2),
+            "overtime_per_capita": round(data["overtime_hours"] / pc, 2) if pc else 0,
+            "leave_per_capita": round(data["leave_days"] / pc, 2) if pc else 0,
+            "trip_per_capita": round(data["trip_days"] / pc, 2) if pc else 0,
+        })
+    return {
+        "ok": True,
+        "scope": dept or "全部门",
+        "start_date": start_day.strftime("%Y-%m-%d"),
+        "end_date": end_day.strftime("%Y-%m-%d"),
+        "count": len(rows),
+        "rows": rows,
+        "message": "科室横向对比已由后端按统一统计口径计算完成。",
+    }
+
+
+def skill_query_person_ranking(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """人员排行：加班小时、请假天数、公出天数。"""
+    start_day, end_day = _parse_period_args(args)
+    metric = (args.get("metric") or args.get("type") or "overtime").strip().lower()
+    metric_map = {
+        "overtime": ("加班小时", "小时", _overtime_hours_by_person),
+        "leave": ("请假天数", "天", _leave_days_by_person),
+        "trip": ("公出天数", "天", _trip_days_by_person),
+        "business_trip": ("公出天数", "天", _trip_days_by_person),
+    }
+    if metric not in metric_map:
+        metric = "overtime"
+    err, dept, name_filter = _visible_scope_filter(current_user, args.get("department") or args.get("lsys") or "", args.get("name") or "")
+    if err:
+        return {"ok": False, "message": err}
+    staff = _staff_rows_for_scope(dept=dept, name=name_filter)
+    names = [r["name"] for r in staff]
+    by_name_dept = {r["name"]: r["lsys"] for r in staff}
+    label, unit, fn = metric_map[metric]
+    vals = fn(start_day, end_day, names)
+    limit = int(args.get("limit") or 20)
+    limit = max(1, min(limit, 100))
+    ranked = [
+        {"rank": i + 1, "name": n, "lsys": by_name_dept.get(n, ""), "value": round(v, 2), "unit": unit}
+        for i, (n, v) in enumerate(sorted(vals.items(), key=lambda x: (-x[1], x[0]))[:limit])
+        if v > 0
+    ]
+    return {
+        "ok": True,
+        "metric": metric,
+        "metric_label": label,
+        "unit": unit,
+        "scope": dept or ("本人" if name_filter else "全部门"),
+        "start_date": start_day.strftime("%Y-%m-%d"),
+        "end_date": end_day.strftime("%Y-%m-%d"),
+        "count": len(ranked),
+        "rows": ranked,
+        "message": f"{label}排行已由后端按统一统计口径计算完成。",
+    }
+
+
+def skill_query_monthly_summary(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """月度趋势汇总：按月返回加班、请假、公出。"""
+    start_day, end_day = _parse_period_args(args)
+    err, dept, name_filter = _visible_scope_filter(current_user, args.get("department") or args.get("lsys") or "", args.get("name") or "")
+    if err:
+        return {"ok": False, "message": err}
+    staff = _staff_rows_for_scope(dept=dept, name=name_filter)
+    names = [r["name"] for r in staff]
+    rows = []
+    for y, m, ms, me in _months_between(start_day, end_day):
+        ot = sum(_overtime_hours_by_person(ms, me, names).values())
+        lv = sum(_leave_days_by_person(ms, me, names).values())
+        tr = sum(_trip_days_by_person(ms, me, names).values())
+        rows.append({
+            "month": f"{y}-{m:02d}",
+            "overtime_hours": round(ot, 2),
+            "leave_days": round(lv, 2),
+            "trip_days": round(tr, 2),
+        })
+    totals = {
+        "overtime_hours": round(sum(r["overtime_hours"] for r in rows), 2),
+        "leave_days": round(sum(r["leave_days"] for r in rows), 2),
+        "trip_days": round(sum(r["trip_days"] for r in rows), 2),
+    }
+    return {
+        "ok": True,
+        "scope": name_filter or dept or "全部门",
+        "start_date": start_day.strftime("%Y-%m-%d"),
+        "end_date": end_day.strftime("%Y-%m-%d"),
+        "totals": totals,
+        "rows": rows,
+        "chart_hint": {
+            "labels": [r["month"] for r in rows],
+            "series": [
+                {"name": "加班小时", "values": [r["overtime_hours"] for r in rows]},
+                {"name": "请假天数", "values": [r["leave_days"] for r in rows]},
+                {"name": "公出天数", "values": [r["trip_days"] for r in rows]},
+            ],
+        },
+        "message": "月度趋势已由后端按统一统计口径计算完成，可直接用于折线图。",
+    }
+
+
 def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
     """查询科室 / 全部门的在职人数与人员名单。
     - scope='all'：全部门全体人员；
@@ -973,23 +1529,42 @@ def skill_query_database(args: Dict[str, Any], current_user: str) -> Dict[str, A
 def _resolve_shift_department(raw: str, current_user: str) -> str:
     dept = (raw or "").strip()
     aliases = {
+        "全部": "__ALL__",
+        "全部门": "__ALL__",
+        "全体": "__ALL__",
+        "所有科室": "__ALL__",
+        "各科室": "__ALL__",
+        "部办": "__ALL__",
         "智能室": "智能制造技术室",
         "智能制造室": "智能制造技术室",
         "智能制造": "智能制造技术室",
         "综合室": "综合技术室",
         "综合技术": "综合技术室",
         "水轮机": "水轮机工艺室",
+        "水轮机室": "水轮机工艺室",
         "水发": "水发工艺室",
+        "水发室": "水发工艺室",
         "汽发": "汽发工艺室",
+        "汽发室": "汽发工艺室",
         "焊接": "焊接工艺室",
+        "焊艺": "焊接工艺室",
+        "焊艺室": "焊接工艺室",
         "工具": "工具技术室",
+        "工具室": "工具技术室",
         "非标": "非标技术室",
+        "非标室": "非标技术室",
         "数控": "数控编程室",
+        "数控室": "数控编程室",
+        "编程室": "数控编程室",
     }
     if dept in aliases:
         return aliases[dept]
     if not dept:
-        return _get_user_dept(current_user).get("lsys", "")
+        user_dept = _get_user_dept(current_user).get("lsys", "")
+        scope_info = _get_data_scope(current_user)
+        if user_dept == "部办" or scope_info.get("scope") == "all":
+            return "__ALL__"
+        return user_dept
     try:
         rows = db.execute_query(
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
@@ -1008,7 +1583,9 @@ def _resolve_shift_department(raw: str, current_user: str) -> str:
 
 def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
     """查询科室近期排班和每日计划。"""
-    department = _resolve_shift_department(args.get("department") or args.get("lsys") or "", current_user)
+    scope = (args.get("scope") or "").strip().lower()
+    raw_department = args.get("department") or args.get("lsys") or ("__ALL__" if scope == "all" else "")
+    department = _resolve_shift_department(raw_department, current_user)
     if not department:
         return {"ok": False, "message": "缺少科室名称，且无法识别当前用户所属科室"}
 
@@ -1032,19 +1609,21 @@ def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[
 
     ds_lo = start_day.strftime("%Y-%m-%d")
     ds_hi = end_day.strftime("%Y-%m-%d")
+    target_departments = SHIFT_BUSINESS_DEPARTMENTS if department == "__ALL__" else [department]
+    placeholders = ",".join(["%s"] * len(target_departments))
     try:
         rows = db.execute_query(
-            "SELECT employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
-            "WHERE department=%s AND shift_date >= %s AND shift_date <= %s "
+            "SELECT department, employee_name, shift_date, shift_type, shift_location FROM shift_schedule "
+            f"WHERE department IN ({placeholders}) AND shift_date >= %s AND shift_date <= %s "
             "AND shift_type IS NOT NULL AND TRIM(shift_type) != '' AND shift_type != '休息' "
-            "ORDER BY shift_date ASC, employee_name ASC",
-            (department, ds_lo, ds_hi),
+            "ORDER BY department ASC, shift_date ASC, employee_name ASC",
+            tuple(target_departments) + (ds_lo, ds_hi),
         ) or []
         plan_rows = db.execute_query(
-            "SELECT plan_date, content FROM shift_day_plan "
-            "WHERE department=%s AND plan_date >= %s AND plan_date <= %s "
-            "AND content IS NOT NULL AND TRIM(content) != '' ORDER BY plan_date ASC",
-            (department, ds_lo, ds_hi),
+            "SELECT department, plan_date, content FROM shift_day_plan "
+            f"WHERE department IN ({placeholders}) AND plan_date >= %s AND plan_date <= %s "
+            "AND content IS NOT NULL AND TRIM(content) != '' ORDER BY department ASC, plan_date ASC",
+            tuple(target_departments) + (ds_lo, ds_hi),
         ) or []
     except Exception as e:
         logger.warning("查询排班失败: %s", e)
@@ -1054,7 +1633,9 @@ def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[
     for r in rows:
         sd = r.get("shift_date")
         date_text = sd.strftime("%Y-%m-%d") if hasattr(sd, "strftime") else str(sd)[:10]
-        item = by_date.setdefault(date_text, {"date": date_text, "day": [], "night": [], "other": []})
+        row_dept = (r.get("department") or "").strip()
+        key = f"{row_dept}|{date_text}" if department == "__ALL__" else date_text
+        item = by_date.setdefault(key, {"date": date_text, "department": row_dept, "day": [], "night": [], "other": []})
         name = (r.get("employee_name") or "").strip()
         shift_type = (r.get("shift_type") or "").strip()
         location = (r.get("shift_location") or "").strip()
@@ -1073,20 +1654,23 @@ def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[
     for r in plan_rows:
         pd = r.get("plan_date")
         plans.append({
+            "department": (r.get("department") or "").strip(),
             "date": pd.strftime("%Y-%m-%d") if hasattr(pd, "strftime") else str(pd)[:10],
             "content": (r.get("content") or "").strip()[:300],
         })
 
     schedule = list(by_date.values())
+    department_label = "全部业务科室" if department == "__ALL__" else department
     return {
         "ok": True,
-        "department": department,
+        "department": department_label,
+        "departments": target_departments,
         "start_date": ds_lo,
         "end_date": ds_hi,
         "row_count": len(rows),
         "schedule": schedule,
         "plans": plans,
-        "message": f"查询到 {department} {ds_lo} 至 {ds_hi} 的排班记录 {len(rows)} 条、每日计划 {len(plans)} 条",
+        "message": f"查询到 {department_label} {ds_lo} 至 {ds_hi} 的排班记录 {len(rows)} 条、每日计划 {len(plans)} 条",
     }
 
 
@@ -1485,6 +2069,10 @@ SKILL_FUNCS = {
     "query_overtime": skill_query_overtime,
     "query_leave": skill_query_leave,
     "query_business_trip": skill_query_business_trip,
+    "query_business_trip_summary": skill_query_business_trip_summary,
+    "query_dept_comparison": skill_query_dept_comparison,
+    "query_person_ranking": skill_query_person_ranking,
+    "query_monthly_summary": skill_query_monthly_summary,
     "query_department": skill_query_department,
     "generate_report": skill_generate_report,
     "query_database": skill_query_database,
@@ -1499,6 +2087,10 @@ SKILL_LABELS = {
     "query_overtime": "加班记录查询",
     "query_leave": "请假记录查询",
     "query_business_trip": "公出记录查询",
+    "query_business_trip_summary": "公出汇总统计",
+    "query_dept_comparison": "科室横向对比",
+    "query_person_ranking": "人员排行统计",
+    "query_monthly_summary": "月度趋势汇总",
     "query_department": "部门人员查询",
     "generate_report": "生成报表下载",
     "query_database": "数据库智能查询",
@@ -1572,6 +2164,79 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "query_business_trip_summary",
+            "description": "汇总部门/科室公出情况与公出总天数。用户问“部门近三个月公出情况”“各科室公出天数”“某科室本月公出统计”等聚合问题时优先使用本工具，不要用 query_database 自己算天数。本工具按已审批通过记录、实际/预计时间兜底、查询区间裁剪、同一人重叠区间合并去重计算。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "科室名称或简称，如“智能室”“综合室”；不填时领导查全部门，普通员工查本人科室"},
+                    "scope": {"type": "string", "enum": ["all"], "description": "传 all 查询全部门公出汇总"},
+                    "months": {"type": "integer", "description": "最近几个月，默认3；例如近三个月传3"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；可替代 months"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；不填默认今天"},
+                    "trip_type": {"type": "string", "enum": ["市内公出", "境内公出", "境外公出"], "description": "可选，指定公出类型"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_dept_comparison",
+            "description": "科室横向对比统计。用户问各科室加班/请假/公出对比、人均对比、哪个科室最多、部门整体横向比较时使用。后端按统一口径计算，不要用 query_database 自行聚合。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
+                    "year": {"type": "integer", "description": "年份；默认当前年"},
+                    "month": {"type": "integer", "description": "月份1-12；不填为全年"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；可替代 year/month"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；可替代 year/month"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_person_ranking",
+            "description": "人员排行统计。用户问谁加班最多、谁请假最多、谁公出最多、前十名/排行榜时使用。后端按统一口径计算，不要用 query_database 自行排序。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "metric": {"type": "string", "enum": ["overtime", "leave", "trip", "business_trip"], "description": "排行指标：overtime=加班小时，leave=请假天数，trip/business_trip=公出天数"},
+                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
+                    "name": {"type": "string", "description": "可选，限定某个人；普通员工只能查本人"},
+                    "year": {"type": "integer", "description": "年份；默认当前年"},
+                    "month": {"type": "integer", "description": "月份1-12；不填为全年"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；可替代 year/month"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；可替代 year/month"},
+                    "limit": {"type": "integer", "description": "返回前 N 名，默认20，最多100"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_monthly_summary",
+            "description": "月度趋势汇总。用户问某人/某科室/全部门每月加班、请假、公出趋势，或要求画月度折线图时使用。后端按月计算并返回可直接用于 create_chart 的 chart_hint。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
+                    "name": {"type": "string", "description": "可选，员工姓名；普通员工只能查本人"},
+                    "year": {"type": "integer", "description": "年份；默认当前年"},
+                    "month": {"type": "integer", "description": "月份1-12；通常趋势不传 month"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；可替代 year/month"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；可替代 year/month"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_department",
             "description": "查询科室或全部门的在职人数与人员名单。用户问“我们科室多少人”时按当前科室查；问“全部门/全体/整个部门多少人”时必须传 scope='all'；问“某科室有哪些人”时传 lsys。该信息属公开信息，所有用户均可查询。",
             "parameters": {
@@ -1614,7 +2279,8 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "department": {"type": "string", "description": "科室名称或简称，如“智能室”“智能制造技术室”“综合室”。不填则用当前登录用户所在科室"},
+                    "department": {"type": "string", "description": "科室名称或简称，如“智能室”“智能制造技术室”“综合室”。不填时普通员工查本人科室，领导/部办查全部业务科室"},
+                    "scope": {"type": "string", "enum": ["all"], "description": "传 all 查询全部业务科室排班"},
                     "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；不填默认今天"},
                     "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；不填按 days 计算"},
                     "days": {"type": "integer", "description": "查询天数，默认14，最多31"},
@@ -1630,6 +2296,8 @@ TOOLS = [
                 "通用只读数据库查询。当用户的问题超出其他专用工具的能力范围时使用——"
                 "例如统计男女比例、各科室人数分布、按性别/职级/科室分组聚合、跨表统计等。"
                 "查询排班/值班/白班/夜班情况时优先使用 query_shift_schedule，不要用本工具猜排班字段。"
+                "查询部门/科室公出汇总和公出总天数时优先使用 query_business_trip_summary，不要用本工具自行计算公出天数。"
+                "查询科室横向对比、人员排行、月度趋势时优先使用 query_dept_comparison / query_person_ranking / query_monthly_summary。"
                 "你需要根据系统提供的表结构编写一条标准 MySQL SELECT 语句。"
                 "仅支持只读查询，不能修改数据；敏感字段（密码/身份证/邮箱授权码等）不可访问。"
                 "涉及具体个人的加班/请假/公出明细应优先使用对应的专用查询工具（受权限控制），"
@@ -1722,7 +2390,8 @@ TOOLS = [
                 "生成数据可视化图表（折线图/柱状图/饼图），输出 PNG 图片。"
                 "当用户要求画图、做趋势分析、数据对比、可视化统计结果时使用。"
                 "先通过 query_database / 查询类工具获取真实数据，再调用本工具绘图。"
-                "图表会在对话中直接展示预览，并支持下载。"
+                "图表会在对话中直接展示预览，并支持下载；下载地址只能由本工具返回的本地 /api/ai-assistant/download 生成。"
+                "禁止在正文里编造 via.placeholder.com、quickchart.io、image-charts.com 或任何外部图表/占位图链接。"
                 "若用户还要 Word/Excel 文档，可单独 create_document 并在 charts 参数中传入相同图表数据。"
             ),
             "parameters": {
@@ -1898,6 +2567,8 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
     return (
         "你是「智能制造工艺部 AI 助手」，服务于哈电智能制造工艺部门的集成办公平台。"
         "你可以整合系统数据库资源，帮助员工查询考勤、加班、请假、公出数据，统计部门人员，检索部门制度与工艺规范，并生成可下载的报表。\n\n"
+        + DEPARTMENT_KNOWLEDGE
+        + "\n\n"
         f"当前登录用户：{current_user or '未知'}；所在科室：{dept}；今天日期：{today}。\n"
         f"该用户的数据查询权限范围：{scope_text}。\n\n"
         "工作要求：\n"
@@ -1921,6 +2592,12 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "不要因摘要中没有逐条明细就编造或猜测。\n"
         "8. 严格遵守该用户的数据权限范围：若其权限不足以查询他人/其他科室数据，工具会返回"
         "“权限不足”，此时应礼貌告知用户其权限范围，不要尝试绕过。\n"
+        "8a. 用户询问部门/科室/近几个月的公出汇总、公出总天数、各科室公出对比时，"
+        "必须调用 query_business_trip_summary，并直接使用工具返回的 total_days、by_department、by_person。"
+        "不要用 query_database 返回明细后自行计算公出天数。\n"
+        "8b. 用户询问科室横向对比、人员排行、月度趋势、按月折线图、最多/最少/Top N 等统计问题时，"
+        "必须优先调用 query_dept_comparison、query_person_ranking 或 query_monthly_summary。"
+        "不要用 query_database 拉明细后让模型自己计算、排序或画趋势。\n"
         "9. 当问题超出专用工具的能力（如男女比例、各科室人数分布、按职级/性别分组统计、"
         "员工职级/邮箱/排班/节假日、工艺问题知识库检索等），调用 query_database 编写只读 SELECT 查询，"
         "严格依据下方表结构编写，禁止查询敏感字段；写不出合规 SQL 时如实说明。\n"
@@ -1936,6 +2613,8 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "    - 不要一看到“报表”二字就盲目导出加班报表；要先理解用户真正想要的内容主题。\n"
         "13. 当用户要求画图、趋势分析、数据可视化、折线图/柱状图/饼图时：\n"
         "    - 先用查询工具拿到真实数据，再调用 create_chart 生成 PNG 图表（对话中会直接展示预览）。\n"
+        "    - 图表文件必须由本系统本地生成，下载地址只能来自 create_chart 返回的 /api/ai-assistant/download 附件；"
+        "正文不要写任何外部图表链接、占位图链接或项目官网链接，尤其禁止 via.placeholder.com、quickchart.io、image-charts.com。\n"
         "    - 若用户还要 Word/Excel 文档且需要图表，create_document 的 charts 参数传入相同图表数据"
         "（Word 嵌入图片，Excel 在表格下方插入原生图表；Excel 需同时提供 columns/rows 表格数据）。\n"
         "    - 不要用 Markdown/ASCII 字符画折线代替真实图表。\n\n"
@@ -2142,9 +2821,12 @@ async def chat_stream(req: ChatRequest):
                     suppress_tool_markup = True
                 if suppress_tool_markup:
                     if piece:
+                        piece = _strip_external_chart_links(piece)
                         produced = True
                         yield _sse({"type": "chunk", "text": piece})
                     continue
+                if piece:
+                    piece = _strip_external_chart_links(piece)
                 if piece:
                     produced = True
                     yield _sse({"type": "chunk", "text": piece})
