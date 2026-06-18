@@ -332,9 +332,10 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
             )
         return out
 
-    if fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary"):
+    if fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary", "query_full_attendance"):
         for k in ("scope", "start_date", "end_date", "count", "message", "metric", "metric_label", "unit",
-                  "totals", "chart_hint"):
+                  "totals", "chart_hint", "year", "month", "workdays", "total_people", "full_count", "rate",
+                  "full_names"):
             if k in result:
                 out[k] = result[k]
         rows = result.get("rows") or []
@@ -343,6 +344,21 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
         else:
             out["rows_sample"] = rows[:LLM_TOOL_SAMPLE_ROWS]
             out["rows_count"] = len(rows)
+        return out
+
+    if fname == "query_work_intensity":
+        for k in ("scope", "year", "month", "start_date", "end_date", "effective_end_date", "range_mode",
+                  "formula", "workdays", "expected_hours_per_person", "total_people", "total_overtime_hours",
+                  "total_leave_hours", "total_actual_hours", "overall_intensity", "overtime_calc_method",
+                  "message", "person_count_total", "person_count_returned"):
+            if k in result:
+                out[k] = result[k]
+        by_dept = result.get("by_dept") or []
+        by_person = result.get("by_person") or []
+        out["by_dept"] = by_dept if _small_enough(len(by_dept)) else by_dept[:LLM_TOOL_SAMPLE_ROWS]
+        out["by_person"] = by_person if _small_enough(len(by_person)) else by_person[:LLM_TOOL_SAMPLE_ROWS]
+        if len(by_person) > LLM_TOOL_SAMPLE_ROWS:
+            out["_hint"] = f"人员明细共 {result.get('person_count_total', len(by_person))} 人，已附前 {len(out['by_person'])} 人。"
         return out
 
     if fname in ("query_overtime", "query_leave", "query_business_trip"):
@@ -1382,6 +1398,307 @@ def skill_query_monthly_summary(args: Dict[str, Any], current_user: str) -> Dict
     }
 
 
+def _statistics_module():
+    """延迟导入驾驶舱统计模块，避免应用启动阶段的循环导入。"""
+    try:
+        from routers import statistics as stats
+        return stats
+    except Exception:
+        from fastapi_backend.routers import statistics as stats
+        return stats
+
+
+def skill_query_full_attendance(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """满勤统计：复用管理驾驶舱 full-attendance 口径。"""
+    stats = _statistics_module()
+    today = datetime.now().date()
+    year = int(args.get("year") or today.year)
+    month_raw = args.get("month")
+    month = int(month_raw) if month_raw not in (None, "", 0) else None
+    if month is not None and not 1 <= month <= 12:
+        return {"ok": False, "message": "month 必须是 1-12。"}
+
+    err, dept, name_filter = _visible_scope_filter(
+        current_user,
+        args.get("department") or args.get("lsys") or "",
+        args.get("name") or "",
+    )
+    if err:
+        return {"ok": False, "message": err}
+
+    staff = _staff_rows_for_scope(dept=dept, name=name_filter)
+    names = [r["name"] for r in staff]
+    by_name_dept = {r["name"]: r["lsys"] for r in staff}
+    scope_label = name_filter or dept or "全部门"
+    if not names:
+        return {
+            "ok": True,
+            "scope": scope_label,
+            "year": year,
+            "month": month,
+            "total_people": 0,
+            "full_count": 0,
+            "rate": 0,
+            "rows": [],
+            "message": "未查询到符合权限范围的在职人员。",
+        }
+
+    def _month_result(m: int) -> Dict[str, Any]:
+        abnormal = stats._compute_abnormal_set(names, year, m)
+        full_names = sorted(n for n in names if n not in abnormal)
+        total = len(names)
+        full_count = len(full_names)
+        by_dept_acc: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"total_people": 0, "full_count": 0, "full_names": []})
+        for n in names:
+            d = by_name_dept.get(n, "")
+            by_dept_acc[d]["total_people"] += 1
+            if n not in abnormal:
+                by_dept_acc[d]["full_count"] += 1
+                by_dept_acc[d]["full_names"].append(n)
+        by_dept = []
+        for d, v in sorted(by_dept_acc.items()):
+            total_d = int(v["total_people"] or 0)
+            full_d = int(v["full_count"] or 0)
+            by_dept.append({
+                "lsys": d,
+                "total_people": total_d,
+                "full_count": full_d,
+                "rate": round(full_d / total_d, 4) if total_d else 0,
+                "full_names": sorted(v["full_names"]),
+            })
+        return {
+            "month": m,
+            "workdays": stats._count_workdays_in_month(year, m),
+            "total_people": total,
+            "full_count": full_count,
+            "rate": round(full_count / total, 4) if total else 0,
+            "full_names": full_names,
+            "by_dept": by_dept,
+        }
+
+    if month:
+        result = _month_result(month)
+        return {
+            "ok": True,
+            "scope": scope_label,
+            "year": year,
+            **result,
+            "rows": result["by_dept"],
+            "message": "满勤统计已按管理驾驶舱口径计算：当月考勤异常全部由已通过公出覆盖或无异常才算满勤。",
+        }
+
+    rows = []
+    for m in range(1, 13):
+        r = _month_result(m)
+        rows.append({
+            "month": m,
+            "total_people": r["total_people"],
+            "full_count": r["full_count"],
+            "rate": r["rate"],
+        })
+    return {
+        "ok": True,
+        "scope": scope_label,
+        "year": year,
+        "total_people": rows[-1]["total_people"] if rows else len(names),
+        "rows": rows,
+        "chart_hint": {
+            "labels": [f"{r['month']}月" for r in rows],
+            "series": [
+                {"name": "满勤人数", "values": [r["full_count"] for r in rows]},
+                {"name": "满勤率", "values": [round(r["rate"] * 100, 2) for r in rows]},
+            ],
+        },
+        "message": "全年满勤趋势已按管理驾驶舱口径逐月计算。",
+    }
+
+
+def skill_query_work_intensity(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """工作强度统计：复用管理驾驶舱 /leader/work-intensity 核心口径。"""
+    stats = _statistics_module()
+    today = datetime.now().date()
+    year = int(args.get("year") or today.year)
+    month_raw = args.get("month")
+    month = int(month_raw) if month_raw not in (None, "", 0) else None
+    if month is not None and not 1 <= month <= 12:
+        return {"ok": False, "message": "month 必须是 1-12。"}
+
+    req_dept = args.get("department") or args.get("lsys") or ""
+    req_dept = _resolve_shift_department(req_dept, current_user) if req_dept else ""
+    if req_dept == "__ALL__":
+        req_dept = ""
+    req_name = (args.get("name") or "").strip() or None
+    formula = (args.get("formula") or args.get("intensity_formula") or "a").strip().lower()
+    if formula not in ("a", "b", "c"):
+        formula = "a"
+    limit = max(1, min(int(args.get("limit") or 30), 100))
+
+    try:
+        scoped_lsys, scoped_name = stats._work_intensity_scope(current_user, req_dept or None, req_name)
+    except HTTPException as e:
+        return {"ok": False, "message": str(e.detail)}
+    except Exception as e:
+        return {"ok": False, "message": f"工作强度权限校验失败：{e}"}
+
+    date_from = (args.get("start_date") or args.get("date_from") or "").strip()
+    date_to = (args.get("end_date") or args.get("date_to") or "").strip()
+    hours_per_day = 8
+    range_meta: Dict[str, Any] = {}
+
+    try:
+        if date_from or date_to:
+            if not date_from or not date_to:
+                return {"ok": False, "message": "自定义日期范围需要同时提供 start_date/date_from 和 end_date/date_to。"}
+            ds = stats._parse_date(date_from)
+            de = stats._parse_date(date_to)
+            if not ds or not de:
+                return {"ok": False, "message": "日期格式无效，请使用 YYYY-MM-DD。"}
+            if de < ds:
+                ds, de = de, ds
+            effective_end = min(de, today)
+            workdays = stats._count_workdays_between(ds, effective_end) if ds <= effective_end else 0
+            expected_hours = workdays * hours_per_day
+            trip_map = stats._get_trip_days_by_person_range(ds, de, None)
+            ot_start, ot_end = ds, effective_end
+            leave_start, leave_end = ds, effective_end
+            range_meta = {"range_mode": True, "start_date": ds.isoformat(), "end_date": de.isoformat(), "effective_end_date": effective_end.isoformat()}
+        elif month:
+            if year == today.year and month == today.month:
+                workdays = stats._count_workdays_in_month_until(year, month, today.day)
+            else:
+                workdays = stats._count_workdays_in_month(year, month)
+            expected_hours = workdays * hours_per_day
+            trip_map = stats._get_trip_days_by_person(year, month, None)
+            month_first = date(year, month, 1)
+            month_last = date(year, month, calendar.monthrange(year, month)[1])
+            ot_start = month_first
+            ot_end = min(month_last, today) if year == today.year and month == today.month else month_last
+            leave_start, leave_end = month_first, month_last
+            range_meta = {"range_mode": False, "year": year, "month": month}
+        else:
+            if year == today.year:
+                workdays = sum(stats._count_workdays_in_month(year, m) for m in range(1, today.month))
+                workdays += stats._count_workdays_in_month_until(year, today.month, today.day)
+            else:
+                workdays = sum(stats._count_workdays_in_month(year, m) for m in range(1, 13))
+            expected_hours = workdays * hours_per_day
+            trip_map = stats._get_trip_days_by_person(year, None, None)
+            year_first = date(year, 1, 1)
+            year_last = date(year, 12, 31)
+            ot_start = year_first
+            ot_end = min(year_last, today) if year == today.year else year_last
+            leave_start, leave_end = year_first, ot_end
+            range_meta = {"range_mode": False, "year": year, "month": None}
+
+        staff = stats._get_staff_with_dept(None)
+        all_names = sorted({s["name"] for s in staff})
+        ot_raw = stats._leader_style_overtime_hours_from_attendance(all_names, ot_start, ot_end) if all_names else {}
+        ot_map = {n: round(float(ot_raw.get(n, 0.0)), 2) for n in all_names}
+
+        uses_leave_deduction = formula in ("b", "c")
+        if formula == "b":
+            leave_days_map = stats._get_leave_days_by_person_period(leave_start, leave_end, None)
+        elif formula == "c":
+            leave_days_map = stats._get_leave_days_by_person_period(
+                leave_start, leave_end, None, qjfs_allowlist=stats._WI_FORMULA_C_QJFS
+            )
+        else:
+            leave_days_map = {}
+
+        people = []
+        for s in staff:
+            name = s["name"]
+            dept = s["lsys"]
+            ot = float(ot_map.get(name, 0))
+            trip_days = float((trip_map.get(name) or {}).get("tripDays", 0))
+            trip_holiday_days = float((trip_map.get(name) or {}).get("holidayTripDays", 0))
+            actual_hours = expected_hours - trip_days * hours_per_day + trip_holiday_days * hours_per_day
+            leave_hours = float(leave_days_map.get(name, 0.0)) * hours_per_day if uses_leave_deduction else 0.0
+            net_ot = ot - leave_hours if uses_leave_deduction else ot
+            intensity = round(net_ot / actual_hours, 4) if actual_hours > 0 else 0
+            row = {
+                "name": name,
+                "lsys": dept,
+                "jb": s.get("jb") or "",
+                "overtime_hours": round(ot, 2),
+                "trip_days": round(trip_days, 2),
+                "trip_holiday_days": round(trip_holiday_days, 2),
+                "actual_hours": round(actual_hours, 2),
+                "intensity": intensity,
+            }
+            if uses_leave_deduction:
+                row["leave_hours"] = round(leave_hours, 2)
+            people.append(row)
+
+        people.sort(key=lambda x: (-x["intensity"], -x["actual_hours"], x["name"]))
+        for i, p in enumerate(people, 1):
+            p["rank"] = i
+
+        if scoped_name:
+            visible_people = [p for p in people if p["name"] == scoped_name]
+        elif scoped_lsys:
+            visible_people = [p for p in people if p["lsys"] == scoped_lsys]
+        else:
+            visible_people = people
+
+        dept_acc: Dict[str, Dict[str, float]] = defaultdict(lambda: {"count": 0, "ot": 0.0, "leave": 0.0, "trip": 0.0, "trip_holiday": 0.0})
+        for p in visible_people:
+            d = dept_acc[p["lsys"]]
+            d["count"] += 1
+            d["ot"] += float(p.get("overtime_hours") or 0)
+            d["leave"] += float(p.get("leave_hours") or 0)
+            d["trip"] += float(p.get("trip_days") or 0)
+            d["trip_holiday"] += float(p.get("trip_holiday_days") or 0)
+
+        by_dept = []
+        for dept_name, d in dept_acc.items():
+            actual = expected_hours * d["count"] - d["trip"] * hours_per_day + d["trip_holiday"] * hours_per_day
+            net_ot = d["ot"] - d["leave"] if uses_leave_deduction else d["ot"]
+            row = {
+                "lsys": dept_name,
+                "person_count": int(d["count"]),
+                "overtime_hours": round(d["ot"], 2),
+                "trip_days": round(d["trip"], 2),
+                "trip_holiday_days": round(d["trip_holiday"], 2),
+                "actual_hours": round(actual, 2),
+                "intensity": round(net_ot / actual, 4) if actual > 0 else 0,
+            }
+            if uses_leave_deduction:
+                row["leave_hours"] = round(d["leave"], 2)
+            by_dept.append(row)
+        by_dept.sort(key=lambda x: -x["intensity"])
+
+        total_ot = sum(float(p.get("overtime_hours") or 0) for p in visible_people)
+        total_leave = sum(float(p.get("leave_hours") or 0) for p in visible_people) if uses_leave_deduction else 0.0
+        total_trip = sum(float(p.get("trip_days") or 0) for p in visible_people)
+        total_trip_holiday = sum(float(p.get("trip_holiday_days") or 0) for p in visible_people)
+        total_actual = expected_hours * len(visible_people) - total_trip * hours_per_day + total_trip_holiday * hours_per_day
+        overall_intensity = round((total_ot - total_leave) / total_actual, 4) if total_actual > 0 else 0
+
+        return {
+            "ok": True,
+            **range_meta,
+            "scope": scoped_name or scoped_lsys or "全部门",
+            "formula": formula,
+            "workdays": workdays,
+            "expected_hours_per_person": expected_hours,
+            "total_people": len(visible_people),
+            "total_overtime_hours": round(total_ot, 2),
+            "total_leave_hours": round(total_leave, 2) if uses_leave_deduction else None,
+            "total_actual_hours": round(total_actual, 2),
+            "overall_intensity": overall_intensity,
+            "by_dept": by_dept,
+            "by_person": visible_people[:limit],
+            "person_count_returned": min(len(visible_people), limit),
+            "person_count_total": len(visible_people),
+            "overtime_calc_method": "attendance",
+            "message": "工作强度已按管理驾驶舱口径计算：加班来自打卡识别，实际在岗小时扣除公出并加回公出期间节假日。",
+        }
+    except Exception as e:
+        logger.exception("工作强度工具计算失败")
+        return {"ok": False, "message": f"工作强度统计失败：{e}"}
+
+
 def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
     """查询科室 / 全部门的在职人数与人员名单。
     - scope='all'：全部门全体人员；
@@ -2073,6 +2390,8 @@ SKILL_FUNCS = {
     "query_dept_comparison": skill_query_dept_comparison,
     "query_person_ranking": skill_query_person_ranking,
     "query_monthly_summary": skill_query_monthly_summary,
+    "query_full_attendance": skill_query_full_attendance,
+    "query_work_intensity": skill_query_work_intensity,
     "query_department": skill_query_department,
     "generate_report": skill_generate_report,
     "query_database": skill_query_database,
@@ -2091,6 +2410,8 @@ SKILL_LABELS = {
     "query_dept_comparison": "科室横向对比",
     "query_person_ranking": "人员排行统计",
     "query_monthly_summary": "月度趋势汇总",
+    "query_full_attendance": "满勤统计",
+    "query_work_intensity": "工作强度统计",
     "query_department": "部门人员查询",
     "generate_report": "生成报表下载",
     "query_database": "数据库智能查询",
@@ -2237,6 +2558,42 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "query_full_attendance",
+            "description": "满勤统计。用户问满勤率、满勤人数、满勤名单、哪个科室满勤多、全年/月度满勤趋势、某人某月是否满勤时使用。本工具复用管理驾驶舱满勤口径，不要用 query_database 自行判断。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
+                    "name": {"type": "string", "description": "可选，员工姓名；普通员工只能查本人"},
+                    "year": {"type": "integer", "description": "年份，默认当前年"},
+                    "month": {"type": "integer", "description": "月份1-12；不填时返回全年逐月满勤趋势"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_work_intensity",
+            "description": "工作强度统计。用户问工作强度、强度排名、哪个科室/人员负荷高、实际在岗小时、打卡识别加班、公式A/B/C强度时使用。本工具复用管理驾驶舱 work-intensity 口径，不要用 query_database 或大模型自行计算。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
+                    "name": {"type": "string", "description": "可选，员工姓名；普通员工只能查本人"},
+                    "year": {"type": "integer", "description": "年份，默认当前年"},
+                    "month": {"type": "integer", "description": "月份1-12；不填且未传日期范围时为全年"},
+                    "start_date": {"type": "string", "description": "可选，自定义开始日期 YYYY-MM-DD"},
+                    "end_date": {"type": "string", "description": "可选，自定义结束日期 YYYY-MM-DD"},
+                    "formula": {"type": "string", "enum": ["a", "b", "c"], "description": "工作强度口径：a=加班/实际在岗；b=(加班-全部请假小时)/实际在岗；c=(加班-主观请假小时)/实际在岗"},
+                    "limit": {"type": "integer", "description": "返回人员明细前 N 名，默认30，最大100"},
+                },
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_department",
             "description": "查询科室或全部门的在职人数与人员名单。用户问“我们科室多少人”时按当前科室查；问“全部门/全体/整个部门多少人”时必须传 scope='all'；问“某科室有哪些人”时传 lsys。该信息属公开信息，所有用户均可查询。",
             "parameters": {
@@ -2298,6 +2655,8 @@ TOOLS = [
                 "查询排班/值班/白班/夜班情况时优先使用 query_shift_schedule，不要用本工具猜排班字段。"
                 "查询部门/科室公出汇总和公出总天数时优先使用 query_business_trip_summary，不要用本工具自行计算公出天数。"
                 "查询科室横向对比、人员排行、月度趋势时优先使用 query_dept_comparison / query_person_ranking / query_monthly_summary。"
+                "查询满勤、满勤率、满勤名单时优先使用 query_full_attendance。"
+                "查询工作强度、实际在岗小时、打卡识别加班、强度排名时优先使用 query_work_intensity。"
                 "你需要根据系统提供的表结构编写一条标准 MySQL SELECT 语句。"
                 "仅支持只读查询，不能修改数据；敏感字段（密码/身份证/邮箱授权码等）不可访问。"
                 "涉及具体个人的加班/请假/公出明细应优先使用对应的专用查询工具（受权限控制），"
@@ -2598,6 +2957,10 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "8b. 用户询问科室横向对比、人员排行、月度趋势、按月折线图、最多/最少/Top N 等统计问题时，"
         "必须优先调用 query_dept_comparison、query_person_ranking 或 query_monthly_summary。"
         "不要用 query_database 拉明细后让模型自己计算、排序或画趋势。\n"
+        "8c. 用户询问满勤、满勤率、满勤人数、满勤名单、全年/月度满勤趋势时，"
+        "必须调用 query_full_attendance，不要用 query_database 自行判断考勤异常。\n"
+        "8d. 用户询问工作强度、负荷、强度排名、实际在岗小时、打卡识别加班、公式A/B/C时，"
+        "必须调用 query_work_intensity，不要用 query_database 拉考勤明细后让模型计算。\n"
         "9. 当问题超出专用工具的能力（如男女比例、各科室人数分布、按职级/性别分组统计、"
         "员工职级/邮箱/排班/节假日、工艺问题知识库检索等），调用 query_database 编写只读 SELECT 查询，"
         "严格依据下方表结构编写，禁止查询敏感字段；写不出合规 SQL 时如实说明。\n"
