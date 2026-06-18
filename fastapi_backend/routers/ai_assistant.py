@@ -148,8 +148,10 @@ LLM_TEMPERATURE_TOOL = 0.2              # 阶段1 工具规划
 LLM_TEMPERATURE_ANSWER = 0.4            # 阶段2 最终回答（本地模型）
 LLM_MAX_HISTORY_TURNS = 16              # 送入模型的最近消息条数（不含 system，约 8 轮问答）
 LLM_MAX_MESSAGE_CHARS = 6000            # 单条 user/assistant 正文最大字符（超出截断）
-LLM_MAX_TOOL_RESULT_CHARS = 10000       # 单个 tool 返回写入上下文的最大 JSON 字符
-LLM_TOOL_ROWS_FOR_MODEL = 40            # query_database 等写入上下文的明细行数上限
+LLM_MAX_TOOL_RESULT_CHARS = 12000       # 单个 tool 摘要 JSON 上限（摘要模式通常远小于此）
+LLM_TOOL_SAMPLE_ROWS = 10               # 给模型看的明细样本行数
+LLM_TOOL_SAMPLE_ROSTER = 12             # 给模型看的名单样本人数
+LLM_FULL_DETAIL_THRESHOLD = 25          # 低于此条数仍返回完整明细
 
 
 def _clean_text(s: Any) -> str:
@@ -196,59 +198,184 @@ def _sanitize_json_value(v: Any) -> Any:
     return _clean_text(str(v))
 
 
+def _aggregate_rows(rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """对查询结果中的数值列做简单聚合（供模型理解全貌，无需逐行明细）。"""
+    if not rows:
+        return {}
+    agg: Dict[str, Any] = {}
+    keys = list(rows[0].keys()) if isinstance(rows[0], dict) else []
+    for col in keys:
+        nums: List[float] = []
+        for r in rows:
+            if not isinstance(r, dict):
+                continue
+            v = r.get(col)
+            if v is None or v == "":
+                continue
+            try:
+                nums.append(float(v))
+            except (TypeError, ValueError):
+                continue
+        if len(nums) >= 2:
+            agg[col] = {
+                "sum": round(sum(nums), 2),
+                "avg": round(sum(nums) / len(nums), 2),
+                "min": round(min(nums), 2),
+                "max": round(max(nums), 2),
+                "count": len(nums),
+            }
+    return agg
+
+
+def _monthly_breakdown(records: List[Dict[str, Any]], date_keys: Tuple[str, ...] = ("date", "start", "timedate")) -> Dict[str, int]:
+    """按 YYYY-MM 统计记录条数。"""
+    counts: Dict[str, int] = {}
+    for r in records:
+        if not isinstance(r, dict):
+            continue
+        raw = ""
+        for k in date_keys:
+            if r.get(k):
+                raw = str(r[k])
+                break
+        key = raw[:7] if len(raw) >= 7 else raw
+        if key:
+            counts[key] = counts.get(key, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def _count_by_field(items: List[Dict[str, Any]], field: str) -> Dict[str, int]:
+    out: Dict[str, int] = {}
+    for it in items:
+        if not isinstance(it, dict):
+            continue
+        k = (it.get(field) or "未填").strip() or "未填"
+        out[k] = out.get(k, 0) + 1
+    return dict(sorted(out.items(), key=lambda x: (-x[1], x[0])))
+
+
+def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict[str, Any]] = None) -> Any:
+    """把工具原始结果转为「模型友好摘要」：保留统计/分布/样本，去掉大段明细。
+    完整数据仍可通过 generate_report / create_document / create_chart 重新查库导出，不影响业务质量。"""
+    if not isinstance(result, dict):
+        return result
+    if not result.get("ok", True):
+        return result
+
+    fargs = fargs or {}
+    out: Dict[str, Any] = {"ok": True, "_view": "summary"}
+
+    # 小结果 / 无明细：原样返回（对话质量无损）
+    def _small_enough(n: int) -> bool:
+        return n <= LLM_FULL_DETAIL_THRESHOLD
+
+    if fname == "query_department":
+        roster = result.get("roster") or []
+        total = int(result.get("total_count") or len(roster))
+        out.update({"lsys": result.get("lsys"), "total_count": total})
+        out["by_department"] = _count_by_field(roster, "lsys")
+        out["by_jb"] = _count_by_field(roster, "jb")
+        if any(isinstance(x, dict) and x.get("xbie") for x in roster):
+            out["by_gender"] = _count_by_field(roster, "xbie")
+        if _small_enough(total):
+            out["roster"] = roster
+            out["members"] = result.get("members") or [x.get("name") for x in roster]
+        else:
+            out["roster_sample"] = roster[:LLM_TOOL_SAMPLE_ROSTER]
+            out["_hint"] = (
+                f"共 {total} 人，已附各科室/职级汇总与 {len(out['roster_sample'])} 人样本。"
+                "若需完整名单：让用户指定科室(lsys)查询，或调用 generate_report/create_document 导出。"
+            )
+        return out
+
+    if fname == "query_database":
+        rows = result.get("rows") or []
+        total = int(result.get("row_count") or len(rows))
+        out.update({"sql": result.get("sql"), "row_count": total, "message": result.get("message")})
+        if _small_enough(total):
+            out["rows"] = rows
+        else:
+            out["columns"] = list(rows[0].keys()) if rows and isinstance(rows[0], dict) else []
+            out["sample_rows"] = rows[:LLM_TOOL_SAMPLE_ROWS]
+            out["aggregates"] = _aggregate_rows(rows)
+            out["_hint"] = (
+                f"共 {total} 行，已附 {len(out['sample_rows'])} 行样本与数值聚合。"
+                "回答统计/趋势/对比类问题请优先用 aggregates；"
+                "若需完整明细表格请 create_document 或缩小 SQL 范围。"
+            )
+        return out
+
+    if fname in ("query_overtime", "query_leave", "query_business_trip"):
+        for k in ("name", "year", "month", "total_hours", "total_days", "total_count", "by_type", "message"):
+            if k in result:
+                out[k] = result[k]
+        records = result.get("records") or []
+        n = len(records)
+        if _small_enough(n):
+            out["records"] = records
+        else:
+            out["records_sample"] = records[:LLM_TOOL_SAMPLE_ROWS]
+            out["monthly_breakdown"] = _monthly_breakdown(records)
+            out["_hint"] = f"共 {n} 条记录，已附样本与按月分布；导出完整明细请 generate_report。"
+        return out
+
+    if fname == "search_policy":
+        out["count"] = result.get("count", 0)
+        out["results"] = (result.get("results") or [])[:5]
+        return out
+
+    # 下载/图表类：只保留状态，URL 已在 attachment 事件里
+    if fname in ("generate_report", "create_document", "create_chart"):
+        out.update({k: result[k] for k in ("message", "label", "filename", "chart_type") if k in result})
+        if result.get("download_url"):
+            out["download_url"] = "(已生成，见对话附件)"
+        return out
+
+    # 其他技能：保留主要字段，去掉可能很大的嵌套列表
+    for k, v in result.items():
+        if k in ("rows", "roster", "members", "records", "results") and isinstance(v, list) and len(v) > LLM_FULL_DETAIL_THRESHOLD:
+            out[f"{k}_sample"] = v[:LLM_TOOL_SAMPLE_ROWS]
+            out[f"{k}_count"] = len(v)
+        elif k not in ("preview_url",):
+            out[k] = v
+    return out
+
+
 def _compact_tool_result(result: Any) -> Any:
-    """压缩工具返回，避免领导账号查全部门时把超大 JSON 塞进模型上下文。"""
+    """兜底压缩（智能摘要后仍超长时使用）。"""
     if not isinstance(result, dict):
         return result
     out = dict(result)
-
-    rows = out.get("rows")
-    if isinstance(rows, list) and len(rows) > LLM_TOOL_ROWS_FOR_MODEL:
-        total = len(rows)
-        out["rows"] = rows[:LLM_TOOL_ROWS_FOR_MODEL]
-        out["_note"] = f"明细仅展示前 {LLM_TOOL_ROWS_FOR_MODEL} 行，共 {total} 行"
-
-    roster = out.get("roster")
-    if isinstance(roster, list) and len(roster) > 60:
-        total = len(roster)
-        out["roster"] = roster[:60]
-        out["_roster_note"] = f"名单仅展示前 60 人，共 {total} 人"
-
-    members = out.get("members")
-    if isinstance(members, list) and len(members) > 80:
-        out["members"] = members[:80]
-        out["_members_note"] = f"姓名仅展示前 80 个，共 {len(members)} 人"
-
-    records = out.get("records")
-    if isinstance(records, list) and len(records) > 25:
-        total = len(records)
-        out["records"] = records[:25]
-        out["_records_note"] = f"记录仅展示前 25 条，共 {total} 条"
-
-    results = out.get("results")
-    if isinstance(results, list):
-        for item in results:
-            if isinstance(item, dict) and "snippet" in item:
-                item["snippet"] = _clean_text(item.get("snippet") or "")[:200]
-
+    for key, cap in (("rows", LLM_TOOL_SAMPLE_ROWS), ("roster", LLM_TOOL_SAMPLE_ROSTER),
+                     ("records", LLM_TOOL_SAMPLE_ROWS), ("members", 30)):
+        arr = out.get(key)
+        if isinstance(arr, list) and len(arr) > cap:
+            out[key] = arr[:cap]
+            out[f"_{key}_note"] = f"共 {len(arr)} 条，已截为 {cap} 条"
     if out.get("download_url"):
         out["download_url"] = "(已生成，见对话附件)"
     out.pop("preview_url", None)
     return out
 
 
-def _safe_json_dumps(obj: Any, max_chars: int = LLM_MAX_TOOL_RESULT_CHARS) -> str:
-    """strict JSON 序列化 + 长度截断（allow_nan=False 避免网关报 JSON decode error）。"""
-    cleaned = _sanitize_json_value(_compact_tool_result(obj))
+def _tool_result_json_for_llm(fname: str, result: Any, fargs: Optional[Dict[str, Any]] = None,
+                               max_chars: int = LLM_MAX_TOOL_RESULT_CHARS) -> str:
+    """先智能摘要 → 再 strict JSON 序列化（保证网关可解析且信息密度高）。"""
+    summarized = _summarize_tool_result_for_llm(fname, result, fargs)
+    cleaned = _sanitize_json_value(_compact_tool_result(summarized))
     try:
         text = json.dumps(cleaned, ensure_ascii=False, allow_nan=False)
     except (TypeError, ValueError) as e:
-        logger.warning("工具结果 JSON 序列化失败，降级为摘要: %s", e)
-        text = json.dumps({"ok": False, "message": "工具结果过大或含非法数据，已省略明细"}, ensure_ascii=False)
+        logger.warning("工具结果 JSON 序列化失败: %s", e)
+        text = json.dumps({"ok": False, "message": "工具结果序列化失败"}, ensure_ascii=False)
     if len(text) > max_chars:
-        summary: Dict[str, Any] = {"_truncated": True, "_note": f"工具返回约 {len(text)} 字符，已截断；请缩小查询或做聚合统计"}
+        summary: Dict[str, Any] = {
+            "_truncated": True,
+            "_note": "摘要仍过长，已保留关键统计；请缩小查询或用导出工具获取完整数据",
+        }
         if isinstance(cleaned, dict):
-            for k in ("ok", "message", "total_count", "row_count", "count", "sql", "lsys"):
+            for k in ("ok", "message", "total_count", "row_count", "count", "sql", "lsys",
+                      "by_department", "by_jb", "by_gender", "aggregates", "monthly_breakdown", "_hint"):
                 if k in cleaned:
                     summary[k] = cleaned[k]
         text = json.dumps(summary, ensure_ascii=False, allow_nan=False)
@@ -256,7 +383,7 @@ def _safe_json_dumps(obj: Any, max_chars: int = LLM_MAX_TOOL_RESULT_CHARS) -> st
 
 
 def _trim_chat_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """保留 system + 最近若干轮 user/assistant，防止多轮对话撑爆上下文。"""
+    """保留 system + 最近若干轮对话；用户问题尽量完整保留，仅压缩过长的 assistant 回复。"""
     if not history:
         return history
     system = history[0] if history[0].get("role") == "system" else None
@@ -265,12 +392,20 @@ def _trim_chat_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         rest = rest[-LLM_MAX_HISTORY_TURNS:]
     out = ([system] if system else []) + rest
     for msg in out:
-        if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
-            c = _clean_text(msg["content"])
-            if len(c) > LLM_MAX_MESSAGE_CHARS:
-                msg["content"] = c[: LLM_MAX_MESSAGE_CHARS - 20] + "\n…（上文已截断）"
+        if not isinstance(msg.get("content"), str):
+            continue
+        c = _clean_text(msg["content"])
+        role = msg.get("role")
+        limit = LLM_MAX_MESSAGE_CHARS if role == "assistant" else LLM_MAX_MESSAGE_CHARS + 2000
+        if len(c) > limit:
+            if role == "assistant":
+                # 保留开头结论 + 结尾，中间省略
+                head, tail = limit // 2 - 30, limit // 2 - 30
+                msg["content"] = c[:head] + "\n…（中间回复已压缩，关键数据以本轮工具结果为准）…\n" + c[-tail:]
             else:
-                msg["content"] = c
+                msg["content"] = c[: limit - 20] + "…"
+        else:
+            msg["content"] = c
     return out
 
 
@@ -644,7 +779,7 @@ def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str,
     lsys = (args.get("lsys") or "").strip()
 
     base = (
-        "SELECT name, jb, lsys FROM yggl WHERE name IS NOT NULL AND name != '' "
+        "SELECT name, jb, lsys, xbie FROM yggl WHERE name IS NOT NULL AND name != '' "
         "AND RIGHT(TRIM(name),1) != '1' AND RIGHT(TRIM(lsys),1) != '1' "
         "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0)"
     )
@@ -666,7 +801,8 @@ def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str,
     roster = [
         {"name": (r.get("name") or "").strip(),
          "jb": (r.get("jb") or "").strip(),
-         "lsys": (r.get("lsys") or "").strip()}
+         "lsys": (r.get("lsys") or "").strip(),
+         "xbie": (r.get("xbie") or "").strip()}
         for r in (rows or []) if r.get("name")
     ]
     names = [x["name"] for x in roster]
@@ -844,17 +980,20 @@ def _render_chart_png(fp: Path, spec: Dict[str, Any]) -> None:
     import matplotlib
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from utils.chart_font import configure_matplotlib_cjk, get_cjk_font_properties
 
-    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
-    plt.rcParams["axes.unicode_minus"] = False
+    configure_matplotlib_cjk()
+    cjk_font = get_cjk_font_properties()
+    text_kw = {"fontproperties": cjk_font} if cjk_font else {}
 
     chart_type, labels, series, title, x_label, y_label = _parse_chart_spec(spec)
     fig, ax = plt.subplots(figsize=(8.5, 4.8), dpi=120)
 
     if chart_type == "pie":
         vals = series[0]["values"]
-        ax.pie(vals, labels=labels, autopct="%1.1f%%", startangle=90, textprops={"fontsize": 10})
-        ax.set_title(title, fontsize=14, fontweight="bold")
+        pie_text = {**text_kw, "fontsize": 10}
+        ax.pie(vals, labels=labels, autopct="%1.1f%%", startangle=90, textprops=pie_text)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
     elif chart_type == "bar":
         x_idx = list(range(len(labels)))
         n_series = len(series)
@@ -864,28 +1003,31 @@ def _render_chart_png(fp: Path, spec: Dict[str, Any]) -> None:
             xs = [xi + offset for xi in x_idx]
             ax.bar(xs, s["values"], width=width, label=s["name"])
         ax.set_xticks(x_idx)
-        ax.set_xticklabels(labels, rotation=25 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
+        ax.set_xticklabels(labels, rotation=25 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center", **text_kw)
         if n_series > 1:
-            ax.legend(loc="best", fontsize=9)
-        ax.set_title(title, fontsize=14, fontweight="bold")
+            ax.legend(loc="best", fontsize=9, prop=cjk_font)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
         if x_label:
-            ax.set_xlabel(x_label)
+            ax.set_xlabel(x_label, **text_kw)
         if y_label:
-            ax.set_ylabel(y_label)
+            ax.set_ylabel(y_label, **text_kw)
         ax.grid(True, axis="y", alpha=0.3)
     else:  # line
         for s in series:
             ax.plot(labels, s["values"], marker="o", linewidth=2, markersize=5, label=s["name"])
         if len(series) > 1:
-            ax.legend(loc="best", fontsize=9)
-        ax.set_title(title, fontsize=14, fontweight="bold")
+            ax.legend(loc="best", fontsize=9, prop=cjk_font)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
         if x_label:
-            ax.set_xlabel(x_label)
+            ax.set_xlabel(x_label, **text_kw)
         if y_label:
-            ax.set_ylabel(y_label)
+            ax.set_ylabel(y_label, **text_kw)
         ax.grid(True, alpha=0.3)
         if len(labels) > 6:
-            plt.setp(ax.get_xticklabels(), rotation=25, ha="right")
+            plt.setp(ax.get_xticklabels(), rotation=25, ha="right", **text_kw)
+        elif cjk_font:
+            for lbl in ax.get_xticklabels() + ax.get_yticklabels():
+                lbl.set_fontproperties(cjk_font)
 
     fig.tight_layout()
     fig.savefig(fp, format="png", bbox_inches="tight")
@@ -1577,6 +1719,10 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "5. 引用制度检索结果时注明制度标题，并基于检索到的片段作答，避免脱离原文。\n"
         "6. 回答使用 Markdown（标题、列表、表格、加粗）让结构清晰美观。\n"
         "7. 工具返回无数据时，如实说明未查询到相关记录，不要编造。\n"
+        "7a. 工具返回可能是「摘要视图」（含 total_count、by_department、by_jb、by_gender、aggregates、"
+        "sample_rows 等汇总字段，而非完整明细）。回答统计/分布/对比类问题时，优先依据这些汇总数字作答；"
+        "若用户需要完整名单或明细表格，应调用 generate_report / create_document / create_chart 重新导出，"
+        "不要因摘要中没有逐条明细就编造或猜测。\n"
         "8. 严格遵守该用户的数据权限范围：若其权限不足以查询他人/其他科室数据，工具会返回"
         "“权限不足”，此时应礼貌告知用户其权限范围，不要尝试绕过。\n"
         "9. 当问题超出专用工具的能力（如男女比例、各科室人数分布、按职级/性别分组统计、"
@@ -1754,7 +1900,7 @@ async def chat_stream(req: ChatRequest):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id or f"call_{i}",
-                        "content": _safe_json_dumps(result),
+                        "content": _tool_result_json_for_llm(fname, result, fargs),
                     })
         except Exception as e:
             logger.error(f"AI 助手工具调用失败({provider}): {e}")

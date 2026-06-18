@@ -13,12 +13,14 @@ import hashlib
 from collections import defaultdict
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
+from email.mime.image import MIMEImage
 from email.mime.base import MIMEBase
 from email import encoders
 from email.header import Header
 from typing import Optional, List, Dict
 from io import BytesIO
 from datetime import datetime, date, timedelta
+from pathlib import Path
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -31,6 +33,8 @@ router = APIRouter(prefix="/email", tags=["邮件发送"])
 
 SMTP_SERVER = "smtp.qiye.163.com"
 SMTP_PORT_SSL = 465
+SHIFT_COMPLAINT_QR_CID = "shift_complaint_qr"
+SHIFT_COMPLAINT_QR_PATH = Path(__file__).resolve().parent.parent / "scripts" / "投诉码.png"
 
 
 def _get_admin1() -> Optional[str]:
@@ -145,9 +149,10 @@ async def update_email_config(req: UpdateEmailConfigRequest):
 
 def _build_email_message(sender: str, recipients: List[str], cc_list: List[str],
                          subject: str, content: str, content_type: str,
-                         attachments: Optional[List[AttachmentItem]] = None) -> MIMEMultipart:
+                         attachments: Optional[List[AttachmentItem]] = None,
+                         inline_images: Optional[List[dict]] = None) -> MIMEMultipart:
     """构建支持抄送和附件的邮件消息"""
-    msg = MIMEMultipart()
+    msg = MIMEMultipart("mixed")
     msg["From"] = sender
     msg["To"] = ", ".join(recipients)
     if cc_list:
@@ -155,7 +160,27 @@ def _build_email_message(sender: str, recipients: List[str], cc_list: List[str],
     msg["Subject"] = Header(subject, "utf-8")
 
     body = MIMEText(content, content_type, "utf-8")
-    msg.attach(body)
+    related = None
+    if inline_images:
+        related = MIMEMultipart("related")
+        related.attach(body)
+        msg.attach(related)
+    else:
+        msg.attach(body)
+
+    if inline_images:
+        for item in inline_images:
+            try:
+                cid = (item.get("cid") or "").strip()
+                if not cid:
+                    continue
+                image_data = base64.b64decode(item.get("content_base64") or "")
+                part = MIMEImage(image_data)
+                part.add_header("Content-ID", f"<{cid}>")
+                part.add_header("Content-Disposition", "inline", filename=("utf-8", "", item.get("filename") or "image.png"))
+                related.attach(part)
+            except Exception as e:
+                logger.warning(f"内嵌图片 {item.get('filename') if isinstance(item, dict) else ''} 编码失败: {e}")
 
     if attachments:
         for att in attachments:
@@ -1488,16 +1513,62 @@ def _shift_recipient_units(config_recipients: List[dict], leaders: List[dict]) -
     return units
 
 
+def _shift_schedule_inline_images() -> List[dict]:
+    if not SHIFT_COMPLAINT_QR_PATH.exists():
+        logger.warning("[ShiftScheduleEmail] 投诉二维码不存在: %s", SHIFT_COMPLAINT_QR_PATH)
+        return []
+    try:
+        return [{
+            "cid": SHIFT_COMPLAINT_QR_CID,
+            "filename": SHIFT_COMPLAINT_QR_PATH.name,
+            "content_base64": base64.b64encode(SHIFT_COMPLAINT_QR_PATH.read_bytes()).decode("utf-8"),
+        }]
+    except Exception as e:
+        logger.warning("[ShiftScheduleEmail] 读取投诉二维码失败: %s", e)
+        return []
+
+
+def _shift_schedule_footer_html() -> str:
+    qr_html = ""
+    if SHIFT_COMPLAINT_QR_PATH.exists():
+        qr_html = (
+            f'<p style="margin:12px 0 4px;">'
+            f'<img src="cid:{SHIFT_COMPLAINT_QR_CID}" alt="投诉二维码" '
+            f'style="width:132px;height:132px;display:block;border:0;" />'
+            f"</p>"
+        )
+    return (
+        "<p>如后续排班有调整，我会根据系统设置及时更新并发送邮件通知您。</p>"
+        "<p>感谢您对智能制造工艺部一如既往的支持。</p>"
+        "<p>邮件最后附投诉二维码。如您对生产服务工作有意见建议，请随时扫码告诉我们，"
+        "我们会“码上办理”，一定让您满意。</p>"
+        f"{qr_html}"
+        "<p style=\"color:#64748b;font-size:12px;\">"
+        "（本邮件为公共邮箱自动发送，有事请联系具体负责人，不要回邮件哦~）"
+        "</p>"
+    )
+
+
+def _build_shift_schedule_intro_html(dept_names: str, week_start: date, week_end: date) -> str:
+    return (
+        "<p>各位领导、同事：</p>"
+        "<p>您好！</p>"
+        "<p>我是智能制造工艺部AI办公小助手，"
+        f"已为您整理好本周{dept_names}的值班排班表"
+        f"（{week_start.month}月{week_start.day}日至{week_end.month}月{week_end.day}日），"
+        "并附电话号码，便于您开展各项生产准备工作。"
+        "详细排班见下表，附件中同步提供对应周排班表电子表格文件，方便您留存和转发。</p>"
+    )
+
+
 def _build_shift_schedule_email_body(report: dict) -> str:
     week_start = report["week_start"]
     week_end = report["week_end"]
     return (
-        "<p>各位领导、同事好：</p>"
-        f"<p>已为大家整理好{report['department']} {week_start.month}月{week_start.day}日"
-        f"至{week_end.month}月{week_end.day}日周排班计划，便于各项生产服务保障工作提前衔接、顺畅开展。"
-        "详细排班见下表，附件中同步提供周排班表，方便留存和转发。</p>"
-        "<p>如后续排班有调整，系统会自动更新并发送邮件。感谢大家的配合与支持。</p>"
+        _build_shift_schedule_intro_html(report["department"], week_start, week_end)
+        +
         f"{report['html_table']}"
+        f"{_shift_schedule_footer_html()}"
     )
 
 
@@ -1513,12 +1584,10 @@ def _build_merged_shift_schedule_subject(reports: List[dict], unit: str) -> str:
 
 def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
     dept_names = "、".join(r["department"] for r in reports)
+    week_start_min = min(r["week_start"] for r in reports)
+    week_end_max = max(r["week_end"] for r in reports)
     parts = [
-        "<p>各位领导、同事好：</p>",
-        f"<p>已为大家整理好本次向<strong>{unit}</strong>发送的周排班计划，"
-        f"包含<strong>{dept_names}</strong>共 {len(reports)} 个科室排班表，"
-        "便于各项生产服务保障工作提前衔接、顺畅开展。详细排班见下表，附件中同步提供对应周排班表，方便留存和转发。</p>",
-        "<p>如后续排班有调整，系统会自动更新并发送邮件。感谢大家的配合与支持。</p>",
+        _build_shift_schedule_intro_html(dept_names, week_start_min, week_end_max),
     ]
     for report in reports:
         week_start = report["week_start"]
@@ -1528,6 +1597,7 @@ def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
             f"{week_start.month}月{week_start.day}日至{week_end.month}月{week_end.day}日：</p>"
             f"{report['html_table']}"
         )
+    parts.append(_shift_schedule_footer_html())
     return "".join(parts)
 
 
@@ -1711,7 +1781,16 @@ async def _run_shift_schedule_email_once_locked(
             if len(reports) == 1
             else _build_merged_shift_schedule_body(reports, unit)
         )
-        msg = _build_email_message(sender_addr, to_emails, cc_emails, subject, body, "html", attachments)
+        msg = _build_email_message(
+            sender_addr,
+            to_emails,
+            cc_emails,
+            subject,
+            body,
+            "html",
+            attachments,
+            inline_images=_shift_schedule_inline_images(),
+        )
         all_recipients = list(set(to_emails + cc_emails))
         try:
             success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])

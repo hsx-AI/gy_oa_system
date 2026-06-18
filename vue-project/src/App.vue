@@ -492,6 +492,9 @@
       </div>
     </div>
 
+    <!-- AI 助手全局悬浮气泡（公测权限内、非登录页、非全屏对话页） -->
+    <AiAssistantFab v-if="showNav && canUseAi && route.path !== '/ai-assistant'" />
+
     <!-- 更新通知弹窗（支持多条未读） -->
     <div v-if="showNotificationModal" class="notification-modal-overlay" @click.self="closeNotificationModal">
       <div class="notification-modal">
@@ -523,6 +526,7 @@ import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
+import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
 
 const route = useRoute()
 const router = useRouter()

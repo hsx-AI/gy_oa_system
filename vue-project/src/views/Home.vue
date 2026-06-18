@@ -1003,8 +1003,6 @@
       </div>
     </div>
 
-    <!-- AI 助手悬浮气泡（公测：智能制造技术室全员 + 公司经理/副经理/经理助理） -->
-    <AiAssistantFab v-if="canUseAi" />
   </div>
 </template>
 
@@ -1027,8 +1025,7 @@ import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
@@ -1052,8 +1049,6 @@ const canAccessInboxBoard = computed(() => {
   return isMinisterOrDeptLeader(jb)
 })
 
-// AI 助手公测开放范围：智能制造技术室全员 + 公司经理/副经理/经理助理
-const canUseAi = computed(() => canUseAiAssistant({ jb: userJb.value, lsys: userLsys.value }))
 const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
 const inboxTaskLoading = ref(false)
