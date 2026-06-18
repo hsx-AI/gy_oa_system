@@ -164,6 +164,8 @@ def _resolve_llm() -> dict:
     deepseek_key = ""
     local_base_url = DEFAULT_LOCAL_BASE_URL
     local_model = DEFAULT_LOCAL_MODEL
+    local_api_key = ""        # 本地模型鉴权 token（如 DeepSeek-V4 网关的 JWT）；空则用占位 "ollama"
+    local_use_extra = True    # True=Ollama 本地（带 enable_thinking）；False=OpenAI 兼容网关
 
     # deepseek_api_key 以 webconfig 为准（数据库为唯一开关）
     try:
@@ -184,6 +186,17 @@ def _resolve_llm() -> dict:
     except Exception as e:
         logger.debug(f"读取 webconfig 本地大模型配置失败: {e}")
 
+    # 本地模型鉴权 token 与接口类型（新列，旧库可能尚未创建，单独 try 容错）
+    try:
+        rows = db.execute_query("SELECT llm_api_key, llm_use_extra FROM webconfig WHERE id=%s LIMIT 1", ("1",))
+        if rows:
+            local_api_key = (rows[0].get("llm_api_key") or "").strip()
+            v = rows[0].get("llm_use_extra")
+            if v is not None:
+                local_use_extra = bool(int(v))
+    except Exception as e:
+        logger.debug(f"读取 webconfig 本地模型鉴权/接口类型失败（可能为旧库无此列）: {e}")
+
     if deepseek_key:
         cfg = {
             "provider": "deepseek",
@@ -197,8 +210,8 @@ def _resolve_llm() -> dict:
             "provider": "local",
             "base_url": _normalize_llm_base_url(local_base_url),
             "model": local_model,
-            "api_key": "ollama",
-            "use_extra": True,
+            "api_key": local_api_key or "ollama",
+            "use_extra": local_use_extra,
         }
 
     log_line = f"{cfg['provider']} | {cfg['model']} | {cfg['base_url']}"

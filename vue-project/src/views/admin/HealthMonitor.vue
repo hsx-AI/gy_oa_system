@@ -65,6 +65,8 @@
                   <div class="llm-model-line">
                     <span class="llm-model-name">{{ m.name }}</span>
                     <span v-if="m.is_active" class="llm-model-badge">当前选中</span>
+                    <span class="llm-model-tag">{{ m.use_extra ? 'Ollama 本地' : 'OpenAI 兼容网关' }}</span>
+                    <span v-if="m.has_key" class="llm-model-tag llm-model-tag--key">需鉴权 {{ m.key_masked }}</span>
                   </div>
                   <span class="llm-model-meta">{{ m.model }} · {{ m.base_url }}</span>
                 </div>
@@ -76,11 +78,16 @@
             </div>
 
             <h3 class="email-settings-title">添加本地模型</h3>
-            <div class="llm-add-row">
-              <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 本地 Qwen3-8B">
-              <input v-model.trim="newModel.base_url" type="text" class="recipient-input recipient-input-email" placeholder="base_url，如 http://127.0.0.1:11434/v1">
-              <input v-model.trim="newModel.model" type="text" class="recipient-input" placeholder="模型名，如 qwen3:8b">
-              <button type="button" class="btn btn-primary btn-sm" :disabled="llmSaving" @click="addModel">添加</button>
+            <div class="llm-add-grid">
+              <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 本地 DeepSeek-V4">
+              <input v-model.trim="newModel.model" type="text" class="recipient-input" placeholder="模型名，如 DeepSeek-V4">
+              <select v-model="newModel.use_extra" class="recipient-select llm-add-wide">
+                <option :value="true">接口类型：Ollama 本地（带 enable_thinking 参数）</option>
+                <option :value="false">接口类型：OpenAI 兼容网关（如本地 DeepSeek-V4）</option>
+              </select>
+              <input v-model.trim="newModel.base_url" type="text" class="recipient-input llm-add-wide" placeholder="base_url，如 http://10.3.26.243:30080/prod-api/api_ability/202605212224_v1/v1">
+              <input v-model.trim="newModel.api_key" type="password" autocomplete="new-password" class="recipient-input llm-add-wide" placeholder="鉴权 Token（Ollama 可留空；DeepSeek-V4 填 JWT）">
+              <button type="button" class="btn btn-primary btn-sm llm-add-btn" :disabled="llmSaving" @click="addModel">添加模型</button>
             </div>
 
             <p v-if="llmMessage" class="config-message">{{ llmMessage }}</p>
@@ -326,7 +333,7 @@ const llmConfig = ref({
   models: [],
 })
 const deepseekKeyInput = ref('')
-const newModel = ref({ name: '', base_url: '', model: '' })
+const newModel = ref({ name: '', base_url: '', model: '', api_key: '', use_extra: true })
 
 function currentName() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
@@ -777,8 +784,10 @@ async function addModel() {
       name: newModel.value.name,
       base_url: newModel.value.base_url,
       model: newModel.value.model,
+      api_key: newModel.value.api_key,
+      use_extra: newModel.value.use_extra,
     })
-    newModel.value = { name: '', base_url: '', model: '' }
+    newModel.value = { name: '', base_url: '', model: '', api_key: '', use_extra: true }
     llmMessage.value = res?.message || '已添加'
     await fetchLlmConfig()
   } catch (e) {
@@ -1273,16 +1282,42 @@ onMounted(async () => {
   color: var(--color-text-tertiary);
   word-break: break-all;
 }
+.llm-model-tag {
+  font-size: 0.72rem;
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: #eef2ff;
+  color: #4338ca;
+}
+.llm-model-tag--key {
+  background: #fef3c7;
+  color: #92400e;
+}
 .llm-model-ops {
   display: flex;
   align-items: center;
   gap: 8px;
 }
-.llm-add-row {
-  display: flex;
-  align-items: center;
+.llm-add-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
   gap: 8px;
-  flex-wrap: wrap;
+  align-items: center;
+}
+.llm-add-wide {
+  grid-column: 1 / -1;
+}
+.llm-add-btn {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+@media (max-width: 640px) {
+  .llm-add-grid {
+    grid-template-columns: 1fr;
+  }
+  .llm-add-btn {
+    justify-self: stretch;
+  }
 }
 .status-grid {
   display: grid;

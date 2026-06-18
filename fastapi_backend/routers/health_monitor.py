@@ -63,6 +63,8 @@ class LlmModelRequest(BaseModel):
     name: str
     base_url: str
     model: str
+    api_key: str = ""
+    use_extra: bool = True
 
 
 class ActivateRequest(BaseModel):
@@ -419,8 +421,29 @@ async def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
 
 # ==================== 大模型配置（DeepSeek 开关 + 多本地模型管理） ====================
 
+def _ensure_column(table: str, column: str, ddl: str) -> None:
+    """幂等地为表补列（不同环境的库可能缺列）。"""
+    try:
+        rows = db.execute_query(
+            "SELECT COUNT(*) AS c FROM information_schema.columns "
+            "WHERE table_schema = DATABASE() AND table_name = %s AND column_name = %s",
+            (table, column),
+        )
+        if rows and rows[0].get("c"):
+            return
+        db.execute_update(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+        logger.info("已为 %s 增加列 %s", table, column)
+    except Exception as e:
+        logger.warning("确保列 %s.%s 失败: %s", table, column, e)
+
+
 def _ensure_llm_models_table() -> None:
-    """确保本地大模型候选表存在。"""
+    """确保本地大模型候选表存在，并为新增能力补齐字段。
+
+    api_key   : 鉴权 token（如 DeepSeek-V4 网关的 JWT；Ollama 留空即可）
+    use_extra : 是否附带 Ollama/qwen 专用的 enable_thinking 参数
+                （1=Ollama 本地；0=OpenAI 兼容网关，如本地 DeepSeek-V4）
+    """
     db.execute_update(
         """
         CREATE TABLE IF NOT EXISTS llm_models (
@@ -428,11 +451,19 @@ def _ensure_llm_models_table() -> None:
             name VARCHAR(100) NOT NULL,
             base_url VARCHAR(512) NOT NULL,
             model VARCHAR(128) NOT NULL,
+            api_key TEXT NULL,
+            use_extra TINYINT NOT NULL DEFAULT 1,
             is_active TINYINT NOT NULL DEFAULT 0,
             created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """
     )
+    # 兼容已存在的旧表 / 不同环境的库
+    _ensure_column("llm_models", "api_key", "TEXT NULL")
+    _ensure_column("llm_models", "use_extra", "TINYINT NOT NULL DEFAULT 1")
+    # 当前生效本地模型的鉴权与接口类型（写入 webconfig，供 _resolve_llm 读取）
+    _ensure_column("webconfig", "llm_api_key", "TEXT NULL")
+    _ensure_column("webconfig", "llm_use_extra", "TINYINT NOT NULL DEFAULT 1")
 
 
 def _mask_key(key: str) -> str:
@@ -461,19 +492,35 @@ async def get_llm_config_api(current_user: str = Query(..., description="当前�
         base_url = (rows[0].get("llm_base_url") or "").strip()
         model = (rows[0].get("llm_model") or "").strip()
 
-    models = db.execute_query(
-        "SELECT id, name, base_url, model, is_active FROM llm_models ORDER BY id"
-    ) or []
+    def _list_models():
+        rows2 = db.execute_query(
+            "SELECT id, name, base_url, model, api_key, use_extra, is_active FROM llm_models ORDER BY id"
+        ) or []
+        out = []
+        for m in rows2:
+            mk = (m.get("api_key") or "").strip()
+            out.append({
+                "id": m.get("id"),
+                "name": m.get("name"),
+                "base_url": m.get("base_url"),
+                "model": m.get("model"),
+                "use_extra": bool(m.get("use_extra")),
+                "has_key": bool(mk),
+                "key_masked": _mask_key(mk),
+                "is_active": bool(m.get("is_active")),
+            })
+        return out
 
-    # 首次访问且候选表为空时，把 webconfig 中已有的本地模型作为初始候选并标记为选中
+    models = _list_models()
+
+    # 首次访问且候选表为空时，把 webconfig 中已有的本地模型作为初始候选并标记为选中（默认 Ollama 接口）
     if not models and base_url and model:
         db.execute_update(
-            "INSERT INTO llm_models (name, base_url, model, is_active) VALUES (%s, %s, %s, 1)",
+            "INSERT INTO llm_models (name, base_url, model, api_key, use_extra, is_active) "
+            "VALUES (%s, %s, %s, '', 1, 1)",
             (f"本地 {model}", base_url, model),
         )
-        models = db.execute_query(
-            "SELECT id, name, base_url, model, is_active FROM llm_models ORDER BY id"
-        ) or []
+        models = _list_models()
 
     return {
         "success": True,
@@ -509,11 +556,14 @@ async def add_llm_model_api(req: LlmModelRequest):
     name = (req.name or "").strip()
     base_url = (req.base_url or "").strip()
     model = (req.model or "").strip()
+    api_key = (req.api_key or "").strip()
+    use_extra = 1 if req.use_extra else 0
     if not (name and base_url and model):
         raise HTTPException(status_code=400, detail="请填写完整：名称 / base_url / 模型名")
     db.execute_update(
-        "INSERT INTO llm_models (name, base_url, model, is_active) VALUES (%s, %s, %s, 0)",
-        (name, base_url, model),
+        "INSERT INTO llm_models (name, base_url, model, api_key, use_extra, is_active) "
+        "VALUES (%s, %s, %s, %s, %s, 0)",
+        (name, base_url, model, api_key, use_extra),
     )
     return {"success": True, "message": f"已添加本地模型「{name}」"}
 
@@ -537,17 +587,20 @@ async def activate_llm_model_api(model_id: int, req: ActivateRequest):
     _require_admin1(req.current_user)
     _ensure_llm_models_table()
     rows = db.execute_query(
-        "SELECT name, base_url, model FROM llm_models WHERE id=%s LIMIT 1", (model_id,)
+        "SELECT name, base_url, model, api_key, use_extra FROM llm_models WHERE id=%s LIMIT 1", (model_id,)
     )
     if not rows:
         raise HTTPException(status_code=404, detail="该本地模型不存在")
     name = (rows[0].get("name") or "").strip()
     base_url = (rows[0].get("base_url") or "").strip()
     model = (rows[0].get("model") or "").strip()
+    api_key = (rows[0].get("api_key") or "").strip()
+    use_extra = 1 if rows[0].get("use_extra") else 0
     db.execute_update("UPDATE llm_models SET is_active=0", ())
     db.execute_update("UPDATE llm_models SET is_active=1 WHERE id=%s", (model_id,))
     db.execute_update(
-        "UPDATE webconfig SET llm_base_url=%s, llm_model=%s WHERE id=%s", (base_url, model, "1")
+        "UPDATE webconfig SET llm_base_url=%s, llm_model=%s, llm_api_key=%s, llm_use_extra=%s WHERE id=%s",
+        (base_url, model, api_key, use_extra, "1"),
     )
 
     deepseek_key = ""
