@@ -119,46 +119,6 @@
       </article>
     </section>
 
-    <!-- TODO: 服务器端测试通过后取消注释 — 首页 AI 助手瓦片
-    <section
-      v-if="isHomeModuleVisible('aiAssistant')"
-      class="home-tile home-tile--ai-assistant"
-      data-home-module-id="aiAssistant"
-      :style="homeModuleStyle('aiAssistant')"
-    >
-      <button
-        type="button"
-        class="home-tile-drag-handle"
-        :class="{ 'is-active': homeLayoutDrag.activeId === 'aiAssistant' }"
-        title="拖动调整位置"
-        aria-label="拖动调整 AI 助手位置"
-        @pointerdown="startHomeTileDrag($event, 'aiAssistant')"
-      >
-        <svg viewBox="0 0 24 24" aria-hidden="true">
-          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
-          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
-          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
-        </svg>
-      </button>
-      <article class="dashboard-card dashboard-card--ai-assistant">
-        <header class="dashboard-card__header">
-          <h2 class="dashboard-card__title">
-            <span class="dashboard-card__icon dashboard-card__icon--ai" aria-hidden="true">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M12 2a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v3h1a2 2 0 0 1 0 4h-1v3a2 2 0 0 1-2 2h-3v1a2 2 0 0 1-4 0v-1H7a2 2 0 0 1-2-2v-3H4a2 2 0 0 1 0-4h1V7a2 2 0 0 1 2-2h3V4a2 2 0 0 1 2-2z"/>
-              </svg>
-            </span>
-            <span class="dashboard-card__title-text">智能制造工艺部AI助手</span>
-          </h2>
-          <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/ai-assistant')">全屏对话</a>
-        </header>
-        <div class="dashboard-card__body dashboard-card__body--ai">
-          <AiAssistantChat compact />
-        </div>
-      </article>
-    </section>
-    -->
-
     <!-- 部门通讯录（电话簿）瓦片：与待办等 home-tile 同尺寸，内部滚动 -->
     <section
       v-if="isHomeModuleVisible('contactsCard')"
@@ -1043,6 +1003,8 @@
       </div>
     </div>
 
+    <!-- AI 助手悬浮气泡（公测：智能制造技术室全员 + 公司经理/副经理/经理助理） -->
+    <AiAssistantFab v-if="canUseAi" />
   </div>
 </template>
 
@@ -1065,8 +1027,8 @@ import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-// TODO: 服务器端测试通过后取消注释 — import AiAssistantChat from '@/components/ai/AiAssistantChat.vue'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
+import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
@@ -1089,6 +1051,9 @@ const canAccessInboxBoard = computed(() => {
   const jb = (userJb.value || '').trim()
   return isMinisterOrDeptLeader(jb)
 })
+
+// AI 助手公测开放范围：智能制造技术室全员 + 公司经理/副经理/经理助理
+const canUseAi = computed(() => canUseAiAssistant({ jb: userJb.value, lsys: userLsys.value }))
 const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
 const inboxTaskLoading = ref(false)
@@ -1956,7 +1921,6 @@ const userName = ref(userInfo.name || userInfo.userName || '')
 const HOME_LAYOUT_MODULES = [
   { id: 'todo', label: '待办事项', description: '需要我处理的待办与审批' },
   { id: 'request', label: '我的申请流程', description: '我提交的待审批 / 审批中申请' },
-  // TODO: 服务器端测试通过后取消注释 — { id: 'aiAssistant', label: '智能制造工艺部AI助手', description: '本地大模型问答，支持考勤查询、制度检索、报表下载' },
   { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
   { id: 'briefing', label: '重要信息审阅', description: '部长/副经理级别可见的重要换休、公出信息滚动审阅' },
   { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },

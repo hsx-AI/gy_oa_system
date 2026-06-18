@@ -71,6 +71,11 @@ class ActivateRequest(BaseModel):
     current_user: str
 
 
+class LlmTestRequest(BaseModel):
+    current_user: str
+    model_id: Optional[int] = None  # 指定本地候选模型；为空则测试当前生效模型
+
+
 def _require_admin1(current_user: str) -> None:
     admin1 = _get_admin1()
     if not admin1 or (current_user or "").strip() != admin1:
@@ -609,3 +614,134 @@ async def activate_llm_model_api(model_id: int, req: ActivateRequest):
         deepseek_key = (drows[0].get("deepseek_api_key") or "").strip()
     extra = "（当前 DeepSeek 密钥非空，仍会优先使用联网模型；清空密钥后本地模型即生效）" if deepseek_key else "，已立即生效"
     return {"success": True, "message": f"已切换本地模型为「{name}」{extra}"}
+
+
+def _estimate_tokens(s: str) -> int:
+    """粗略估算 token 数（当网关不返回 usage 时使用）：中文按字计，其余按约 4 字符/词折算。"""
+    import re
+    if not s:
+        return 0
+    cjk = len(re.findall(r"[\u4e00-\u9fff]", s))
+    other = len(re.sub(r"[\u4e00-\u9fff]", "", s))
+    return cjk + max(0, round(other / 4))
+
+
+def _run_llm_benchmark(cfg: dict) -> dict:
+    """对给定模型配置发起一次测试对话，统计首字延迟与生成速度（tokens/s）。"""
+    import time
+    try:
+        from openai import OpenAI
+    except ImportError:
+        return {"ok": False, "message": "服务端未安装 openai SDK"}
+
+    base_url = cfg.get("base_url") or ""
+    model = cfg.get("model") or ""
+    if not base_url or not model:
+        return {"ok": False, "message": "该模型未配置 base_url 或模型名"}
+
+    prompt = "请用一段话简要介绍你自己，并说明你能为工艺部门员工提供哪些帮助。约80字。"
+    messages = [{"role": "user", "content": prompt}]
+    extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if cfg.get("use_extra") else None
+
+    try:
+        client = OpenAI(base_url=base_url, api_key=cfg.get("api_key") or "ollama", timeout=60.0)
+    except Exception as e:
+        return {"ok": False, "message": f"初始化客户端失败：{e}"}
+
+    def _do_stream(with_usage: bool):
+        kwargs = dict(model=model, messages=messages, stream=True, temperature=0.5)
+        if with_usage:
+            kwargs["stream_options"] = {"include_usage": True}
+        if extra_body:
+            kwargs["extra_body"] = extra_body
+        return client.chat.completions.create(**kwargs)
+
+    t0 = time.perf_counter()
+    ttft = None
+    pieces: list[str] = []
+    usage = None
+    try:
+        try:
+            stream = _do_stream(True)
+        except Exception:
+            stream = _do_stream(False)  # 部分网关不支持 stream_options
+        for ev in stream:
+            u = getattr(ev, "usage", None)
+            if u:
+                usage = u
+            if not getattr(ev, "choices", None):
+                continue
+            delta = ev.choices[0].delta
+            piece = getattr(delta, "content", None) or ""
+            if piece:
+                if ttft is None:
+                    ttft = time.perf_counter() - t0
+                pieces.append(piece)
+    except Exception as e:
+        return {"ok": False, "message": f"调用失败：{e}"}
+
+    elapsed = time.perf_counter() - t0
+    content = "".join(pieces)
+    comp_tokens = None
+    if usage is not None:
+        comp_tokens = getattr(usage, "completion_tokens", None)
+    estimated = False
+    if not comp_tokens:
+        comp_tokens = _estimate_tokens(content)
+        estimated = True
+    gen_time = elapsed - (ttft or 0)
+    denom = gen_time if gen_time and gen_time > 0.05 else elapsed
+    tps = round(comp_tokens / denom, 1) if denom > 0 and comp_tokens else 0.0
+
+    sample = content.strip().replace("\n", " ")
+    if len(sample) > 120:
+        sample = sample[:120] + "…"
+
+    return {
+        "ok": True,
+        "tokens_per_sec": tps,
+        "completion_tokens": comp_tokens,
+        "estimated": estimated,
+        "ttft_ms": round((ttft or 0) * 1000),
+        "elapsed_ms": round(elapsed * 1000),
+        "sample": sample,
+    }
+
+
+@router.post("/llm-test")
+async def llm_test_api(req: LlmTestRequest):
+    """对当前生效模型或指定本地候选模型做一次连通/速度测试，返回 tokens/s 等指标。仅 admin1。"""
+    _require_admin1(req.current_user)
+    _ensure_llm_models_table()
+
+    try:
+        from routers.ai_assistant import _resolve_llm, _normalize_llm_base_url, _model_label
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"加载大模型配置失败：{e}")
+
+    if req.model_id:
+        rows = db.execute_query(
+            "SELECT name, base_url, model, api_key, use_extra FROM llm_models WHERE id=%s LIMIT 1",
+            (req.model_id,),
+        )
+        if not rows:
+            raise HTTPException(status_code=404, detail="该本地模型不存在")
+        r = rows[0]
+        cfg = {
+            "provider": "local",
+            "base_url": _normalize_llm_base_url((r.get("base_url") or "").strip()),
+            "model": (r.get("model") or "").strip(),
+            "api_key": (r.get("api_key") or "").strip() or "ollama",
+            "use_extra": bool(r.get("use_extra")),
+        }
+        label = (r.get("name") or cfg["model"]).strip()
+    else:
+        cfg = _resolve_llm()
+        label = _model_label(cfg)
+
+    result = await asyncio.to_thread(_run_llm_benchmark, cfg)
+    result["label"] = label
+    result["model"] = cfg.get("model")
+    if not result.get("ok"):
+        return {"success": True, **result}
+    return {"success": True, **result}

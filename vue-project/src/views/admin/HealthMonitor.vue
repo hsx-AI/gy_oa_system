@@ -45,6 +45,19 @@
               <strong v-if="llmConfig.provider === 'deepseek'">联网 DeepSeek</strong>
               <strong v-else>本地模型：{{ llmConfig.active.model || '未设置' }}</strong>
               <span v-if="llmConfig.provider === 'local' && llmConfig.active.base_url" class="llm-active-url">{{ llmConfig.active.base_url }}</span>
+              <button type="button" class="btn btn-secondary btn-sm llm-banner-test" :disabled="llmTestingTarget !== null" @click="testModel(null)">
+                {{ llmTestingTarget === 'active' ? '测试中…' : '健康测试' }}
+              </button>
+            </div>
+
+            <!-- 测试结果（针对当前生效模型） -->
+            <div v-if="llmTestResult && llmTestResult.target === 'active'" class="llm-test-result" :class="{ 'is-error': !llmTestResult.ok }">
+              <template v-if="llmTestResult.ok">
+                <span class="llm-test-metric"><strong>{{ llmTestResult.tokens_per_sec }}</strong> tokens/s</span>
+                <span class="llm-test-sub">首字 {{ llmTestResult.ttft_ms }}ms · 总耗时 {{ llmTestResult.elapsed_ms }}ms · {{ llmTestResult.completion_tokens }} tokens{{ llmTestResult.estimated ? '（估算）' : '' }}</span>
+                <span v-if="llmTestResult.sample" class="llm-test-sample">「{{ llmTestResult.sample }}」</span>
+              </template>
+              <span v-else class="llm-test-err">测试失败：{{ llmTestResult.message }}</span>
             </div>
 
             <h3 class="email-settings-title">联网 DeepSeek 密钥</h3>
@@ -69,8 +82,16 @@
                     <span v-if="m.has_key" class="llm-model-tag llm-model-tag--key">需鉴权 {{ m.key_masked }}</span>
                   </div>
                   <span class="llm-model-meta">{{ m.model }} · {{ m.base_url }}</span>
+                  <div v-if="llmTestResult && llmTestResult.target === m.id" class="llm-test-result llm-test-result--row" :class="{ 'is-error': !llmTestResult.ok }">
+                    <template v-if="llmTestResult.ok">
+                      <span class="llm-test-metric"><strong>{{ llmTestResult.tokens_per_sec }}</strong> tokens/s</span>
+                      <span class="llm-test-sub">首字 {{ llmTestResult.ttft_ms }}ms · {{ llmTestResult.completion_tokens }} tokens{{ llmTestResult.estimated ? '（估算）' : '' }}</span>
+                    </template>
+                    <span v-else class="llm-test-err">测试失败：{{ llmTestResult.message }}</span>
+                  </div>
                 </div>
                 <div class="llm-model-ops">
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="llmTestingTarget !== null" @click="testModel(m.id)">{{ llmTestingTarget === m.id ? '测试中…' : '测试' }}</button>
                   <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving || m.is_active" @click="activateModel(m)">{{ m.is_active ? '已选用' : '选用' }}</button>
                   <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving" @click="deleteModel(m)">删除</button>
                 </div>
@@ -302,6 +323,7 @@ import {
   addLlmModel,
   deleteLlmModel,
   activateLlmModel,
+  testLlmModel,
 } from '@/api/healthMonitor'
 
 const router = useRouter()
@@ -334,6 +356,8 @@ const llmConfig = ref({
 })
 const deepseekKeyInput = ref('')
 const newModel = ref({ name: '', base_url: '', model: '', api_key: '', use_extra: true })
+const llmTestingTarget = ref(null)   // null=未测试；'active'=当前模型；或 model.id
+const llmTestResult = ref(null)
 
 function currentName() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
@@ -831,6 +855,25 @@ async function activateModel(m) {
   }
 }
 
+async function testModel(modelId) {
+  const name = currentName()
+  if (!name) return
+  const target = modelId == null ? 'active' : modelId
+  llmTestingTarget.value = target
+  llmTestResult.value = null
+  llmMessage.value = ''
+  try {
+    const payload = { current_user: name }
+    if (modelId != null) payload.model_id = modelId
+    const res = await testLlmModel(payload)
+    llmTestResult.value = { target, ...res }
+  } catch (e) {
+    llmTestResult.value = { target, ok: false, message: e?.response?.data?.detail || e?.message || '测试失败' }
+  } finally {
+    llmTestingTarget.value = null
+  }
+}
+
 async function triggerTodoReminder() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = (user.name || user.userName || '').trim()
@@ -1224,6 +1267,46 @@ onMounted(async () => {
   font-size: 0.8rem;
   opacity: 0.8;
   word-break: break-all;
+}
+.llm-banner-test {
+  margin-left: auto;
+}
+.llm-test-result {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  margin: 8px 0 4px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+  border: 1px solid var(--color-border-base);
+  font-size: 0.85rem;
+}
+.llm-test-result--row {
+  margin: 6px 0 0;
+  padding: 6px 10px;
+  font-size: 0.8rem;
+}
+.llm-test-result.is-error {
+  background: #fef2f2;
+  border-color: #fecaca;
+}
+.llm-test-metric {
+  color: #166534;
+}
+.llm-test-metric strong {
+  font-size: 1.05rem;
+}
+.llm-test-sub {
+  color: var(--color-text-tertiary);
+}
+.llm-test-sample {
+  color: var(--color-text-secondary);
+  font-style: italic;
+}
+.llm-test-err {
+  color: #b91c1c;
 }
 .llm-key-row {
   display: flex;

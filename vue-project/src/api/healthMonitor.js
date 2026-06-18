@@ -59,3 +59,8 @@ export function deleteLlmModel(modelId, params) {
 export function activateLlmModel(modelId, data) {
   return request({ url: `/health-monitor/llm-models/${modelId}/activate`, method: 'post', data })
 }
+
+/** 对当前生效模型或指定本地模型做一次速度/连通性测试（返回 tokens/s 等） */
+export function testLlmModel(data) {
+  return request({ url: '/health-monitor/llm-test', method: 'post', data, timeout: 80000 })
+}

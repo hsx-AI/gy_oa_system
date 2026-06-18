@@ -59,6 +59,18 @@ export function canAccessLeaderOvertimeStats(jb) {
   return isMinisterLevel(jb)
 }
 
+/**
+ * AI 助手公测开放范围：
+ *  - 智能制造技术室全员（lsys === '智能制造技术室'）；
+ *  - 公司经理 / 副经理 / 经理助理（jb 精确匹配）。
+ */
+export function canUseAiAssistant({ jb, lsys }) {
+  const l = (lsys || '').trim()
+  if (l === '智能制造技术室') return true
+  const j = (jb || '').trim()
+  return j === '经理' || j === '副经理' || j === '经理助理'
+}
+
 /** 管理驾驶舱 / 考勤纪律审查：部长副部长、综合技术室主任副主任、admin1、admin2 */
 export function canAccessLeaderDashboard({ name, jb, lsys, admin1, admin2 }) {
   const n = (name || '').trim()

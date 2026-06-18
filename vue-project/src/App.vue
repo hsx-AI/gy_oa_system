@@ -18,8 +18,8 @@
             </svg>
             <span>首页</span>
           </router-link>
-          <!-- TODO: 服务器端测试通过后取消注释 — 侧栏 AI 助手入口
-          <router-link v-if="!isOtherDeptUser" to="/ai-assistant" class="sidebar-item" active-class="sidebar-item-active">
+          <!-- AI 助手入口（公测：智能制造技术室全员 + 公司经理/副经理/经理助理） -->
+          <router-link v-if="!isOtherDeptUser && canUseAi" to="/ai-assistant" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 2a2 2 0 0 1 2 2v1h3a2 2 0 0 1 2 2v3h1a2 2 0 0 1 0 4h-1v3a2 2 0 0 1-2 2h-3v1a2 2 0 0 1-4 0v-1H7a2 2 0 0 1-2-2v-3H4a2 2 0 0 1 0-4h1V7a2 2 0 0 1 2-2h3V4a2 2 0 0 1 2-2z" />
               <circle cx="9.5" cy="11" r="1" />
@@ -28,7 +28,6 @@
             </svg>
             <span>AI 助手</span>
           </router-link>
-          -->
           <router-link v-if="!isOtherDeptUser" to="/profile" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" />
@@ -523,7 +522,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
 
 const route = useRoute()
 const router = useRouter()
@@ -994,6 +993,13 @@ const canShowAttendanceExceptions = computed(() => {
 const isOtherDeptUser = computed(() => {
   const lsys = (currentUser.value?.dept || currentUser.value?.lsys || '').trim()
   return lsys === '其他部门成员'
+})
+
+// AI 助手公测开放范围：智能制造技术室全员 + 公司经理/副经理/经理助理
+const canUseAi = computed(() => {
+  const jb = (currentUser.value?.jb || '').trim()
+  const lsys = (currentUser.value?.lsys || currentUser.value?.dept || '').trim()
+  return canUseAiAssistant({ jb, lsys })
 })
 
 const canUseRotorBladeBalance = computed(() => {

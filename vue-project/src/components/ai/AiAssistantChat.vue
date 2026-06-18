@@ -1,5 +1,35 @@
 <template>
   <div class="ai-chat" :class="{ 'ai-chat--compact': compact }">
+    <!-- 顶部工具栏：当前模型（只读）+ 历史对话 + 新建对话 -->
+    <div v-if="!compact" ref="barEl" class="ai-chat__bar">
+      <div class="ai-chat__model" :title="currentModel ? `当前使用：${currentModel}` : ''">
+        <span class="ai-chat__model-dot"></span>
+        <span class="ai-chat__model-text">{{ currentModel ? `当前模型：${currentModel}` : '正在获取模型…' }}</span>
+      </div>
+      <div class="ai-chat__bar-actions">
+        <div v-if="sessions.length" class="ai-chat__history">
+          <button type="button" class="ai-chat__bar-btn" @click="historyOpen = !historyOpen">
+            历史对话 · {{ sessions.length }}
+          </button>
+          <div v-if="historyOpen" class="ai-chat__history-pop">
+            <div
+              v-for="s in sessions"
+              :key="s.id"
+              class="ai-chat__history-item"
+              :class="{ 'is-current': s.id === currentSessionId }"
+            >
+              <span class="ai-chat__history-title" @click="onSwitch(s.id)">{{ s.title }}</span>
+              <button type="button" class="ai-chat__history-del" title="删除该对话" @click.stop="deleteSession(s.id)">×</button>
+            </div>
+          </div>
+        </div>
+        <button type="button" class="ai-chat__bar-btn ai-chat__bar-btn--new" @click="newConversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          新建对话
+        </button>
+      </div>
+    </div>
+
     <!-- 消息列表 -->
     <div ref="scrollEl" class="ai-chat__scroll">
       <!-- 空状态 -->
@@ -136,7 +166,7 @@
 </template>
 
 <script setup>
-import { ref, reactive, watch, nextTick, onMounted } from 'vue'
+import { ref, reactive, watch, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { useAiChat } from '@/composables/useAiChat'
 import { renderMarkdown } from '@/utils/renderMarkdown'
 
@@ -144,7 +174,23 @@ const props = defineProps({
   compact: { type: Boolean, default: false },
 })
 
-const { messages, loading, send, stop } = useAiChat()
+const {
+  messages, loading, send, stop,
+  sessions, currentSessionId, currentModel,
+  loadSessions, newConversation, switchSession, deleteSession, fetchModel,
+} = useAiChat({ persist: !props.compact })
+
+const historyOpen = ref(false)
+const barEl = ref(null)
+
+function onSwitch(id) {
+  switchSession(id)
+  historyOpen.value = false
+}
+
+function onBarOutsideClick(e) {
+  if (barEl.value && !barEl.value.contains(e.target)) historyOpen.value = false
+}
 
 // 思考过程展开状态：用户未手动设置时，流式中默认展开、完成后默认折叠
 const reasoningOpen = reactive({})
@@ -192,7 +238,16 @@ function scrollToBottom() {
 watch(messages, scrollToBottom, { deep: true })
 
 onMounted(() => {
-  if (!props.compact && inputEl.value) inputEl.value.focus()
+  if (!props.compact) {
+    loadSessions()
+    fetchModel()
+    document.addEventListener('click', onBarOutsideClick)
+    if (inputEl.value) inputEl.value.focus()
+  }
+})
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', onBarOutsideClick)
 })
 
 defineExpose({ send })
@@ -206,6 +261,96 @@ defineExpose({ send })
   min-height: 0;
   background: var(--color-bg-container, #fff);
 }
+
+/* 顶部工具栏 */
+.ai-chat__bar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 14px;
+  border-bottom: 1px solid var(--color-border-secondary, #eef0f3);
+  background: var(--color-bg-container, #fff);
+}
+.ai-chat__model {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 12.5px;
+  color: var(--color-text-secondary, #4b5563);
+  overflow: hidden;
+}
+.ai-chat__model-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  box-shadow: 0 0 0 3px rgba(34, 197, 94, 0.18);
+  flex: 0 0 auto;
+}
+.ai-chat__model-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.ai-chat__bar-actions { display: flex; align-items: center; gap: 8px; flex: 0 0 auto; }
+.ai-chat__history { position: relative; }
+.ai-chat__bar-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-border, #e5e7eb);
+  background: var(--color-bg-layout, #f7f9fb);
+  color: var(--color-text-secondary, #4b5563);
+  padding: 5px 11px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  cursor: pointer;
+  transition: all 0.16s ease;
+}
+.ai-chat__bar-btn:hover { border-color: var(--color-primary, #1890ff); color: var(--color-primary, #1890ff); }
+.ai-chat__bar-btn svg { width: 13px; height: 13px; }
+.ai-chat__bar-btn--new { background: var(--color-primary-bg, #e6f4ff); color: var(--color-primary, #1890ff); border-color: rgba(24, 144, 255, 0.3); }
+.ai-chat__history-pop {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  width: 260px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.16);
+  padding: 6px;
+  z-index: 20;
+}
+.ai-chat__history-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 7px 8px;
+  border-radius: 7px;
+  cursor: pointer;
+}
+.ai-chat__history-item:hover { background: var(--color-bg-layout, #f5f7fa); }
+.ai-chat__history-item.is-current { background: var(--color-primary-bg, #e6f4ff); }
+.ai-chat__history-title {
+  flex: 1 1 auto;
+  font-size: 13px;
+  color: var(--color-text-primary, #1f2937);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-chat__history-del {
+  flex: 0 0 auto;
+  border: none;
+  background: none;
+  color: var(--color-text-quaternary, #c0c4cc);
+  font-size: 16px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 4px;
+}
+.ai-chat__history-del:hover { color: var(--color-error, #ff4d4f); }
 
 .ai-chat__scroll {
   flex: 1 1 auto;

@@ -8,7 +8,7 @@ import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -300,7 +300,7 @@ const routes = [
     component: () => import('@/views/seal/SealApply.vue'),
     meta: { title: '部门用印申请' }
   },
-  // 路由保留：服务器端测试时可浏览器直接访问 /ai-assistant；上线前入口已在 App.vue / Home.vue 注释屏蔽
+  // AI 助手（公测）：仅智能制造技术室全员 + 公司经理/副经理/经理助理可访问，见下方 beforeEach 守卫
   {
     path: '/ai-assistant',
     name: 'AiAssistant',
@@ -354,6 +354,26 @@ router.beforeEach(async (to, _from, next) => {
       if (!name) {
         next('/login')
       } else if (lsys === '焊接工艺室' || lsys === '部办') {
+        next()
+      } else {
+        next('/')
+      }
+    } catch {
+      next('/login')
+    }
+    return
+  }
+
+  // AI 助手（公测）：仅智能制造技术室全员 + 公司经理/副经理/经理助理
+  if (to.name === 'AiAssistant') {
+    try {
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const jb = (user.jb || '').trim()
+      const lsys = (user.lsys || user.dept || '').trim()
+      if (!name) {
+        next('/login')
+      } else if (canUseAiAssistant({ jb, lsys })) {
         next()
       } else {
         next('/')

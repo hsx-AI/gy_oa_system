@@ -10,6 +10,13 @@ function escapeHtml(text) {
     .replace(/'/g, '&#39;')
 }
 
+// 将绝对地址（如 http://localhost:xxxx/api/ai-assistant/...）规范为相对路径，
+// 保证部署后链接指向当前访问域名而非开发环境 localhost。
+function normalizeLinkUrl(u) {
+  const m = (u || '').match(/^https?:\/\/[^/]+(\/api\/ai-assistant\/.*)$/i)
+  return m ? m[1] : u
+}
+
 function inlineFormat(text) {
   let s = text
   // 行内代码
@@ -20,7 +27,7 @@ function inlineFormat(text) {
   s = s.replace(/(^|[^*])\*([^*\n]+)\*(?!\*)/g, '$1<em>$2</em>')
   // 链接 [text](url)
   s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+|\/[^\s)]*)\)/g,
-    '<a href="$2" target="_blank" rel="noopener" class="md-link">$1</a>')
+    (_m, label, url) => `<a href="${normalizeLinkUrl(url)}" target="_blank" rel="noopener" class="md-link">${label}</a>`)
   return s
 }
 

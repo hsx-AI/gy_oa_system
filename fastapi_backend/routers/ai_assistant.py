@@ -224,6 +224,13 @@ def _resolve_llm() -> dict:
     return cfg
 
 
+def _model_label(cfg: dict) -> str:
+    """面向用户的模型展示名（不暴露 base_url / api_key 等敏感信息）。"""
+    if cfg.get("provider") == "deepseek":
+        return "DeepSeek（联网）"
+    return cfg.get("model") or "本地模型"
+
+
 # ==================== 请求模型 ====================
 
 
@@ -1123,6 +1130,8 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "4. 用户要求导出/下载报表时，调用 generate_report 生成下载链接，并明确告诉用户报表已生成、可点击下方按钮下载。"
         "注意区分导出范围：导出“全部门/全体/所有人员”报表时传 scope='all'；导出“某科室/某室全员”报表时传 lsys=科室名；"
         "只导出单个人时传 name。若用户在其权限范围内要全部门或某科室汇总报表，不要退化成只导出本人。\n"
+        "   注意：生成下载文件后，正文中只需提示“点击下方按钮下载”，切勿把下载网址（URL/链接地址）直接写进回答文本里——"
+        "下载按钮会由系统自动渲染在消息下方。\n"
         "5. 引用制度检索结果时注明制度标题，并基于检索到的片段作答，避免脱离原文。\n"
         "6. 回答使用 Markdown（标题、列表、表格、加粗）让结构清晰美观。\n"
         "7. 工具返回无数据时，如实说明未查询到相关记录，不要编造。\n"
@@ -1148,6 +1157,17 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
 
 def _sse(payload: dict) -> str:
     return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+@router.get("/model-info")
+async def model_info(current_user: str = Query("", description="当前登录用户（可选）")):
+    """返回当前生效的大模型展示信息（仅模型名/类型，不含 base_url、api_key 等敏感信息），供前端只读展示。"""
+    try:
+        cfg = _resolve_llm()
+        return {"success": True, "provider": cfg.get("provider"), "model": cfg.get("model"), "label": _model_label(cfg)}
+    except Exception as e:
+        logger.debug(f"获取模型信息失败: {e}")
+        return {"success": False, "label": ""}
 
 
 @router.post("/chat-stream")
@@ -1182,8 +1202,10 @@ async def chat_stream(req: ChatRequest):
 
     extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if cfg.get("use_extra") else None
 
+    model_label = _model_label(cfg)
+
     def gen():
-        yield _sse({"type": "meta", "provider": provider, "model": model})
+        yield _sse({"type": "meta", "provider": provider, "model": model, "label": model_label})
         messages = list(history)
         try:
             client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=120.0)
