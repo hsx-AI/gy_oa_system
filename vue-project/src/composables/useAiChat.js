@@ -248,7 +248,12 @@ export function useAiChat(options = {}) {
         break
       }
       case 'attachment':
-        assistant.attachments.push({ label: evt.label, url: normalizeApiUrl(evt.url), filename: evt.filename })
+        assistant.attachments.push({
+          label: evt.label,
+          url: normalizeApiUrl(evt.url),
+          filename: evt.filename,
+          kind: evt.kind || '',
+        })
         break
       case 'status':
         assistant.status = evt.text || ''

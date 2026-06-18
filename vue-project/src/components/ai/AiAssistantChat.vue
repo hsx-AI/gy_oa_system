@@ -103,24 +103,32 @@
             <span v-if="msg.status" class="ai-msg__status">{{ msg.status }}</span>
           </div>
 
-          <!-- 附件（报表下载） -->
+          <!-- 附件（报表下载 / 图表预览） -->
           <div v-if="msg.attachments && msg.attachments.length" class="ai-msg__attachments">
-            <a
-              v-for="(att, ai2) in msg.attachments"
-              :key="ai2"
-              class="ai-attachment"
-              :href="att.url"
-              :download="att.filename"
-            >
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
-                <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
-                <polyline points="14 2 14 8 20 8"/>
-                <line x1="12" y1="18" x2="12" y2="12"/>
-                <polyline points="9 15 12 18 15 15"/>
-              </svg>
-              <span class="ai-attachment__label">{{ att.label || att.filename }}</span>
-              <span class="ai-attachment__ext">下载</span>
-            </a>
+            <template v-for="(att, ai2) in msg.attachments" :key="ai2">
+              <div v-if="att.kind === 'image'" class="ai-chart-preview">
+                <img class="ai-chart-preview__img" :src="att.url" :alt="att.label || att.filename" loading="lazy">
+                <div class="ai-chart-preview__foot">
+                  <span class="ai-chart-preview__label">{{ att.label || att.filename }}</span>
+                  <a class="ai-chart-preview__dl" :href="att.url" :download="att.filename">下载 PNG</a>
+                </div>
+              </div>
+              <a
+                v-else
+                class="ai-attachment"
+                :href="att.url"
+                :download="att.filename"
+              >
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+                  <polyline points="14 2 14 8 20 8"/>
+                  <line x1="12" y1="18" x2="12" y2="12"/>
+                  <polyline points="9 15 12 18 15 15"/>
+                </svg>
+                <span class="ai-attachment__label">{{ att.label || att.filename }}</span>
+                <span class="ai-attachment__ext">下载</span>
+              </a>
+            </template>
           </div>
 
           <!-- 错误 -->
@@ -583,6 +591,41 @@ defineExpose({ send })
 
 /* 附件 */
 .ai-msg__attachments { margin-top: 10px; display: flex; flex-direction: column; gap: 8px; }
+.ai-chart-preview {
+  border: 1px solid var(--color-border, #e5e7eb);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #fff;
+  max-width: 100%;
+}
+.ai-chart-preview__img {
+  display: block;
+  width: 100%;
+  max-width: 520px;
+  height: auto;
+}
+.ai-chart-preview__foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 8px 12px;
+  background: var(--color-bg-layout, #f5f7fa);
+  font-size: 13px;
+}
+.ai-chart-preview__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--color-text-primary, #1f2937);
+}
+.ai-chart-preview__dl {
+  flex: 0 0 auto;
+  color: var(--color-primary, #1890ff);
+  text-decoration: none;
+  font-weight: 600;
+}
+.ai-chart-preview__dl:hover { text-decoration: underline; }
 .ai-attachment {
   display: inline-flex;
   align-items: center;

@@ -7,6 +7,7 @@
   - 加班 / 请假 / 公出记录查询统计
   - 部门人数 / 人员名单查询
   - 报表查询与下载（生成 Excel 下载链接，复用报表汇聚口径）
+  - 数据可视化图表（折线/柱状/饼图 PNG，对话内预览；Word/Excel 可嵌入）
 
 【大模型选择】优先使用 webconfig.deepseek_api_key 指向的 DeepSeek（联网模型，function calling
 与流式 token 输出都很稳定）；未配置 deepseek_api_key 时回退到本地 Ollama
@@ -46,6 +47,7 @@ router = APIRouter(prefix="/ai-assistant", tags=["AI助手"])
 TEMP_DOC_DIR = Path(__file__).resolve().parent.parent / "temp_docs"
 XLSX_MIME = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 DOCX_MIME = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+PNG_MIME = "image/png"
 TEMP_DOC_TTL = 24 * 3600  # 临时文件保留时长（秒）
 
 
@@ -136,6 +138,161 @@ DEEPSEEK_REASONER_MODEL = "deepseek-reasoner"  # 最终回答用，可输出思�
 
 # 工具调用最多迭代轮数，防止无限循环
 MAX_TOOL_ROUNDS = 4
+
+# ==================== 大模型请求参数（在此调整） ====================
+# 说明：400「上下文超出」通常是【输入】过长，不是 max_tokens（输出上限）本身。
+# 本地网关/ Ollama 实际可用窗口往往远小于模型宣传的 1M；工具返回的大段 JSON 也会迅速撑爆上下文。
+LLM_MAX_OUTPUT_TOKENS = 4096          # 单次回答 max_tokens（输出上限）
+LLM_MAX_OUTPUT_TOKENS_DEEPSEEK = 8192   # 联网 DeepSeek 可略大
+LLM_TEMPERATURE_TOOL = 0.2              # 阶段1 工具规划
+LLM_TEMPERATURE_ANSWER = 0.4            # 阶段2 最终回答（本地模型）
+LLM_MAX_HISTORY_TURNS = 16              # 送入模型的最近消息条数（不含 system，约 8 轮问答）
+LLM_MAX_MESSAGE_CHARS = 6000            # 单条 user/assistant 正文最大字符（超出截断）
+LLM_MAX_TOOL_RESULT_CHARS = 10000       # 单个 tool 返回写入上下文的最大 JSON 字符
+LLM_TOOL_ROWS_FOR_MODEL = 40            # query_database 等写入上下文的明细行数上限
+
+
+def _clean_text(s: Any) -> str:
+    """清理文本中的非法控制字符，避免网关 JSON 解析失败。"""
+    if s is None:
+        return ""
+    if not isinstance(s, str):
+        s = str(s)
+    return re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", s)
+
+
+def _sanitize_json_value(v: Any) -> Any:
+    """递归清理工具结果，确保可被 strict JSON 序列化。"""
+    import math
+    from decimal import Decimal
+
+    if v is None or isinstance(v, (bool, int)):
+        return v
+    if isinstance(v, float):
+        if math.isnan(v) or math.isinf(v):
+            return None
+        return v
+    if isinstance(v, Decimal):
+        try:
+            f = float(v)
+            if math.isnan(f) or math.isinf(f):
+                return None
+            return f
+        except Exception:
+            return str(v)
+    if isinstance(v, (datetime,)):
+        return v.isoformat(sep=" ", timespec="seconds")
+    if isinstance(v, bytes):
+        try:
+            return _clean_text(v.decode("utf-8", errors="replace"))
+        except Exception:
+            return ""
+    if isinstance(v, str):
+        return _clean_text(v)
+    if isinstance(v, dict):
+        return {str(k): _sanitize_json_value(val) for k, val in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_sanitize_json_value(x) for x in v]
+    return _clean_text(str(v))
+
+
+def _compact_tool_result(result: Any) -> Any:
+    """压缩工具返回，避免领导账号查全部门时把超大 JSON 塞进模型上下文。"""
+    if not isinstance(result, dict):
+        return result
+    out = dict(result)
+
+    rows = out.get("rows")
+    if isinstance(rows, list) and len(rows) > LLM_TOOL_ROWS_FOR_MODEL:
+        total = len(rows)
+        out["rows"] = rows[:LLM_TOOL_ROWS_FOR_MODEL]
+        out["_note"] = f"明细仅展示前 {LLM_TOOL_ROWS_FOR_MODEL} 行，共 {total} 行"
+
+    roster = out.get("roster")
+    if isinstance(roster, list) and len(roster) > 60:
+        total = len(roster)
+        out["roster"] = roster[:60]
+        out["_roster_note"] = f"名单仅展示前 60 人，共 {total} 人"
+
+    members = out.get("members")
+    if isinstance(members, list) and len(members) > 80:
+        out["members"] = members[:80]
+        out["_members_note"] = f"姓名仅展示前 80 个，共 {len(members)} 人"
+
+    records = out.get("records")
+    if isinstance(records, list) and len(records) > 25:
+        total = len(records)
+        out["records"] = records[:25]
+        out["_records_note"] = f"记录仅展示前 25 条，共 {total} 条"
+
+    results = out.get("results")
+    if isinstance(results, list):
+        for item in results:
+            if isinstance(item, dict) and "snippet" in item:
+                item["snippet"] = _clean_text(item.get("snippet") or "")[:200]
+
+    if out.get("download_url"):
+        out["download_url"] = "(已生成，见对话附件)"
+    out.pop("preview_url", None)
+    return out
+
+
+def _safe_json_dumps(obj: Any, max_chars: int = LLM_MAX_TOOL_RESULT_CHARS) -> str:
+    """strict JSON 序列化 + 长度截断（allow_nan=False 避免网关报 JSON decode error）。"""
+    cleaned = _sanitize_json_value(_compact_tool_result(obj))
+    try:
+        text = json.dumps(cleaned, ensure_ascii=False, allow_nan=False)
+    except (TypeError, ValueError) as e:
+        logger.warning("工具结果 JSON 序列化失败，降级为摘要: %s", e)
+        text = json.dumps({"ok": False, "message": "工具结果过大或含非法数据，已省略明细"}, ensure_ascii=False)
+    if len(text) > max_chars:
+        summary: Dict[str, Any] = {"_truncated": True, "_note": f"工具返回约 {len(text)} 字符，已截断；请缩小查询或做聚合统计"}
+        if isinstance(cleaned, dict):
+            for k in ("ok", "message", "total_count", "row_count", "count", "sql", "lsys"):
+                if k in cleaned:
+                    summary[k] = cleaned[k]
+        text = json.dumps(summary, ensure_ascii=False, allow_nan=False)
+    return text
+
+
+def _trim_chat_history(history: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    """保留 system + 最近若干轮 user/assistant，防止多轮对话撑爆上下文。"""
+    if not history:
+        return history
+    system = history[0] if history[0].get("role") == "system" else None
+    rest = history[1:] if system else list(history)
+    if len(rest) > LLM_MAX_HISTORY_TURNS:
+        rest = rest[-LLM_MAX_HISTORY_TURNS:]
+    out = ([system] if system else []) + rest
+    for msg in out:
+        if msg.get("role") in ("user", "assistant") and isinstance(msg.get("content"), str):
+            c = _clean_text(msg["content"])
+            if len(c) > LLM_MAX_MESSAGE_CHARS:
+                msg["content"] = c[: LLM_MAX_MESSAGE_CHARS - 20] + "\n…（上文已截断）"
+            else:
+                msg["content"] = c
+    return out
+
+
+def _safe_tool_arguments(raw: str) -> str:
+    """本地模型有时返回不合法 JSON arguments，需清洗后再回传。"""
+    s = _clean_text(raw or "").strip()
+    if not s:
+        return "{}"
+    try:
+        return json.dumps(json.loads(s), ensure_ascii=False, allow_nan=False)
+    except Exception:
+        return "{}"
+
+
+def _llm_request_kwargs(cfg: dict, **extra) -> dict:
+    """统一大模型请求参数（修改 LLM_* 常量即可）。"""
+    kw = dict(extra)
+    if cfg.get("provider") == "deepseek":
+        kw.setdefault("max_tokens", LLM_MAX_OUTPUT_TOKENS_DEEPSEEK)
+    else:
+        kw.setdefault("max_tokens", LLM_MAX_OUTPUT_TOKENS)
+    return kw
 
 
 def _normalize_llm_base_url(url: str) -> str:
@@ -620,7 +777,152 @@ def skill_query_database(args: Dict[str, Any], current_user: str) -> Dict[str, A
     }
 
 
-def _render_xlsx(fp: Path, title: str, body: str, columns: list, rows: list) -> None:
+def _parse_chart_spec(args: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]], str, str, str]:
+    """解析并校验图表参数，返回 (chart_type, labels, series, title, x_label, y_label)。"""
+    chart_type = (args.get("chart_type") or "line").strip().lower()
+    if chart_type not in ("line", "bar", "pie"):
+        chart_type = "line"
+    title = (args.get("title") or "图表").strip()
+    x_label = (args.get("x_label") or "").strip()
+    y_label = (args.get("y_label") or "").strip()
+
+    labels = args.get("labels") or []
+    if not isinstance(labels, list):
+        labels = []
+    labels = [str(x) for x in labels]
+
+    series_raw = args.get("series") or []
+    if not isinstance(series_raw, list):
+        series_raw = []
+    series: List[Dict[str, Any]] = []
+    for item in series_raw:
+        if not isinstance(item, dict):
+            continue
+        name = (item.get("name") or "数据").strip()
+        vals = item.get("values") or []
+        if not isinstance(vals, list):
+            continue
+        nums = []
+        for v in vals:
+            try:
+                nums.append(float(v))
+            except (TypeError, ValueError):
+                nums.append(0.0)
+        series.append({"name": name, "values": nums})
+
+    if not series and args.get("values") is not None:
+        vals = args.get("values")
+        if isinstance(vals, list):
+            name = (args.get("series_name") or "数据").strip()
+            nums = []
+            for v in vals:
+                try:
+                    nums.append(float(v))
+                except (TypeError, ValueError):
+                    nums.append(0.0)
+            series = [{"name": name, "values": nums}]
+
+    if not series:
+        raise ValueError("缺少数据：请提供 series（含 name/values）或 values")
+    if not labels:
+        raise ValueError("缺少横轴/分类 labels")
+    if chart_type == "pie":
+        if len(series) != 1:
+            raise ValueError("饼图仅支持单组数据（一个 series）")
+        if len(labels) != len(series[0]["values"]):
+            raise ValueError("饼图 labels 数量须与 values 一致")
+    else:
+        n = len(labels)
+        for s in series:
+            if len(s["values"]) != n:
+                raise ValueError(f"系列「{s['name']}」的数据点数量须与 labels 一致（{n} 个）")
+    return chart_type, labels, series, title, x_label, y_label
+
+
+def _render_chart_png(fp: Path, spec: Dict[str, Any]) -> None:
+    """用 matplotlib 渲染折线/柱状/饼图并保存为 PNG。"""
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    plt.rcParams["font.sans-serif"] = ["Microsoft YaHei", "SimHei", "Arial Unicode MS", "DejaVu Sans"]
+    plt.rcParams["axes.unicode_minus"] = False
+
+    chart_type, labels, series, title, x_label, y_label = _parse_chart_spec(spec)
+    fig, ax = plt.subplots(figsize=(8.5, 4.8), dpi=120)
+
+    if chart_type == "pie":
+        vals = series[0]["values"]
+        ax.pie(vals, labels=labels, autopct="%1.1f%%", startangle=90, textprops={"fontsize": 10})
+        ax.set_title(title, fontsize=14, fontweight="bold")
+    elif chart_type == "bar":
+        x_idx = list(range(len(labels)))
+        n_series = len(series)
+        width = min(0.8 / max(n_series, 1), 0.35)
+        for i, s in enumerate(series):
+            offset = (i - (n_series - 1) / 2) * width
+            xs = [xi + offset for xi in x_idx]
+            ax.bar(xs, s["values"], width=width, label=s["name"])
+        ax.set_xticks(x_idx)
+        ax.set_xticklabels(labels, rotation=25 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center")
+        if n_series > 1:
+            ax.legend(loc="best", fontsize=9)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        if x_label:
+            ax.set_xlabel(x_label)
+        if y_label:
+            ax.set_ylabel(y_label)
+        ax.grid(True, axis="y", alpha=0.3)
+    else:  # line
+        for s in series:
+            ax.plot(labels, s["values"], marker="o", linewidth=2, markersize=5, label=s["name"])
+        if len(series) > 1:
+            ax.legend(loc="best", fontsize=9)
+        ax.set_title(title, fontsize=14, fontweight="bold")
+        if x_label:
+            ax.set_xlabel(x_label)
+        if y_label:
+            ax.set_ylabel(y_label)
+        ax.grid(True, alpha=0.3)
+        if len(labels) > 6:
+            plt.setp(ax.get_xticklabels(), rotation=25, ha="right")
+
+    fig.tight_layout()
+    fig.savefig(fp, format="png", bbox_inches="tight")
+    plt.close(fig)
+
+
+def _add_xlsx_chart(ws, chart_spec: dict, data_start_row: int, n_cols: int, n_data_rows: int) -> None:
+    """在已有表格数据下方插入 openpyxl 原生折线/柱状图（仅 Excel）。"""
+    from openpyxl.chart import LineChart, BarChart, Reference
+
+    chart_type = (chart_spec.get("chart_type") or "line").strip().lower()
+    title = (chart_spec.get("title") or "图表").strip()
+    x_label = (chart_spec.get("x_label") or "").strip()
+    y_label = (chart_spec.get("y_label") or "").strip()
+
+    if n_cols < 2 or n_data_rows < 1:
+        return
+    ChartCls = BarChart if chart_type == "bar" else LineChart
+    chart = ChartCls()
+    chart.title = title
+    if x_label:
+        chart.x_axis.title = x_label
+    if y_label:
+        chart.y_axis.title = y_label
+
+    # 第一列为分类轴，其余列为数据系列
+    data = Reference(ws, min_col=2, min_row=data_start_row, max_col=n_cols, max_row=data_start_row + n_data_rows)
+    cats = Reference(ws, min_col=1, min_row=data_start_row + 1, max_row=data_start_row + n_data_rows)
+    chart.add_data(data, titles_from_data=True)
+    chart.set_categories(cats)
+    chart.width = 16
+    chart.height = 9
+    anchor_row = data_start_row + n_data_rows + 2
+    ws.add_chart(chart, f"A{anchor_row}")
+
+
+def _render_xlsx(fp: Path, title: str, body: str, columns: list, rows: list, charts: Optional[list] = None) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Font, Alignment, PatternFill
     from openpyxl.utils import get_column_letter
@@ -647,9 +949,12 @@ def _render_xlsx(fp: Path, title: str, body: str, columns: list, rows: list) -> 
             r += 1
         r += 1
 
+    table_header_row = 0
+    n_data_rows = 0
     if columns:
         header_fill = PatternFill(start_color="1890FF", end_color="1890FF", fill_type="solid")
         header_font = Font(color="FFFFFF", bold=True)
+        table_header_row = r
         for ci, h in enumerate(columns, start=1):
             c = ws.cell(row=r, column=ci, value=str(h))
             c.fill = header_fill
@@ -661,15 +966,25 @@ def _render_xlsx(fp: Path, title: str, body: str, columns: list, rows: list) -> 
             for ci, val in enumerate(cells, start=1):
                 ws.cell(row=r, column=ci, value=val if val is not None else "")
             r += 1
+            n_data_rows += 1
         for ci, h in enumerate(columns, start=1):
             ws.column_dimensions[get_column_letter(ci)].width = max(14, len(str(h)) + 8)
+
+        # Excel 内置折线/柱状图（引用上方表格数据，第一列为分类轴）
+        if charts and table_header_row and n_data_rows:
+            for spec in charts:
+                if isinstance(spec, dict):
+                    try:
+                        _add_xlsx_chart(ws, spec, table_header_row, len(columns), n_data_rows)
+                    except Exception as e:
+                        logger.warning("Excel 图表插入失败: %s", e)
 
     wb.save(fp)
 
 
-def _render_docx(fp: Path, title: str, body: str, columns: list, rows: list) -> None:
+def _render_docx(fp: Path, title: str, body: str, columns: list, rows: list, charts: Optional[list] = None) -> None:
     from docx import Document
-    from docx.shared import Pt
+    from docx.shared import Pt, Inches
     from docx.enum.text import WD_ALIGN_PARAGRAPH
 
     doc = Document()
@@ -715,7 +1030,62 @@ def _render_docx(fp: Path, title: str, body: str, columns: list, rows: list) -> 
             for ci in range(len(columns)):
                 tr[ci].text = "" if ci >= len(cells) or cells[ci] is None else str(cells[ci])
 
+    # Word 文档嵌入图表（PNG 图片）
+    if charts:
+        for spec in charts:
+            if not isinstance(spec, dict):
+                continue
+            try:
+                _cleanup_temp_docs()
+                TEMP_DOC_DIR.mkdir(parents=True, exist_ok=True)
+                tmp_token = uuid.uuid4().hex
+                chart_fp = TEMP_DOC_DIR / f"{tmp_token}.png"
+                _render_chart_png(chart_fp, spec)
+                ct = (spec.get("title") or "图表").strip()
+                doc.add_heading(ct, level=2)
+                doc.add_picture(str(chart_fp), width=Inches(6.2))
+                doc.add_paragraph("")
+            except Exception as e:
+                logger.warning("Word 图表嵌入失败: %s", e)
+                doc.add_paragraph(f"（图表生成失败：{e}）")
+
     doc.save(fp)
+
+
+def skill_create_chart(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """生成折线/柱状/饼图 PNG，供对话内预览与下载；也可供 create_document 引用相同数据结构。"""
+    try:
+        _parse_chart_spec(args)
+    except ValueError as e:
+        return {"ok": False, "message": str(e)}
+
+    _cleanup_temp_docs()
+    TEMP_DOC_DIR.mkdir(parents=True, exist_ok=True)
+    token = uuid.uuid4().hex
+    fp = TEMP_DOC_DIR / f"{token}.png"
+    try:
+        _render_chart_png(fp, args)
+    except ImportError:
+        return {"ok": False, "message": "服务端未安装 matplotlib，无法生成图表。请联系管理员执行 pip install matplotlib"}
+    except Exception as e:
+        logger.error("图表生成失败: %s", e)
+        return {"ok": False, "message": f"图表生成失败：{e}"}
+
+    title = (args.get("title") or "图表").strip()
+    safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip() or "图表"
+    filename = f"{safe_title}.png"
+    url = "/api/ai-assistant/download?" + urlencode({"token": token, "filename": filename})
+    chart_type = (args.get("chart_type") or "line").strip().lower()
+    type_label = {"line": "折线图", "bar": "柱状图", "pie": "饼图"}.get(chart_type, "图表")
+    return {
+        "ok": True,
+        "download_url": url,
+        "preview_url": url,
+        "filename": filename,
+        "label": f"{title}（{type_label}）",
+        "chart_type": chart_type,
+        "message": f"已生成{type_label}《{filename}》，对话中会直接展示预览，用户也可点击下载。",
+    }
 
 
 def skill_create_document(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
@@ -728,12 +1098,15 @@ def skill_create_document(args: Dict[str, Any], current_user: str) -> Dict[str, 
     body = (args.get("body") or "").strip()
     columns = args.get("columns") or []
     rows = args.get("rows") or []
+    charts = args.get("charts") or []
     if not isinstance(columns, list):
         columns = []
     if not isinstance(rows, list):
         rows = []
-    if not body and not columns:
-        return {"ok": False, "message": "缺少内容：请提供正文 body 或表格 columns/rows"}
+    if not isinstance(charts, list):
+        charts = []
+    if not body and not columns and not charts:
+        return {"ok": False, "message": "缺少内容：请提供正文 body、表格 columns/rows 或 charts 图表数据"}
 
     _cleanup_temp_docs()
     TEMP_DOC_DIR.mkdir(parents=True, exist_ok=True)
@@ -741,9 +1114,9 @@ def skill_create_document(args: Dict[str, Any], current_user: str) -> Dict[str, 
     fp = TEMP_DOC_DIR / f"{token}.{fmt}"
     try:
         if fmt == "xlsx":
-            _render_xlsx(fp, title, body, columns, rows)
+            _render_xlsx(fp, title, body, columns, rows, charts=charts if charts else None)
         else:
-            _render_docx(fp, title, body, columns, rows)
+            _render_docx(fp, title, body, columns, rows, charts=charts if charts else None)
     except Exception as e:
         logger.error(f"文档生成失败: {e}")
         return {"ok": False, "message": f"文档生成失败：{e}"}
@@ -798,6 +1171,7 @@ SKILL_FUNCS = {
     "query_database": skill_query_database,
     "get_info_feed": skill_get_info_feed,
     "create_document": skill_create_document,
+    "create_chart": skill_create_chart,
 }
 
 SKILL_LABELS = {
@@ -810,6 +1184,7 @@ SKILL_LABELS = {
     "query_database": "数据库智能查询",
     "get_info_feed": "天气/新闻",
     "create_document": "生成文档",
+    "create_chart": "生成图表",
 }
 
 TOOLS = [
@@ -967,8 +1342,75 @@ TOOLS = [
                     "body": {"type": "string", "description": "文档正文，支持简单 Markdown（# 标题、- 列表、数字列表、段落）。Word 作为正文，Excel 作为表格上方说明，可选"},
                     "columns": {"type": "array", "items": {"type": "string"}, "description": "表格表头数组，可选"},
                     "rows": {"type": "array", "items": {"type": "array"}, "description": "表格数据，二维数组，每行与 columns 对应，可选"},
+                    "charts": {
+                        "type": "array",
+                        "description": "可选，嵌入文档的图表列表（Word 嵌入 PNG 图片；Excel 在表格下方插入原生折线/柱状图）。每项结构与 create_chart 相同",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "chart_type": {"type": "string", "enum": ["line", "bar", "pie"], "description": "line=折线图，bar=柱状图，pie=饼图"},
+                                "title": {"type": "string", "description": "图表标题"},
+                                "x_label": {"type": "string", "description": "X 轴标题（折线/柱状图）"},
+                                "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状图）"},
+                                "labels": {"type": "array", "items": {"type": "string"}, "description": "X 轴分类或饼图扇区名称"},
+                                "series": {
+                                    "type": "array",
+                                    "items": {
+                                        "type": "object",
+                                        "properties": {
+                                            "name": {"type": "string", "description": "系列名称"},
+                                            "values": {"type": "array", "items": {"type": "number"}, "description": "数值数组，长度须与 labels 一致"},
+                                        },
+                                        "required": ["values"],
+                                    },
+                                    "description": "数据系列，可多条（折线/柱状图支持多系列对比）",
+                                },
+                                "values": {"type": "array", "items": {"type": "number"}, "description": "单系列简写：仅一组数据时可只传 values + series_name"},
+                                "series_name": {"type": "string", "description": "单系列名称（与 values 配合）"},
+                            },
+                            "required": ["chart_type", "title", "labels"],
+                        },
+                    },
                 },
                 "required": ["format", "title"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "create_chart",
+            "description": (
+                "生成数据可视化图表（折线图/柱状图/饼图），输出 PNG 图片。"
+                "当用户要求画图、做趋势分析、数据对比、可视化统计结果时使用。"
+                "先通过 query_database / 查询类工具获取真实数据，再调用本工具绘图。"
+                "图表会在对话中直接展示预览，并支持下载。"
+                "若用户还要 Word/Excel 文档，可单独 create_document 并在 charts 参数中传入相同图表数据。"
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chart_type": {"type": "string", "enum": ["line", "bar", "pie"], "description": "line=折线图（趋势），bar=柱状图（对比），pie=饼图（占比）"},
+                    "title": {"type": "string", "description": "图表标题"},
+                    "x_label": {"type": "string", "description": "X 轴标题（折线/柱状图，可选）"},
+                    "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状图，可选）"},
+                    "labels": {"type": "array", "items": {"type": "string"}, "description": "横轴分类标签，如 ['1月','2月','3月'] 或 ['男','女']"},
+                    "series": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "properties": {
+                                "name": {"type": "string", "description": "系列名称，如 '加班时长'"},
+                                "values": {"type": "array", "items": {"type": "number"}, "description": "数值，与 labels 等长"},
+                            },
+                            "required": ["values"],
+                        },
+                        "description": "数据系列；多系列折线/柱状图可传多条",
+                    },
+                    "values": {"type": "array", "items": {"type": "number"}, "description": "单系列简写：只传一组数据时使用"},
+                    "series_name": {"type": "string", "description": "单系列名称（与 values 配合）"},
+                },
+                "required": ["chart_type", "title", "labels"],
             },
         },
     },
@@ -1147,7 +1589,12 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "    - 仅当用户要导出【加班/请假/公出】标准考勤报表时，才用 generate_report；\n"
         "    - 其他任何需要生成可下载文件的场景（如工艺指导报表、知识库整理、统计分析报告、"
         "自定义清单等），先用查询/检索工具拿到真实数据，再用 create_document 生成 Word 或 Excel。\n"
-        "    - 不要一看到“报表”二字就盲目导出加班报表；要先理解用户真正想要的内容主题。\n\n"
+        "    - 不要一看到“报表”二字就盲目导出加班报表；要先理解用户真正想要的内容主题。\n"
+        "13. 当用户要求画图、趋势分析、数据可视化、折线图/柱状图/饼图时：\n"
+        "    - 先用查询工具拿到真实数据，再调用 create_chart 生成 PNG 图表（对话中会直接展示预览）。\n"
+        "    - 若用户还要 Word/Excel 文档且需要图表，create_document 的 charts 参数传入相同图表数据"
+        "（Word 嵌入图片，Excel 在表格下方插入原生图表；Excel 需同时提供 columns/rows 表格数据）。\n"
+        "    - 不要用 Markdown/ASCII 字符画折线代替真实图表。\n\n"
         + DB_SCHEMA_HINT
     )
 
@@ -1200,6 +1647,8 @@ async def chat_stream(req: ChatRequest):
     if len(history) <= 1:
         raise HTTPException(status_code=400, detail="对话内容为空")
 
+    history = _trim_chat_history(history)
+
     extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if cfg.get("use_extra") else None
 
     model_label = _model_label(cfg)
@@ -1219,17 +1668,28 @@ async def chat_stream(req: ChatRequest):
         try:
             for _round in range(MAX_TOOL_ROUNDS):
                 yield _sse({"type": "status", "text": "正在理解问题并规划任务…" if _round == 0 else "正在结合查询结果继续分析…"})
-                kwargs = dict(
+                kwargs = _llm_request_kwargs(cfg,
                     model=model,
                     messages=messages,
                     tools=TOOLS,
                     tool_choice="auto",
-                    temperature=0.2,
+                    temperature=LLM_TEMPERATURE_TOOL,
                     stream=False,
                 )
                 if extra_body:
                     kwargs["extra_body"] = extra_body
-                resp = client.chat.completions.create(**kwargs)
+                try:
+                    resp = client.chat.completions.create(**kwargs)
+                except Exception as api_err:
+                    err_s = str(api_err)
+                    if "json_invalid" in err_s or "JSON decode" in err_s or "400" in err_s:
+                        logger.error("大模型请求体异常(%s, user=%s, msgs=%d): %s",
+                                       provider, current_user, len(messages), err_s)
+                        yield _sse({"type": "error", "message":
+                            "模型网关拒绝请求（请求体过大或格式异常）。"
+                            "领导账号查询全部门数据时较常见，已启用截断；请重试或缩小查询范围（如指定科室/月份）。"})
+                        return
+                    raise
                 msg = resp.choices[0].message
                 tool_calls = getattr(msg, "tool_calls", None) or []
                 if not tool_calls:
@@ -1244,7 +1704,7 @@ async def chat_stream(req: ChatRequest):
                             "type": "function",
                             "function": {
                                 "name": tc.function.name,
-                                "arguments": tc.function.arguments or "{}",
+                                "arguments": _safe_tool_arguments(tc.function.arguments or "{}"),
                             },
                         }
                         for i, tc in enumerate(tool_calls)
@@ -1268,13 +1728,16 @@ async def chat_stream(req: ChatRequest):
                     else:
                         result = _execute_skill(fname, fargs, current_user)
 
-                    if fname in ("generate_report", "create_document") and result.get("ok") and result.get("download_url"):
-                        yield _sse({
+                    if fname in ("generate_report", "create_document", "create_chart") and result.get("ok") and result.get("download_url"):
+                        att_evt = {
                             "type": "attachment",
                             "label": result.get("label") or "文件下载",
                             "url": result.get("download_url"),
                             "filename": result.get("filename") or "document",
-                        })
+                        }
+                        if fname == "create_chart" or (result.get("filename") or "").lower().endswith(".png"):
+                            att_evt["kind"] = "image"
+                        yield _sse(att_evt)
 
                     summary = ""
                     if isinstance(result, dict):
@@ -1291,7 +1754,7 @@ async def chat_stream(req: ChatRequest):
                     messages.append({
                         "role": "tool",
                         "tool_call_id": tc.id or f"call_{i}",
-                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                        "content": _safe_json_dumps(result),
                     })
         except Exception as e:
             logger.error(f"AI 助手工具调用失败({provider}): {e}")
@@ -1302,9 +1765,9 @@ async def chat_stream(req: ChatRequest):
         # DeepSeek 优先用 reasoner 模型：先流式输出思维链(reasoning_content)，再输出正文，
         # 让前端能看到"思考过程"。reasoner 不可用时回退普通对话模型。本地模型直接流式。
         def _emit_final(model2):
-            kwargs = dict(model=model2, messages=messages, stream=True)
+            kwargs = _llm_request_kwargs(cfg, model=model2, messages=messages, stream=True)
             if provider != "deepseek":
-                kwargs["temperature"] = 0.4
+                kwargs["temperature"] = LLM_TEMPERATURE_ANSWER
                 if extra_body:
                     kwargs["extra_body"] = extra_body
             stream = client.chat.completions.create(**kwargs)
@@ -1524,7 +1987,7 @@ async def download_document(
     """下载 create_document 生成的临时 Word/Excel 文件。"""
     if not re.fullmatch(r"[0-9a-fA-F]{8,64}", token or ""):
         raise HTTPException(status_code=400, detail="无效的下载标识")
-    for ext, mime in (("xlsx", XLSX_MIME), ("docx", DOCX_MIME)):
+    for ext, mime in (("xlsx", XLSX_MIME), ("docx", DOCX_MIME), ("png", PNG_MIME)):
         fp = TEMP_DOC_DIR / f"{token}.{ext}"
         if fp.exists():
             dl_name = (filename or fp.name).strip() or fp.name

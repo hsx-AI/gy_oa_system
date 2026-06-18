@@ -22,6 +22,7 @@
         <span class="ai-page__tag">部门人员职级</span>
         <span class="ai-page__tag">数据统计分析</span>
         <span class="ai-page__tag">报表导出</span>
+        <span class="ai-page__tag">数据图表</span>
         <span class="ai-page__tag">排班/节假日</span>
         <span class="ai-page__tag">天气/新闻</span>
       </div>
