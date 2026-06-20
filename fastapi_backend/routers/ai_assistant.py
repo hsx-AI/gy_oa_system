@@ -32,6 +32,7 @@ from pathlib import Path
 from urllib.parse import urlencode, quote
 from collections import defaultdict
 import calendar
+import asyncio
 import os
 import re
 import json
@@ -114,13 +115,43 @@ SHIFT_BUSINESS_DEPARTMENTS = [
     "数控编程室",
 ]
 
+DEPARTMENT_ALIASES: Dict[str, str] = {
+    "水轮机室": "水轮机工艺室", "水轮机": "水轮机工艺室",
+    "水发室": "水发工艺室", "水发": "水发工艺室",
+    "汽发室": "汽发工艺室", "汽发": "汽发工艺室",
+    "焊艺室": "焊接工艺室", "焊艺": "焊接工艺室", "焊接": "焊接工艺室",
+    "综合室": "综合技术室", "综合": "综合技术室",
+    "非标室": "非标技术室", "非标": "非标技术室",
+    "工具室": "工具技术室", "工具": "工具技术室",
+    "智能室": "智能制造技术室", "智能制造室": "智能制造技术室",
+    "数控室": "数控编程室", "编程室": "数控编程室", "数控": "数控编程室",
+    "部办": "部办",
+}
+
+
+def _normalize_lsys(raw: str) -> str:
+    """将用户/模型传入的科室简称映射为数据库正式 lsys。"""
+    s = (raw or "").strip()
+    if not s:
+        return ""
+    return DEPARTMENT_ALIASES.get(s, s)
+
 DEPARTMENT_KNOWLEDGE = (
-    "组织结构知识：本部门为智能制造工艺部。下设 9 个科室："
-    "水轮机工艺室（简称水轮机室）、水发工艺室（简称水发室）、汽发工艺室（简称汽发室）、"
-    "焊接工艺室（简称焊艺室）、综合技术室（简称综合室）、非标技术室（简称非标室）、"
-    "工具技术室（简称工具室）、智能制造技术室（简称智能室）、数控编程室（简称数控室/编程室）。"
-    "除此之外，部门领导层和总师组成部门办公室“部办”。"
-    "用户使用简称提问时，应先映射为上述数据库中的正式科室名称再查询。"
+    "【部门组织结构】\n"
+    "本部门全称：智能制造工艺部（哈电智能制造工艺部门）。\n"
+    "下设 9 大科室（调用工具时 lsys 参数须使用下列正式名称）：\n"
+    "· 水轮机工艺室（简称：水轮机室）\n"
+    "· 水发工艺室（简称：水发室）\n"
+    "· 汽发工艺室（简称：汽发室）\n"
+    "· 焊接工艺室（简称：焊艺室）\n"
+    "· 综合技术室（简称：综合室）\n"
+    "· 非标技术室（简称：非标室）\n"
+    "· 工具技术室（简称：工具室）\n"
+    "· 智能制造技术室（简称：智能室）\n"
+    "· 数控编程室（简称：数控室、编程室）\n"
+    "另：部门领导层与总师组成部门办公室「部办」（lsys='部办'，与上述 9 个科室并列，不是某个工艺室）。\n"
+    "用户用简称提问时（如「智能室加班情况」「焊艺室人数」），须先映射为正式科室名再查询；"
+    "「全部门/整个工艺部」指上述 9 个科室及部办全体在职人员。"
 )
 
 # 提供给大模型的安全表结构说明（仅含可查询字段）
@@ -160,8 +191,8 @@ DEFAULT_LOCAL_MODEL = "qwen3:8b"
 
 # DeepSeek 联网模型
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-v4-flash"
-DEEPSEEK_REASONER_MODEL = "deepseek-v4-flash"
+DEEPSEEK_MODEL = "deepseek-v4-flash"          # 工具调用（function calling）用
+DEEPSEEK_REASONER_MODEL = "deepseek-v4-flash"  # 最终回答用，可输出思维链 reasoning_content
 
 # 工具调用最多迭代轮数，防止无限循环
 MAX_TOOL_ROUNDS = 4
@@ -332,33 +363,25 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
             )
         return out
 
-    if fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary", "query_full_attendance"):
+    if fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary",
+                 "query_full_attendance", "query_work_intensity", "query_discipline_clock",
+                 "query_leader_overtime"):
         for k in ("scope", "start_date", "end_date", "count", "message", "metric", "metric_label", "unit",
-                  "totals", "chart_hint", "year", "month", "workdays", "total_people", "full_count", "rate",
-                  "full_names"):
+                  "totals", "chart_hint", "year", "month", "lsys", "workdays", "totalPeople", "fullCount",
+                  "rate", "totalOvertimeHours", "totalLeaveHours", "totalActualHours", "overallIntensity",
+                  "rankInfo", "clockInTotal", "clockOutTotal", "clockInRange", "clockOutRange",
+                  "totalHours", "personCount", "range", "periodMonths", "rankBaselineYear", "rankTotal"):
             if k in result:
                 out[k] = result[k]
-        rows = result.get("rows") or []
-        if _small_enough(len(rows)):
-            out["rows"] = rows
-        else:
-            out["rows_sample"] = rows[:LLM_TOOL_SAMPLE_ROWS]
-            out["rows_count"] = len(rows)
-        return out
-
-    if fname == "query_work_intensity":
-        for k in ("scope", "year", "month", "start_date", "end_date", "effective_end_date", "range_mode",
-                  "formula", "workdays", "expected_hours_per_person", "total_people", "total_overtime_hours",
-                  "total_leave_hours", "total_actual_hours", "overall_intensity", "overtime_calc_method",
-                  "message", "person_count_total", "person_count_returned"):
-            if k in result:
-                out[k] = result[k]
-        by_dept = result.get("by_dept") or []
-        by_person = result.get("by_person") or []
-        out["by_dept"] = by_dept if _small_enough(len(by_dept)) else by_dept[:LLM_TOOL_SAMPLE_ROWS]
-        out["by_person"] = by_person if _small_enough(len(by_person)) else by_person[:LLM_TOOL_SAMPLE_ROWS]
-        if len(by_person) > LLM_TOOL_SAMPLE_ROWS:
-            out["_hint"] = f"人员明细共 {result.get('person_count_total', len(by_person))} 人，已附前 {len(out['by_person'])} 人。"
+        for key in ("rows", "byDept", "byPerson", "fullNames_sample", "clockIn", "clockOut", "list", "details_sample"):
+            arr = result.get(key) or []
+            if not isinstance(arr, list):
+                continue
+            if _small_enough(len(arr)):
+                out[key] = arr
+            else:
+                out[f"{key}_sample"] = arr[:LLM_TOOL_SAMPLE_ROWS]
+                out[f"{key}_count"] = len(arr)
         return out
 
     if fname in ("query_overtime", "query_leave", "query_business_trip"):
@@ -394,7 +417,7 @@ def _summarize_tool_result_for_llm(fname: str, result: Any, fargs: Optional[Dict
         return out
 
     # 下载/图表类：只保留状态，URL 已在 attachment 事件里
-    if fname in ("generate_report", "create_document", "create_chart"):
+    if fname in ("generate_report", "export_report_center", "create_document", "create_chart"):
         out.update({k: result[k] for k in ("message", "label", "filename", "chart_type") if k in result})
         if result.get("download_url"):
             out["download_url"] = "(已生成，见对话附件)"
@@ -517,6 +540,158 @@ def _strip_external_chart_links(text: str) -> str:
     s = re.sub(r"\[[^\]]*(?:图表|折线图|下载|PNG|图片)[^\]]*\]\(\s*https?://[^)]*\)", "（图表请点击下方本地生成的附件下载）", s, flags=re.I)
     s = re.sub(r"https?://(?:via\.placeholder\.com|placehold\.co|quickchart\.io|image-charts\.com|chart\.googleapis\.com)[^\s)）]+", "", s, flags=re.I)
     return s
+
+
+def _user_declines_chart(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    return bool(re.search(r"(不要|不用|无需|别|不必).{0,8}(图|图表|可视化)|只要(文字|数据|表格|列表)", s))
+
+
+def _is_work_intensity_or_discipline_question(text: str) -> bool:
+    s = (text or "").strip()
+    if not s:
+        return False
+    return bool(re.search(
+        r"(工作强度|强度排行|强度统计|考勤纪律|打卡纪律|早到|晚走|踩点|实际在岗|在岗小时|"
+        r"口径\s*[ABCＡＢＣ]|口径[一二三]|公式\s*[ABCＡＢＣ])",
+        s,
+        flags=re.I,
+    ))
+
+
+def _chart_field_from_text(text: str, default_field: str, default_name: str) -> Tuple[str, str, str]:
+    s = text or ""
+    if "人均" in s and ("加班" in s or "工时" in s):
+        return "overtime_per_capita", "人均加班", "小时/人"
+    if "人均" in s and "请假" in s:
+        return "leave_per_capita", "人均请假", "天/人"
+    if "人均" in s and ("公出" in s or "出差" in s):
+        return "trip_per_capita", "人均公出", "天/人"
+    if "请假" in s:
+        return "leave_days", "请假天数", "天"
+    if "公出" in s or "出差" in s:
+        return "trip_days", "公出天数", "天"
+    if "满勤率" in s:
+        return "rate", "满勤率", "%"
+    if "满勤" in s:
+        return "fullCount", "满勤人数", "人"
+    return default_field, default_name, ""
+
+
+def _row_label(row: Dict[str, Any]) -> str:
+    for k in ("name", "lsys", "department", "key", "month"):
+        v = row.get(k)
+        if v not in (None, ""):
+            return str(v)
+    return "项目"
+
+
+def _to_chart_value(value: Any, percent: bool = False) -> float:
+    try:
+        num = float(value or 0)
+    except (TypeError, ValueError):
+        num = 0.0
+    return round(num * 100, 2) if percent else round(num, 2)
+
+
+def _auto_chart_spec_from_tool_result(fname: str, result: Dict[str, Any], fargs: Dict[str, Any], user_text: str) -> Optional[Dict[str, Any]]:
+    if not isinstance(result, dict) or not result.get("ok", True) or _user_declines_chart(user_text):
+        return None
+    if fname in ("query_database", "query_overtime", "query_leave", "query_business_trip", "query_shift_schedule"):
+        return None
+
+    scope = result.get("scope") or result.get("lsys") or fargs.get("department") or fargs.get("lsys") or "统计"
+    start = result.get("start_date") or ""
+    end = result.get("end_date") or ""
+    period = f"{start}至{end}" if start and end else str(result.get("year") or datetime.now().year)
+    text = user_text or ""
+
+    if fname == "query_monthly_summary":
+        hint = result.get("chart_hint") or {}
+        labels = hint.get("labels") or []
+        series = hint.get("series") or []
+        if len(labels) >= 2 and series:
+            chart_type = "area" if "面积" in text else ("bar" if "柱" in text else "line")
+            return {
+                "chart_type": chart_type,
+                "title": f"{scope}{period}月度趋势",
+                "x_label": "月份",
+                "y_label": "数值",
+                "labels": labels,
+                "series": series,
+            }
+
+    if fname == "query_dept_comparison":
+        rows = (result.get("rows") or [])[:12]
+        if len(rows) >= 2:
+            labels = [_row_label(r) for r in rows]
+            if not any(k in text for k in ("加班", "请假", "公出", "出差", "人均")):
+                series = [
+                    {"name": "加班小时", "values": [_to_chart_value(r.get("overtime_hours")) for r in rows]},
+                    {"name": "请假天数", "values": [_to_chart_value(r.get("leave_days")) for r in rows]},
+                    {"name": "公出天数", "values": [_to_chart_value(r.get("trip_days")) for r in rows]},
+                ]
+                return {"chart_type": "bar", "title": f"{period}科室横向对比", "x_label": "科室", "y_label": "数值", "labels": labels, "series": series}
+            field, name, unit = _chart_field_from_text(text, "overtime_hours", "加班小时")
+            return {"chart_type": "bar", "title": f"{period}{name}科室对比", "x_label": "科室", "y_label": unit or name, "labels": labels, "series": [{"name": name, "values": [_to_chart_value(r.get(field), field == "rate") for r in rows]}]}
+
+    if fname == "query_person_ranking":
+        rows = (result.get("rows") or [])[:15]
+        if len(rows) >= 2:
+            return {
+                "chart_type": "horizontal_bar",
+                "title": f"{period}{result.get('metric_label') or '人员'}排行",
+                "x_label": result.get("unit") or "数值",
+                "y_label": "人员",
+                "labels": [_row_label(r) for r in rows],
+                "series": [{"name": result.get("metric_label") or "数值", "values": [_to_chart_value(r.get("value")) for r in rows]}],
+            }
+
+    if fname == "query_full_attendance":
+        rows = result.get("byDept") or []
+        if len(rows) >= 2:
+            field, name, unit = _chart_field_from_text(text, "rate", "满勤率")
+            return {
+                "chart_type": "bar",
+                "title": f"{scope}{period}{name}",
+                "x_label": "科室",
+                "y_label": unit or name,
+                "labels": [_row_label(r) for r in rows],
+                "series": [{"name": name, "values": [_to_chart_value(r.get(field), field == "rate") for r in rows]}],
+            }
+        total = int(result.get("totalPeople") or 0)
+        full = int(result.get("fullCount") or 0)
+        if total > 0:
+            return {"chart_type": "pie", "title": f"{scope}{period}满勤构成", "labels": ["满勤", "未满勤"], "series": [{"name": "人数", "values": [full, max(total - full, 0)]}]}
+
+    if fname == "query_work_intensity":
+        rows = result.get("byDept") or result.get("byPerson") or []
+        rows = rows[:15]
+        if len(rows) >= 2:
+            return {
+                "chart_type": "horizontal_bar",
+                "title": f"{scope}{period}工作强度排行",
+                "x_label": "工作强度(%)",
+                "y_label": "对象",
+                "labels": [_row_label(r) for r in rows],
+                "series": [{"name": "工作强度", "values": [_to_chart_value(r.get("intensity"), True) for r in rows]}],
+            }
+
+    if fname == "query_discipline_clock":
+        rows = result.get("clockOut") if any(k in text for k in ("下班", "晚走", "退勤")) else result.get("clockIn")
+        name = "晚走打卡" if rows is result.get("clockOut") else "早到打卡"
+        rows = (rows or [])[:15]
+        if len(rows) >= 2:
+            return {"chart_type": "horizontal_bar", "title": f"{scope}{period}{name}排行", "x_label": "次数", "y_label": "对象", "labels": [_row_label(r) for r in rows], "series": [{"name": "次数", "values": [_to_chart_value(r.get("count")) for r in rows]}]}
+
+    if fname == "query_leader_overtime":
+        rows = (result.get("list") or [])[:15]
+        if len(rows) >= 2:
+            return {"chart_type": "horizontal_bar", "title": f"{period}领导加班排行", "x_label": "小时", "y_label": "人员", "labels": [_row_label(r) for r in rows], "series": [{"name": "加班小时", "values": [_to_chart_value(r.get("hours")) for r in rows]}]}
+
+    return None
 
 
 def _plain_messages_for_answer(messages: List[Dict[str, Any]]) -> List[Dict[str, str]]:
@@ -1068,7 +1243,7 @@ def skill_query_business_trip_summary(args: Dict[str, Any], current_user: str) -
         "total_days": total_days,
         "by_department": by_department,
         "by_person": by_person[:50],
-        "message": (
+            "message": (
             f"{dept or '全部门'} {ds_lo} 至 {ds_hi} 已审批通过公出："
             f"{raw_records} 条，{len(by_person)} 人，合计 {total_days} 天。"
             "天数已按人合并重叠区间并裁剪到查询区间。"
@@ -1394,309 +1569,185 @@ def skill_query_monthly_summary(args: Dict[str, Any], current_user: str) -> Dict
                 {"name": "公出天数", "values": [r["trip_days"] for r in rows]},
             ],
         },
-        "message": "月度趋势已由后端按统一统计口径计算完成，可直接用于折线图。",
+        "message": "月度趋势已由后端按统一统计口径计算完成，可直接用于折线图、柱状图或面积图。",
     }
 
 
 def _statistics_module():
-    """延迟导入驾驶舱统计模块，避免应用启动阶段的循环导入。"""
     try:
         from routers import statistics as stats
-        return stats
     except Exception:
         from fastapi_backend.routers import statistics as stats
-        return stats
+    return stats
+
+
+def _run_async_tool(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    import concurrent.futures
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+        return executor.submit(asyncio.run, coro).result()
 
 
 def skill_query_full_attendance(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
-    """满勤统计：复用管理驾驶舱 full-attendance 口径。"""
+    """管理驾驶舱满勤统计：月度/年度满勤率、满勤人数、科室分布。"""
     stats = _statistics_module()
-    today = datetime.now().date()
-    year = int(args.get("year") or today.year)
-    month_raw = args.get("month")
-    month = int(month_raw) if month_raw not in (None, "", 0) else None
-    if month is not None and not 1 <= month <= 12:
-        return {"ok": False, "message": "month 必须是 1-12。"}
-
-    err, dept, name_filter = _visible_scope_filter(
-        current_user,
-        args.get("department") or args.get("lsys") or "",
-        args.get("name") or "",
-    )
-    if err:
-        return {"ok": False, "message": err}
-
-    staff = _staff_rows_for_scope(dept=dept, name=name_filter)
-    names = [r["name"] for r in staff]
-    by_name_dept = {r["name"]: r["lsys"] for r in staff}
-    scope_label = name_filter or dept or "全部门"
-    if not names:
-        return {
-            "ok": True,
-            "scope": scope_label,
-            "year": year,
-            "month": month,
-            "total_people": 0,
-            "full_count": 0,
-            "rate": 0,
-            "rows": [],
-            "message": "未查询到符合权限范围的在职人员。",
-        }
-
-    def _month_result(m: int) -> Dict[str, Any]:
-        abnormal = stats._compute_abnormal_set(names, year, m)
-        full_names = sorted(n for n in names if n not in abnormal)
-        total = len(names)
-        full_count = len(full_names)
-        by_dept_acc: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"total_people": 0, "full_count": 0, "full_names": []})
-        for n in names:
-            d = by_name_dept.get(n, "")
-            by_dept_acc[d]["total_people"] += 1
-            if n not in abnormal:
-                by_dept_acc[d]["full_count"] += 1
-                by_dept_acc[d]["full_names"].append(n)
-        by_dept = []
-        for d, v in sorted(by_dept_acc.items()):
-            total_d = int(v["total_people"] or 0)
-            full_d = int(v["full_count"] or 0)
-            by_dept.append({
-                "lsys": d,
-                "total_people": total_d,
-                "full_count": full_d,
-                "rate": round(full_d / total_d, 4) if total_d else 0,
-                "full_names": sorted(v["full_names"]),
-            })
-        return {
-            "month": m,
-            "workdays": stats._count_workdays_in_month(year, m),
-            "total_people": total,
-            "full_count": full_count,
-            "rate": round(full_count / total, 4) if total else 0,
-            "full_names": full_names,
-            "by_dept": by_dept,
-        }
-
-    if month:
-        result = _month_result(month)
-        return {
-            "ok": True,
-            "scope": scope_label,
-            "year": year,
-            **result,
-            "rows": result["by_dept"],
-            "message": "满勤统计已按管理驾驶舱口径计算：当月考勤异常全部由已通过公出覆盖或无异常才算满勤。",
-        }
-
-    rows = []
-    for m in range(1, 13):
-        r = _month_result(m)
-        rows.append({
-            "month": m,
-            "total_people": r["total_people"],
-            "full_count": r["full_count"],
-            "rate": r["rate"],
-        })
+    year = int(args.get("year") or datetime.now().year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    lsys = _normalize_lsys(args.get("lsys") or args.get("department") or "") or None
+    try:
+        if month:
+            data = _run_async_tool(stats.get_leader_full_attendance(year=year, month=month, lsys=lsys))
+        else:
+            data = _run_async_tool(stats.get_leader_full_attendance_year(year=year, lsys=lsys))
+    except HTTPException as e:
+        return {"ok": False, "message": str(e.detail)}
+    if not isinstance(data, dict) or not data.get("success"):
+        return {"ok": False, "message": "满勤统计查询失败。"}
+    by_dept = data.get("byDept") or []
     return {
         "ok": True,
-        "scope": scope_label,
         "year": year,
-        "total_people": rows[-1]["total_people"] if rows else len(names),
-        "rows": rows,
-        "chart_hint": {
-            "labels": [f"{r['month']}月" for r in rows],
-            "series": [
-                {"name": "满勤人数", "values": [r["full_count"] for r in rows]},
-                {"name": "满勤率", "values": [round(r["rate"] * 100, 2) for r in rows]},
-            ],
-        },
-        "message": "全年满勤趋势已按管理驾驶舱口径逐月计算。",
+        "month": month,
+        "lsys": lsys or "全部门",
+        "workdays": data.get("workdays"),
+        "totalPeople": data.get("totalPeople"),
+        "fullCount": data.get("fullCount"),
+        "rate": data.get("rate"),
+        "fullNames_sample": (data.get("fullNames") or [])[:50],
+        "byDept": [
+            {
+                "lsys": d.get("lsys"),
+                "totalPeople": d.get("totalPeople"),
+                "fullCount": d.get("fullCount"),
+                "rate": d.get("rate"),
+                "fullNames_sample": (d.get("fullNames") or [])[:20],
+            }
+            for d in by_dept[:20]
+        ],
+        "message": "满勤统计已由管理驾驶舱后端口径计算完成。",
     }
 
 
 def skill_query_work_intensity(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
-    """工作强度统计：复用管理驾驶舱 /leader/work-intensity 核心口径。"""
+    """管理驾驶舱工作强度统计：口径 A/B/C、按科室和个人排行。"""
     stats = _statistics_module()
-    today = datetime.now().date()
-    year = int(args.get("year") or today.year)
-    month_raw = args.get("month")
-    month = int(month_raw) if month_raw not in (None, "", 0) else None
-    if month is not None and not 1 <= month <= 12:
-        return {"ok": False, "message": "month 必须是 1-12。"}
-
-    req_dept = args.get("department") or args.get("lsys") or ""
-    req_dept = _resolve_shift_department(req_dept, current_user) if req_dept else ""
-    if req_dept == "__ALL__":
-        req_dept = ""
-    req_name = (args.get("name") or "").strip() or None
+    year = int(args.get("year") or datetime.now().year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    lsys = _normalize_lsys(args.get("lsys") or args.get("department") or "") or None
+    name = (args.get("name") or "").strip() or None
+    date_from = (args.get("start_date") or args.get("date_from") or "").strip() or None
+    date_to = (args.get("end_date") or args.get("date_to") or "").strip() or None
     formula = (args.get("formula") or args.get("intensity_formula") or "a").strip().lower()
-    if formula not in ("a", "b", "c"):
-        formula = "a"
-    limit = max(1, min(int(args.get("limit") or 30), 100))
-
+    limit = max(1, min(int(args.get("limit") or 20), 100))
     try:
-        scoped_lsys, scoped_name = stats._work_intensity_scope(current_user, req_dept or None, req_name)
+        data = _run_async_tool(stats.get_work_intensity(
+            year=year, month=month, lsys=lsys, current_user=current_user, name=name,
+            date_from=date_from, date_to=date_to, intensity_formula=formula,
+        ))
     except HTTPException as e:
         return {"ok": False, "message": str(e.detail)}
-    except Exception as e:
-        return {"ok": False, "message": f"工作强度权限校验失败：{e}"}
+    if not isinstance(data, dict) or not data.get("success"):
+        return {"ok": False, "message": "工作强度统计查询失败。"}
+    return {
+        "ok": True,
+        "year": year,
+        "month": month,
+        "lsys": lsys or "全部门",
+        "formula": data.get("intensityFormula") or formula,
+        "workdays": data.get("workdays"),
+        "expectedHoursPerPerson": data.get("expectedHoursPerPerson"),
+        "totalPeople": data.get("totalPeople"),
+        "totalOvertimeHours": data.get("totalOvertimeHours"),
+        "totalLeaveHours": data.get("totalLeaveHours"),
+        "totalActualHours": data.get("totalActualHours"),
+        "overallIntensity": data.get("overallIntensity"),
+        "rankInfo": data.get("rankInfo"),
+        "byDept": (data.get("byDept") or [])[:20],
+        "byPerson": (data.get("rankList") or data.get("byPerson") or [])[:limit],
+        "message": "工作强度统计已由管理驾驶舱后端口径计算完成。",
+    }
 
-    date_from = (args.get("start_date") or args.get("date_from") or "").strip()
-    date_to = (args.get("end_date") or args.get("date_to") or "").strip()
-    hours_per_day = 8
-    range_meta: Dict[str, Any] = {}
 
+def skill_query_discipline_clock(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """考勤纪律审查：早到、晚走打卡次数统计，可按人员/科室/月聚合。"""
+    stats = _statistics_module()
+    year = int(args.get("year") or datetime.now().year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    lsys = _normalize_lsys(args.get("lsys") or args.get("department") or "") or None
+    dimension = (args.get("dimension") or "person").strip()
+    limit = max(1, min(int(args.get("limit") or 20), 100))
     try:
-        if date_from or date_to:
-            if not date_from or not date_to:
-                return {"ok": False, "message": "自定义日期范围需要同时提供 start_date/date_from 和 end_date/date_to。"}
-            ds = stats._parse_date(date_from)
-            de = stats._parse_date(date_to)
-            if not ds or not de:
-                return {"ok": False, "message": "日期格式无效，请使用 YYYY-MM-DD。"}
-            if de < ds:
-                ds, de = de, ds
-            effective_end = min(de, today)
-            workdays = stats._count_workdays_between(ds, effective_end) if ds <= effective_end else 0
-            expected_hours = workdays * hours_per_day
-            trip_map = stats._get_trip_days_by_person_range(ds, de, None)
-            ot_start, ot_end = ds, effective_end
-            leave_start, leave_end = ds, effective_end
-            range_meta = {"range_mode": True, "start_date": ds.isoformat(), "end_date": de.isoformat(), "effective_end_date": effective_end.isoformat()}
-        elif month:
-            if year == today.year and month == today.month:
-                workdays = stats._count_workdays_in_month_until(year, month, today.day)
-            else:
-                workdays = stats._count_workdays_in_month(year, month)
-            expected_hours = workdays * hours_per_day
-            trip_map = stats._get_trip_days_by_person(year, month, None)
-            month_first = date(year, month, 1)
-            month_last = date(year, month, calendar.monthrange(year, month)[1])
-            ot_start = month_first
-            ot_end = min(month_last, today) if year == today.year and month == today.month else month_last
-            leave_start, leave_end = month_first, month_last
-            range_meta = {"range_mode": False, "year": year, "month": month}
-        else:
-            if year == today.year:
-                workdays = sum(stats._count_workdays_in_month(year, m) for m in range(1, today.month))
-                workdays += stats._count_workdays_in_month_until(year, today.month, today.day)
-            else:
-                workdays = sum(stats._count_workdays_in_month(year, m) for m in range(1, 13))
-            expected_hours = workdays * hours_per_day
-            trip_map = stats._get_trip_days_by_person(year, None, None)
-            year_first = date(year, 1, 1)
-            year_last = date(year, 12, 31)
-            ot_start = year_first
-            ot_end = min(year_last, today) if year == today.year else year_last
-            leave_start, leave_end = year_first, ot_end
-            range_meta = {"range_mode": False, "year": year, "month": None}
+        data = _run_async_tool(stats.get_clock_in_discipline_stats(
+            year=year,
+            month=month,
+            lsys=lsys,
+            dimension=dimension,
+            clock_in_minutes=int(args.get("clock_in_minutes") or 2),
+            clock_out_minutes=int(args.get("clock_out_minutes") or 2),
+        ))
+    except HTTPException as e:
+        return {"ok": False, "message": str(e.detail)}
+    if not isinstance(data, dict) or not data.get("success"):
+        return {"ok": False, "message": "考勤纪律统计查询失败。"}
+    return {
+        "ok": True,
+        "year": year,
+        "month": month,
+        "lsys": lsys or "全部门",
+        "dimension": dimension,
+        "clockInTotal": data.get("clockInTotal"),
+        "clockOutTotal": data.get("clockOutTotal"),
+        "clockInRange": data.get("clockInRange"),
+        "clockOutRange": data.get("clockOutRange"),
+        "clockIn": (data.get("clockIn") or [])[:limit],
+        "clockOut": (data.get("clockOut") or [])[:limit],
+        "message": "考勤纪律审查统计已由管理驾驶舱后端口径计算完成。",
+    }
 
-        staff = stats._get_staff_with_dept(None)
-        all_names = sorted({s["name"] for s in staff})
-        ot_raw = stats._leader_style_overtime_hours_from_attendance(all_names, ot_start, ot_end) if all_names else {}
-        ot_map = {n: round(float(ot_raw.get(n, 0.0)), 2) for n in all_names}
 
-        uses_leave_deduction = formula in ("b", "c")
-        if formula == "b":
-            leave_days_map = stats._get_leave_days_by_person_period(leave_start, leave_end, None)
-        elif formula == "c":
-            leave_days_map = stats._get_leave_days_by_person_period(
-                leave_start, leave_end, None, qjfs_allowlist=stats._WI_FORMULA_C_QJFS
-            )
-        else:
-            leave_days_map = {}
-
-        people = []
-        for s in staff:
-            name = s["name"]
-            dept = s["lsys"]
-            ot = float(ot_map.get(name, 0))
-            trip_days = float((trip_map.get(name) or {}).get("tripDays", 0))
-            trip_holiday_days = float((trip_map.get(name) or {}).get("holidayTripDays", 0))
-            actual_hours = expected_hours - trip_days * hours_per_day + trip_holiday_days * hours_per_day
-            leave_hours = float(leave_days_map.get(name, 0.0)) * hours_per_day if uses_leave_deduction else 0.0
-            net_ot = ot - leave_hours if uses_leave_deduction else ot
-            intensity = round(net_ot / actual_hours, 4) if actual_hours > 0 else 0
-            row = {
-                "name": name,
-                "lsys": dept,
-                "jb": s.get("jb") or "",
-                "overtime_hours": round(ot, 2),
-                "trip_days": round(trip_days, 2),
-                "trip_holiday_days": round(trip_holiday_days, 2),
-                "actual_hours": round(actual_hours, 2),
-                "intensity": intensity,
-            }
-            if uses_leave_deduction:
-                row["leave_hours"] = round(leave_hours, 2)
-            people.append(row)
-
-        people.sort(key=lambda x: (-x["intensity"], -x["actual_hours"], x["name"]))
-        for i, p in enumerate(people, 1):
-            p["rank"] = i
-
-        if scoped_name:
-            visible_people = [p for p in people if p["name"] == scoped_name]
-        elif scoped_lsys:
-            visible_people = [p for p in people if p["lsys"] == scoped_lsys]
-        else:
-            visible_people = people
-
-        dept_acc: Dict[str, Dict[str, float]] = defaultdict(lambda: {"count": 0, "ot": 0.0, "leave": 0.0, "trip": 0.0, "trip_holiday": 0.0})
-        for p in visible_people:
-            d = dept_acc[p["lsys"]]
-            d["count"] += 1
-            d["ot"] += float(p.get("overtime_hours") or 0)
-            d["leave"] += float(p.get("leave_hours") or 0)
-            d["trip"] += float(p.get("trip_days") or 0)
-            d["trip_holiday"] += float(p.get("trip_holiday_days") or 0)
-
-        by_dept = []
-        for dept_name, d in dept_acc.items():
-            actual = expected_hours * d["count"] - d["trip"] * hours_per_day + d["trip_holiday"] * hours_per_day
-            net_ot = d["ot"] - d["leave"] if uses_leave_deduction else d["ot"]
-            row = {
-                "lsys": dept_name,
-                "person_count": int(d["count"]),
-                "overtime_hours": round(d["ot"], 2),
-                "trip_days": round(d["trip"], 2),
-                "trip_holiday_days": round(d["trip_holiday"], 2),
-                "actual_hours": round(actual, 2),
-                "intensity": round(net_ot / actual, 4) if actual > 0 else 0,
-            }
-            if uses_leave_deduction:
-                row["leave_hours"] = round(d["leave"], 2)
-            by_dept.append(row)
-        by_dept.sort(key=lambda x: -x["intensity"])
-
-        total_ot = sum(float(p.get("overtime_hours") or 0) for p in visible_people)
-        total_leave = sum(float(p.get("leave_hours") or 0) for p in visible_people) if uses_leave_deduction else 0.0
-        total_trip = sum(float(p.get("trip_days") or 0) for p in visible_people)
-        total_trip_holiday = sum(float(p.get("trip_holiday_days") or 0) for p in visible_people)
-        total_actual = expected_hours * len(visible_people) - total_trip * hours_per_day + total_trip_holiday * hours_per_day
-        overall_intensity = round((total_ot - total_leave) / total_actual, 4) if total_actual > 0 else 0
-
-        return {
-            "ok": True,
-            **range_meta,
-            "scope": scoped_name or scoped_lsys or "全部门",
-            "formula": formula,
-            "workdays": workdays,
-            "expected_hours_per_person": expected_hours,
-            "total_people": len(visible_people),
-            "total_overtime_hours": round(total_ot, 2),
-            "total_leave_hours": round(total_leave, 2) if uses_leave_deduction else None,
-            "total_actual_hours": round(total_actual, 2),
-            "overall_intensity": overall_intensity,
-            "by_dept": by_dept,
-            "by_person": visible_people[:limit],
-            "person_count_returned": min(len(visible_people), limit),
-            "person_count_total": len(visible_people),
-            "overtime_calc_method": "attendance",
-            "message": "工作强度已按管理驾驶舱口径计算：加班来自打卡识别，实际在岗小时扣除公出并加回公出期间节假日。",
-        }
-    except Exception as e:
-        logger.exception("工作强度工具计算失败")
-        return {"ok": False, "message": f"工作强度统计失败：{e}"}
+def skill_query_leader_overtime(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """领导加班统计：部办人员打卡加班识别、领导岗位月均天数和估算排名。"""
+    stats = _statistics_module()
+    year = int(args.get("year") or datetime.now().year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    date_from = (args.get("start_date") or args.get("date_from") or "").strip() or None
+    date_to = (args.get("end_date") or args.get("date_to") or "").strip() or None
+    limit = max(1, min(int(args.get("limit") or 20), 100))
+    try:
+        data = _run_async_tool(stats.get_leader_overtime_from_attendance(
+            year=year,
+            month=month,
+            date_from=date_from,
+            date_to=date_to,
+            current_user=current_user,
+        ))
+    except HTTPException as e:
+        return {"ok": False, "message": str(e.detail)}
+    if not isinstance(data, dict) or not data.get("success"):
+        return {"ok": False, "message": "领导加班统计查询失败。"}
+    return {
+        "ok": True,
+        "year": data.get("year"),
+        "month": data.get("month"),
+        "range": data.get("range"),
+        "periodMonths": data.get("periodMonths"),
+        "rankBaselineYear": data.get("rankBaselineYear"),
+        "rankTotal": data.get("rankTotal"),
+        "totalHours": data.get("totalHours"),
+        "personCount": data.get("personCount"),
+        "list": (data.get("list") or [])[:limit],
+        "details_sample": (data.get("details") or [])[:30],
+        "message": "领导加班统计已由管理驾驶舱后端口径计算完成。",
+    }
 
 
 def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
@@ -1720,6 +1771,8 @@ def skill_query_department(args: Dict[str, Any], current_user: str) -> Dict[str,
         else:
             if not lsys:
                 lsys = _get_user_dept(current_user).get("lsys", "")
+            else:
+                lsys = _normalize_lsys(lsys)
             if not lsys:
                 return {"ok": False, "message": "未指定科室，且无法识别当前用户所属科室"}
             rows = db.execute_query(base + " AND lsys = %s ORDER BY name", (lsys,))
@@ -1786,6 +1839,157 @@ def skill_generate_report(args: Dict[str, Any], current_user: str) -> Dict[str, 
         "filename": filename,
         "label": f"{title} {period}{type_label[report_type]}报表",
         "message": f"已生成《{filename}》下载链接，请提示用户点击下方按钮下载。",
+    }
+
+
+def _report_center_period(args: Dict[str, Any]) -> Tuple[int, Optional[int], str]:
+    year = int(args.get("year") or datetime.now().year)
+    month = args.get("month")
+    month = int(month) if month not in (None, "", 0) else None
+    label = f"{year}年{month}月" if month else f"{year}年全年"
+    return year, month, label
+
+
+def skill_export_report_center(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+    """导出报表中心中已有后端文件流报表，返回真实系统下载附件。"""
+    raw_type = (args.get("report_type") or args.get("report_id") or "").strip().lower().replace("-", "_")
+    aliases = {
+        "attendance_exception": "attendance_exceptions",
+        "attendance_exceptions": "attendance_exceptions",
+        "exceptions": "attendance_exceptions",
+        "leave_handler": "leave_handler",
+        "suggestion_attendance": "suggestion_attendance",
+        "attendance_day": "suggestion_attendance",
+        "daily_attendance": "suggestion_attendance",
+        "attendance_report": "attendance_report",
+        "attendance_word": "attendance_report",
+        "holiday_duty": "holiday_duty",
+        "duty": "holiday_duty",
+        "shift": "shift_schedule",
+        "shift_schedule": "shift_schedule",
+        "employees": "employees",
+        "employee": "employees",
+        "file_numbering": "file_numbering",
+        "numbering": "file_numbering",
+        "confidentiality_ledger": "confidentiality_ledger",
+        "confidentiality": "confidentiality_ledger",
+    }
+    report_type = aliases.get(raw_type, raw_type)
+    year, month, period_label = _report_center_period(args)
+    params: Dict[str, Any] = {}
+    path = ""
+    filename = "report"
+    label = "报表"
+
+    if report_type in ("attendance_exceptions", "leave_handler"):
+        if not month:
+            return {"ok": False, "message": "该报表必须指定 month。"}
+        params = {"year": year, "month": month}
+        if current_user:
+            params["current_user"] = current_user
+        if report_type == "attendance_exceptions":
+            path = "/api/attendance/exceptions/export"
+            filename = f"考勤异常_{year}{month:02d}.xlsx"
+            label = f"{period_label}考勤异常明细"
+        else:
+            path = "/api/attendance/leave-handler-export"
+            filename = f"异常处理表_{year}{month:02d}.xlsx"
+            label = f"{period_label}异常处理表"
+    elif report_type == "suggestion_attendance":
+        start_date = (args.get("start_date") or "").strip()
+        end_date = (args.get("end_date") or "").strip()
+        if not start_date or not end_date:
+            if not month:
+                return {"ok": False, "message": "全员考勤日表必须指定 start_date/end_date，或指定 year+month。"}
+            start_date = f"{year}-{month:02d}-01"
+            end_date = f"{year}-{month:02d}-{calendar.monthrange(year, month)[1]:02d}"
+        params = {"start_date": start_date, "end_date": end_date}
+        if current_user:
+            params["current_user"] = current_user
+        path = "/api/attendance/suggestion-attendance-report/export"
+        filename = f"全员考勤日表_{start_date}_{end_date}.xlsx"
+        label = f"{start_date} 至 {end_date} 全员考勤日表"
+    elif report_type == "attendance_report":
+        if not month:
+            return {"ok": False, "message": "考勤表 Word 必须指定 month。"}
+        params = {"year": year, "month": month}
+        lsys = _normalize_lsys(args.get("lsys") or args.get("department") or "")
+        if lsys:
+            params["lsys"] = lsys
+            filename = f"考勤表_{year}年{month}月_{lsys}.docx"
+            label = f"{lsys} {period_label}考勤表"
+        else:
+            filename = f"考勤表_{year}年{month}月_各科室.zip"
+            label = f"全部门 {period_label}考勤表"
+        path = "/api/leader/attendance-report-export"
+    elif report_type == "holiday_duty":
+        start_date = (args.get("start_date") or "").strip()
+        end_date = (args.get("end_date") or "").strip()
+        if not start_date or not end_date:
+            return {"ok": False, "message": "假期值班出勤核查必须指定 start_date 和 end_date。"}
+        params = {"start_date": start_date, "end_date": end_date}
+        lsys = _normalize_lsys(args.get("lsys") or args.get("department") or "")
+        if lsys:
+            params["lsys"] = lsys
+        if current_user:
+            params["name"] = current_user
+        path = "/api/discipline/holiday-duty-attendance/export"
+        filename = f"{lsys or '全部科室'}_{start_date}_{end_date}_假期值班出勤核查.xlsx"
+        label = f"{start_date} 至 {end_date} 假期值班出勤核查"
+    elif report_type == "shift_schedule":
+        fmt = (args.get("format") or args.get("shift_format") or "month").strip()
+        department = _normalize_lsys(args.get("department") or args.get("lsys") or "")
+        if not department:
+            department = "__ALL__" if fmt == "holiday" else _get_user_dept(current_user).get("lsys", "")
+        params = {"department": department, "year": year, "format": fmt}
+        if fmt == "month":
+            if not month:
+                return {"ok": False, "message": "月排班表必须指定 month。"}
+            params["month"] = month
+        elif fmt == "week":
+            week_date = (args.get("week_date") or args.get("date") or "").strip()
+            if not week_date:
+                return {"ok": False, "message": "周排班表必须指定 week_date。"}
+            params["week_date"] = week_date
+        elif fmt == "holiday":
+            holiday = (args.get("holiday") or "").strip()
+            if not holiday:
+                return {"ok": False, "message": "假期排班表必须指定 holiday。"}
+            params["holiday"] = holiday
+        path = "/api/shift/export-excel"
+        filename = f"{department}_{year}年排班表.xlsx"
+        label = f"{department}排班表"
+    elif report_type == "employees":
+        if current_user:
+            params["current_user"] = current_user
+        path = "/api/admin/export-employees"
+        filename = f"在职员工表_{datetime.now().strftime('%Y-%m-%d')}.xlsx"
+        label = "在职员工表"
+    elif report_type == "file_numbering":
+        table = (args.get("table") or "tech").strip()
+        params = {"table": table}
+        if current_user:
+            params["name"] = current_user
+        path = "/api/file-numbering/export/excel"
+        filename = f"文件编号_{table}.xlsx"
+        label = "文件编号台账"
+    elif report_type == "confidentiality_ledger":
+        keyword = (args.get("keyword") or "").strip()
+        if keyword:
+            params["keyword"] = keyword
+        path = "/api/confidentiality-ledger/export"
+        filename = "智能制造工艺部论文保密审批台账.xlsx"
+        label = "论文保密审批台账"
+    else:
+        return {"ok": False, "message": f"报表中心暂不支持该报表类型：{raw_type}"}
+
+    url = path + ("?" + urlencode(params) if params else "")
+    return {
+        "ok": True,
+        "download_url": url,
+        "filename": filename,
+        "label": label,
+        "message": f"已生成《{filename}》下载附件，请提示用户点击下方按钮下载。",
     }
 
 
@@ -1993,8 +2197,18 @@ def skill_query_shift_schedule(args: Dict[str, Any], current_user: str) -> Dict[
 
 def _parse_chart_spec(args: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[str, Any]], str, str, str]:
     """解析并校验图表参数，返回 (chart_type, labels, series, title, x_label, y_label)。"""
-    chart_type = (args.get("chart_type") or "line").strip().lower()
-    if chart_type not in ("line", "bar", "pie"):
+    raw_chart_type = (args.get("chart_type") or "line").strip().lower()
+    chart_aliases = {
+        "折线": "line", "折线图": "line", "趋势图": "line", "line_chart": "line",
+        "柱状": "bar", "柱状图": "bar", "柱形图": "bar", "bar_chart": "bar", "column": "bar",
+        "条形": "horizontal_bar", "条形图": "horizontal_bar", "横向柱状图": "horizontal_bar",
+        "horizontal_bar_chart": "horizontal_bar", "barh": "horizontal_bar",
+        "堆叠柱状图": "stacked_bar", "堆叠柱形图": "stacked_bar", "stacked": "stacked_bar",
+        "面积": "area", "面积图": "area", "area_chart": "area",
+        "饼": "pie", "饼图": "pie", "占比图": "pie", "pie_chart": "pie",
+    }
+    chart_type = chart_aliases.get(raw_chart_type, raw_chart_type)
+    if chart_type not in ("line", "bar", "horizontal_bar", "stacked_bar", "area", "pie"):
         chart_type = "line"
     title = (args.get("title") or "图表").strip()
     x_label = (args.get("x_label") or "").strip()
@@ -2045,6 +2259,8 @@ def _parse_chart_spec(args: Dict[str, Any]) -> Tuple[str, List[str], List[Dict[s
             raise ValueError("饼图仅支持单组数据（一个 series）")
         if len(labels) != len(series[0]["values"]):
             raise ValueError("饼图 labels 数量须与 values 一致")
+    elif chart_type in ("stacked_bar", "area") and len(series) < 1:
+        raise ValueError("缺少数据系列")
     else:
         n = len(labels)
         for s in series:
@@ -2090,6 +2306,56 @@ def _render_chart_png(fp: Path, spec: Dict[str, Any]) -> None:
         if y_label:
             ax.set_ylabel(y_label, **text_kw)
         ax.grid(True, axis="y", alpha=0.3)
+    elif chart_type == "horizontal_bar":
+        y_idx = list(range(len(labels)))
+        n_series = len(series)
+        height = min(0.8 / max(n_series, 1), 0.35)
+        for i, s in enumerate(series):
+            offset = (i - (n_series - 1) / 2) * height
+            ys = [yi + offset for yi in y_idx]
+            ax.barh(ys, s["values"], height=height, label=s["name"])
+        ax.set_yticks(y_idx)
+        ax.set_yticklabels(labels, **text_kw)
+        ax.invert_yaxis()
+        if n_series > 1:
+            ax.legend(loc="best", fontsize=9, prop=cjk_font)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
+        if x_label:
+            ax.set_xlabel(x_label, **text_kw)
+        if y_label:
+            ax.set_ylabel(y_label, **text_kw)
+        ax.grid(True, axis="x", alpha=0.3)
+    elif chart_type == "stacked_bar":
+        x_idx = list(range(len(labels)))
+        bottoms = [0.0 for _ in labels]
+        for s in series:
+            ax.bar(x_idx, s["values"], bottom=bottoms, label=s["name"])
+            bottoms = [b + float(v) for b, v in zip(bottoms, s["values"])]
+        ax.set_xticks(x_idx)
+        ax.set_xticklabels(labels, rotation=25 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center", **text_kw)
+        if len(series) > 1:
+            ax.legend(loc="best", fontsize=9, prop=cjk_font)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
+        if x_label:
+            ax.set_xlabel(x_label, **text_kw)
+        if y_label:
+            ax.set_ylabel(y_label, **text_kw)
+        ax.grid(True, axis="y", alpha=0.3)
+    elif chart_type == "area":
+        x_idx = list(range(len(labels)))
+        values = [s["values"] for s in series]
+        names = [s["name"] for s in series]
+        ax.stackplot(x_idx, values, labels=names, alpha=0.75)
+        ax.set_xticks(x_idx)
+        ax.set_xticklabels(labels, rotation=25 if len(labels) > 6 else 0, ha="right" if len(labels) > 6 else "center", **text_kw)
+        if len(series) > 1:
+            ax.legend(loc="best", fontsize=9, prop=cjk_font)
+        ax.set_title(title, fontsize=14, fontweight="bold", **text_kw)
+        if x_label:
+            ax.set_xlabel(x_label, **text_kw)
+        if y_label:
+            ax.set_ylabel(y_label, **text_kw)
+        ax.grid(True, alpha=0.25)
     else:  # line
         for s in series:
             ax.plot(labels, s["values"], marker="o", linewidth=2, markersize=5, label=s["name"])
@@ -2116,15 +2382,21 @@ def _add_xlsx_chart(ws, chart_spec: dict, data_start_row: int, n_cols: int, n_da
     """在已有表格数据下方插入 openpyxl 原生折线/柱状图（仅 Excel）。"""
     from openpyxl.chart import LineChart, BarChart, Reference
 
-    chart_type = (chart_spec.get("chart_type") or "line").strip().lower()
+    chart_type, _, _, _, _, _ = _parse_chart_spec(chart_spec)
     title = (chart_spec.get("title") or "图表").strip()
     x_label = (chart_spec.get("x_label") or "").strip()
     y_label = (chart_spec.get("y_label") or "").strip()
 
     if n_cols < 2 or n_data_rows < 1:
         return
-    ChartCls = BarChart if chart_type == "bar" else LineChart
+    ChartCls = BarChart if chart_type in ("bar", "horizontal_bar", "stacked_bar") else LineChart
     chart = ChartCls()
+    if chart_type == "horizontal_bar":
+        chart.type = "bar"
+    elif chart_type == "stacked_bar":
+        chart.type = "col"
+        chart.grouping = "stacked"
+        chart.overlap = 100
     chart.title = title
     if x_label:
         chart.x_axis.title = x_label
@@ -2275,7 +2547,7 @@ def _render_docx(fp: Path, title: str, body: str, columns: list, rows: list, cha
 def skill_create_chart(args: Dict[str, Any], current_user: str) -> Dict[str, Any]:
     """生成折线/柱状/饼图 PNG，供对话内预览与下载；也可供 create_document 引用相同数据结构。"""
     try:
-        _parse_chart_spec(args)
+        chart_type, _, _, _, _, _ = _parse_chart_spec(args)
     except ValueError as e:
         return {"ok": False, "message": str(e)}
 
@@ -2295,8 +2567,14 @@ def skill_create_chart(args: Dict[str, Any], current_user: str) -> Dict[str, Any
     safe_title = re.sub(r'[\\/:*?"<>|]', "_", title).strip() or "图表"
     filename = f"{safe_title}.png"
     url = "/api/ai-assistant/download?" + urlencode({"token": token, "filename": filename})
-    chart_type = (args.get("chart_type") or "line").strip().lower()
-    type_label = {"line": "折线图", "bar": "柱状图", "pie": "饼图"}.get(chart_type, "图表")
+    type_label = {
+        "line": "折线图",
+        "bar": "柱状图",
+        "horizontal_bar": "条形图",
+        "stacked_bar": "堆叠柱状图",
+        "area": "面积图",
+        "pie": "饼图",
+    }.get(chart_type, "图表")
     return {
         "ok": True,
         "download_url": url,
@@ -2392,8 +2670,11 @@ SKILL_FUNCS = {
     "query_monthly_summary": skill_query_monthly_summary,
     "query_full_attendance": skill_query_full_attendance,
     "query_work_intensity": skill_query_work_intensity,
+    "query_discipline_clock": skill_query_discipline_clock,
+    "query_leader_overtime": skill_query_leader_overtime,
     "query_department": skill_query_department,
     "generate_report": skill_generate_report,
+    "export_report_center": skill_export_report_center,
     "query_database": skill_query_database,
     "query_shift_schedule": skill_query_shift_schedule,
     "get_info_feed": skill_get_info_feed,
@@ -2410,8 +2691,6 @@ SKILL_LABELS = {
     "query_dept_comparison": "科室横向对比",
     "query_person_ranking": "人员排行统计",
     "query_monthly_summary": "月度趋势汇总",
-    "query_full_attendance": "满勤统计",
-    "query_work_intensity": "工作强度统计",
     "query_department": "部门人员查询",
     "generate_report": "生成报表下载",
     "query_database": "数据库智能查询",
@@ -2420,6 +2699,12 @@ SKILL_LABELS = {
     "create_document": "生成文档",
     "create_chart": "生成图表",
 }
+
+SKILL_LABELS["export_report_center"] = "报表中心导出"
+SKILL_LABELS["query_full_attendance"] = "满勤统计"
+SKILL_LABELS["query_work_intensity"] = "工作强度统计"
+SKILL_LABELS["query_discipline_clock"] = "考勤纪律审查"
+SKILL_LABELS["query_leader_overtime"] = "领导加班统计"
 
 TOOLS = [
     {
@@ -2559,15 +2844,15 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "query_full_attendance",
-            "description": "满勤统计。用户问满勤率、满勤人数、满勤名单、哪个科室满勤多、全年/月度满勤趋势、某人某月是否满勤时使用。本工具复用管理驾驶舱满勤口径，不要用 query_database 自行判断。",
+            "description": "管理驾驶舱满勤统计。用于查询满勤率、满勤人数、满勤名单样本、各科室满勤对比；后端口径与管理驾驶舱一致。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
-                    "name": {"type": "string", "description": "可选，员工姓名；普通员工只能查本人"},
-                    "year": {"type": "integer", "description": "年份，默认当前年"},
-                    "month": {"type": "integer", "description": "月份1-12；不填时返回全年逐月满勤趋势"},
-                },
+                    "year": {"type": "integer", "description": "年份，默认当前年。"},
+                    "month": {"type": "integer", "description": "月份 1-12；不传则查询全年满勤。"},
+                    "department": {"type": "string", "description": "科室名称，可选；不传为全部门。"},
+                    "lsys": {"type": "string", "description": "科室名称，同 department。"}
+                }
             },
         },
     },
@@ -2575,19 +2860,57 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "query_work_intensity",
-            "description": "工作强度统计。用户问工作强度、强度排名、哪个科室/人员负荷高、实际在岗小时、打卡识别加班、公式A/B/C强度时使用。本工具复用管理驾驶舱 work-intensity 口径，不要用 query_database 或大模型自行计算。",
+            "description": "管理驾驶舱工作强度统计。用于查询工作强度、科室强度排行、人员强度排行。后端使用驾驶舱统一口径计算，避免模型自行计算；具体口径说明和统计结果均受权限控制。",
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "department": {"type": "string", "description": "可选，科室名称或简称；不填时按当前用户权限范围"},
-                    "name": {"type": "string", "description": "可选，员工姓名；普通员工只能查本人"},
-                    "year": {"type": "integer", "description": "年份，默认当前年"},
-                    "month": {"type": "integer", "description": "月份1-12；不填且未传日期范围时为全年"},
-                    "start_date": {"type": "string", "description": "可选，自定义开始日期 YYYY-MM-DD"},
-                    "end_date": {"type": "string", "description": "可选，自定义结束日期 YYYY-MM-DD"},
-                    "formula": {"type": "string", "enum": ["a", "b", "c"], "description": "工作强度口径：a=加班/实际在岗；b=(加班-全部请假小时)/实际在岗；c=(加班-主观请假小时)/实际在岗"},
-                    "limit": {"type": "integer", "description": "返回人员明细前 N 名，默认30，最大100"},
-                },
+                    "year": {"type": "integer", "description": "年份，默认当前年。"},
+                    "month": {"type": "integer", "description": "月份 1-12；不传为全年。"},
+                    "department": {"type": "string", "description": "科室名称，可选。"},
+                    "lsys": {"type": "string", "description": "科室名称，同 department。"},
+                    "name": {"type": "string", "description": "员工姓名，可选。"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD。"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD。"},
+                    "formula": {"type": "string", "enum": ["a", "b", "c"], "description": "工作强度口径编号，必须在权限通过后由后端解释和计算，模型不得自行展开公式。"},
+                    "limit": {"type": "integer", "description": "返回个人排行条数，默认 20。"}
+                }
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_discipline_clock",
+            "description": "考勤纪律审查统计。用于查询早到、晚走打卡次数，支持按 person/dept/month 聚合排行。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "year": {"type": "integer", "description": "年份，默认当前年。"},
+                    "month": {"type": "integer", "description": "月份 1-12；不传为全年。"},
+                    "department": {"type": "string", "description": "科室名称，可选。"},
+                    "lsys": {"type": "string", "description": "科室名称，同 department。"},
+                    "dimension": {"type": "string", "enum": ["person", "dept", "month"], "description": "聚合维度，默认 person。"},
+                    "clock_in_minutes": {"type": "integer", "description": "上班前阈值分钟，默认 2。"},
+                    "clock_out_minutes": {"type": "integer", "description": "下班后阈值分钟，默认 2。"},
+                    "limit": {"type": "integer", "description": "返回排行条数，默认 20。"}
+                }
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "query_leader_overtime",
+            "description": "领导加班统计。用于查询部办人员/领导岗位打卡识别加班、月均加班天数、估算排名。后端口径与管理驾驶舱领导加班统计一致。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "year": {"type": "integer", "description": "年份，默认当前年。"},
+                    "month": {"type": "integer", "description": "月份 1-12；不传为全年。"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD。"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD。"},
+                    "limit": {"type": "integer", "description": "返回排行条数，默认 20。"}
+                }
             },
         },
     },
@@ -2631,6 +2954,45 @@ TOOLS = [
     {
         "type": "function",
         "function": {
+            "name": "export_report_center",
+            "description": "导出“报表汇聚/导出中心”里已有的后端文件流报表。适用于考勤异常明细、异常处理表、全员考勤日表、考勤表Word、假期值班出勤核查、排班表、在职员工表、文件编号台账、论文保密审批台账。生成后只返回系统附件，不要在正文编造下载链接。",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "report_type": {
+                        "type": "string",
+                        "enum": [
+                            "attendance_exceptions",
+                            "leave_handler",
+                            "suggestion_attendance",
+                            "attendance_report",
+                            "holiday_duty",
+                            "shift_schedule",
+                            "employees",
+                            "file_numbering",
+                            "confidentiality_ledger"
+                        ],
+                        "description": "报表类型。attendance_exceptions=考勤异常明细；leave_handler=异常处理表；suggestion_attendance=全员考勤日表；attendance_report=考勤表Word；holiday_duty=假期值班出勤核查；shift_schedule=排班表；employees=在职员工表；file_numbering=文件编号台账；confidentiality_ledger=论文保密审批台账。"
+                    },
+                    "year": {"type": "integer", "description": "年份。"},
+                    "month": {"type": "integer", "description": "月份 1-12；月报、考勤异常、异常处理表、考勤表Word、月排班表需要。"},
+                    "start_date": {"type": "string", "description": "开始日期 YYYY-MM-DD；全员考勤日表、假期值班核查需要。"},
+                    "end_date": {"type": "string", "description": "结束日期 YYYY-MM-DD；全员考勤日表、假期值班核查需要。"},
+                    "department": {"type": "string", "description": "科室名称；考勤表、假期值班、排班表可用。"},
+                    "lsys": {"type": "string", "description": "科室名称，同 department。"},
+                    "format": {"type": "string", "enum": ["month", "week", "holiday"], "description": "排班表格式：month=月排班，week=周排班，holiday=假期值班表。"},
+                    "week_date": {"type": "string", "description": "周排班所处日期 YYYY-MM-DD。"},
+                    "holiday": {"type": "string", "description": "假期排班表的假期名称。"},
+                    "table": {"type": "string", "enum": ["tech", "jsgl", "manage", "gygch", "scszh"], "description": "文件编号台账类型。"},
+                    "keyword": {"type": "string", "description": "论文保密审批台账可选关键词。"}
+                },
+                "required": ["report_type"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "query_shift_schedule",
             "description": "查询某科室近期排班情况和值班每日计划。用户问排班、值班、白班、夜班、最近/本周/下周排班时优先使用本工具，不要用 query_database 猜排班表字段。科室简称如“智能室”应传 department='智能室'，工具会映射到真实科室。",
             "parameters": {
@@ -2655,8 +3017,6 @@ TOOLS = [
                 "查询排班/值班/白班/夜班情况时优先使用 query_shift_schedule，不要用本工具猜排班字段。"
                 "查询部门/科室公出汇总和公出总天数时优先使用 query_business_trip_summary，不要用本工具自行计算公出天数。"
                 "查询科室横向对比、人员排行、月度趋势时优先使用 query_dept_comparison / query_person_ranking / query_monthly_summary。"
-                "查询满勤、满勤率、满勤名单时优先使用 query_full_attendance。"
-                "查询工作强度、实际在岗小时、打卡识别加班、强度排名时优先使用 query_work_intensity。"
                 "你需要根据系统提供的表结构编写一条标准 MySQL SELECT 语句。"
                 "仅支持只读查询，不能修改数据；敏感字段（密码/身份证/邮箱授权码等）不可访问。"
                 "涉及具体个人的加班/请假/公出明细应优先使用对应的专用查询工具（受权限控制），"
@@ -2713,10 +3073,10 @@ TOOLS = [
                         "items": {
                             "type": "object",
                             "properties": {
-                                "chart_type": {"type": "string", "enum": ["line", "bar", "pie"], "description": "line=折线图，bar=柱状图，pie=饼图"},
+                                "chart_type": {"type": "string", "enum": ["line", "bar", "horizontal_bar", "stacked_bar", "area", "pie"], "description": "line=折线图，bar=柱状图，horizontal_bar=条形图，stacked_bar=堆叠柱状图，area=面积图，pie=饼图"},
                                 "title": {"type": "string", "description": "图表标题"},
-                                "x_label": {"type": "string", "description": "X 轴标题（折线/柱状图）"},
-                                "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状图）"},
+                                "x_label": {"type": "string", "description": "X 轴标题（折线/柱状/条形/面积图）"},
+                                "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状/条形/面积图）"},
                                 "labels": {"type": "array", "items": {"type": "string"}, "description": "X 轴分类或饼图扇区名称"},
                                 "series": {
                                     "type": "array",
@@ -2728,7 +3088,7 @@ TOOLS = [
                                         },
                                         "required": ["values"],
                                     },
-                                    "description": "数据系列，可多条（折线/柱状图支持多系列对比）",
+                                    "description": "数据系列，可多条（折线/柱状/条形/堆叠柱状/面积图支持多系列）",
                                 },
                                 "values": {"type": "array", "items": {"type": "number"}, "description": "单系列简写：仅一组数据时可只传 values + series_name"},
                                 "series_name": {"type": "string", "description": "单系列名称（与 values 配合）"},
@@ -2746,7 +3106,7 @@ TOOLS = [
         "function": {
             "name": "create_chart",
             "description": (
-                "生成数据可视化图表（折线图/柱状图/饼图），输出 PNG 图片。"
+                "生成数据可视化图表（折线图/柱状图/条形图/堆叠柱状图/面积图/饼图），输出 PNG 图片。"
                 "当用户要求画图、做趋势分析、数据对比、可视化统计结果时使用。"
                 "先通过 query_database / 查询类工具获取真实数据，再调用本工具绘图。"
                 "图表会在对话中直接展示预览，并支持下载；下载地址只能由本工具返回的本地 /api/ai-assistant/download 生成。"
@@ -2756,10 +3116,10 @@ TOOLS = [
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "chart_type": {"type": "string", "enum": ["line", "bar", "pie"], "description": "line=折线图（趋势），bar=柱状图（对比），pie=饼图（占比）"},
+                    "chart_type": {"type": "string", "enum": ["line", "bar", "horizontal_bar", "stacked_bar", "area", "pie"], "description": "line=折线图（趋势），bar=柱状图（分类对比），horizontal_bar=条形图（人员/科室排行），stacked_bar=堆叠柱状图（构成对比），area=面积图（累计/趋势），pie=饼图（占比）"},
                     "title": {"type": "string", "description": "图表标题"},
-                    "x_label": {"type": "string", "description": "X 轴标题（折线/柱状图，可选）"},
-                    "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状图，可选）"},
+                    "x_label": {"type": "string", "description": "X 轴标题（折线/柱状/条形/面积图，可选）"},
+                    "y_label": {"type": "string", "description": "Y 轴标题（折线/柱状/条形/面积图，可选）"},
                     "labels": {"type": "array", "items": {"type": "string"}, "description": "横轴分类标签，如 ['1月','2月','3月'] 或 ['男','女']"},
                     "series": {
                         "type": "array",
@@ -2771,7 +3131,7 @@ TOOLS = [
                             },
                             "required": ["values"],
                         },
-                        "description": "数据系列；多系列折线/柱状图可传多条",
+                        "description": "数据系列；多系列折线/柱状/条形/堆叠柱状/面积图可传多条",
                     },
                     "values": {"type": "array", "items": {"type": "number"}, "description": "单系列简写：只传一组数据时使用"},
                     "series_name": {"type": "string", "description": "单系列名称（与 values 配合）"},
@@ -2788,7 +3148,7 @@ TOOLS = [
 
 
 def _get_data_scope(current_user: str) -> Dict[str, str]:
-    """返回 {'scope': 'all'|'dept'|'self', 'lsys': str}。
+    """返回 {'scope': 'all'|'dept'|'self', 'lsys': str, 'jb': str}。
     判定与 /report/statistics-permission 一致：
       - 部长/经理/副部长、综合技术室主任副主任、系统管理员(admin1)、人事管理员(admin2)、部办 → all
       - 主任/副主任/组长 → dept（本科室）
@@ -2796,12 +3156,12 @@ def _get_data_scope(current_user: str) -> Dict[str, str]:
     """
     name = (current_user or "").strip()
     if not name:
-        return {"scope": "self", "lsys": ""}
+        return {"scope": "self", "lsys": "", "jb": ""}
     try:
         from routers.approvers import _get_user_info, _jb_match, can_access_leader_dashboard
     except Exception as e:
         logger.debug(f"导入权限判定失败: {e}")
-        return {"scope": "self", "lsys": ""}
+        return {"scope": "self", "lsys": "", "jb": ""}
 
     user = _get_user_info(name) or {}
     jb = (user.get("jb") or "").strip()
@@ -2809,16 +3169,18 @@ def _get_data_scope(current_user: str) -> Dict[str, str]:
 
     try:
         if can_access_leader_dashboard(name):
-            return {"scope": "all", "lsys": lsys}
+            return {"scope": "all", "lsys": lsys, "jb": jb}
     except Exception:
         pass
     if _jb_match_safe(jb, "部长") or _jb_match_safe(jb, "副部长"):
-        return {"scope": "all", "lsys": lsys}
+        return {"scope": "all", "lsys": lsys, "jb": jb}
     if lsys == "部办":
-        return {"scope": "all", "lsys": lsys}
+        return {"scope": "all", "lsys": lsys, "jb": jb}
+    if _is_manager_jb(jb):
+        return {"scope": "dept", "lsys": lsys, "jb": jb}
     if _jb_match_safe(jb, "主任") or _jb_match_safe(jb, "组长") or (jb and "副主任" in jb):
-        return {"scope": "dept", "lsys": lsys}
-    return {"scope": "self", "lsys": lsys}
+        return {"scope": "dept", "lsys": lsys, "jb": jb}
+    return {"scope": "self", "lsys": lsys, "jb": jb}
 
 
 def _jb_match_safe(jb: str, target: str) -> bool:
@@ -2827,6 +3189,34 @@ def _jb_match_safe(jb: str, target: str) -> bool:
         return _jb_match(jb, target)
     except Exception:
         return False
+
+
+def _is_manager_jb(jb: str) -> bool:
+    """AI 统计白名单：yggl.jb 为经理/副经理/经理助理。"""
+    s = (jb or "").strip()
+    if not s:
+        return False
+    return bool("经理助理" in s or "副经理" in s or _jb_match_safe(s, "经理") or s == "经理")
+
+
+def _is_manager_stats_global(scope_info: Dict[str, str]) -> bool:
+    """部办经理层按部门级权限处理；其他经理层按本人 lsys 限制。"""
+    return _is_manager_jb(scope_info.get("jb") or "") and (scope_info.get("scope") == "all" or scope_info.get("lsys") == "部办")
+
+
+def _can_export_all_attendance_reports(scope_info: Dict[str, str]) -> bool:
+    """标准加班/请假/公出报表的全部门导出权限，按 yggl.jb/lsys 判断，不因 admin 身份自动放大。"""
+    jb = scope_info.get("jb") or ""
+    lsys = _normalize_lsys(scope_info.get("lsys") or "")
+    return bool(lsys == "部办" or _jb_match_safe(jb, "部长") or _jb_match_safe(jb, "副部长"))
+
+
+def _requested_lsys_from_args(fargs: Dict[str, Any]) -> str:
+    raw = fargs.get("lsys") or fargs.get("department") or ""
+    lsys = _normalize_lsys(raw)
+    if not lsys and (fargs.get("scope") or "").strip().lower() == "all":
+        return "__ALL__"
+    return lsys
 
 
 def _scope_desc(scope_info: Dict[str, str]) -> str:
@@ -2857,9 +3247,10 @@ def _can_access_person(scope_info: Dict[str, str], current_user: str, target_nam
 
 def _can_access_dept(scope_info: Dict[str, str], target_lsys: str) -> bool:
     scope = scope_info.get("scope")
+    target_lsys = _normalize_lsys(target_lsys)
     if scope == "all":
         return True
-    cur_lsys = scope_info.get("lsys") or ""
+    cur_lsys = _normalize_lsys(scope_info.get("lsys") or "")
     return bool(target_lsys) and target_lsys == cur_lsys
 
 
@@ -2867,6 +3258,7 @@ def _check_skill_permission(fname: str, fargs: Dict[str, Any], current_user: str
                             scope_info: Dict[str, str]) -> Optional[str]:
     """越权时返回拒绝原因文本；允许时返回 None。"""
     scope = scope_info.get("scope")
+    own_lsys = _normalize_lsys(scope_info.get("lsys") or "")
     if fname in ("query_overtime", "query_leave", "query_business_trip"):
         target = (fargs.get("name") or current_user or "").strip()
         if not _can_access_person(scope_info, current_user, target):
@@ -2874,24 +3266,101 @@ def _check_skill_permission(fname: str, fargs: Dict[str, Any], current_user: str
             return f"权限不足：您当前只能查询本人{extra}的数据，无权查询【{target}】的记录。"
     elif fname == "generate_report":
         req_scope = (fargs.get("scope") or "").strip().lower()
-        req_lsys = (fargs.get("lsys") or "").strip()
+        req_lsys = _normalize_lsys(fargs.get("lsys") or fargs.get("department") or "")
         if req_scope == "all":
-            if scope != "all":
+            if not _can_export_all_attendance_reports(scope_info):
                 return "权限不足：您无权导出全部门报表，仅能导出本人或权限范围内的数据。"
         elif req_lsys:
             if not _can_access_dept(scope_info, req_lsys):
                 return f"权限不足：您无权导出【{req_lsys}】科室的报表。"
+            fargs["lsys"] = req_lsys
+            fargs["department"] = req_lsys
         else:
             target = (fargs.get("name") or current_user or "").strip()
             if not _can_access_person(scope_info, current_user, target):
                 extra = "及本科室人员" if scope == "dept" else ""
                 return f"权限不足：您当前只能导出本人{extra}的报表，无权导出【{target}】的报表。"
+    elif fname in ("query_work_intensity", "query_discipline_clock"):
+        if not _is_manager_jb(scope_info.get("jb") or ""):
+            return "权限不足：工作强度和考勤纪律统计仅限 yggl.jb 为经理、副经理、经理助理的用户查询。"
+        req_lsys = _requested_lsys_from_args(fargs)
+        if req_lsys == "__ALL__":
+            if not _is_manager_stats_global(scope_info):
+                return f"权限不足：您只能查询本科室（{own_lsys}）的统计，不能查询全部门。"
+        elif req_lsys:
+            if not _can_access_dept(scope_info, req_lsys):
+                return f"权限不足：您无权查询【{req_lsys}】的统计。"
+        elif not _is_manager_stats_global(scope_info):
+            fargs["lsys"] = own_lsys
+            fargs["department"] = own_lsys
+    elif fname in ("query_dept_comparison", "query_person_ranking", "query_monthly_summary", "query_full_attendance"):
+        req_lsys = _requested_lsys_from_args(fargs)
+        if scope == "self":
+            target = (fargs.get("name") or "").strip()
+            if not target or target != (current_user or "").strip() or fname == "query_full_attendance":
+                return "权限不足：该统计工具仅支持经理/主任等管理范围查询；普通员工请查询本人明细。"
+        if req_lsys == "__ALL__":
+            if scope != "all":
+                return f"权限不足：您只能查询本科室（{own_lsys}）统计，不能查询全部门。"
+        elif req_lsys:
+            if not _can_access_dept(scope_info, req_lsys):
+                return f"权限不足：您无权查询【{req_lsys}】的统计。"
+        elif scope == "dept":
+            fargs["lsys"] = own_lsys
+            fargs["department"] = own_lsys
+    elif fname == "export_report_center":
+        raw_type = (fargs.get("report_type") or fargs.get("report_id") or "").strip().lower().replace("-", "_")
+        aliases = {
+            "attendance_exception": "attendance_exceptions",
+            "exceptions": "attendance_exceptions",
+            "attendance_day": "suggestion_attendance",
+            "daily_attendance": "suggestion_attendance",
+            "attendance_word": "attendance_report",
+            "duty": "holiday_duty",
+            "shift": "shift_schedule",
+            "employee": "employees",
+            "numbering": "file_numbering",
+            "confidentiality": "confidentiality_ledger",
+        }
+        report_type = aliases.get(raw_type, raw_type)
+        req_lsys = _requested_lsys_from_args(fargs)
+        scoped_report_types = {"attendance_report", "holiday_duty", "shift_schedule"}
+        all_only_report_types = {
+            "attendance_exceptions", "leave_handler", "suggestion_attendance",
+            "employees", "file_numbering", "confidentiality_ledger",
+        }
+        if scope == "self":
+            return "权限不足：报表汇聚导出仅限具备科室或部门管理权限的用户使用。"
+        if report_type in all_only_report_types:
+            if scope != "all":
+                return "权限不足：该报表为全部门报表，您当前无权导出。"
+        elif report_type in scoped_report_types:
+            if req_lsys == "__ALL__":
+                if scope != "all":
+                    return f"权限不足：您只能导出本科室（{own_lsys}）报表，不能导出全部门。"
+            elif req_lsys:
+                if not _can_access_dept(scope_info, req_lsys):
+                    return f"权限不足：您无权导出【{req_lsys}】报表。"
+                normalized = _normalize_lsys(req_lsys)
+                fargs["lsys"] = normalized
+                fargs["department"] = normalized
+            elif scope == "dept":
+                fargs["lsys"] = own_lsys
+                fargs["department"] = own_lsys
     elif fname == "query_database":
         # 公开表（员工/知识库/排班/节假日/制度）全员可查；隐私表（请假/加班/公出/换休）受权限控制：
         # 仅 scope=all（经理/副经理/综合技术室主任副主任）可查逐条个人明细，
         # scope=dept/self 只能对隐私表做聚合统计，避免用自由 SQL 绕过隐私明细权限。
         sql_low = (fargs.get("sql") or "").lower()
+        purpose = (fargs.get("purpose") or "").strip()
         used_tables = set(re.findall(r"(?:from|join)\s+`?([a-zA-Z_]\w*)`?", sql_low))
+        discipline_like = bool(
+            used_tables & {"attendance_records"}
+            or re.search(r"(工作强度|考勤纪律|早到|晚走|打卡纪律|踩点|在岗小时|实际在岗)", purpose)
+            or re.search(r"(工作强度|考勤纪律|早到|晚走|打卡纪律|踩点|在岗小时|实际在岗)", fargs.get("sql") or "")
+        )
+        if discipline_like and not _is_manager_jb(scope_info.get("jb") or ""):
+            return "权限不足：工作强度和考勤纪律相关数据仅限 yggl.jb 为经理、副经理、经理助理的用户查询。"
         if (used_tables & PRIVATE_TABLES) and scope != "all":
             is_agg = bool(
                 re.search(r"\b(count|sum|avg|min|max)\s*\(", sql_low)
@@ -2936,10 +3405,13 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "必须调用相应的工具获取真实数据。答案中出现的每一个姓名、职级、科室、数字等事实，"
         "都必须严格来自工具返回的结果，绝不能凭空编造、猜测或用常识推断；"
         "工具结果中没有的信息，要明确说明“未查询到”，不要自行补全。\n"
-        "3. 用户未指明姓名时，默认查询当前登录用户；未指明科室时，默认当前用户所在科室。\n"
+        "3. 用户未指明姓名时，默认查询当前登录用户；未指明科室时，默认当前用户所在科室。"
+        "用户提到科室简称（水轮机室/水发室/汽发室/焊艺室/综合室/非标室/工具室/智能室/数控室/部办等）时，"
+        "须先按【部门组织结构】映射为正式 lsys 名称再调用工具。\n"
         "4. 用户要求导出/下载报表时，调用 generate_report 生成下载链接，并明确告诉用户报表已生成、可点击下方按钮下载。"
-        "注意区分导出范围：导出“全部门/全体/所有人员”报表时传 scope='all'；导出“某科室/某室全员”报表时传 lsys=科室名；"
-        "只导出单个人时传 name。若用户在其权限范围内要全部门或某科室汇总报表，不要退化成只导出本人。\n"
+        "注意区分导出范围：只有部门级权限用户导出“全部门/全体/所有人员”报表时才传 scope='all'；"
+        "科室级用户说“我们部门/我们科室/本部门”时默认传当前用户所在 lsys；只导出单个人时传 name。"
+        "若用户无全部门权限，不得主动传 scope='all' 或拼全部门下载链接。\n"
         "   注意：生成下载文件后，正文中只需提示“点击下方按钮下载”，切勿把下载网址（URL/链接地址）直接写进回答文本里——"
         "下载按钮会由系统自动渲染在消息下方。\n"
         "5. 引用制度检索结果时注明制度标题，并基于检索到的片段作答，避免脱离原文。\n"
@@ -2957,10 +3429,6 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "8b. 用户询问科室横向对比、人员排行、月度趋势、按月折线图、最多/最少/Top N 等统计问题时，"
         "必须优先调用 query_dept_comparison、query_person_ranking 或 query_monthly_summary。"
         "不要用 query_database 拉明细后让模型自己计算、排序或画趋势。\n"
-        "8c. 用户询问满勤、满勤率、满勤人数、满勤名单、全年/月度满勤趋势时，"
-        "必须调用 query_full_attendance，不要用 query_database 自行判断考勤异常。\n"
-        "8d. 用户询问工作强度、负荷、强度排名、实际在岗小时、打卡识别加班、公式A/B/C时，"
-        "必须调用 query_work_intensity，不要用 query_database 拉考勤明细后让模型计算。\n"
         "9. 当问题超出专用工具的能力（如男女比例、各科室人数分布、按职级/性别分组统计、"
         "员工职级/邮箱/排班/节假日、工艺问题知识库检索等），调用 query_database 编写只读 SELECT 查询，"
         "严格依据下方表结构编写，禁止查询敏感字段；写不出合规 SQL 时如实说明。\n"
@@ -2974,13 +3442,16 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "    - 其他任何需要生成可下载文件的场景（如工艺指导报表、知识库整理、统计分析报告、"
         "自定义清单等），先用查询/检索工具拿到真实数据，再用 create_document 生成 Word 或 Excel。\n"
         "    - 不要一看到“报表”二字就盲目导出加班报表；要先理解用户真正想要的内容主题。\n"
-        "13. 当用户要求画图、趋势分析、数据可视化、折线图/柱状图/饼图时：\n"
+        "13. 当用户要求画图，或问题本身适合用统计图表达时（趋势、排行、横向对比、占比、构成、驾驶舱统计等）：\n"
         "    - 先用查询工具拿到真实数据，再调用 create_chart 生成 PNG 图表（对话中会直接展示预览）。\n"
         "    - 图表文件必须由本系统本地生成，下载地址只能来自 create_chart 返回的 /api/ai-assistant/download 附件；"
         "正文不要写任何外部图表链接、占位图链接或项目官网链接，尤其禁止 via.placeholder.com、quickchart.io、image-charts.com。\n"
+        "    - 选择图表类型：趋势默认 line，分类对比默认 bar，人员/科室排行优先 horizontal_bar，构成占比用 pie，多系列构成对比用 stacked_bar，累计或连续趋势可用 area。\n"
         "    - 若用户还要 Word/Excel 文档且需要图表，create_document 的 charts 参数传入相同图表数据"
         "（Word 嵌入图片，Excel 在表格下方插入原生图表；Excel 需同时提供 columns/rows 表格数据）。\n"
         "    - 不要用 Markdown/ASCII 字符画折线代替真实图表。\n\n"
+        + "\n报表工具规则：用户要导出“报表汇聚/导出中心”中的考勤异常明细、异常处理表、全员考勤日表、考勤表Word、假期值班出勤核查、排班表、在职员工表、文件编号台账、论文保密审批台账时，必须调用 export_report_center。只有导出加班/请假/公出三类标准明细报表时才调用 generate_report。工资、总时长、科室对比、人员排行、月度趋势等统计类问题优先调用 query_dept_comparison、query_person_ranking、query_monthly_summary 等统计工具获取系统计算结果，不要先拉 SQL 明细后自行计算。\n"
+        + "管理驾驶舱统计规则：满勤/满勤率/满勤名单必须调用 query_full_attendance；工作强度/负荷/强度排行/实际在岗小时必须调用 query_work_intensity；考勤纪律审查/早到晚走/打卡纪律排行必须调用 query_discipline_clock；领导加班统计/部办加班/月均加班天数/领导估算排名必须调用 query_leader_overtime。工作强度和考勤纪律仅限 yggl.jb 为经理、副经理、经理助理的用户查询，并且非部办/非全局权限用户只能查本人 lsys 科室。\n"
         + DB_SCHEMA_HINT
     )
 
@@ -3033,6 +3504,33 @@ async def chat_stream(req: ChatRequest):
     if len(history) <= 1:
         raise HTTPException(status_code=400, detail="对话内容为空")
 
+    latest_user_text = ""
+    for hm in reversed(history):
+        if hm.get("role") == "user":
+            latest_user_text = hm.get("content") or ""
+            break
+
+    if _is_work_intensity_or_discipline_question(latest_user_text) and not _is_manager_jb(scope_info.get("jb") or ""):
+        def denied_gen():
+            yield _sse({"type": "meta", "provider": provider, "model": model, "label": model_label})
+            msg = (
+                "权限不足：工作强度、考勤纪律及其统计口径说明仅限 yggl.jb 为"
+                "经理、副经理、经理助理的用户查询。"
+            )
+            yield _sse({"type": "chunk", "text": msg})
+            yield _sse({"type": "done"})
+
+        model_label = _model_label(cfg)
+        return StreamingResponse(
+            denied_gen(),
+            media_type="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "X-Accel-Buffering": "no",
+                "Connection": "keep-alive",
+            },
+        )
+
     history = _trim_chat_history(history)
 
     extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if cfg.get("use_extra") else None
@@ -3042,6 +3540,11 @@ async def chat_stream(req: ChatRequest):
     def gen():
         yield _sse({"type": "meta", "provider": provider, "model": model, "label": model_label})
         messages = list(history)
+        latest_user_text = ""
+        for hm in reversed(history):
+            if hm.get("role") == "user":
+                latest_user_text = hm.get("content") or ""
+                break
         try:
             client = OpenAI(base_url=cfg["base_url"], api_key=cfg["api_key"], timeout=120.0)
         except Exception as e:
@@ -3103,6 +3606,9 @@ async def chat_stream(req: ChatRequest):
                     ],
                 })
 
+                tool_names_this_round = {tc.function.name for tc in tool_calls if getattr(tc, "function", None)}
+                auto_chart_notes: List[str] = []
+
                 for i, tc in enumerate(tool_calls):
                     fname = tc.function.name
                     label = SKILL_LABELS.get(fname, fname)
@@ -3120,7 +3626,7 @@ async def chat_stream(req: ChatRequest):
                     else:
                         result = _execute_skill(fname, fargs, current_user)
 
-                    if fname in ("generate_report", "create_document", "create_chart") and result.get("ok") and result.get("download_url"):
+                    if fname in ("generate_report", "export_report_center", "create_document", "create_chart") and result.get("ok") and result.get("download_url"):
                         att_evt = {
                             "type": "attachment",
                             "label": result.get("label") or "文件下载",
@@ -3130,6 +3636,26 @@ async def chat_stream(req: ChatRequest):
                         if fname == "create_chart" or (result.get("filename") or "").lower().endswith(".png"):
                             att_evt["kind"] = "image"
                         yield _sse(att_evt)
+
+                    if fname != "create_chart" and "create_chart" not in tool_names_this_round and isinstance(result, dict):
+                        chart_spec = _auto_chart_spec_from_tool_result(fname, result, fargs, latest_user_text)
+                        if chart_spec:
+                            yield _sse({"type": "tool", "name": "create_chart", "label": SKILL_LABELS.get("create_chart", "生成图表"), "status": "running"})
+                            yield _sse({"type": "status", "text": "正在生成统计图…"})
+                            chart_result = _execute_skill("create_chart", chart_spec, current_user)
+                            if chart_result.get("ok") and chart_result.get("download_url"):
+                                att_evt = {
+                                    "type": "attachment",
+                                    "label": chart_result.get("label") or "统计图",
+                                    "url": chart_result.get("download_url"),
+                                    "filename": chart_result.get("filename") or "chart.png",
+                                    "kind": "image",
+                                }
+                                yield _sse(att_evt)
+                                auto_chart_notes.append(f"已自动生成本地统计图附件：{chart_result.get('label') or chart_result.get('filename') or '统计图'}。")
+                                yield _sse({"type": "tool", "name": "create_chart", "label": SKILL_LABELS.get("create_chart", "生成图表"), "status": "done", "summary": "已生成图表"})
+                            else:
+                                yield _sse({"type": "tool", "name": "create_chart", "label": SKILL_LABELS.get("create_chart", "生成图表"), "status": "done", "summary": chart_result.get("message", "图表生成失败")})
 
                     summary = ""
                     if isinstance(result, dict):
@@ -3147,6 +3673,12 @@ async def chat_stream(req: ChatRequest):
                         "role": "tool",
                         "tool_call_id": tc.id or f"call_{i}",
                         "content": _tool_result_json_for_llm(fname, result, fargs),
+                    })
+
+                if auto_chart_notes:
+                    messages.append({
+                        "role": "assistant",
+                        "content": "\n".join(auto_chart_notes) + "\n最终回答中不要再编写 Markdown 图片链接；只需说明统计图已在对话中展示，可点击附件查看或下载。",
                     })
         except Exception as e:
             logger.error(f"AI 助手工具调用失败({provider}): {e}")
@@ -3195,15 +3727,19 @@ async def chat_stream(req: ChatRequest):
                     yield _sse({"type": "chunk", "text": piece})
             return produced
 
+        # 关键：deepseek-reasoner 不支持 function calling，无法消费对话历史里的
+        # tool_calls / tool 结果消息。若本轮调用过工具仍用 reasoner，会丢失真实数据导致“胡编乱造”。
+        # 因此：本轮调用过工具时，最终答案必须用 deepseek-chat（能正确读取工具返回结果）；
+        # 纯对话（未调用工具）时才用 reasoner 展示思维链。
         used_tools = any(isinstance(m, dict) and m.get("role") == "tool" for m in messages)
         yield _sse({"type": "status", "text": "正在生成回答…"})
         try:
             got = False
-            if provider == "deepseek" and not used_tools and DEEPSEEK_REASONER_MODEL != model:
+            if provider == "deepseek" and not used_tools:
                 try:
                     got = yield from _emit_final(DEEPSEEK_REASONER_MODEL)
                 except Exception as e_reason:
-                    logger.warning(f"DeepSeek 备用回答模型不可用，回退 {model}: {e_reason}")
+                    logger.warning(f"DeepSeek reasoner 不可用，回退 {model}: {e_reason}")
                     got = yield from _emit_final(model)
             else:
                 got = yield from _emit_final(model)
@@ -3286,7 +3822,7 @@ async def export_report(
     if req:
         scope_info = _get_data_scope(req)
         if scope_v == "all":
-            if scope_info.get("scope") != "all":
+            if not _can_export_all_attendance_reports(scope_info):
                 raise HTTPException(status_code=403, detail="权限不足：您无权导出全部门报表")
         elif lsys_v:
             if not _can_access_dept(scope_info, lsys_v):
