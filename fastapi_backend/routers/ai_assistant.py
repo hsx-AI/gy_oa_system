@@ -553,9 +553,19 @@ def _is_work_intensity_or_discipline_question(text: str) -> bool:
     s = (text or "").strip()
     if not s:
         return False
+    # 权限类意图识别必须偏保守：本地模型不一定遵循提示词，进入模型前先挡住。
+    if re.search(r"(工作|劳动|人员|科室|部门|个人).{0,8}(强度|负荷|负载|饱和|压力|忙碌|忙不忙)", s, flags=re.I):
+        return True
+    if re.search(r"(谁|哪个人|哪位|哪个科室|哪个部门|本部门|全部门).{0,8}(最忙|更忙|比较忙|忙碌)", s, flags=re.I):
+        return True
+    if re.search(r"(强度|负荷|负载|饱和度|忙碌度).{0,8}(统计|排行|排名|对比|分析|报表|表|图|趋势)", s, flags=re.I):
+        return True
+    if re.search(r"(加班|请假|公出|出勤|考勤).{0,12}(在岗|强度|负荷|负载|饱和|压力)", s, flags=re.I):
+        return True
     return bool(re.search(
-        r"(工作强度|强度排行|强度统计|考勤纪律|打卡纪律|早到|晚走|踩点|实际在岗|在岗小时|"
-        r"口径\s*[ABCＡＢＣ]|口径[一二三]|公式\s*[ABCＡＢＣ])",
+        r"(工作强度|强度排行|强度统计|强度表|负荷统计|负荷排行|负载统计|劳动强度|"
+        r"考勤纪律|打卡纪律|早到|晚走|踩点|卡点|实际在岗|在岗小时|出勤纪律|"
+        r"口径\s*[ABCＡＢＣ]|口径[一二三]|公式\s*[ABCＡＢＣ]|强度口径)",
         s,
         flags=re.I,
     ))
@@ -3143,6 +3153,20 @@ TOOLS = [
 ]
 
 
+def _tools_for_scope(scope_info: Dict[str, str]) -> List[Dict[str, Any]]:
+    """按服务端权限裁剪下发给模型的工具 schema，避免本地模型从描述里学习受限口径。"""
+    if _is_manager_jb(scope_info.get("jb") or ""):
+        return TOOLS
+    blocked = {"query_work_intensity", "query_discipline_clock"}
+    out: List[Dict[str, Any]] = []
+    for tool in TOOLS:
+        fn = (tool.get("function") or {}).get("name")
+        if fn in blocked:
+            continue
+        out.append(tool)
+    return out
+
+
 # ==================== 数据权限（与报表/统计页 level 口径一致） ====================
 # scope: all=全部门任意人员；dept=本人及本科室人员；self=仅本人
 
@@ -3353,9 +3377,11 @@ def _check_skill_permission(fname: str, fargs: Dict[str, Any], current_user: str
         # scope=dept/self 只能对隐私表做聚合统计，避免用自由 SQL 绕过隐私明细权限。
         sql_low = (fargs.get("sql") or "").lower()
         purpose = (fargs.get("purpose") or "").strip()
+        user_text = (fargs.get("_user_text") or "").strip()
         used_tables = set(re.findall(r"(?:from|join)\s+`?([a-zA-Z_]\w*)`?", sql_low))
         discipline_like = bool(
             used_tables & {"attendance_records"}
+            or _is_work_intensity_or_discipline_question(user_text)
             or re.search(r"(工作强度|考勤纪律|早到|晚走|打卡纪律|踩点|在岗小时|实际在岗)", purpose)
             or re.search(r"(工作强度|考勤纪律|早到|晚走|打卡纪律|踩点|在岗小时|实际在岗)", fargs.get("sql") or "")
         )
@@ -3536,6 +3562,7 @@ async def chat_stream(req: ChatRequest):
     extra_body = {"chat_template_kwargs": {"enable_thinking": False}} if cfg.get("use_extra") else None
 
     model_label = _model_label(cfg)
+    available_tools = _tools_for_scope(scope_info)
 
     def gen():
         yield _sse({"type": "meta", "provider": provider, "model": model, "label": model_label})
@@ -3560,7 +3587,7 @@ async def chat_stream(req: ChatRequest):
                 kwargs = _llm_request_kwargs(cfg,
                     model=model,
                     messages=messages,
-                    tools=TOOLS,
+                    tools=available_tools,
                     tool_choice="auto",
                     temperature=LLM_TEMPERATURE_TOOL,
                     stream=False,
@@ -3616,6 +3643,7 @@ async def chat_stream(req: ChatRequest):
                         fargs = json.loads(tc.function.arguments or "{}")
                     except Exception:
                         fargs = {}
+                    fargs["_user_text"] = latest_user_text
                     yield _sse({"type": "tool", "name": fname, "label": label, "status": "running"})
                     yield _sse({"type": "status", "text": f"正在{label}…"})
 

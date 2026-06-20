@@ -16,14 +16,14 @@
         </div>
       </div>
       <div class="ai-page__tags">
-        <span class="ai-page__tag">制度智能检索</span>
-        <span class="ai-page__tag">工艺知识库</span>
-        <span class="ai-page__tag">考勤/请假/公出查询</span>
-        <span class="ai-page__tag">部门人员职级</span>
-        <span class="ai-page__tag">数据统计分析</span>
-        <span class="ai-page__tag">报表导出</span>
-        <span class="ai-page__tag">数据图表</span>
-        <span class="ai-page__tag">排班/节假日</span>
+        <span class="ai-page__tag">制度与工艺知识库</span>
+        <span class="ai-page__tag">个人考勤查询</span>
+        <span class="ai-page__tag">科室人员与职级</span>
+        <span class="ai-page__tag">权限内统计分析</span>
+        <span class="ai-page__tag">本地统计图表</span>
+        <span class="ai-page__tag">权限内报表导出</span>
+        <span class="ai-page__tag">报表汇聚导出</span>
+        <span class="ai-page__tag">排班与节假日</span>
         <span class="ai-page__tag">天气/新闻</span>
       </div>
     </header>
