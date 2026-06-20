@@ -160,8 +160,8 @@ DEFAULT_LOCAL_MODEL = "qwen3:8b"
 
 # DeepSeek 联网模型
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-chat"          # 工具调用（function calling）用
-DEEPSEEK_REASONER_MODEL = "deepseek-reasoner"  # 最终回答用，可输出思维链 reasoning_content
+DEEPSEEK_MODEL = "deepseek-v4-flash"
+DEEPSEEK_REASONER_MODEL = "deepseek-v4-flash"
 
 # 工具调用最多迭代轮数，防止无限循环
 MAX_TOOL_ROUNDS = 4
@@ -3195,19 +3195,15 @@ async def chat_stream(req: ChatRequest):
                     yield _sse({"type": "chunk", "text": piece})
             return produced
 
-        # 关键：deepseek-reasoner 不支持 function calling，无法消费对话历史里的
-        # tool_calls / tool 结果消息。若本轮调用过工具仍用 reasoner，会丢失真实数据导致“胡编乱造”。
-        # 因此：本轮调用过工具时，最终答案必须用 deepseek-chat（能正确读取工具返回结果）；
-        # 纯对话（未调用工具）时才用 reasoner 展示思维链。
         used_tools = any(isinstance(m, dict) and m.get("role") == "tool" for m in messages)
         yield _sse({"type": "status", "text": "正在生成回答…"})
         try:
             got = False
-            if provider == "deepseek" and not used_tools:
+            if provider == "deepseek" and not used_tools and DEEPSEEK_REASONER_MODEL != model:
                 try:
                     got = yield from _emit_final(DEEPSEEK_REASONER_MODEL)
                 except Exception as e_reason:
-                    logger.warning(f"DeepSeek reasoner 不可用，回退 {model}: {e_reason}")
+                    logger.warning(f"DeepSeek 备用回答模型不可用，回退 {model}: {e_reason}")
                     got = yield from _emit_final(model)
             else:
                 got = yield from _emit_final(model)

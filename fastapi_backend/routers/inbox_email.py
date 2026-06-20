@@ -47,7 +47,7 @@ ANALYSIS_STATUS_FAILED = "failed"
 
 # 联网模型（DeepSeek）兜底配置
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MODEL = "deepseek-v4-flash"
 
 
 # ==================== 建表 / 字段保障 ====================
