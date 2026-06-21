@@ -1745,6 +1745,15 @@ const rawFeatureGroups = [
         iconPath: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'
       },
       {
+        id: 'massage-chair',
+        title: '按摩椅预约',
+        description: '部门公共按摩椅按 15 分钟时段预约，每人每日最多 30 分钟',
+        path: '/massage-chair',
+        color: 'linear-gradient(135deg, #14b8a6 0%, #6366f1 100%)',
+        tag: '新功能',
+        iconPath: 'M4 10h16v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8zm4-5h8v5H8V5zm2 8h4'
+      },
+      {
         id: 'feedback',
         title: '意见与建议',
         description: '部门吐槽墙、领导匿名信箱、系统功能建议',

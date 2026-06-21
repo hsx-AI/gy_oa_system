@@ -11,6 +11,20 @@
           <span class="sidebar-title">集成办公平台</span>
         </div>
         <nav class="sidebar-nav">
+          <section v-if="!isOtherDeptUser" class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="常用入口"
+              :aria-expanded="isSidebarGroupOpen('common') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('common')"
+            >
+              <span>常用入口</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('common') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('common')" class="sidebar-group-panel">
           <router-link v-if="!isOtherDeptUser" to="/" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
@@ -44,6 +58,23 @@
             </svg>
             <span>通讯录</span>
           </router-link>
+            </div>
+          </section>
+
+          <section v-if="!isOtherDeptUser" class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="休闲娱乐"
+              :aria-expanded="isSidebarGroupOpen('leisure') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('leisure')"
+            >
+              <span>休闲娱乐</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('leisure') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('leisure')" class="sidebar-group-panel">
           <router-link v-if="!isOtherDeptUser" to="/info-feed" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M3 15a4 4 0 0 0 4 4h10a4 4 0 0 0 1.2-7.82A6 6 0 0 0 6.2 9.1 4 4 0 0 0 3 15z" />
@@ -53,6 +84,33 @@
             </svg>
             <span>天气新闻</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/massage-chair" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14"/>
+              <path d="M12 5v14"/>
+              <rect x="3" y="8" width="18" height="10" rx="2"/>
+              <path d="M7 12h2"/>
+              <path d="M15 12h2"/>
+            </svg>
+            <span>按摩椅预约</span>
+          </router-link>
+            </div>
+          </section>
+
+          <section class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="考勤审批"
+              :aria-expanded="isSidebarGroupOpen('attendance') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('attendance')"
+            >
+              <span>考勤审批</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('attendance') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('attendance')" class="sidebar-group-panel">
           <router-link v-if="!isOtherDeptUser" to="/attendance" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M9 11l3 3L22 4" />
@@ -78,12 +136,6 @@
             </svg>
             <span>公出管理</span>
           </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-            <span>部门用印申请</span>
-          </router-link>
           <router-link v-if="!isOtherDeptUser && !canSeeLeaderDashboard" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="20" x2="18" y2="10" />
@@ -100,13 +152,6 @@
               <path d="M8 17h6" />
             </svg>
             <span>报表汇聚</span>
-          </router-link>
-          <router-link to="/confidentiality-ledger" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="M9 12l2 2 4-4" />
-            </svg>
-            <span>保密审批台账</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -158,6 +203,36 @@
               <line x1="12" y1="17" x2="12.01" y2="17" />
             </svg>
             <span>考勤异常管理</span>
+          </router-link>
+            </div>
+          </section>
+
+          <section class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="数字化办公"
+              :aria-expanded="isSidebarGroupOpen('files') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('files')"
+            >
+              <span>数字化办公</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('files') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('files')" class="sidebar-group-panel">
+          <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <span>部门用印申请</span>
+          </router-link>
+          <router-link to="/confidentiality-ledger" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <span>保密审批台账</span>
           </router-link>
           <router-link to="/file/numbering" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -212,6 +287,23 @@
             </svg>
             <span>意见与建议</span>
           </router-link>
+            </div>
+          </section>
+
+          <section v-if="!isOtherDeptUser" class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="外部系统"
+              :aria-expanded="isSidebarGroupOpen('external') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('external')"
+            >
+              <span>外部系统</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('external') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('external')" class="sidebar-group-panel">
           <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 14l9-5-9-5-9 5 9 5z" />
@@ -229,6 +321,23 @@
             </svg>
             <span>人事档案系统</span>
           </a>
+            </div>
+          </section>
+
+          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canAccessInboxEmails" class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="系统管理"
+              :aria-expanded="isSidebarGroupOpen('admin') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('admin')"
+            >
+              <span>系统管理</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('admin') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('admin')" class="sidebar-group-panel">
           <router-link v-if="canShowEmployeeAdmin" to="/admin/employees" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -287,6 +396,8 @@
             </svg>
             <span>待办邮箱</span>
           </router-link>
+            </div>
+          </section>
         </nav>
       </aside>
 
@@ -543,6 +654,58 @@ const todoPopoverOpen = ref(false)
 const settingsWrapRef = ref(null)
 const settingsPopoverOpen = ref(false)
 const activeSkinStyle = ref('default')
+const sidebarOpenGroups = ref({
+  common: true,
+  leisure: false,
+  attendance: false,
+  files: false,
+  external: false,
+  admin: false,
+})
+
+function isSidebarGroupOpen(groupKey) {
+  return !!sidebarOpenGroups.value[groupKey]
+}
+
+function toggleSidebarGroup(groupKey) {
+  sidebarOpenGroups.value = {
+    ...sidebarOpenGroups.value,
+    [groupKey]: !sidebarOpenGroups.value[groupKey],
+  }
+}
+
+function getSidebarGroupByPath(path) {
+  if (path.startsWith('/admin')) return 'admin'
+  if (
+    path.startsWith('/file') ||
+    path.startsWith('/weldoa') ||
+    path.startsWith('/seal') ||
+    path === '/confidentiality-ledger' ||
+    path === '/feedback'
+  ) {
+    return 'files'
+  }
+  if (path === '/info-feed' || path === '/massage-chair') return 'leisure'
+  if (
+    path.startsWith('/attendance') ||
+    path === '/statistics' ||
+    path === '/reports-hub' ||
+    path === '/overtime-pay' ||
+    path === '/leader-dashboard' ||
+    path === '/upload'
+  ) {
+    return 'attendance'
+  }
+  if (
+    path === '/' ||
+    path === '/ai-assistant' ||
+    path === '/profile' ||
+    path === '/contacts'
+  ) {
+    return 'common'
+  }
+  return ''
+}
 
 const skinStyleOptions = [
   { key: 'default', label: '默认蓝', primary: '#1890ff', secondary: '#e6f7ff' },
@@ -1069,6 +1232,13 @@ const loadUserInfo = () => {
 // 路由变化时重新加载用户信息（登录后跳转时 currentUser 能正确更新）
 watch(() => route.path, () => {
   loadUserInfo()
+  const activeSidebarGroup = getSidebarGroupByPath(route.path)
+  if (activeSidebarGroup) {
+    sidebarOpenGroups.value = {
+      ...sidebarOpenGroups.value,
+      [activeSidebarGroup]: true,
+    }
+  }
   if (route.path === '/login') {
     applySkinStyle('default')
   } else {
@@ -1284,6 +1454,59 @@ const displayUserName = computed(() => {
   flex: 1;
   padding: var(--spacing-md) 0;
   overflow-y: auto;
+}
+
+.sidebar-group {
+  margin: 0 0 6px;
+}
+
+.sidebar-group-toggle {
+  width: calc(100% - 16px);
+  margin: 0 8px 4px;
+  padding: 8px 10px 8px 13px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-sm);
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.04);
+  color: var(--color-sb-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.sidebar-group-toggle:hover {
+  color: var(--color-sb-text-hover);
+  background: rgba(255, 255, 255, 0.08);
+  border-color: var(--color-sb-border);
+}
+
+.sidebar-group-toggle span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-group-arrow {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+  transition: transform 0.2s ease;
+}
+
+.sidebar-group-arrow.open {
+  transform: rotate(90deg);
+}
+
+.sidebar-group-panel {
+  padding-bottom: 4px;
+}
+
+.sidebar-group-panel .sidebar-item {
+  padding-left: calc(var(--spacing-lg) + 8px);
 }
 
 .sidebar-item {
@@ -1960,6 +2183,7 @@ a.user-menu__item {
   }
 
   .sidebar-title,
+  .sidebar-group-toggle span,
   .sidebar-item span {
     display: none;
   }
@@ -1972,6 +2196,18 @@ a.user-menu__item {
   .sidebar-item {
     justify-content: center;
     padding: 12px;
+  }
+
+  .sidebar-group-toggle {
+    width: 44px;
+    height: 34px;
+    justify-content: center;
+    margin: 0 auto 4px;
+    padding: 0;
+  }
+
+  .sidebar-group-panel .sidebar-item {
+    padding-left: 12px;
   }
 }
 
@@ -2005,6 +2241,28 @@ a.user-menu__item {
     padding: 0;
   }
 
+  .sidebar-group {
+    width: 100%;
+  }
+
+  .sidebar-group-toggle {
+    width: 100%;
+    height: auto;
+    justify-content: space-between;
+    margin: 0;
+    padding: 8px 10px;
+  }
+
+  .sidebar-group-toggle span {
+    display: block;
+  }
+
+  .sidebar-group-panel {
+    display: flex;
+    flex-wrap: wrap;
+    gap: var(--spacing-xs);
+  }
+
   .sidebar-item {
     flex: 1;
     min-width: 80px;
@@ -2016,6 +2274,10 @@ a.user-menu__item {
   .sidebar-item span {
     display: block;
     font-size: 12px;
+  }
+
+  .sidebar-group-panel .sidebar-item {
+    padding-left: 12px;
   }
 
   .sidebar-item-active {

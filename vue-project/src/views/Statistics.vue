@@ -142,7 +142,7 @@
           </div>
         </div>
 
-        <div v-if="ENABLE_WORK_INTENSITY_IN_STATISTICS && workIntensity.totalPeople" class="work-intensity-card card">
+        <div v-if="canSeeWorkIntensity && workIntensity.totalPeople" class="work-intensity-card card">
           <div class="work-intensity-header">
             <h3 class="work-intensity-title">
               <svg class="section-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -587,6 +587,7 @@
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
 import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear, getLeaderWorkIntensity } from '@/api/attendance'
+import { canSeeWorkIntensityInStatistics } from '@/utils/roleMatch'
 
 // 权限：1=仅自己 2=科室下拉 3=全部输入
 const permLevel = ref(1)
@@ -594,8 +595,7 @@ const permLsys = ref('')
 const deptEmployeeList = ref([])
 const currentUserName = ref('')
 const currentUserInfo = ref({})
-// 临时下线：统计汇总中的工作强度模块暂不展示、不请求接口。上线时改为 true。
-const ENABLE_WORK_INTENSITY_IN_STATISTICS = false
+const canSeeWorkIntensity = computed(() => canSeeWorkIntensityInStatistics(currentUserInfo.value?.jb))
 
 // 查询参数
 const queryParams = ref({
@@ -1217,7 +1217,7 @@ const fetchData = async () => {
       fullAttendance.value = null
     }
 
-    if (ENABLE_WORK_INTENSITY_IN_STATISTICS) {
+    if (canSeeWorkIntensity.value) {
       try {
         await fetchWorkIntensity()
       } catch (e) {

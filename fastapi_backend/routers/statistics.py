@@ -109,13 +109,31 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     return bool(_jb_match(jb, "部长") or _jb_match(jb, "副部长"))
 
 
+def _can_access_work_intensity_stats(jb: Optional[str]) -> bool:
+    """统计汇总工作强度：仅 yggl.jb 为 主任/副主任/主任责/班组长/组长 可查看。"""
+    j = (jb or "").strip()
+    if not j:
+        return False
+    try:
+        from routers.approvers import _jb_match
+    except Exception:
+        return False
+    if "副主任" in j:
+        return True
+    if "主任责" in j:
+        return True
+    if _jb_match(j, "主任"):
+        return True
+    if _jb_match(j, "组长"):
+        return True
+    return False
+
+
 def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[str], requested_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
     统计汇总中的工作强度范围：
-    - 驾驶舱权限：沿用原请求范围；
-    - 经理/副经理/经理助理：可查本科室，部办经理层可按请求范围查询；
-    - 主任/副主任/组长：仅可查本科室，若传 name 则必须属于本科室；
-    - 普通员工：仅本人。
+    - 仅主任/副主任/主任责/班组长/组长可查看；
+    - 仅可查本科室，若传 name 则必须属于本科室。
     返回 (lsys, name)，后续计算先按 lsys 拉员工，再按 name 收窄。
     """
     user_name = (current_user or "").strip()
@@ -123,55 +141,35 @@ def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[
         raise HTTPException(status_code=403, detail="缺少当前用户信息")
 
     try:
-        from routers.approvers import _get_user_info, _jb_match, can_access_leader_dashboard
+        from routers.approvers import _get_user_info
     except Exception:
         raise HTTPException(status_code=403, detail="无法校验工作强度权限")
 
     user = _get_user_info(user_name)
     if not user:
-        return None, user_name
+        raise HTTPException(status_code=403, detail="用户不存在")
+
+    jb = (user.get("jb") or "").strip()
+    if not _can_access_work_intensity_stats(jb):
+        raise HTTPException(status_code=403, detail="仅主任/副主任/主任责/班组长/组长可查看工作强度")
 
     user_lsys = (user.get("lsys") or "").strip()
     req_lsys = (requested_lsys or "").strip() or None
     req_name = (requested_name or "").strip() or None
 
-    if can_access_leader_dashboard(user_name):
-        return req_lsys, req_name
-
-    jb = (user.get("jb") or "").strip()
-    if ("经理助理" in jb) or ("副经理" in jb) or _jb_match(jb, "经理") or jb == "经理":
-        if user_lsys == "部办":
-            return req_lsys, req_name
-        scope_lsys = user_lsys
-        if req_lsys and req_lsys != user_lsys:
-            raise HTTPException(status_code=403, detail="无权限查看其他科室工作强度")
-        if req_name:
-            rows = db.execute_query(
-                "SELECT 1 FROM yggl WHERE TRIM(name)=%s AND TRIM(lsys)=%s "
-                "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
-                "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) LIMIT 1",
-                (req_name, user_lsys),
-            )
-            if not rows:
-                raise HTTPException(status_code=403, detail="无权限查看其他科室人员工作强度")
-        return scope_lsys, req_name
-
-    if _jb_match(jb, "组长") or _jb_match(jb, "主任") or (jb == "副主任" or (jb and "副主任" in jb)):
-        scope_lsys = user_lsys
-        if req_lsys and req_lsys != user_lsys:
-            raise HTTPException(status_code=403, detail="无权限查看其他科室工作强度")
-        if req_name:
-            rows = db.execute_query(
-                "SELECT 1 FROM yggl WHERE TRIM(name)=%s AND TRIM(lsys)=%s "
-                "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
-                "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) LIMIT 1",
-                (req_name, user_lsys),
-            )
-            if not rows:
-                raise HTTPException(status_code=403, detail="无权限查看该员工工作强度")
-        return scope_lsys, req_name
-
-    return user_lsys or None, user_name
+    scope_lsys = user_lsys
+    if req_lsys and req_lsys != user_lsys:
+        raise HTTPException(status_code=403, detail="无权限查看其他科室工作强度")
+    if req_name:
+        rows = db.execute_query(
+            "SELECT 1 FROM yggl WHERE TRIM(name)=%s AND TRIM(lsys)=%s "
+            "AND RIGHT(TRIM(name),1)!='1' AND RIGHT(TRIM(lsys),1)!='1' "
+            "AND TRIM(lsys) NOT IN ('其他部门员工','其他部门成员') AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+            (req_name, user_lsys),
+        )
+        if not rows:
+            raise HTTPException(status_code=403, detail="无权限查看该员工工作强度")
+    return scope_lsys, req_name
 
 
 INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}

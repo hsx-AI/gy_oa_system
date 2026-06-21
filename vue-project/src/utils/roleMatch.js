@@ -54,6 +54,17 @@ export function isDirectorLevel(jb) {
   return jbMatch(jb, '主任') || jbMatch(jb, '副主任')
 }
 
+/** 统计汇总工作强度：仅 yggl.jb 为 主任/副主任/主任责/班组长/组长 可见 */
+export function canSeeWorkIntensityInStatistics(jb) {
+  const j = _normalize(jb)
+  if (!j) return false
+  if (j.includes('副主任')) return true
+  if (j.includes('主任责')) return true
+  if (jbMatch(j, '主任')) return true
+  if (jbMatch(j, '组长')) return true
+  return false
+}
+
 /** 领导加班统计：仅部长/副部长 */
 export function canAccessLeaderOvertimeStats(jb) {
   return isMinisterLevel(jb)
