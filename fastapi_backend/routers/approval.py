@@ -3,7 +3,7 @@
 请假/加班/公出逐级审批 API
 - 员工无审批权限
 - 请假: qjzt=1(室主任spr) -> qjzt=3(部长spr2) -> qjzt=4; 驳回 qjzt=22
-- 加班: jiabanzt=0(室主任spr) -> [有spr2时 1->3] -> jiabanzt=5(打卡管理员) -> 4; 驳回 22
+- 加班: jiabanzt=0(室主任spr) -> [有spr2时 1->3] -> 上级审批通过后智能校验 -> 通过则 4，否则 5(打卡管理员) -> 4; 驳回 22
 - 公出: 两级固定。室主任(szr)先批 szrzt=1->2; 部领导(bld)再批 bldzt=1->2; 驳回 22
 """
 from fastapi import APIRouter, HTTPException, Query, Body
@@ -163,6 +163,18 @@ class ApproveRequest(BaseModel):
     action: str  # "approve" | "reject"
     reason: Optional[str] = ""
     approver: Optional[str] = None  # 当前审批人姓名，用于加班最终环(jiabanzt=5)仅 dakaman 可操作时校验
+
+
+class OvertimeValidateItem(BaseModel):
+    id: str
+    applicant: str
+    date: str
+    startTime: str
+    endTime: str
+
+
+class OvertimeValidateRequest(BaseModel):
+    items: List[OvertimeValidateItem]
 
 
 def _add_exchange_tickets(name: str, tickets: float, ly: str = "", sj: str = ""):
@@ -484,6 +496,81 @@ def _get_department_from_row(r, xm_key="xm"):
     return "-"
 
 
+def _format_overtime_time(val) -> str:
+    """将 timefrom/timeto 统一为 HH:MM:SS，便于智能校验与打卡对齐。"""
+    if isinstance(val, datetime):
+        t = val.strftime("%H:%M:%S") if val else ""
+    elif val and " " in str(val):
+        t = str(val).split(" ")[-1].strip()
+        if t and len(t) == 5 and ":" in t:
+            t = t + ":00"
+        t = (t or "")[:8] if t else ""
+    else:
+        t = str(val).strip() if val else ""
+        if t and len(t) == 5 and ":" in t:
+            t = t + ":00"
+        t = (t or "")[:8] if t else ""
+    return t
+
+
+def _finalize_overtime_record(row: dict, item_id: str) -> None:
+    """加班最终审批通过：重算时长 → hx=是 写 hxp 表；hx=否 写 jbf。"""
+    hx = (row.get("hx") or row.get("HX") or "").strip()
+    need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
+    hours = _recalc_overtime_hours(row)
+    tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
+    try:
+        db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, item_id))
+    except Exception:
+        pass
+    xm = (row.get("xm") or "").strip()
+
+    if need_exchange and hours > 0 and xm:
+        tickets = _overtime_exchange_tickets_from_row(row)
+        overtime_sj = str(row.get("timedate") or "")[:10]
+        if tickets > 0:
+            _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
+            db.execute_update(
+                "UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s",
+                (tickets, item_id),
+            )
+    else:
+        db.execute_update(
+            "UPDATE jiaban SET jbf = %s, hxp = 0 WHERE id = %s",
+            (hours, item_id),
+        )
+
+
+def _row_to_validate_item(row: dict) -> OvertimeValidateItem:
+    return OvertimeValidateItem(
+        id=str(row.get("id") or ""),
+        applicant=(row.get("xm") or "").strip(),
+        date=str(row.get("timedate") or "")[:10],
+        startTime=_format_overtime_time(row.get("timefrom")),
+        endTime=_format_overtime_time(row.get("timeto")),
+    )
+
+
+def _after_supervisor_approve(row: dict, item_id: str) -> tuple:
+    """
+    上级审批通过后自动智能校验：通过则直接完结(jiabanzt=4)，否则流转打卡管理员(jiabanzt=5)。
+    返回 (是否已最终通过, 提示消息)。
+    """
+    item = _row_to_validate_item(row)
+    results = _run_overtime_validation_core([item])
+    vr = results[0] if results else {"id": item_id, "pass": False, "reason": "校验失败"}
+    if vr.get("pass"):
+        db.execute_update("UPDATE jiaban SET jiabanzt = 4 WHERE id = %s", (item_id,))
+        _finalize_overtime_record(row, item_id)
+        return True, "智能校验通过，已直接完成审批"
+    db.execute_update("UPDATE jiaban SET jiabanzt = 5 WHERE id = %s", (item_id,))
+    reason = (vr.get("reason") or "").strip()
+    msg = "智能校验未通过，已流转至打卡管理员审批"
+    if reason:
+        msg += f"（{reason}）"
+    return False, msg
+
+
 @router.get("/overtime/{item_id}")
 async def get_overtime_detail(item_id: str):
     """加班详情（item_id 为 jiaban 表 id，支持 UUID 字符串）"""
@@ -547,15 +634,19 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
         raise HTTPException(status_code=400, detail="无效操作")
 
     final_approved = False
+    auto_validated = False
+    message = "已通过"
     if jiabanzt in (0, 1):
         if has_spr2:
             db.execute_update("UPDATE jiaban SET jiabanzt = 3 WHERE id = %s", (item_id,))
         else:
-            # 无二级审批人时进入打卡管理员审批（最后一环）
-            db.execute_update("UPDATE jiaban SET jiabanzt = 5 WHERE id = %s", (item_id,))
+            # 无二级审批人：上级审批完成后自动智能校验
+            final_approved, message = _after_supervisor_approve(row, item_id)
+            auto_validated = True
     elif jiabanzt == 3:
-        # 二级审批通过后进入打卡管理员审批
-        db.execute_update("UPDATE jiaban SET jiabanzt = 5 WHERE id = %s", (item_id,))
+        # 二级审批通过后自动智能校验
+        final_approved, message = _after_supervisor_approve(row, item_id)
+        auto_validated = True
     elif jiabanzt == 5:
         # 仅 webconfig.dakaman 可做最终审批，admin1 不充当 dakaman
         dakaman = _get_dakaman()
@@ -572,36 +663,16 @@ async def overtime_approve_action(item_id: str, req: ApproveRequest):
     else:
         raise HTTPException(status_code=400, detail="当前状态无法审批")
 
-    # 加班最终审批通过：重算时长 → hx=是 写 hxp 表；hx=否 写 jbf
-    if final_approved:
-        hx = (row.get("hx") or row.get("HX") or "").strip()
-        need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
-        hours = _recalc_overtime_hours(row)
-        # 同步修正 tian1（以最新算法为准）
-        tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
-        try:
-            db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, item_id))
-        except Exception:
-            pass
-        xm = (row.get("xm") or "").strip()
+    # 打卡管理员最终审批通过时写入 jbf/hxp（自动校验通过路径已在 _after_supervisor_approve 内处理）
+    if final_approved and jiabanzt == 5:
+        _finalize_overtime_record(row, item_id)
 
-        if need_exchange and hours > 0 and xm:
-            tickets = _overtime_exchange_tickets_from_row(row)
-            overtime_sj = str(row.get("timedate") or "")[:10]
-            if tickets > 0:
-                _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
-                db.execute_update(
-                    "UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s",
-                    (tickets, item_id),
-                )
-        else:
-            # hx=否：只记其他绩效激励，回写 jbf（以 tian1 为准），hxp 置 0
-            db.execute_update(
-                "UPDATE jiaban SET jbf = %s, hxp = 0 WHERE id = %s",
-                (hours, item_id),
-            )
-
-    return {"success": True, "message": "已通过"}
+    return {
+        "success": True,
+        "message": message,
+        "autoValidated": auto_validated,
+        "validationPass": final_approved if auto_validated else None,
+    }
 
 
 @router.post("/overtime/batch")
@@ -633,8 +704,8 @@ async def overtime_batch_approve(req: BatchApproveRequest):
     cur_approver = (req.approver or "").strip()
 
     ids_to_3 = []
-    ids_to_5_from_01 = []
-    ids_to_5_from_3 = []
+    ids_auto_validate = []
+    ids_to_5 = []
     ids_to_4 = []
     final_rows = []
     ok, fail = 0, 0
@@ -651,10 +722,10 @@ async def overtime_batch_approve(req: BatchApproveRequest):
             if has_spr2:
                 ids_to_3.append(iid)
             else:
-                ids_to_5_from_01.append(iid)
+                ids_auto_validate.append(iid)
             ok += 1
         elif jiabanzt == 3:
-            ids_to_5_from_3.append(iid)
+            ids_auto_validate.append(iid)
             ok += 1
         elif jiabanzt == 5:
             if not dakaman or cur_approver != dakaman or (admin1 and cur_approver == admin1):
@@ -666,44 +737,47 @@ async def overtime_batch_approve(req: BatchApproveRequest):
         else:
             fail += 1
 
+    ids_to_4_auto = []
+    auto_final_rows = []
+    if ids_auto_validate:
+        auto_rows = [row_map[iid] for iid in ids_auto_validate if iid in row_map]
+        validate_items = [_row_to_validate_item(r) for r in auto_rows]
+        validate_map = {vr["id"]: vr for vr in _run_overtime_validation_core(validate_items)}
+        for iid in ids_auto_validate:
+            vr = validate_map.get(iid, {"pass": False})
+            r = row_map.get(iid)
+            if not r:
+                continue
+            if vr.get("pass"):
+                ids_to_4_auto.append(iid)
+                auto_final_rows.append(r)
+            else:
+                ids_to_5.append(iid)
+
     if ids_to_3:
         p = ",".join(["%s"] * len(ids_to_3))
         db.execute_update(f"UPDATE jiaban SET jiabanzt = 3 WHERE id IN ({p})", tuple(ids_to_3))
-    if ids_to_5_from_01:
-        p = ",".join(["%s"] * len(ids_to_5_from_01))
-        db.execute_update(f"UPDATE jiaban SET jiabanzt = 5 WHERE id IN ({p})", tuple(ids_to_5_from_01))
-    if ids_to_5_from_3:
-        p = ",".join(["%s"] * len(ids_to_5_from_3))
-        db.execute_update(f"UPDATE jiaban SET jiabanzt = 5 WHERE id IN ({p})", tuple(ids_to_5_from_3))
+    if ids_to_5:
+        p = ",".join(["%s"] * len(ids_to_5))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 5 WHERE id IN ({p})", tuple(ids_to_5))
+    if ids_to_4_auto:
+        p = ",".join(["%s"] * len(ids_to_4_auto))
+        db.execute_update(f"UPDATE jiaban SET jiabanzt = 4 WHERE id IN ({p})", tuple(ids_to_4_auto))
     if ids_to_4:
         p = ",".join(["%s"] * len(ids_to_4))
         db.execute_update(f"UPDATE jiaban SET jiabanzt = 4 WHERE id IN ({p})", tuple(ids_to_4))
 
-    for r in final_rows:
-        hx = (r.get("hx") or r.get("HX") or "").strip()
-        need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
-        hours = _recalc_overtime_hours(r)
-        xm = (r.get("xm") or "").strip()
+    for r in auto_final_rows + final_rows:
         rid = str(r["id"])
-        tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
         try:
-            db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, rid))
-        except Exception:
-            pass
+            _finalize_overtime_record(r, rid)
+        except Exception as e:
+            logger.warning(f"加班批量审批完结失败 id={rid}: {e}")
 
-        if need_exchange and hours > 0 and xm:
-            tickets = _overtime_exchange_tickets_from_row(r)
-            overtime_sj = str(r.get("timedate") or "")[:10]
-            if tickets > 0:
-                try:
-                    _add_exchange_tickets(xm, tickets, ly="加班换休", sj=overtime_sj)
-                except Exception as e:
-                    logger.warning(f"加班批量审批添加换休票失败 xm={xm}: {e}")
-                db.execute_update("UPDATE jiaban SET hxp = %s, jbf = 0 WHERE id = %s", (tickets, rid))
-        else:
-            db.execute_update("UPDATE jiaban SET jbf = %s, hxp = 0 WHERE id = %s", (hours, rid))
-
-    return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
+    msg = f"成功{ok}条，失败{fail}条"
+    if ids_auto_validate:
+        msg += f"（智能校验通过直接完成{len(ids_to_4_auto)}条，未通过流转打卡管理员{len(ids_to_5)}条）"
+    return {"success": True, "passed": ok, "failed": fail, "message": msg}
 
 
 def _parse_overtime_datetime(date_str: str, time_str: str) -> Optional[str]:
@@ -770,32 +844,16 @@ def _interval_contained_in(s_start: str, s_end: str, punch_starts: List[str], pu
     return False
 
 
-class OvertimeValidateItem(BaseModel):
-    id: str
-    applicant: str
-    date: str
-    startTime: str
-    endTime: str
-
-
-class OvertimeValidateRequest(BaseModel):
-    items: List[OvertimeValidateItem]
-
-
-@router.post("/overtime/validate")
-async def overtime_validate(req: OvertimeValidateRequest):
+def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dict]:
     """
-    加班审批智能校验：对当前待审批列表逐条校验。
+    加班智能校验核心逻辑。
     1) 列表内时间段重复 -> 不通过，原因「时间段重复」
     2) 与打卡记录对比，加班区间未被某段打卡包含 -> 不通过，原因「打卡不实」
     3) 与 jiaban 表已有记录时间段重叠 -> 不通过，原因「重复申报」
-
-    性能优化：使用批量查询替代逐条查询。
     """
     results = []
-    items = req.items or []
     if not items:
-        return {"success": True, "results": results}
+        return results
 
     parsed = []
     for it in items:
@@ -806,10 +864,8 @@ async def overtime_validate(req: OvertimeValidateRequest):
             continue
         parsed.append((it.id, (it.applicant or "").strip(), start_dt, end_dt))
 
-    # 快速索引
     parsed_map = {p[0]: p for p in parsed}
 
-    # 1) 列表内重复
     duplicate_ids = set()
     by_applicant = {}
     for id_, app, s, e in parsed:
@@ -821,19 +877,17 @@ async def overtime_validate(req: OvertimeValidateRequest):
                     duplicate_ids.add(group[i][0])
                     duplicate_ids.add(group[j][0])
 
-    # ---------- 批量预取数据 ----------
     applicants = list({p[1] for p in parsed})
     dates = list({p[2][:10] for p in parsed})
     if not applicants or not dates:
         for it in items:
             if it.id not in {r["id"] for r in results}:
                 results.append({"id": it.id, "pass": True, "reason": None})
-        return {"success": True, "results": results}
+        return results
 
     min_date = min(dates)
     max_date = max(dates)
 
-    # 2a) 批量查打卡记录
     att_map = {}
     try:
         ph = ",".join(["%s"] * len(applicants))
@@ -853,7 +907,6 @@ async def overtime_validate(req: OvertimeValidateRequest):
     except Exception:
         pass
 
-    # 3a) 批量查 jiaban 已有记录
     jiaban_map = {}
     try:
         item_ids = [p[0] for p in parsed]
@@ -872,7 +925,6 @@ async def overtime_validate(req: OvertimeValidateRequest):
     except Exception:
         pass
 
-    # ---------- 逐条校验（纯内存） ----------
     for it in items:
         if it.id in duplicate_ids:
             results.append({"id": it.id, "pass": False, "reason": "时间段重复"})
@@ -887,7 +939,6 @@ async def overtime_validate(req: OvertimeValidateRequest):
             results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
             continue
 
-        # 2b) 打卡校验（基于进/出标记配对，从预取数据中查找）
         punch_contained = False
         for row in att_map.get((applicant, date_ymd), []):
             time_mark_pairs = collect_valid_times_with_marks(row)
@@ -912,7 +963,6 @@ async def overtime_validate(req: OvertimeValidateRequest):
             results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
             continue
 
-        # 3b) jiaban 查重（从预取数据中查找）
         overlap_with_db = False
         for row in jiaban_map.get(applicant, []):
             r_start = format_datetime_plain(row.get("timefrom")) or ""
@@ -935,7 +985,14 @@ async def overtime_validate(req: OvertimeValidateRequest):
             continue
 
         results.append({"id": it.id, "pass": True, "reason": None})
-    return {"success": True, "results": results}
+    return results
+
+
+@router.post("/overtime/validate")
+async def overtime_validate(req: OvertimeValidateRequest):
+    """加班审批智能校验（手动批量校验接口，与上级审批后自动校验逻辑一致）。"""
+    items = req.items or []
+    return {"success": True, "results": _run_overtime_validation_core(items)}
 
 
 # ==================== 公出审批（按登记时选择的主任/领导流转） ====================

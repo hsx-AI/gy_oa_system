@@ -951,8 +951,11 @@ async function handleApprove(type, item) {
     else if (type === 'overtime') { fn = overtimeApproveAction; payload = { action: 'approve', approver: currentUser } }
     else if (type === 'holiday-exchange') { fn = holidayExchangeApproveAction; payload = { action: 'approve', approver: currentUser } }
     else { fn = businessTripApproveAction; payload = { action: 'approve' } }
-    await fn(item.id, payload)
+    const res = await fn(item.id, payload)
     detailVisible.value = false
+    if (type === 'overtime' && res?.message) {
+      alert(res.message)
+    }
     refreshList(type)
   } catch (e) {
     alert(e.response?.data?.detail || '操作失败')

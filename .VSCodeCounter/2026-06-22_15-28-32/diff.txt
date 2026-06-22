@@ -1,0 +1,279 @@
+Date : 2026-06-22 15:28:32
+Directory : e:\Desktop\tuixiu_protect\OA_system
+Total : 203 files,  108455 codes, 724 comments, 6123 blanks, all 115302 lines
+
+Languages
++--------------------+------------+------------+------------+------------+------------+
+| language           | files      | code       | comment    | blank      | total      |
++--------------------+------------+------------+------------+------------+------------+
+| JSON               |         10 |     48,936 |          0 |         82 |     49,018 |
+| vue                |         56 |     32,519 |         98 |      2,637 |     35,254 |
+| Python             |         49 |     20,827 |        253 |      2,693 |     23,773 |
+| JavaScript         |         67 |      5,818 |        339 |        624 |      6,781 |
+| MS SQL             |         16 |        188 |         34 |         37 |        259 |
+| Markdown           |          2 |        150 |          0 |         50 |        200 |
+| JSON with Comments |          2 |         16 |          0 |          0 |         16 |
+| pip requirements   |          1 |          1 |          0 |          0 |          1 |
++--------------------+------------+------------+------------+------------+------------+
+
+Directories
++-------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| path                                                                                                        | files      | code       | comment    | blank      | total      |
++-------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+| .                                                                                                           |        203 |    108,455 |        724 |      6,123 |    115,302 |
+| . (Files)                                                                                                   |          2 |        202 |          6 |         58 |        266 |
+| fastapi_backend                                                                                             |         67 |     21,587 |        277 |      2,695 |     24,559 |
+| fastapi_backend (Files)                                                                                     |          5 |         87 |          3 |         -1 |         89 |
+| fastapi_backend\data                                                                                        |          2 |        681 |          0 |          1 |        682 |
+| fastapi_backend\routers                                                                                     |         34 |     19,663 |        242 |      2,466 |     22,371 |
+| fastapi_backend\scripts                                                                                     |         20 |        921 |         41 |        193 |      1,155 |
+| fastapi_backend\services                                                                                    |          1 |         27 |          3 |          4 |         34 |
+| fastapi_backend\utils                                                                                       |          5 |        208 |        -12 |         32 |        228 |
+| scripts                                                                                                     |          1 |          3 |          4 |          2 |          9 |
+| vue-project                                                                                                 |        133 |     86,663 |        437 |      3,368 |     90,468 |
+| vue-project (Files)                                                                                         |          3 |        214 |          0 |         26 |        240 |
+| vue-project\public                                                                                          |          6 |     48,104 |          0 |         81 |     48,185 |
+| vue-project\public (Files)                                                                                  |          3 |        346 |          0 |          2 |        348 |
+| vue-project\public\assets                                                                                   |          3 |     47,758 |          0 |         79 |     47,837 |
+| vue-project\public\assets\json                                                                              |          3 |     47,758 |          0 |         79 |     47,837 |
+| vue-project\src                                                                                             |        124 |     38,345 |        437 |      3,261 |     42,043 |
+| vue-project\src (Files)                                                                                     |          1 |      1,195 |          1 |         82 |      1,278 |
+| vue-project\src\api                                                                                         |         20 |        581 |         95 |        143 |        819 |
+| vue-project\src\components                                                                                  |         11 |      2,468 |         15 |        206 |      2,689 |
+| vue-project\src\components (Files)                                                                          |          7 |        954 |          2 |         95 |      1,051 |
+| vue-project\src\components\ai                                                                               |          2 |        866 |         13 |         50 |        929 |
+| vue-project\src\components\attendance                                                                       |          1 |        481 |          0 |         57 |        538 |
+| vue-project\src\components\inbox                                                                            |          1 |        167 |          0 |          4 |        171 |
+| vue-project\src\composables                                                                                 |          2 |        956 |         18 |         61 |      1,035 |
+| vue-project\src\mini3d                                                                                      |         25 |      1,294 |        120 |         93 |      1,507 |
+| vue-project\src\mini3d (Files)                                                                              |          1 |          5 |          0 |          1 |          6 |
+| vue-project\src\mini3d\components                                                                           |          8 |        536 |         60 |         25 |        621 |
+| vue-project\src\mini3d\core                                                                                 |          3 |        135 |          5 |          8 |        148 |
+| vue-project\src\mini3d\plugins                                                                              |          2 |         19 |          2 |          2 |         23 |
+| vue-project\src\mini3d\plugins (Files)                                                                      |          1 |          0 |          2 |          1 |          3 |
+| vue-project\src\mini3d\plugins\debug                                                                        |          1 |         19 |          0 |          1 |         20 |
+| vue-project\src\mini3d\shader                                                                               |          3 |        173 |          2 |         17 |        192 |
+| vue-project\src\mini3d\utils                                                                                |          8 |        426 |         51 |         40 |        517 |
+| vue-project\src\router                                                                                      |          1 |        245 |          3 |         -1 |        247 |
+| vue-project\src\utils                                                                                       |          9 |        470 |         46 |         74 |        590 |
+| vue-project\src\views                                                                                       |         55 |     31,136 |        139 |      2,603 |     33,878 |
+| vue-project\src\views (Files)                                                                               |         16 |     11,743 |         13 |      1,016 |     12,772 |
+| vue-project\src\views\admin                                                                                 |          5 |      4,535 |         16 |        246 |      4,797 |
+| vue-project\src\views\attendance                                                                            |         25 |      8,959 |         78 |        803 |      9,840 |
+| vue-project\src\views\attendance (Files)                                                                    |         15 |      6,687 |         21 |        549 |      7,257 |
+| vue-project\src\views\attendance\map3d                                                                      |         10 |      2,272 |         57 |        254 |      2,583 |
+| vue-project\src\views\feedback                                                                              |          1 |      1,862 |         13 |        101 |      1,976 |
+| vue-project\src\views\file                                                                                  |          6 |      2,418 |          9 |        231 |      2,658 |
+| vue-project\src\views\massage                                                                               |          1 |        517 |          4 |         71 |        592 |
+| vue-project\src\views\seal                                                                                  |          1 |      1,102 |          6 |        135 |      1,243 |
++-------------------------------------------------------------------------------------------------------------+------------+------------+------------+------------+------------+
+
+Files
++-------------------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| filename                                                                                                    | language           | code       | comment    | blank      | total      |
++-------------------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
+| e:\Desktop\tuixiu_protect\OA_system\DeepSeek-V4-API接入指南.md                                                  | Markdown           |         87 |          0 |         24 |        111 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\attendance_db.py                                        | Python             |         40 |         -1 |          2 |         41 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\config.py                                               | Python             |          5 |          2 |          0 |          7 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\data\city_coordinates.json                              | JSON               |        342 |          0 |          1 |        343 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\data\city_province_map.json                             | JSON               |        339 |          0 |          0 |        339 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\database.py                                             | Python             |         38 |         -1 |         -1 |         36 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\main.py                                                 | Python             |          3 |          3 |         -2 |          4 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\requirements.txt                                        | pip requirements   |          1 |          0 |          0 |          1 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\OA_system.code-workspace                        | JSON with Comments |          8 |          0 |          0 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\admin.py                                        | Python             |        670 |          3 |         75 |        748 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\ai_assistant.py                                 | Python             |      3,553 |         56 |        352 |      3,961 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\approval.py                                     | Python             |         26 |         -1 |         16 |         41 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\approvers.py                                    | Python             |        108 |         -1 |         17 |        124 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\attendance.py                                   | Python             |        585 |          1 |         59 |        645 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\attendance_exception.py                         | Python             |        592 |         25 |         81 |        698 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\attendance_scheduler_config.py                  | Python             |        241 |          2 |         43 |        286 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\auth.py                                         | Python             |         91 |         -2 |         21 |        110 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\bid_template.py                                 | Python             |        459 |          1 |         51 |        511 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\business_trip.py                                | Python             |        564 |          4 |         66 |        634 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\business_trip_map.py                            | Python             |        269 |         14 |         57 |        340 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\confidentiality_ledger.py                       | Python             |        251 |          1 |         36 |        288 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\contacts.py                                     | Python             |        127 |          1 |         17 |        145 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\department_policy.py                            | Python             |         79 |         -1 |          4 |         82 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\email_sender.py                                 | Python             |      2,106 |         16 |        262 |      2,384 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\feedback.py                                     | Python             |        742 |          6 |        101 |        849 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\file_numbering.py                               | Python             |         60 |          1 |          7 |         68 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\health_monitor.py                               | Python             |        465 |          4 |         87 |        556 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\holiday.py                                      | Python             |         71 |         -3 |         15 |         83 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\holiday_exchange.py                             | Python             |        406 |          7 |         38 |        451 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\inbox_email.py                                  | Python             |      1,241 |         28 |        172 |      1,441 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\info_feed.py                                    | Python             |        134 |          1 |         40 |        175 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\leave_overtime.py                               | Python             |        209 |          0 |         15 |        224 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\massage_chair.py                                | Python             |        298 |          2 |         57 |        357 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\personnel_visualization.py                      | Python             |        339 |          1 |         41 |        381 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\report.py                                       | Python             |         13 |          2 |          3 |         18 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\rotor_blade_balance.py                          | Python             |        212 |          1 |         32 |        245 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\seal_apply.py                                   | Python             |        375 |          9 |         64 |        448 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\shift_schedule.py                               | Python             |      1,572 |         14 |        173 |      1,759 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\sso.py                                          | Python             |          6 |          0 |          0 |          6 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\statistics.py                                   | Python             |      2,795 |         41 |        338 |      3,174 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\suggestions.py                                  | Python             |        700 |          8 |         79 |        787 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\routers\tech_problem.py                                 | Python             |        296 |          1 |         47 |        344 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_inbox_email_fields_and_table.sql            | MS SQL             |         20 |          6 |          4 |         30 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_inbox_email_task_fields.sql                 | MS SQL             |         12 |          3 |          7 |         22 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_performance_indexes.py                      | Python             |         97 |          1 |         20 |        118 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_shift_email_include_send_day.sql            | MS SQL             |          4 |          1 |          1 |          6 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_shift_email_recipients.sql                  | MS SQL             |          2 |          0 |          1 |          3 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_shift_email_send_weekday.sql                | MS SQL             |          4 |          1 |          1 |          6 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_shift_schedule_email_departments_config.sql | MS SQL             |          3 |          0 |          1 |          4 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_webconfig_admin2.sql                        | MS SQL             |          2 |          1 |          1 |          4 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_yggl_email_auth_code.sql                    | MS SQL             |          6 |          3 |          3 |         12 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\add_yggl_real_name.sql                          | MS SQL             |          8 |          5 |          3 |         16 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_feedback_tables.sql                      | MS SQL             |         32 |          4 |          4 |         40 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_rotor_blade_balance_records.sql          | MS SQL             |         21 |          0 |          1 |         22 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_shift_schedule_email_log.sql             | MS SQL             |         13 |          0 |          1 |         14 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_shift_tables.sql                         | MS SQL             |         37 |          0 |          3 |         40 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\create_tech_problem_manual.sql                  | MS SQL             |         19 |          6 |          3 |         28 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\drop_shift_schedule_email_unique_key.sql        | MS SQL             |          2 |          0 |          1 |          3 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\export_yggl_gh_sfzh.py                          | Python             |         81 |          1 |         17 |         99 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\fix_hxp_sj.py                                   | Python             |         53 |          1 |         16 |         70 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_paid_annual_leave_qj_from_xlsx.py        | Python             |        342 |          5 |         73 |        420 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\scripts\import_yggl_gh_by_sfzh.py                       | Python             |        163 |          3 |         32 |        198 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\services\policy_vector.py                               | Python             |         27 |          3 |          4 |         34 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\chart_font.py                                     | Python             |         77 |          2 |         15 |         94 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\excel_processor.py                                | Python             |         91 |        -15 |         10 |         86 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\helpers.py                                        | Python             |         14 |          0 |          2 |         16 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\hxp_helper.py                                     | Python             |          6 |          0 |          2 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\fastapi_backend\utils\overtime_exchange.py                              | Python             |         20 |          1 |          3 |         24 |
+| e:\Desktop\tuixiu_protect\OA_system\scripts\add_policy_attachments.sql                                      | MS SQL             |          3 |          4 |          2 |          9 |
+| e:\Desktop\tuixiu_protect\OA_system\test.py                                                                 | Python             |        115 |          6 |         34 |        155 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\README.md                                                   | Markdown           |         63 |          0 |         26 |         89 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\package-lock.json                                           | JSON               |        142 |          0 |          0 |        142 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\package.json                                                | JSON               |          9 |          0 |          0 |          9 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\assets\json\中华人民共和国-轮廓.json                          | JSON               |     20,379 |          0 |         77 |     20,456 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\assets\json\中华人民共和国.json                             | JSON               |     27,252 |          0 |          1 |     27,253 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\assets\json\运输路径.json                                | JSON               |        127 |          0 |          1 |        128 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\china.json                                           | JSON               |          1 |          0 |          1 |          2 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\china_city_coords.json                               | JSON               |        344 |          0 |          1 |        345 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\public\world.json                                           | JSON               |          1 |          0 |          0 |          1 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\App.vue                                                 | vue                |      1,195 |          1 |         82 |      1,278 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\admin.js                                            | JavaScript         |         24 |          8 |          8 |         40 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\attendance.js                                       | JavaScript         |        115 |         36 |         27 |        178 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\attendanceException.js                              | JavaScript         |         48 |          9 |         11 |         68 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\bidTemplate.js                                      | JavaScript         |         39 |          0 |          7 |         46 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\businessTripMap.js                                  | JavaScript         |          7 |          0 |          1 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\confidentialityLedger.js                            | JavaScript         |         29 |          0 |          8 |         37 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\contacts.js                                         | JavaScript         |          4 |          0 |          2 |          6 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\departmentPolicy.js                                 | JavaScript         |          6 |          1 |          1 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\email.js                                            | JavaScript         |         21 |          0 |          7 |         28 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\feedback.js                                         | JavaScript         |         80 |          3 |          5 |         88 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\healthMonitor.js                                    | JavaScript         |         33 |         11 |         11 |         55 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\inboxEmail.js                                       | JavaScript         |         28 |          9 |         10 |         47 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\infoFeed.js                                         | JavaScript         |         19 |          0 |          7 |         26 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\massageChair.js                                     | JavaScript         |         14 |          0 |          6 |         20 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\personnelVisualization.js                           | JavaScript         |          8 |          0 |          2 |         10 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\rotorBladeBalance.js                                | JavaScript         |         23 |          0 |          5 |         28 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\seal.js                                             | JavaScript         |         45 |          9 |         11 |         65 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\shift.js                                            | JavaScript         |         12 |          0 |          4 |         16 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\sso.js                                              | JavaScript         |          0 |          1 |          0 |          1 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\api\techProblem.js                                      | JavaScript         |         26 |          8 |         10 |         44 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\AttendanceExceptionApplyModal.vue            | vue                |        416 |          0 |         40 |        456 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\DateTimePicker.vue                           | vue                |         31 |          0 |          2 |         33 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\LeaveApplyModal.vue                          | vue                |          2 |          0 |          0 |          2 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\LocationPicker.vue                           | vue                |        132 |          2 |         12 |        146 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\OvertimeRegisterModal.vue                    | vue                |         87 |          0 |          5 |         92 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\SearchableSelect.vue                         | vue                |        250 |          0 |         34 |        284 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\TimePicker.vue                               | vue                |         36 |          0 |          2 |         38 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\ai\AiAssistantChat.vue                       | vue                |        683 |         11 |         40 |        734 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\ai\AiAssistantFab.vue                        | vue                |        183 |          2 |         10 |        195 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\attendance\HolidayDutySection.vue            | vue                |        481 |          0 |         57 |        538 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\components\inbox\InboxEmailConfigBody.vue               | vue                |        167 |          0 |          4 |        171 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\composables\useAiChat.js                                | JavaScript         |        250 |         11 |         28 |        289 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\composables\useWorkplaceTodos.js                        | JavaScript         |        706 |          7 |         33 |        746 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\FlyLine.js                            | JavaScript         |         61 |          4 |          6 |         71 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\Grid.js                               | JavaScript         |        141 |          4 |          4 |        149 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\Label3d.js                            | JavaScript         |         86 |         28 |          2 |        116 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\Particles.js                          | JavaScript         |        108 |         20 |          4 |        132 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\PathLine.js                           | JavaScript         |         60 |          4 |          4 |         68 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\Plane.js                              | JavaScript         |         39 |          0 |          2 |         41 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\ToastLoading.js                       | JavaScript         |         34 |          0 |          2 |         36 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\components\index.js                              | JavaScript         |          7 |          0 |          1 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\core\Camera.js                                   | JavaScript         |         32 |          0 |          2 |         34 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\core\Renderer.js                                 | JavaScript         |         36 |          0 |          4 |         40 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\core\index.js                                    | JavaScript         |         67 |          5 |          2 |         74 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\index.js                                         | JavaScript         |          5 |          0 |          1 |          6 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\plugins\debug\index.js                           | JavaScript         |         19 |          0 |          1 |         20 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\plugins\index.js                                 | JavaScript         |          0 |          2 |          1 |          3 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\shader\DiffuseShader.js                          | JavaScript         |         97 |          0 |         10 |        107 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\shader\GradientShader.js                         | JavaScript         |         74 |          2 |          6 |         82 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\shader\index.js                                  | JavaScript         |          2 |          0 |          1 |          3 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\CreateHistory.js                           | JavaScript         |         32 |          5 |          2 |         39 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\EventEmitter.js                            | JavaScript         |         38 |          0 |          6 |         44 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\GC.js                                      | JavaScript         |         33 |          3 |          2 |         38 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\Resource.js                                | JavaScript         |        138 |          3 |         19 |        160 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\Sizes.js                                   | JavaScript         |         29 |          0 |          2 |         31 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\Time.js                                    | JavaScript         |         35 |          0 |          2 |         37 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\index.js                                   | JavaScript         |          7 |          0 |          1 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\mini3d\utils\utils.js                                   | JavaScript         |        114 |         40 |          6 |        160 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\router\index.js                                         | JavaScript         |        245 |          3 |         -1 |        247 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\attendanceTimeMark.js                             | JavaScript         |         11 |          4 |          3 |         18 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\formatHxp.js                                      | JavaScript         |          7 |          1 |          2 |         10 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\infoFeedDisplay.js                                | JavaScript         |         63 |          0 |          4 |         67 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\leaveDuration.js                                  | JavaScript         |          8 |          5 |          1 |         14 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\overtimeExchangeTickets.js                        | JavaScript         |         40 |          1 |          5 |         46 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\overtimeLeaderRules.js                            | JavaScript         |         42 |          0 |          9 |         51 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\overtimeShiftValidation.js                        | JavaScript         |         97 |          0 |         15 |        112 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\renderMarkdown.js                                 | JavaScript         |        110 |         16 |         17 |        143 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\utils\roleMatch.js                                      | JavaScript         |         92 |         19 |         18 |        129 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\AdminEmployeeStatus.vue                           | vue                |        185 |          0 |          8 |        193 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\AiAssistant.vue                                   | vue                |         97 |          0 |          4 |        101 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Attendance.vue                                    | vue                |        238 |          1 |         26 |        265 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\ConfidentialityLedger.vue                         | vue                |        485 |          0 |         57 |        542 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Contacts.vue                                      | vue                |        364 |          0 |         32 |        396 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\EmployeeProfile.vue                               | vue                |         15 |          0 |          1 |         16 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Home.vue                                          | vue                |      3,966 |         10 |        356 |      4,332 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\InfoFeed.vue                                      | vue                |        624 |          0 |         24 |        648 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\LeaderDashboard.vue                               | vue                |      1,255 |          1 |        104 |      1,360 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\LeaderOvertimeStats.vue                           | vue                |        713 |          0 |         26 |        739 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\OA_system.code-workspace                          | JSON with Comments |          8 |          0 |          0 |          8 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\OvertimePay.vue                                   | vue                |        194 |          0 |          8 |        202 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\ReportsHub.vue                                    | vue                |      1,311 |          0 |        105 |      1,416 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\RotorBladeBalance.vue                             | vue                |      1,462 |          0 |        166 |      1,628 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\Statistics.vue                                    | vue                |        786 |          1 |         96 |        883 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\UploadAttendance.vue                              | vue                |         40 |          0 |          3 |         43 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\EmailSender.vue                             | vue                |        728 |          5 |         43 |        776 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\HealthMonitor.vue                           | vue                |      1,266 |          1 |         49 |      1,316 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\HxpManage.vue                               | vue                |        462 |          4 |         20 |        486 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\HxpRecords.vue                              | vue                |        543 |          1 |         62 |        606 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\admin\InboxEmails.vue                             | vue                |      1,536 |          5 |         72 |      1,613 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Approval.vue                           | vue                |        361 |          6 |         19 |        386 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\AttendanceDiscipline.vue               | vue                |      1,174 |          5 |        119 |      1,298 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\AttendanceExceptionRecords.vue         | vue                |        335 |          0 |         27 |        362 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\AttendanceExceptions.vue               | vue                |        168 |          0 |         14 |        182 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTrip.vue                       | vue                |        615 |          2 |         31 |        648 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTripAllRecords.vue             | vue                |       -426 |         -1 |        -18 |       -445 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\BusinessTripMap.vue                    | vue                |        803 |          5 |         47 |        855 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\HolidayDutyCheck.vue                   | vue                |         76 |          0 |         10 |         86 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\HolidayExchange.vue                    | vue                |        142 |          0 |         11 |        153 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\HolidaySettings.vue                    | vue                |        164 |          0 |          8 |        172 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Leave.vue                              | vue                |         72 |          0 |          3 |         75 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\Overtime.vue                           | vue                |        157 |          0 |         15 |        172 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\PendingTasks.vue                       | vue                |         65 |          0 |          1 |         66 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\PersonnelVisualization.vue             | vue                |      1,260 |          0 |        166 |      1,426 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\ShiftSchedule.vue                      | vue                |      1,721 |          4 |         96 |      1,821 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\Assets.js                        | JavaScript         |         54 |          0 |          7 |         61 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\ChildMap.js                      | JavaScript         |        357 |         23 |         36 |        416 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\DiffuseShader.js                 | JavaScript         |        130 |          6 |          7 |        143 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\Reflector.js                     | JavaScript         |        207 |          9 |         74 |        290 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\TextureFactory.js                | JavaScript         |        229 |          0 |         20 |        249 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\World.js                         | JavaScript         |        721 |          9 |        102 |        832 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\badgesData.js                    | JavaScript         |         27 |          0 |          1 |         28 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\extrudeMap.js                    | JavaScript         |        135 |         10 |          5 |        150 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\provincesData.js                 | JavaScript         |        274 |          0 |          1 |        275 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\attendance\map3d\scatter.js                       | JavaScript         |        138 |          0 |          1 |        139 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\feedback\FeedbackCenter.vue                       | vue                |      1,862 |         13 |        101 |      1,976 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\BidTemplateLibrary.vue                       | vue                |        813 |          0 |         91 |        904 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\FileNumbering.vue                            | vue                |        -39 |         -1 |          1 |        -39 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\PolicyQuery.vue                              | vue                |        160 |          0 |         13 |        173 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\TechProblemForm.vue                          | vue                |        626 |          5 |         50 |        681 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\TechProblemList.vue                          | vue                |        552 |          5 |         47 |        604 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\file\WorkNoManage.vue                             | vue                |        306 |          0 |         29 |        335 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\massage\MassageChairBooking.vue                   | vue                |        517 |          4 |         71 |        592 |
+| e:\Desktop\tuixiu_protect\OA_system\vue-project\src\views\seal\SealApply.vue                                | vue                |      1,102 |          6 |        135 |      1,243 |
+| Total                                                                                                       |                    |    108,455 |        724 |      6,123 |    115,302 |
++-------------------------------------------------------------------------------------------------------------+--------------------+------------+------------+------------+------------+
