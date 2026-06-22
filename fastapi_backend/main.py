@@ -90,7 +90,7 @@ app.include_router(rotor_blade_balance.router, prefix=settings.API_PREFIX)  # �
 app.include_router(personnel_visualization.router, prefix=settings.API_PREFIX)  # 人员出勤可视化
 app.include_router(info_feed.router, prefix=settings.API_PREFIX)  # 天气新闻中转缓存
 app.include_router(ai_assistant.router, prefix=settings.API_PREFIX)  # 智能制造工艺部 AI 助手
-app.include_router(massage_chair.router, prefix=settings.API_PREFIX)  # 按摩椅预约
+app.include_router(massage_chair.router, prefix=settings.API_PREFIX)  # 休闲角预约
 
 @app.on_event("startup")
 async def startup_event():

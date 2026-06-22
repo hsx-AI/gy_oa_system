@@ -65,18 +65,22 @@ async def get_statistics_permission(name: str = Query(..., description="当前�
     管理驾驶舱 level 3：部长/副部长、综合技术室主任/副主任、admin1、admin2。
     """
     name_stripped = (name or "").strip()
+
+    # admin1/admin2 等驾驶舱用户优先判定（即使 yggl 无记录也给予 level 3）
+    try:
+        from routers.approvers import can_access_leader_dashboard
+        if can_access_leader_dashboard(name_stripped):
+            user = _get_user_info(name_stripped)
+            lsys = (user.get("lsys") or "").strip() if user else ""
+            return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}
+    except Exception:
+        pass
+
     user = _get_user_info(name_stripped)
     if not user:
         return {"success": True, "level": 1, "lsys": "", "name": name_stripped}
     jb = (user.get("jb") or "").strip()
     lsys = (user.get("lsys") or "").strip()
-
-    try:
-        from routers.approvers import can_access_leader_dashboard
-        if can_access_leader_dashboard(name_stripped):
-            return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}
-    except Exception:
-        pass
 
     if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
         return {"success": True, "level": 3, "lsys": lsys, "name": name_stripped}

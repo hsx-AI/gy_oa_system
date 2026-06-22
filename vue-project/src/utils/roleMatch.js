@@ -54,8 +54,41 @@ export function isDirectorLevel(jb) {
   return jbMatch(jb, '主任') || jbMatch(jb, '副主任')
 }
 
-/** 统计汇总工作强度：仅 yggl.jb 为 主任/副主任/主任责/班组长/组长 可见 */
-export function canSeeWorkIntensityInStatistics(jb) {
+/** 综合技术室主任/副主任：工作强度可查看全员 */
+export function isZongheTechDirector({ jb, lsys }) {
+  const l = (lsys || '').trim()
+  if (l !== '综合技术室') return false
+  return isDirectorLevel(jb)
+}
+
+export function isAdmin2User(name, admin2) {
+  const n = (name || '').trim()
+  const a2 = (admin2 || '').trim()
+  return !!(a2 && n === a2)
+}
+
+export function isAdmin1User(name, admin1) {
+  const n = (name || '').trim()
+  const a1 = (admin1 || '').trim()
+  return !!(a1 && n === a1)
+}
+
+/** 工作强度全员/任意科室：admin1/admin2、综合技术室主任/副主任 */
+export function hasWorkIntensityAllScope({ name, jb, lsys, admin1, admin2 }) {
+  if (isAdmin2User(name, admin2) || isAdmin1User(name, admin1)) return true
+  return isZongheTechDirector({ jb, lsys })
+}
+
+function isDepartmentManagerJb(jb) {
+  const j = _normalize(jb)
+  if (!j) return false
+  return j.includes('经理助理') || j.includes('副经理') || jbMatch(j, '经理') || j === '经理'
+}
+
+/** 工作强度模块可见：admin1/admin2、经理层、或各科室主任/副主任/主任责/班组长/组长 */
+export function canSeeWorkIntensityInStatistics(jb, { name, admin1, admin2 } = {}) {
+  if (isAdmin2User(name, admin2) || isAdmin1User(name, admin1)) return true
+  if (isDepartmentManagerJb(jb)) return true
   const j = _normalize(jb)
   if (!j) return false
   if (j.includes('副主任')) return true

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""部门公共按摩椅预约"""
+"""部门休闲角预约"""
 import logging
 from datetime import date, datetime, time, timedelta
 from typing import List, Optional, Tuple
@@ -11,7 +11,7 @@ from database import db
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/massage-chair", tags=["按摩椅预约"])
+router = APIRouter(prefix="/massage-chair", tags=["休闲角预约"])
 
 SLOT_MINUTES = 15
 MAX_SLOTS_PER_DAY = 2
@@ -19,17 +19,17 @@ MAX_SLOTS_PER_DAY = 2
 # 可预约时段：(开始, 结束)，左闭右开
 BOOKING_WINDOWS: List[Tuple[time, time]] = [
     (time(5, 0), time(8, 0)),
-    (time(10, 0), time(10, 30)),
+    (time(10, 0), time(10, 15)),
     (time(12, 0), time(13, 0)),
-    (time(15, 0), time(15, 30)),
+    (time(15, 0), time(15, 15)),
     (time(17, 0), time(22, 0)),
 ]
 
 PERIOD_LABELS = [
     {"key": "early", "label": "早间", "start": "05:00", "end": "08:00"},
-    {"key": "morning_break", "label": "上午工间操", "start": "10:00", "end": "10:30"},
+    {"key": "morning_break", "label": "上午工间操", "start": "10:00", "end": "10:15"},
     {"key": "lunch", "label": "午休", "start": "12:00", "end": "13:00"},
-    {"key": "afternoon_break", "label": "下午工间操", "start": "15:00", "end": "15:30"},
+    {"key": "afternoon_break", "label": "下午工间操", "start": "15:00", "end": "15:15"},
     {"key": "evening", "label": "晚间", "start": "17:00", "end": "22:00"},
 ]
 
@@ -53,7 +53,7 @@ def _ensure_table():
             INDEX idx_date (booking_date),
             INDEX idx_booker_date (booker, booking_date),
             INDEX idx_active (booking_date, start_time, status)
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='按摩椅预约'
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='休闲角预约'
     """)
     _INIT_DONE = True
 
@@ -115,7 +115,7 @@ def _assert_active_user(name: str) -> dict:
     if not user:
         raise HTTPException(status_code=403, detail="用户不存在或未在员工库中登记")
     if int(user.get("zaizhi") or 0) != 0:
-        raise HTTPException(status_code=403, detail="仅在职员工可预约按摩椅")
+        raise HTTPException(status_code=403, detail="仅在职员工可预约休闲角")
     return user
 
 
@@ -140,9 +140,9 @@ async def get_config():
         "maxSlotsPerDay": MAX_SLOTS_PER_DAY,
         "periods": PERIOD_LABELS,
         "usageNotice": [
-            "本系统为部门公共按摩椅唯一预约渠道，请严格按预约时段到场使用，先到先享，超时须让位。",
+            "本系统为部门休闲角唯一预约渠道，请严格按预约时段到场使用，先到先享，超时须让位。",
             "每人每个自然日最多预约 2 个时段（合计 30 分钟），预约成功后请准时使用，不得占而不用。",
-            "可预约时段：早间 5:00–8:00、上午工间操 10:00–10:30、午休 12:00–13:00、下午工间操 15:00–15:30、晚间 17:00–22:00；其余上班工作时间一律禁止使用。",
+            "可预约时段：早间 5:00–8:00、上午工间操 10:00–10:15、午休 12:00–13:00、下午工间操 15:00–15:15、晚间 17:00–22:00；其余上班工作时间一律禁止使用。",
             "严禁未预约擅自使用；严禁代他人预约后转借他人；严禁连续占用超出预约时长。",
             "使用完毕请关闭电源、整理坐垫，保持设备与周围环境整洁，发现故障请及时反馈科室管理员。",
             "多次违规（未预约使用、占而不用、超时占用等）将暂停预约权限，并通报科室。",

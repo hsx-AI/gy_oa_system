@@ -3224,8 +3224,8 @@ def _is_manager_jb(jb: str) -> bool:
 
 
 def _is_manager_stats_global(scope_info: Dict[str, str]) -> bool:
-    """部办经理层按部门级权限处理；其他经理层按本人 lsys 限制。"""
-    return _is_manager_jb(scope_info.get("jb") or "") and (scope_info.get("scope") == "all" or scope_info.get("lsys") == "部办")
+    """工作强度/考勤纪律白名单中的部领导按部门级范围处理。"""
+    return _is_manager_jb(scope_info.get("jb") or "")
 
 
 def _can_export_all_attendance_reports(scope_info: Dict[str, str]) -> bool:
@@ -3477,7 +3477,7 @@ def _build_system_prompt(current_user: str, scope_info: Dict[str, str]) -> str:
         "（Word 嵌入图片，Excel 在表格下方插入原生图表；Excel 需同时提供 columns/rows 表格数据）。\n"
         "    - 不要用 Markdown/ASCII 字符画折线代替真实图表。\n\n"
         + "\n报表工具规则：用户要导出“报表汇聚/导出中心”中的考勤异常明细、异常处理表、全员考勤日表、考勤表Word、假期值班出勤核查、排班表、在职员工表、文件编号台账、论文保密审批台账时，必须调用 export_report_center。只有导出加班/请假/公出三类标准明细报表时才调用 generate_report。工资、总时长、科室对比、人员排行、月度趋势等统计类问题优先调用 query_dept_comparison、query_person_ranking、query_monthly_summary 等统计工具获取系统计算结果，不要先拉 SQL 明细后自行计算。\n"
-        + "管理驾驶舱统计规则：满勤/满勤率/满勤名单必须调用 query_full_attendance；工作强度/负荷/强度排行/实际在岗小时必须调用 query_work_intensity；考勤纪律审查/早到晚走/打卡纪律排行必须调用 query_discipline_clock；领导加班统计/部办加班/月均加班天数/领导估算排名必须调用 query_leader_overtime。工作强度和考勤纪律仅限 yggl.jb 为经理、副经理、经理助理的用户查询，并且非部办/非全局权限用户只能查本人 lsys 科室。\n"
+        + "管理驾驶舱统计规则：满勤/满勤率/满勤名单必须调用 query_full_attendance；工作强度/负荷/强度排行/实际在岗小时必须调用 query_work_intensity；考勤纪律审查/早到晚走/打卡纪律排行必须调用 query_discipline_clock；领导加班统计/部办加班/月均加班天数/领导估算排名必须调用 query_leader_overtime。工作强度和考勤纪律仅限 yggl.jb 为经理、副经理、经理助理的用户查询；该白名单用户可查询全体人员或指定科室。\n"
         + DB_SCHEMA_HINT
     )
 

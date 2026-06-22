@@ -92,7 +92,7 @@
               <path d="M7 12h2"/>
               <path d="M15 12h2"/>
             </svg>
-            <span>按摩椅预约</span>
+            <span>休闲角预约</span>
           </router-link>
             </div>
           </section>

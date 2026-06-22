@@ -109,8 +109,8 @@ def _can_access_leader_overtime_stats(name: Optional[str]) -> bool:
     return bool(_jb_match(jb, "部长") or _jb_match(jb, "副部长"))
 
 
-def _can_access_work_intensity_stats(jb: Optional[str]) -> bool:
-    """统计汇总工作强度：仅 yggl.jb 为 主任/副主任/主任责/班组长/组长 可查看。"""
+def _is_department_manager_jb(jb: Optional[str]) -> bool:
+    """部领导工作强度白名单：经理/副经理/经理助理。"""
     j = (jb or "").strip()
     if not j:
         return False
@@ -118,6 +118,28 @@ def _can_access_work_intensity_stats(jb: Optional[str]) -> bool:
         from routers.approvers import _jb_match
     except Exception:
         return False
+    return bool("经理助理" in j or "副经理" in j or _jb_match(j, "经理") or j == "经理")
+
+
+def _can_access_work_intensity_stats(jb: Optional[str], user_name: Optional[str] = None) -> bool:
+    """工作强度可见：admin1/admin2、部领导经理层，或各科室主任/副主任/主任责/班组长/组长。"""
+    name = (user_name or "").strip()
+    if name:
+        try:
+            from routers.approvers import has_work_intensity_all_scope
+            if has_work_intensity_all_scope(name):
+                return True
+        except Exception:
+            pass
+    j = (jb or "").strip()
+    if not j:
+        return False
+    try:
+        from routers.approvers import _jb_match
+    except Exception:
+        return False
+    if _is_department_manager_jb(j):
+        return True
     if "副主任" in j:
         return True
     if "主任责" in j:
@@ -131,10 +153,10 @@ def _can_access_work_intensity_stats(jb: Optional[str]) -> bool:
 
 def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[str], requested_name: Optional[str]) -> Tuple[Optional[str], Optional[str]]:
     """
-    统计汇总中的工作强度范围：
-    - 仅主任/副主任/主任责/班组长/组长可查看；
-    - 仅可查本科室，若传 name 则必须属于本科室。
-    返回 (lsys, name)，后续计算先按 lsys 拉员工，再按 name 收窄。
+    工作强度数据范围：
+    - admin1/admin2、部领导经理层、综合技术室主任/副主任：可查全员或指定科室；
+    - 其他主任/副主任/主任责/班组长/组长：仅本科室，若传 name 须属本科室。
+    返回 (lsys, name)。
     """
     user_name = (current_user or "").strip()
     if not user_name:
@@ -150,12 +172,21 @@ def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[
         raise HTTPException(status_code=403, detail="用户不存在")
 
     jb = (user.get("jb") or "").strip()
-    if not _can_access_work_intensity_stats(jb):
-        raise HTTPException(status_code=403, detail="仅主任/副主任/主任责/班组长/组长可查看工作强度")
+    if not _can_access_work_intensity_stats(jb, user_name):
+        raise HTTPException(status_code=403, detail="仅经理/副经理/经理助理、主任/副主任/主任责/班组长/组长可查看工作强度")
 
     user_lsys = (user.get("lsys") or "").strip()
     req_lsys = (requested_lsys or "").strip() or None
     req_name = (requested_name or "").strip() or None
+
+    try:
+        from routers.approvers import has_work_intensity_all_scope
+    except Exception:
+        has_work_intensity_all_scope = lambda _n, _u=None: False  # type: ignore
+
+    # admin1/admin2、部领导经理层、综合技术室主任/副主任：可查看全员或指定科室
+    if has_work_intensity_all_scope(user_name, user) or _is_department_manager_jb(jb):
+        return req_lsys, req_name
 
     scope_lsys = user_lsys
     if req_lsys and req_lsys != user_lsys:

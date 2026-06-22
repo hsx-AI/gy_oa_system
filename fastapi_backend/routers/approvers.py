@@ -88,6 +88,61 @@ def is_zonghe_tech_director(user: Optional[Dict[str, Any]]) -> bool:
     return _jb_match(jb, "主任") or _jb_match(jb, "副主任")
 
 
+def is_admin1_user(name: Optional[str]) -> bool:
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        from routers.db_manager import _get_admin1
+        a1 = (_get_admin1() or "").strip()
+        return bool(a1 and n == a1)
+    except Exception:
+        return False
+
+
+def is_admin2_user(name: Optional[str]) -> bool:
+    """webconfig.admin2 人事管理员"""
+    n = (name or "").strip()
+    if not n:
+        return False
+    try:
+        from routers.admin import _get_admin2
+        a2 = (_get_admin2() or "").strip()
+        return bool(a2 and n == a2)
+    except Exception:
+        return False
+
+
+def has_leader_dashboard_all_dept_scope(name: Optional[str]) -> bool:
+    """
+    管理驾驶舱可选「全员」、任意科室的数据范围：
+    部长/副部长、综合技术室主任/副主任、admin1、admin2。
+    """
+    n = (name or "").strip()
+    if not n:
+        return False
+    if is_admin1_user(n) or is_admin2_user(n):
+        return True
+    user = _get_user_info(n)
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return True
+    return is_zonghe_tech_director(user)
+
+
+def has_work_intensity_all_scope(name: Optional[str], user: Optional[Dict[str, Any]] = None) -> bool:
+    """工作强度全员/任意科室：综合技术室主任/副主任、admin1、admin2。"""
+    n = (name or "").strip()
+    if not n:
+        return False
+    if is_admin1_user(n) or is_admin2_user(n):
+        return True
+    u = user if user is not None else _get_user_info(n)
+    return is_zonghe_tech_director(u)
+
+
 def can_access_leader_dashboard(name: Optional[str]) -> bool:
     """
     管理驾驶舱 / 考勤纪律审查：部长/副部长、综合技术室主任/副主任、

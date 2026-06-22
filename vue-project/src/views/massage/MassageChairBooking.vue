@@ -3,8 +3,8 @@
     <div class="page-header">
       <div class="header-content">
         <div class="header-info">
-          <h1 class="header-title">按摩椅预约</h1>
-          <p class="header-subtitle">部门公共按摩椅 · 以 15 分钟为单位预约 · 每人每日最多 2 个时段（30 分钟）</p>
+          <h1 class="header-title">休闲角预约</h1>
+          <p class="header-subtitle">部门休闲角 · 以 15 分钟为单位预约 · 每人每日最多 2 个时段（30 分钟）</p>
         </div>
       </div>
     </div>
@@ -27,7 +27,7 @@
           <li v-for="(item, idx) in usageNotice" :key="idx">{{ item }}</li>
         </ol>
         <p v-show="noticeExpanded" class="notice-emphasis">
-          特别提醒：8:00–10:00、10:30–12:00、13:00–15:00、15:30–17:00 为正常上班工作时间，<strong>严禁使用按摩椅</strong>；仅可在系统开放的可预约时段内使用。
+          特别提醒：8:00–10:00、10:15–12:00、13:00–15:00、15:15–17:00 为正常上班工作时间，<strong>严禁使用休闲角</strong>；仅可在系统开放的可预约时段内使用。
         </p>
       </section>
 
@@ -153,9 +153,9 @@ function showToast(message, type = 'success') {
 const periodGroups = computed(() => {
   const list = periods.value.length ? periods.value : [
     { key: 'early', label: '早间', start: '05:00', end: '08:00' },
-    { key: 'morning_break', label: '上午工间操', start: '10:00', end: '10:30' },
+    { key: 'morning_break', label: '上午工间操', start: '10:00', end: '10:15' },
     { key: 'lunch', label: '午休', start: '12:00', end: '13:00' },
-    { key: 'afternoon_break', label: '下午工间操', start: '15:00', end: '15:30' },
+    { key: 'afternoon_break', label: '下午工间操', start: '15:00', end: '15:15' },
     { key: 'evening', label: '晚间', start: '17:00', end: '22:00' }
   ]
   return list.map((p) => ({

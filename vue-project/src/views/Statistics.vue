@@ -586,8 +586,8 @@
 
 <script setup>
 import { ref, computed, onMounted, watch } from 'vue'
-import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear, getLeaderWorkIntensity } from '@/api/attendance'
-import { canSeeWorkIntensityInStatistics } from '@/utils/roleMatch'
+import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear, getLeaderWorkIntensity, getUploadConfig } from '@/api/attendance'
+import { canSeeWorkIntensityInStatistics, hasWorkIntensityAllScope } from '@/utils/roleMatch'
 
 // 权限：1=仅自己 2=科室下拉 3=全部输入
 const permLevel = ref(1)
@@ -595,7 +595,16 @@ const permLsys = ref('')
 const deptEmployeeList = ref([])
 const currentUserName = ref('')
 const currentUserInfo = ref({})
-const canSeeWorkIntensity = computed(() => canSeeWorkIntensityInStatistics(currentUserInfo.value?.jb))
+const webAdmin1 = ref('')
+const webAdmin2 = ref('')
+const wiScopeOpts = computed(() => ({
+  name: currentUserName.value,
+  jb: currentUserInfo.value?.jb,
+  lsys: currentUserInfo.value?.lsys || currentUserInfo.value?.dept || permLsys.value,
+  admin1: webAdmin1.value,
+  admin2: webAdmin2.value,
+}))
+const canSeeWorkIntensity = computed(() => canSeeWorkIntensityInStatistics(currentUserInfo.value?.jb, wiScopeOpts.value))
 
 // 查询参数
 const queryParams = ref({
@@ -753,7 +762,14 @@ function isWorkIntensityPrivilegedJb(jbRaw) {
 }
 
 const canSeeAllWorkIntensityNames = computed(() => {
-  return isWorkIntensityPrivilegedJb(currentUserInfo.value?.jb)
+  const info = currentUserInfo.value || {}
+  return isWorkIntensityPrivilegedJb(info.jb) || hasWorkIntensityAllScope({
+    name: currentUserName.value,
+    jb: info.jb,
+    lsys: info.lsys || info.dept || permLsys.value,
+    admin1: webAdmin1.value,
+    admin2: webAdmin2.value,
+  })
 })
 
 const currentUserDeptForMask = computed(() => {
@@ -1054,6 +1070,14 @@ const loadPermission = async () => {
     if (!name) return
     currentUserName.value = name
     currentUserInfo.value = user
+    try {
+      const cfg = await getUploadConfig()
+      webAdmin1.value = (cfg?.admin1 || '').trim()
+      webAdmin2.value = (cfg?.admin2 || '').trim()
+    } catch {
+      webAdmin1.value = ''
+      webAdmin2.value = ''
+    }
     const res = await getStatisticsPermission({ name })
     if (res.success) {
       permLevel.value = res.level ?? 1
@@ -1127,7 +1151,7 @@ const fetchWorkIntensity = async () => {
   if (month) params.month = month
   if (name) {
     params.name = name
-  } else if (permLsys.value) {
+  } else if (permLsys.value && !hasWorkIntensityAllScope(wiScopeOpts.value) && !isWorkIntensityPrivilegedJb(currentUserInfo.value?.jb)) {
     params.lsys = permLsys.value
   }
   const res = await getLeaderWorkIntensity(params)

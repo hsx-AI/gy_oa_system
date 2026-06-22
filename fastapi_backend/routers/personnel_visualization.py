@@ -105,6 +105,12 @@ def _get_dakaman() -> str:
 def _can_view_all_departments(viewer: str, user: Optional[dict]) -> bool:
     if not viewer:
         return False
+    try:
+        from routers.approvers import is_admin2_user
+        if is_admin2_user(viewer):
+            return True
+    except Exception:
+        pass
     admin1 = (_get_admin1() or "").strip()
     dakaman = _get_dakaman()
     if (admin1 and viewer == admin1) or (dakaman and viewer == dakaman):

@@ -1746,8 +1746,8 @@ const rawFeatureGroups = [
       },
       {
         id: 'massage-chair',
-        title: '按摩椅预约',
-        description: '部门公共按摩椅按 15 分钟时段预约，每人每日最多 30 分钟',
+        title: '休闲角预约',
+        description: '部门休闲角按 15 分钟时段预约，每人每日最多 30 分钟',
         path: '/massage-chair',
         color: 'linear-gradient(135deg, #14b8a6 0%, #6366f1 100%)',
         tag: '新功能',

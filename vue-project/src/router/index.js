@@ -304,7 +304,7 @@ const routes = [
     path: '/massage-chair',
     name: 'MassageChairBooking',
     component: () => import('@/views/massage/MassageChairBooking.vue'),
-    meta: { title: '按摩椅预约' }
+    meta: { title: '休闲角预约' }
   },
   // AI 助手（公测）：仅智能制造技术室全员 + 公司经理/副经理/经理助理可访问，见下方 beforeEach 守卫
   {
