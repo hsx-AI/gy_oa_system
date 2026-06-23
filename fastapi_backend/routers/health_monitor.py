@@ -76,6 +76,11 @@ class LlmTestRequest(BaseModel):
     model_id: Optional[int] = None  # 指定本地候选模型；为空则测试当前生效模型
 
 
+class LlmSceneModelRequest(BaseModel):
+    current_user: str
+    model_id: Optional[int] = None
+
+
 def _require_admin1(current_user: str) -> None:
     admin1 = _get_admin1()
     if not admin1 or (current_user or "").strip() != admin1:
@@ -471,6 +476,96 @@ def _ensure_llm_models_table() -> None:
     _ensure_column("webconfig", "llm_use_extra", "TINYINT NOT NULL DEFAULT 1")
 
 
+LLM_SCENES = {
+    "inbox_tasks": "AI 待办看板",
+    "holiday_parse": "假期通知解析",
+}
+
+
+def _ensure_llm_scene_config_table() -> None:
+    _ensure_llm_models_table()
+    db.execute_update(
+        """
+        CREATE TABLE IF NOT EXISTS llm_scene_config (
+            scene VARCHAR(50) PRIMARY KEY,
+            model_id INT NULL,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """
+    )
+
+
+def _model_row_to_public(row: Optional[dict]) -> Optional[dict]:
+    if not row:
+        return None
+    mk = (row.get("api_key") or "").strip()
+    return {
+        "id": row.get("id"),
+        "name": row.get("name"),
+        "base_url": row.get("base_url"),
+        "model": row.get("model"),
+        "use_extra": bool(row.get("use_extra")),
+        "has_key": bool(mk),
+        "key_masked": _mask_key(mk),
+        "is_active": bool(row.get("is_active")),
+    }
+
+
+def _get_llm_model_row(model_id: Optional[int]) -> Optional[dict]:
+    if not model_id:
+        return None
+    rows = db.execute_query(
+        "SELECT id, name, base_url, model, api_key, use_extra, is_active FROM llm_models WHERE id=%s LIMIT 1",
+        (int(model_id),),
+    )
+    return rows[0] if rows else None
+
+
+def _get_llm_scene_configs() -> List[dict]:
+    _ensure_llm_scene_config_table()
+    rows = db.execute_query("SELECT scene, model_id FROM llm_scene_config", ()) or []
+    by_scene = {(r.get("scene") or "").strip(): r.get("model_id") for r in rows}
+    out = []
+    for scene, label in LLM_SCENES.items():
+        model_id = by_scene.get(scene)
+        model_row = _get_llm_model_row(model_id) if model_id else None
+        out.append({
+            "scene": scene,
+            "label": label,
+            "model_id": model_id or 0,
+            "model": _model_row_to_public(model_row),
+        })
+    return out
+
+
+def get_local_llm_model_for_scene(scene: str) -> dict:
+    """返回指定功能场景绑定的本地模型；未绑定时回退 webconfig.llm_base_url / llm_model。"""
+    _ensure_llm_scene_config_table()
+    model_row = None
+    try:
+        rows = db.execute_query(
+            "SELECT model_id FROM llm_scene_config WHERE scene=%s LIMIT 1",
+            ((scene or "").strip(),),
+        ) or []
+        model_id = rows[0].get("model_id") if rows else None
+        model_row = _get_llm_model_row(model_id) if model_id else None
+    except Exception as e:
+        logger.debug("读取场景大模型配置失败 scene=%s: %s", scene, e)
+    if model_row:
+        return {
+            "base_url": (model_row.get("base_url") or "").strip(),
+            "model": (model_row.get("model") or "").strip(),
+        }
+
+    rows = db.execute_query("SELECT llm_base_url, llm_model FROM webconfig WHERE id=%s LIMIT 1", ("1",)) or []
+    if rows:
+        return {
+            "base_url": (rows[0].get("llm_base_url") or "").strip(),
+            "model": (rows[0].get("llm_model") or "").strip(),
+        }
+    return {"base_url": "", "model": ""}
+
+
 def _mask_key(key: str) -> str:
     k = (key or "").strip()
     if not k:
@@ -503,17 +598,7 @@ async def get_llm_config_api(current_user: str = Query(..., description="当前�
         ) or []
         out = []
         for m in rows2:
-            mk = (m.get("api_key") or "").strip()
-            out.append({
-                "id": m.get("id"),
-                "name": m.get("name"),
-                "base_url": m.get("base_url"),
-                "model": m.get("model"),
-                "use_extra": bool(m.get("use_extra")),
-                "has_key": bool(mk),
-                "key_masked": _mask_key(mk),
-                "is_active": bool(m.get("is_active")),
-            })
+            out.append(_model_row_to_public(m))
         return out
 
     models = _list_models()
@@ -534,6 +619,7 @@ async def get_llm_config_api(current_user: str = Query(..., description="当前�
         "provider": "deepseek" if key else "local",
         "active": {"base_url": base_url, "model": model},
         "models": models,
+        "scene_configs": _get_llm_scene_configs(),
     }
 
 
@@ -614,6 +700,31 @@ async def activate_llm_model_api(model_id: int, req: ActivateRequest):
         deepseek_key = (drows[0].get("deepseek_api_key") or "").strip()
     extra = "（当前 DeepSeek 密钥非空，仍会优先使用联网模型；清空密钥后本地模型即生效）" if deepseek_key else "，已立即生效"
     return {"success": True, "message": f"已切换本地模型为「{name}」{extra}"}
+
+
+@router.post("/llm-scenes/{scene}/model")
+async def save_llm_scene_model_api(scene: str, req: LlmSceneModelRequest):
+    """为指定功能场景绑定本地模型。model_id 为空或 0 时改为跟随当前本地模型。"""
+    _require_admin1(req.current_user)
+    _ensure_llm_scene_config_table()
+    scene_key = (scene or "").strip()
+    if scene_key not in LLM_SCENES:
+        raise HTTPException(status_code=404, detail="未知的大模型功能场景")
+    model_id = int(req.model_id or 0)
+    if model_id:
+        row = _get_llm_model_row(model_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="选择的本地模型不存在")
+    db.execute_update(
+        "INSERT INTO llm_scene_config (scene, model_id) VALUES (%s, %s) "
+        "ON DUPLICATE KEY UPDATE model_id=VALUES(model_id), updated_at=CURRENT_TIMESTAMP",
+        (scene_key, model_id or None),
+    )
+    return {
+        "success": True,
+        "message": f"{LLM_SCENES[scene_key]}模型配置已保存",
+        "scene_configs": _get_llm_scene_configs(),
+    }
 
 
 def _estimate_tokens(s: str) -> int:

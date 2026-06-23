@@ -98,6 +98,33 @@
               </div>
             </div>
 
+            <h3 class="email-settings-title">功能场景模型</h3>
+            <p class="email-settings-hint">
+              AI 助手继续使用上方“当前选中”模型与 DeepSeek 开关；AI 待办看板和假期通知解析可单独指定 Ollama 本地小模型。
+            </p>
+            <div class="llm-scene-list">
+              <div v-for="scene in llmSceneRows" :key="scene.scene" class="llm-scene-row">
+                <div class="llm-scene-info">
+                  <span class="llm-scene-name">{{ scene.label }}</span>
+                  <span class="llm-scene-desc">{{ scene.desc }}</span>
+                </div>
+                <select v-model.number="llmSceneDraft[scene.scene]" class="recipient-select llm-scene-select">
+                  <option :value="0">跟随当前本地模型</option>
+                  <option v-for="m in llmOllamaModels" :key="scene.scene + '-' + m.id" :value="m.id">
+                    {{ m.name }} · {{ m.model }}
+                  </option>
+                </select>
+                <button
+                  type="button"
+                  class="btn btn-secondary btn-sm"
+                  :disabled="llmSceneSaving === scene.scene || !llmOllamaModels.length"
+                  @click="saveSceneModel(scene.scene)"
+                >
+                  {{ llmSceneSaving === scene.scene ? '保存中…' : '保存' }}
+                </button>
+              </div>
+            </div>
+
             <h3 class="email-settings-title">添加本地模型</h3>
             <div class="llm-add-grid">
               <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 本地 DeepSeek-V4">
@@ -205,7 +232,15 @@
               </p>
               <ul class="shift-email-preview-list">
                 <li v-for="(line, idx) in shiftEmailPreviewLines" :key="'pv-' + idx">
-                  {{ line }}
+                  <span class="shift-email-preview-text">{{ line.text }}</span>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm shift-email-preview-resend"
+                    :disabled="shiftEmailResendingKey === line.key || shiftEmailLoading || shiftEmailSaving"
+                    @click="resendShiftScheduleEmail(line)"
+                  >
+                    {{ shiftEmailResendingKey === line.key ? '重发中…' : '重发该计划' }}
+                  </button>
                 </li>
               </ul>
             </div>
@@ -323,8 +358,10 @@ import {
   addLlmModel,
   deleteLlmModel,
   activateLlmModel,
+  saveLlmSceneModel,
   testLlmModel,
 } from '@/api/healthMonitor'
+import { runShiftScheduleEmail } from '@/api/shift'
 
 const router = useRouter()
 const canAccess = ref(false)
@@ -335,6 +372,7 @@ const todoReminderLoading = ref(false)
 const todoReminderResult = ref(null)
 const shiftEmailLoading = ref(false)
 const shiftEmailSaving = ref(false)
+const shiftEmailResendingKey = ref('')
 const shiftEmailItems = ref([])
 const shiftEmailCompanyLeaders = ref([])
 const shiftEmailMessage = ref('')
@@ -353,11 +391,14 @@ const llmConfig = ref({
   deepseek_key_masked: '',
   active: { base_url: '', model: '' },
   models: [],
+  scene_configs: [],
 })
 const deepseekKeyInput = ref('')
 const newModel = ref({ name: '', base_url: '', model: '', api_key: '', use_extra: true })
 const llmTestingTarget = ref(null)   // null=未测试；'active'=当前模型；或 model.id
 const llmTestResult = ref(null)
+const llmSceneSaving = ref('')
+const llmSceneDraft = ref({})
 
 function currentName() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
@@ -439,6 +480,13 @@ function formatShiftEmailSendWhen(d) {
   return `${d.getMonth() + 1}月${d.getDate()}日${SHIFT_EMAIL_SEND_HOUR}:00`
 }
 
+function formatDateParam(d) {
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${y}-${m}-${day}`
+}
+
 function normalizeRecipientUnit(unit) {
   const u = (unit || '').trim()
   return recipientUnitOptions.includes(u) ? u : '其他'
@@ -503,7 +551,8 @@ const shiftEmailPreviewLines = computed(() => {
   return [...buckets.values()]
     .sort((a, b) => a.sortAt - b.sortAt || a.unit.localeCompare(b.unit, 'zh-CN'))
     .map((bucket) => {
-      const whenStr = formatShiftEmailSendWhen(nextShiftEmailSendTime(bucket.sendWeekday))
+      const sendTime = nextShiftEmailSendTime(bucket.sendWeekday)
+      const whenStr = formatShiftEmailSendWhen(sendTime)
       const deptPart = bucket.departments.join('、')
       const configPart = [...bucket.configNames].join('、')
       const ccPart = bucket.leadersByDept
@@ -519,7 +568,13 @@ const shiftEmailPreviewLines = computed(() => {
       const ccSuffix = ccPieces.length ? `，抄送${ccPieces.join('；')}` : ''
 
       const rangeHint = shiftEmailRangeHint(bucket.sendWeekday, bucket.includeSendDay)
-      return `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表（${rangeHint}），${toPart}${ccSuffix}。`
+      return {
+        key: `${bucket.sendWeekday}|${bucket.includeSendDay ? 1 : 0}|${bucket.unit}|${bucket.departments.join(',')}`,
+        text: `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表（${rangeHint}），${toPart}${ccSuffix}。`,
+        unit: bucket.unit,
+        departments: [...bucket.departments],
+        weekDate: formatDateParam(sendTime),
+      }
     })
 })
 
@@ -567,6 +622,24 @@ const lastUpdateText = computed(() => {
 function statusLabel(status) {
   const map = { ok: '正常', error: '异常', unconfigured: '未配置' }
   return map[status] || status
+}
+
+const llmSceneRows = computed(() => [
+  { scene: 'inbox_tasks', label: 'AI 待办看板', desc: '/admin/inbox-emails 邮件任务抽取' },
+  { scene: 'holiday_parse', label: '假期通知解析', desc: '/attendance/holiday-settings 通知文本解析' },
+])
+
+const llmOllamaModels = computed(() => (llmConfig.value.models || []).filter((m) => m.use_extra))
+
+function syncLlmSceneDraft(sceneConfigs) {
+  const draft = {}
+  for (const row of sceneConfigs || []) {
+    draft[row.scene] = Number(row.model_id || 0)
+  }
+  for (const row of llmSceneRows.value) {
+    if (draft[row.scene] === undefined) draft[row.scene] = 0
+  }
+  llmSceneDraft.value = draft
 }
 
 async function fetchOverview() {
@@ -734,6 +807,28 @@ async function saveShiftEmailConfig() {
   }
 }
 
+async function resendShiftScheduleEmail(line) {
+  const name = currentName()
+  const departments = (line?.departments || []).filter(Boolean)
+  if (!name || shiftEmailResendingKey.value || !departments.length) return
+  if (!window.confirm(`确认重发该计划吗？\n\n${line.text}\n\n系统会重新生成这条合并邮件，并继续执行缺排拦截校验。`)) return
+  shiftEmailResendingKey.value = line.key
+  shiftEmailMessage.value = ''
+  try {
+    const res = await runShiftScheduleEmail({
+      current_user: name,
+      week_date: line.weekDate,
+      departments: departments.join(','),
+      force: true,
+    })
+    shiftEmailMessage.value = res?.message || '排班邮件重发任务已执行'
+  } catch (e) {
+    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '重发排班邮件失败'
+  } finally {
+    shiftEmailResendingKey.value = ''
+  }
+}
+
 async function fetchLlmConfig() {
   const name = currentName()
   if (!name) return
@@ -747,11 +842,33 @@ async function fetchLlmConfig() {
       deepseek_key_masked: res?.deepseek_key_masked || '',
       active: { base_url: res?.active?.base_url || '', model: res?.active?.model || '' },
       models: (res?.models || []).map((m) => ({ ...m, is_active: !!m.is_active })),
+      scene_configs: res?.scene_configs || [],
     }
+    syncLlmSceneDraft(llmConfig.value.scene_configs)
   } catch (e) {
     llmMessage.value = e?.response?.data?.detail || e?.message || '大模型配置加载失败'
   } finally {
     llmLoading.value = false
+  }
+}
+
+async function saveSceneModel(scene) {
+  const name = currentName()
+  if (!name || !scene) return
+  llmSceneSaving.value = scene
+  llmMessage.value = ''
+  try {
+    const res = await saveLlmSceneModel(scene, {
+      current_user: name,
+      model_id: Number(llmSceneDraft.value[scene] || 0),
+    })
+    llmConfig.value.scene_configs = res?.scene_configs || llmConfig.value.scene_configs
+    syncLlmSceneDraft(llmConfig.value.scene_configs)
+    llmMessage.value = res?.message || '功能场景模型配置已保存'
+  } catch (e) {
+    llmMessage.value = e?.response?.data?.detail || e?.message || '保存功能场景模型失败'
+  } finally {
+    llmSceneSaving.value = ''
   }
 }
 
@@ -1230,6 +1347,9 @@ onMounted(async () => {
   gap: 10px;
 }
 .shift-email-preview-list li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   padding: 10px 12px;
   font-size: 0.86rem;
   line-height: 1.55;
@@ -1237,6 +1357,13 @@ onMounted(async () => {
   background: rgba(255, 255, 255, 0.75);
   border-radius: 6px;
   border: 1px solid #dbeafe;
+}
+.shift-email-preview-text {
+  flex: 1 1 auto;
+}
+.shift-email-preview-resend {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .llm-active-banner {
   display: flex;
@@ -1381,6 +1508,38 @@ onMounted(async () => {
   align-items: center;
   gap: 8px;
 }
+.llm-scene-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.llm-scene-row {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(220px, 320px) auto;
+  gap: 10px;
+  align-items: center;
+  padding: 10px 14px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-layout);
+}
+.llm-scene-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.llm-scene-name {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--color-text-primary);
+}
+.llm-scene-desc {
+  font-size: 0.78rem;
+  color: var(--color-text-secondary);
+}
+.llm-scene-select {
+  width: 100%;
+}
 .llm-add-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1395,6 +1554,9 @@ onMounted(async () => {
   justify-self: end;
 }
 @media (max-width: 640px) {
+  .llm-scene-row {
+    grid-template-columns: 1fr;
+  }
   .llm-add-grid {
     grid-template-columns: 1fr;
   }

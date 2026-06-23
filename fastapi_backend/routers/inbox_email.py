@@ -754,12 +754,20 @@ def _get_inbox_llm_config() -> dict:
     local_base_url = ""
     local_model = ""
     try:
-        from routers.holiday import _get_llm_config
-        cfg = _get_llm_config() or {}
+        from routers.health_monitor import get_local_llm_model_for_scene
+        cfg = get_local_llm_model_for_scene("inbox_tasks") or {}
         local_base_url = _normalize_llm_base_url(cfg.get("base_url") or "")
         local_model = (cfg.get("model") or "").strip()
     except Exception as e:
         logger.debug("读取本地大模型配置失败: %s", e)
+    if not local_base_url or not local_model:
+        try:
+            from routers.holiday import _get_llm_config
+            cfg = _get_llm_config() or {}
+            local_base_url = _normalize_llm_base_url(cfg.get("base_url") or "")
+            local_model = (cfg.get("model") or "").strip()
+        except Exception as e:
+            logger.debug("读取默认本地大模型配置失败: %s", e)
 
     deepseek_api_key = ""
     try:

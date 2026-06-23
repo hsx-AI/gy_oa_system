@@ -66,6 +66,16 @@ def _get_llm_config() -> dict:
     base_url = DEFAULT_LLM_BASE_URL
     model = DEFAULT_LLM_MODEL
     try:
+        from routers.health_monitor import get_local_llm_model_for_scene
+        scene_cfg = get_local_llm_model_for_scene("holiday_parse") or {}
+        if (scene_cfg.get("base_url") or "").strip():
+            base_url = (scene_cfg.get("base_url") or "").strip()
+        if (scene_cfg.get("model") or "").strip():
+            model = (scene_cfg.get("model") or "").strip()
+        return {"base_url": _normalize_llm_base_url(base_url), "model": model}
+    except Exception as e:
+        logger.debug(f"读取假期解析场景大模型配置失败，回退 webconfig：{e}")
+    try:
         rows = db.execute_query(
             "SELECT llm_base_url, llm_model FROM webconfig WHERE id = %s LIMIT 1",
             ("1",),

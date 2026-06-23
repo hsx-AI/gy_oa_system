@@ -64,3 +64,7 @@ export function activateLlmModel(modelId, data) {
 export function testLlmModel(data) {
   return request({ url: '/health-monitor/llm-test', method: 'post', data, timeout: 80000 })
 }
+
+export function saveLlmSceneModel(scene, data) {
+  return request({ url: `/health-monitor/llm-scenes/${scene}/model`, method: 'post', data })
+}

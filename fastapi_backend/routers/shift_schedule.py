@@ -1823,6 +1823,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
         "filename": filename,
         "excel_bytes": bio.getvalue(),
         "html_table": html_table,
+        "rows_data": rows_data,
     }
 
 

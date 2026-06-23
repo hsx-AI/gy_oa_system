@@ -1601,6 +1601,89 @@ def _build_merged_shift_schedule_body(reports: List[dict], unit: str) -> str:
     return "".join(parts)
 
 
+def _shift_schedule_missing_rows(report: dict) -> List[dict]:
+    missing = []
+    for row in report.get("rows_data") or []:
+        try:
+            count = int(row.get("count") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        if count <= 0:
+            missing.append(row)
+    return missing
+
+
+def _format_shift_missing_days(missing_rows: List[dict]) -> str:
+    weekday_labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
+    labels = []
+    for row in missing_rows or []:
+        ds = str(row.get("date") or "").strip()
+        if not ds:
+            continue
+        try:
+            d = date.fromisoformat(ds[:10])
+            labels.append(f"{d.month}月{d.day}日{weekday_labels[d.weekday()]}")
+        except Exception:
+            labels.append(ds[:10])
+    return "、".join(labels)
+
+
+def _send_shift_schedule_missing_notice(
+    sender_addr: str,
+    password: str,
+    department: str,
+    report: dict,
+    missing_rows: List[dict],
+    leaders: List[dict],
+    company_leaders: List[dict],
+) -> tuple[bool, str, int, int]:
+    from html import escape
+
+    to_emails = sorted({
+        (item.get("email") or "").strip()
+        for item in (leaders or [])
+        if (item.get("email") or "").strip()
+    })
+    cc_emails = sorted({
+        (item.get("email") or "").strip()
+        for item in (company_leaders or [])
+        if (item.get("email") or "").strip()
+    })
+    cc_emails = [email for email in cc_emails if email not in set(to_emails)]
+    if not to_emails:
+        return False, "缺少本科室管理人员企业邮箱，无法发送排班缺失提醒", 0, len(cc_emails)
+
+    week_start = report["week_start"]
+    week_end = report["week_end"]
+    missing_days_text = _format_shift_missing_days(missing_rows) or "部分日期"
+    period_text = f"{week_start.strftime('%Y-%m-%d')}-{week_end.strftime('%Y-%m-%d')}"
+    notice_text = (
+        f"请注意{period_text}时间由于{missing_days_text}缺少排班人员排班邮件发送失败，"
+        "请尽快联系系统管理员补发邮件。"
+    )
+    subject = f"{department}排班邮件发送失败提醒"
+    body = (
+        "<p>各位管理人员：</p>"
+        f"<p>{escape(notice_text)}</p>"
+        "<p style=\"color:#64748b;font-size:12px;\">"
+        "（本邮件由系统自动发送，用于提醒排班数据缺失。）"
+        "</p>"
+    )
+    msg = _build_email_message(
+        sender_addr,
+        to_emails,
+        cc_emails,
+        subject,
+        body,
+        "html",
+    )
+    all_recipients = list(set(to_emails + cc_emails))
+    success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
+    if success_count:
+        return True, notice_text, len(to_emails), len(cc_emails)
+    return False, "；".join(failures) if failures else "SMTP 未返回成功", len(to_emails), len(cc_emails)
+
+
 def _collect_shift_email_send_buckets(jobs: List[dict]) -> dict:
     """
     按发送星期 + 收件人单位合并。
@@ -1627,11 +1710,16 @@ def _collect_shift_email_send_buckets(jobs: List[dict]) -> dict:
                     "to_emails": set(),
                     "cc_emails": set(),
                     "departments": [],
+                    "leaders_by_dept": {},
+                    "missing_by_dept": {},
                 },
             )
             if dept not in bucket["departments"]:
                 bucket["departments"].append(dept)
                 bucket["reports"].append(report)
+                bucket["leaders_by_dept"][dept] = leaders
+                if job.get("missing_rows"):
+                    bucket["missing_by_dept"][dept] = job["missing_rows"]
             for item in config or []:
                 if _normalize_shift_recipient_unit(item.get("unit")) != unit:
                     continue
@@ -1733,12 +1821,14 @@ async def _run_shift_schedule_email_once_locked(
 
         try:
             report = build_week_schedule_report(dept, week_start)
+            missing_rows = _shift_schedule_missing_rows(report)
             jobs.append({
                 "department": dept,
                 "send_weekday": _get_shift_email_send_weekday(dept),
                 "report": report,
                 "config_recipients": config,
                 "leaders": leaders,
+                "missing_rows": missing_rows,
             })
         except Exception as e:
             errors += 1
@@ -1751,12 +1841,81 @@ async def _run_shift_schedule_email_once_locked(
             skipped += 1
             details.append({"department": job["department"], "status": "skipped", "message": "无法归入发送批次"})
 
+    missing_notice_sent_keys = set()
+    company_leaders = _get_shift_company_leader_recipients()
     for bucket in buckets.values():
         to_emails = sorted(bucket["to_emails"])
         cc_emails = sorted(bucket["cc_emails"])
         reports = bucket["reports"]
         unit = bucket["unit"]
         if not reports:
+            continue
+        missing_by_dept = bucket.get("missing_by_dept") or {}
+        if missing_by_dept:
+            skipped += len(reports)
+            missing_dept_names = "、".join(missing_by_dept.keys())
+            blocked_msg = f"{unit}合并排班邮件因{missing_dept_names}存在缺排已整体拦截，未发送"
+            for report in reports:
+                dept = report["department"]
+                missing_rows = missing_by_dept.get(dept) or []
+                notice_ok = False
+                notice_msg = ""
+                notice_to_count = 0
+                notice_cc_count = 0
+                if missing_rows:
+                    notice_key = (dept, report["week_start"].strftime("%Y-%m-%d"))
+                    if notice_key not in missing_notice_sent_keys:
+                        try:
+                            notice_ok, notice_msg, notice_to_count, notice_cc_count = _send_shift_schedule_missing_notice(
+                                sender_addr,
+                                password,
+                                dept,
+                                report,
+                                missing_rows,
+                                (bucket.get("leaders_by_dept") or {}).get(dept) or [],
+                                company_leaders,
+                            )
+                        except Exception as notice_err:
+                            notice_msg = str(notice_err)[:200]
+                            logger.error("[ShiftScheduleEmail] %s 缺排提醒邮件发送失败: %s", dept, notice_err)
+                        missing_notice_sent_keys.add(notice_key)
+                    missing_days_text = _format_shift_missing_days(missing_rows) or "部分日期"
+                    log_msg = (
+                        f"{report['week_start'].strftime('%Y-%m-%d')}至{report['week_end'].strftime('%Y-%m-%d')} "
+                        f"{missing_days_text}缺少排班人员；{blocked_msg}；"
+                        f"提醒邮件{'已发送' if notice_ok else '发送失败或已发送过'}"
+                    )
+                    if notice_msg:
+                        log_msg = f"{log_msg}：{notice_msg}"
+                else:
+                    log_msg = (
+                        f"{report['week_start'].strftime('%Y-%m-%d')}至{report['week_end'].strftime('%Y-%m-%d')} "
+                        f"{blocked_msg}"
+                    )
+                _record_shift_schedule_email_log(
+                    dept,
+                    report["week_start"],
+                    report["week_end"],
+                    trigger_label,
+                    notice_to_count + notice_cc_count,
+                    "skipped",
+                    log_msg,
+                )
+                detail = {
+                    "department": dept,
+                    "status": "skipped",
+                    "message": log_msg[:200],
+                    "unit": unit,
+                    "blockedByMissingDepartment": missing_dept_names,
+                }
+                if missing_rows:
+                    detail.update({
+                        "missingDays": [str(row.get("date") or "")[:10] for row in missing_rows],
+                        "noticeSent": notice_ok,
+                        "noticeToCount": notice_to_count,
+                        "noticeCcCount": notice_cc_count,
+                    })
+                details.append(detail)
             continue
         if not to_emails:
             for dept in bucket["departments"]:
@@ -1890,9 +2049,13 @@ async def run_shift_schedule_email_api(
     current_user: str = Query(...),
     week_date: Optional[str] = Query(None, description="指定日期所属的周六-周五排班周"),
     department: Optional[str] = Query(None, description="只发送指定科室，留空则全部科室"),
+    departments: Optional[str] = Query(None, description="管理员批量重发指定科室，英文逗号分隔"),
     force: bool = Query(False, description="是否忽略已发送记录强制发送"),
 ):
     scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
+    only_departments = None
+    if departments and not scoped_department:
+        only_departments = [d.strip() for d in departments.split(",") if d.strip()]
     target_week_start = None
     if week_date:
         from routers.shift_schedule import (
@@ -1904,7 +2067,7 @@ async def run_shift_schedule_email_api(
         anchor = _parse_iso_date(week_date)
         if not anchor:
             raise HTTPException(status_code=400, detail="week_date 格式应为 YYYY-MM-DD")
-        dept_key = scoped_department or department or ""
+        dept_key = scoped_department or department or (only_departments[0] if only_departments else "")
         send_wd = _get_shift_email_send_weekday(dept_key)
         include_send = _get_shift_email_include_send_day(dept_key)
         target_week_start, _ = _week_range_for_send_day(anchor, send_wd, include_send)
@@ -1912,6 +2075,7 @@ async def run_shift_schedule_email_api(
         "手动触发周排班邮件",
         target_week_start=target_week_start,
         department_filter=scoped_department,
+        only_departments=only_departments,
         force=force,
     )
     return result
