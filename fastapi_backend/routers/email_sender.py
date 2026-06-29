@@ -2081,6 +2081,85 @@ async def run_shift_schedule_email_api(
     return result
 
 
+@router.get("/shift-schedule-email-blocked-plans")
+async def get_shift_schedule_email_blocked_plans_api(
+    current_user: str = Query(...),
+    limit: int = Query(20, ge=1, le=100),
+):
+    """返回最近因缺排被整体拦截、且尚未成功补发的合并排班邮件计划。仅 admin1 可查看。"""
+    admin1 = _get_admin1()
+    if not admin1 or (current_user or "").strip() != admin1:
+        raise HTTPException(status_code=403, detail="仅系统管理员可查看待补发排班邮件")
+    _ensure_shift_schedule_email_log_table()
+
+    rows = db.execute_query(
+        "SELECT department, week_start, week_end, trigger_label, message, sent_at "
+        "FROM shift_schedule_email_log "
+        "WHERE status = 'skipped' AND message LIKE %s "
+        "ORDER BY sent_at DESC LIMIT 300",
+        ("%整体拦截%",),
+    ) or []
+
+    grouped = {}
+    for r in rows:
+        ws = r.get("week_start")
+        we = r.get("week_end")
+        sent_at = str(r.get("sent_at") or "")
+        ws_text = ws.strftime("%Y-%m-%d") if hasattr(ws, "strftime") else str(ws)[:10]
+        we_text = we.strftime("%Y-%m-%d") if hasattr(we, "strftime") else str(we)[:10]
+        message = (r.get("message") or "").strip()
+        unit = ""
+        marker = "合并排班邮件"
+        if marker in message:
+            unit = message.split(marker, 1)[0].split("；")[-1].strip()
+        key = (sent_at, ws_text, we_text, unit)
+        item = grouped.setdefault(key, {
+            "sentAt": sent_at,
+            "weekStart": ws_text,
+            "weekEnd": we_text,
+            "unit": unit or "未知单位",
+            "departments": [],
+            "message": message,
+        })
+        dept = (r.get("department") or "").strip()
+        if dept and dept not in item["departments"]:
+            item["departments"].append(dept)
+        if message and len(message) > len(item.get("message") or ""):
+            item["message"] = message
+
+    plans = []
+    for item in grouped.values():
+        departments = item["departments"]
+        if not departments:
+            continue
+        ph = ",".join(["%s"] * len(departments))
+        ok_rows = db.execute_query(
+            f"SELECT DISTINCT department FROM shift_schedule_email_log "
+            f"WHERE status = 'ok' AND week_start = %s AND department IN ({ph}) AND sent_at > %s",
+            tuple([item["weekStart"]] + departments + [item["sentAt"]]),
+        ) or []
+        ok_depts = {(r.get("department") or "").strip() for r in ok_rows}
+        if ok_depts and all(d in ok_depts for d in departments):
+            continue
+        plans.append({
+            "key": f"{item['sentAt']}|{item['weekStart']}|{item['unit']}|{','.join(departments)}",
+            "sentAt": item["sentAt"],
+            "weekStart": item["weekStart"],
+            "weekEnd": item["weekEnd"],
+            "unit": item["unit"],
+            "departments": departments,
+            "message": item["message"],
+            "text": (
+                f"{item['sentAt']} 自动发送失败：{item['weekStart']}至{item['weekEnd']}，"
+                f"向{item['unit']}发送{ '、'.join(departments) }排班表的合并邮件已被拦截。"
+            ),
+        })
+        if len(plans) >= limit:
+            break
+
+    return {"success": True, "plans": plans}
+
+
 @router.get("/shift-schedule-email-sent-weeks")
 async def get_shift_schedule_email_sent_weeks_api(
     current_user: str = Query(...),

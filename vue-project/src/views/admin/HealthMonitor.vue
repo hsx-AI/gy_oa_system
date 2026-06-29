@@ -230,17 +230,36 @@
                 按发送时间与收件人单位合并发送：同一单位、同一发送时间只发一封邮件（可含多个科室附件）。
                 排班表收件人为邮件收件人；各科室主任/副主任/班组长及公司经理/副经理/经理助理（已配置企业邮箱）为抄送。
               </p>
+              <div class="shift-email-blocked-panel">
+                <div class="shift-email-subhead">
+                  <span>待补发计划</span>
+                  <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailBlockedLoading" @click="fetchShiftEmailBlockedPlans">
+                    {{ shiftEmailBlockedLoading ? '刷新中…' : '刷新' }}
+                  </button>
+                </div>
+                <p v-if="shiftEmailBlockedLoading" class="shift-email-empty">正在加载待补发计划…</p>
+                <p v-else-if="!shiftEmailBlockedPlans.length" class="shift-email-empty">暂无因缺排被拦截且未补发的计划。</p>
+                <ul v-else class="shift-email-preview-list shift-email-preview-list--blocked">
+                  <li v-for="plan in shiftEmailBlockedPlans" :key="'blocked-' + plan.key">
+                    <span class="shift-email-preview-text">
+                      <strong>{{ plan.text }}</strong>
+                      <span class="shift-email-preview-detail">{{ plan.message }}</span>
+                    </span>
+                    <button
+                      type="button"
+                      class="btn btn-primary btn-sm shift-email-preview-resend"
+                      :disabled="shiftEmailResendingKey === plan.key || shiftEmailLoading || shiftEmailSaving"
+                      @click="resendShiftScheduleEmail(plan)"
+                    >
+                      {{ shiftEmailResendingKey === plan.key ? '补发中…' : '补发该计划' }}
+                    </button>
+                  </li>
+                </ul>
+              </div>
+              <h4 class="shift-email-subtitle">即将自动发送计划</h4>
               <ul class="shift-email-preview-list">
                 <li v-for="(line, idx) in shiftEmailPreviewLines" :key="'pv-' + idx">
                   <span class="shift-email-preview-text">{{ line.text }}</span>
-                  <button
-                    type="button"
-                    class="btn btn-primary btn-sm shift-email-preview-resend"
-                    :disabled="shiftEmailResendingKey === line.key || shiftEmailLoading || shiftEmailSaving"
-                    @click="resendShiftScheduleEmail(line)"
-                  >
-                    {{ shiftEmailResendingKey === line.key ? '重发中…' : '重发该计划' }}
-                  </button>
                 </li>
               </ul>
             </div>
@@ -361,7 +380,7 @@ import {
   saveLlmSceneModel,
   testLlmModel,
 } from '@/api/healthMonitor'
-import { runShiftScheduleEmail } from '@/api/shift'
+import { getShiftScheduleEmailBlockedPlans, runShiftScheduleEmail } from '@/api/shift'
 
 const router = useRouter()
 const canAccess = ref(false)
@@ -373,6 +392,8 @@ const todoReminderResult = ref(null)
 const shiftEmailLoading = ref(false)
 const shiftEmailSaving = ref(false)
 const shiftEmailResendingKey = ref('')
+const shiftEmailBlockedLoading = ref(false)
+const shiftEmailBlockedPlans = ref([])
 const shiftEmailItems = ref([])
 const shiftEmailCompanyLeaders = ref([])
 const shiftEmailMessage = ref('')
@@ -686,12 +707,37 @@ async function fetchShiftEmailConfig() {
   } finally {
     shiftEmailLoading.value = false
   }
+  await fetchShiftEmailBlockedPlans()
 }
 
 function setAllShiftEmailEnabled(enabled) {
   shiftEmailItems.value.forEach((item) => {
     item.enabled = enabled
   })
+}
+
+async function fetchShiftEmailBlockedPlans() {
+  const name = currentName()
+  if (!name) return
+  shiftEmailBlockedLoading.value = true
+  try {
+    const res = await getShiftScheduleEmailBlockedPlans({ current_user: name, limit: 20 })
+    shiftEmailBlockedPlans.value = (res?.plans || []).map((p) => ({
+      key: p.key,
+      text: p.text,
+      message: p.message || '',
+      departments: p.departments || [],
+      weekDate: p.weekStart,
+      weekStart: p.weekStart,
+      weekEnd: p.weekEnd,
+      unit: p.unit || '',
+    }))
+  } catch (e) {
+    console.error(e)
+    shiftEmailBlockedPlans.value = []
+  } finally {
+    shiftEmailBlockedLoading.value = false
+  }
 }
 
 function mapAttendanceSchedule(row) {
@@ -811,7 +857,7 @@ async function resendShiftScheduleEmail(line) {
   const name = currentName()
   const departments = (line?.departments || []).filter(Boolean)
   if (!name || shiftEmailResendingKey.value || !departments.length) return
-  if (!window.confirm(`确认重发该计划吗？\n\n${line.text}\n\n系统会重新生成这条合并邮件，并继续执行缺排拦截校验。`)) return
+  if (!window.confirm(`确认补发这个历史失败计划吗？\n\n${line.text}\n\n系统会按该计划原排班周期重新生成合并邮件，并继续执行缺排拦截校验。`)) return
   shiftEmailResendingKey.value = line.key
   shiftEmailMessage.value = ''
   try {
@@ -821,9 +867,10 @@ async function resendShiftScheduleEmail(line) {
       departments: departments.join(','),
       force: true,
     })
-    shiftEmailMessage.value = res?.message || '排班邮件重发任务已执行'
+    shiftEmailMessage.value = res?.message || '排班邮件补发任务已执行'
+    await fetchShiftEmailBlockedPlans()
   } catch (e) {
-    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '重发排班邮件失败'
+    shiftEmailMessage.value = e?.response?.data?.detail || e?.message || '补发排班邮件失败'
   } finally {
     shiftEmailResendingKey.value = ''
   }
@@ -1338,6 +1385,34 @@ onMounted(async () => {
   font-size: 0.82rem;
   color: #475569;
 }
+.shift-email-blocked-panel {
+  margin: 0 0 14px;
+}
+.shift-email-subhead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #991b1b;
+}
+.shift-email-subtitle {
+  margin: 0 0 8px;
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: #1d4ed8;
+}
+.shift-email-empty {
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+  color: #64748b;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px dashed #cbd5e1;
+  border-radius: 6px;
+}
 .shift-email-preview-list {
   margin: 0;
   padding: 0;
@@ -1358,8 +1433,21 @@ onMounted(async () => {
   border-radius: 6px;
   border: 1px solid #dbeafe;
 }
+.shift-email-preview-list--blocked li {
+  color: #7f1d1d;
+  background: #fff7ed;
+  border-color: #fed7aa;
+}
 .shift-email-preview-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   flex: 1 1 auto;
+}
+.shift-email-preview-detail {
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: #9a3412;
 }
 .shift-email-preview-resend {
   flex: 0 0 auto;

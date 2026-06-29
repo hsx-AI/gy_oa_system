@@ -52,6 +52,10 @@ export function runShiftScheduleEmail(params) {
   return request({ url: '/email/run-shift-schedule-email', method: 'post', params })
 }
 
+export function getShiftScheduleEmailBlockedPlans(params) {
+  return request({ url: '/email/shift-schedule-email-blocked-plans', method: 'get', params })
+}
+
 export function getShiftScheduleEmailSentWeeks(params) {
   return request({ url: '/email/shift-schedule-email-sent-weeks', method: 'get', params })
 }
