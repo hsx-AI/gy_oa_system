@@ -884,6 +884,7 @@ const config = reactive({
   email_recipients: [],
   email_send_weekday: 4,
   email_include_send_day: false,
+  email_start_offset_days: 1,
   email_feature_enabled: true,
 })
 
@@ -913,21 +914,27 @@ const emailSendWeekdayOptions = [
 
 const emailSendWeekdayLabel = (wd) => emailSendWeekdayOptions.find((o) => o.value === wd)?.label || '周五'
 
-function shiftEmailRangeText(sendWeekdayPython, includeSendDay) {
+function normalizeEmailStartOffsetDays(value, includeSendDay = false) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return includeSendDay ? 0 : 1
+  return Math.max(0, Math.min(6, Math.trunc(n)))
+}
+
+function shiftEmailRangeText(sendWeekdayPython, startOffsetDays, includeSendDay = false) {
   const sendWd = Number.isFinite(Number(sendWeekdayPython)) ? Number(sendWeekdayPython) : 4
-  const sendLabel = emailSendWeekdayLabel(sendWd)
-  if (includeSendDay) {
-    const endLabel = emailSendWeekdayLabel((sendWd + 6) % 7)
-    return `排班区间为${sendLabel}至${endLabel}（共 7 天，含发送日）`
-  }
-  const startLabel = emailSendWeekdayLabel((sendWd + 1) % 7)
-  return `排班区间为${startLabel}至下${sendLabel}（共 7 天）`
+  const offset = normalizeEmailStartOffsetDays(startOffsetDays, includeSendDay)
+  const startWd = (sendWd + offset) % 7
+  const endWd = (startWd + 6) % 7
+  const startLabel = emailSendWeekdayLabel(startWd)
+  const endLabel = emailSendWeekdayLabel(endWd)
+  const offsetLabel = offset === 0 ? '发送当天开始' : `发送后${offset}天开始`
+  return `排班区间为${startLabel}至${endLabel}（共 7 天，${offsetLabel}）`
 }
 
 const emailSendScheduleHint = computed(() => {
   const sendWd = Number(config.email_send_weekday)
   const sendLabel = emailSendWeekdayLabel(Number.isFinite(sendWd) ? sendWd : 4)
-  const rangeText = shiftEmailRangeText(sendWd, config.email_include_send_day)
+  const rangeText = shiftEmailRangeText(sendWd, config.email_start_offset_days, config.email_include_send_day)
   return `邮件于每周${sendLabel} 17:00 自动发送，${rangeText}。`
 })
 
@@ -1047,12 +1054,11 @@ function nextEmailScheduleRange(
   nowDate = sendCountdownNow.value,
   sendWeekdayPython = config.email_send_weekday,
   includeSendDay = config.email_include_send_day,
+  startOffsetDays = config.email_start_offset_days,
 ) {
   const target = nextConfiguredSendTime(nowDate, sendWeekdayPython)
   const start = startOfLocalDay(target)
-  if (!includeSendDay) {
-    start.setDate(start.getDate() + 1)
-  }
+  start.setDate(start.getDate() + normalizeEmailStartOffsetDays(startOffsetDays, includeSendDay))
   const end = new Date(start)
   end.setDate(end.getDate() + 6)
   return { start, end }
@@ -1515,6 +1521,7 @@ async function loadSchedule() {
     config.email_feature_enabled = true
     config.email_send_weekday = 4
     config.email_include_send_day = false
+    config.email_start_offset_days = 1
     setEmailRecipients([])
     clearChangedDates()
     return
@@ -1567,6 +1574,7 @@ async function loadSchedule() {
     config.email_feature_enabled = c.email_feature_enabled !== false
     config.email_send_weekday = Number.isFinite(Number(c.email_send_weekday)) ? Number(c.email_send_weekday) : 4
     config.email_include_send_day = !!c.email_include_send_day
+    config.email_start_offset_days = normalizeEmailStartOffsetDays(c.email_start_offset_days, c.email_include_send_day)
     setEmailRecipients(c.email_recipients || [])
     loadNextWeekScheduleCompletion()
   } catch (e) {

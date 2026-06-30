@@ -73,11 +73,12 @@
 
         <div class="form-row">
           <div class="form-group half">
-            <label>一级审批人 <span class="required">*</span></label>
-            <select v-model="form.first_approver" :disabled="loadingFirst">
-              <option value="">{{ loadingFirst ? '加载中...' : '请选择主任/副主任/班组长' }}</option>
+            <label>一级审批人 <span v-if="!skipFirstApproval" class="required">*</span></label>
+            <select v-model="form.first_approver" :disabled="loadingFirst || skipFirstApproval">
+              <option value="">{{ firstApproverPlaceholder }}</option>
               <option v-for="a in firstApprovers" :key="a.name" :value="a.name">{{ a.label }}</option>
             </select>
+            <small v-if="skipFirstApproval" class="hint">当前科室无可用一级审批人，将直接提交至二级审批</small>
           </div>
           <div class="form-group half">
             <label>二级审批人 <span class="required">*</span></label>
@@ -150,9 +151,15 @@ const secondApprovers = ref([])
 const loadingFirst = ref(false)
 const loadingSecond = ref(false)
 const fileInput = ref(null)
+const skipFirstApproval = ref(false)
 
 const lockedDate = computed(() => !!props.prefill?.locked && !!props.prefill?.attendance_date)
 const lockedTime = computed(() => !!props.prefill?.locked && (!!props.prefill?.time_from || !!props.prefill?.time_to))
+const firstApproverPlaceholder = computed(() => {
+  if (loadingFirst.value) return '加载中...'
+  if (skipFirstApproval.value) return '无需一级审批'
+  return '请选择主任/副主任/班组长'
+})
 
 function resetForm() {
   const u = getCurrentUser()
@@ -165,6 +172,7 @@ function resetForm() {
   form.description = ''
   form.first_approver = ''
   form.second_approver = ''
+  skipFirstApproval.value = false
   selectedFile.value = null
   if (fileInput.value) fileInput.value.value = ''
 }
@@ -181,9 +189,12 @@ async function loadApprovers() {
     ])
     firstApprovers.value = (r1?.approvers) || []
     secondApprovers.value = (r2?.approvers) || []
+    skipFirstApproval.value = !!r1?.skip_first_approval
+    if (skipFirstApproval.value) form.first_approver = ''
   } catch (e) {
     firstApprovers.value = []
     secondApprovers.value = []
+    skipFirstApproval.value = false
   } finally {
     loadingFirst.value = false
     loadingSecond.value = false
@@ -235,7 +246,7 @@ async function handleSubmit() {
   if (!form.reason_type) tips.push('事由')
   if (!(form.description || '').trim()) tips.push('情况说明')
   if (!selectedFile.value) tips.push('佐证材料')
-  if (!form.first_approver) tips.push('一级审批人')
+  if (!skipFirstApproval.value && !form.first_approver) tips.push('一级审批人')
   if (!form.second_approver) tips.push('二级审批人')
   if (form.first_approver && form.first_approver === form.second_approver) {
     alert('一级与二级审批人不能为同一人')

@@ -95,6 +95,19 @@ def _ensure_tables():
             "ALTER TABLE shift_config ADD COLUMN email_include_send_day TINYINT(1) NOT NULL DEFAULT 0 "
             "COMMENT '排班邮件区间是否含发送当天(0=否,次日始;1=是,发送日至下周同日前一天)' AFTER email_send_weekday"
         )
+    start_offset_col = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shift_config' AND COLUMN_NAME = 'email_start_offset_days' "
+        "LIMIT 1"
+    )
+    if not start_offset_col:
+        db.execute_update(
+            "ALTER TABLE shift_config ADD COLUMN email_start_offset_days INT NOT NULL DEFAULT 1 "
+            "COMMENT '排班邮件区间开始日相对发送日偏移天数(0=当天,1=次日,3=三天后)' AFTER email_include_send_day"
+        )
+        db.execute_update(
+            "UPDATE shift_config SET email_start_offset_days = CASE WHEN email_include_send_day = 1 THEN 0 ELSE 1 END"
+        )
     db.execute_update("""
         CREATE TABLE IF NOT EXISTS shift_schedule (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -302,7 +315,7 @@ def _get_shift_email_feature_config_items() -> dict:
     enabled, configured = _load_shift_email_feature_config(departments)
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT department, email_recipients, email_send_weekday, email_include_send_day FROM shift_config"
+        "SELECT department, email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days FROM shift_config"
     )
     by_dept = {(r.get("department") or "").strip(): r for r in (rows or [])}
     items = []
@@ -313,6 +326,10 @@ def _get_shift_email_feature_config_items() -> dict:
             "enabled": dept in enabled,
             "email_send_weekday": _normalize_email_send_weekday(row.get("email_send_weekday")),
             "email_include_send_day": _normalize_email_include_send_day(row.get("email_include_send_day")),
+            "email_start_offset_days": _normalize_email_start_offset_days(
+                row.get("email_start_offset_days"),
+                row.get("email_include_send_day"),
+            ),
             "email_recipients": _parse_shift_email_recipients(row.get("email_recipients")),
             "leader_recipients": _get_shift_dept_leader_recipients(dept),
         })
@@ -331,28 +348,30 @@ def _upsert_shift_email_settings(
     email_recipients,
     updated_by: str,
     email_include_send_day: bool = False,
+    email_start_offset_days=None,
 ) -> None:
     """仅更新科室排班邮件发送时间与收件人（系统管理员配置）。"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     recipients_json = json.dumps(_normalize_shift_email_recipients(email_recipients), ensure_ascii=False)
     send_wd = _normalize_email_send_weekday(email_send_weekday)
-    include_send = 1 if _normalize_email_include_send_day(email_include_send_day) else 0
+    start_offset = _normalize_email_start_offset_days(email_start_offset_days, email_include_send_day)
+    include_send = 1 if start_offset == 0 else 0
     existing = db.execute_query(
         "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (department,)
     )
     if existing:
         db.execute_update(
             "UPDATE shift_config SET email_recipients=%s, email_send_weekday=%s, "
-            "email_include_send_day=%s, updated_by=%s, updated_at=%s WHERE department=%s",
-            (recipients_json, send_wd, include_send, updated_by, now, department),
+            "email_include_send_day=%s, email_start_offset_days=%s, updated_by=%s, updated_at=%s WHERE department=%s",
+            (recipients_json, send_wd, include_send, start_offset, updated_by, now, department),
         )
     else:
         db.execute_update(
             "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, "
-            "email_recipients, email_send_weekday, email_include_send_day, updated_by, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (department, 2, 2, 2, 2, recipients_json, send_wd, include_send, updated_by, now),
+            "email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days, updated_by, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (department, 2, 2, 2, 2, recipients_json, send_wd, include_send, start_offset, updated_by, now),
         )
 
 
@@ -383,22 +402,29 @@ def _save_shift_email_feature_config(
                 dept = (item.get("department") or "").strip()
                 send_wd = item.get("email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
                 include_send = item.get("email_include_send_day", False)
+                start_offset = item.get("email_start_offset_days", None)
                 recipients = item.get("email_recipients") or []
             else:
                 dept = (getattr(item, "department", None) or "").strip()
                 send_wd = getattr(item, "email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
                 include_send = getattr(item, "email_include_send_day", False)
+                start_offset = getattr(item, "email_start_offset_days", None)
                 recipients = getattr(item, "email_recipients", None) or []
             if not dept or dept not in valid:
                 continue
-            by_dept[dept] = (send_wd, include_send, recipients)
+            by_dept[dept] = (send_wd, include_send, start_offset, recipients)
         for dept in departments:
             if dept in by_dept:
-                send_wd, include_send, recipients = by_dept[dept]
+                send_wd, include_send, start_offset, recipients = by_dept[dept]
             else:
-                send_wd, include_send, recipients = DEFAULT_EMAIL_SEND_WEEKDAY, False, []
+                send_wd, include_send, start_offset, recipients = DEFAULT_EMAIL_SEND_WEEKDAY, False, DEFAULT_EMAIL_START_OFFSET_DAYS, []
             _upsert_shift_email_settings(
-                dept, send_wd, recipients, updated_by, email_include_send_day=include_send
+                dept,
+                send_wd,
+                recipients,
+                updated_by,
+                email_include_send_day=include_send,
+                email_start_offset_days=start_offset,
             )
     return _get_shift_email_feature_config_items()
 
@@ -529,6 +555,9 @@ def _daterange(start: date, end: date) -> List[date]:
 DEFAULT_EMAIL_SEND_WEEKDAY = 4  # 周五；与历史「周六至下周五」排班邮件周期一致
 
 
+DEFAULT_EMAIL_START_OFFSET_DAYS = 1
+
+
 def _normalize_email_send_weekday(value) -> int:
     """0=周一 … 6=周日"""
     try:
@@ -546,10 +575,25 @@ def _normalize_email_include_send_day(value) -> bool:
     return False
 
 
+def _normalize_email_start_offset_days(value, include_send_day=None) -> int:
+    try:
+        offset = int(value)
+    except (TypeError, ValueError):
+        if include_send_day is not None:
+            return 0 if _normalize_email_include_send_day(include_send_day) else 1
+        return DEFAULT_EMAIL_START_OFFSET_DAYS
+    if offset < 0:
+        return 0
+    if offset > 6:
+        return 6
+    return offset
+
+
 def _week_range_for_send_day(
     anchor: date,
     send_weekday: int,
     include_send_day: bool = False,
+    start_offset_days=None,
 ) -> tuple[date, date]:
     """
     按「发送日」划分的 7 天排班区间（含首尾共 7 天）。
@@ -557,7 +601,8 @@ def _week_range_for_send_day(
     include_send_day=True：发送日当天 至 下周同一发送日前一天（例：周五发 → 周五至下周四）。
     """
     send_weekday = _normalize_email_send_weekday(send_weekday)
-    start_weekday = send_weekday if include_send_day else (send_weekday + 1) % 7
+    offset = _normalize_email_start_offset_days(start_offset_days, include_send_day)
+    start_weekday = (send_weekday + offset) % 7
     start = anchor - timedelta(days=(anchor.weekday() - start_weekday) % 7)
     return start, start + timedelta(days=6)
 
@@ -588,15 +633,33 @@ def _get_shift_email_include_send_day(department: str) -> bool:
     return False
 
 
+def _get_shift_email_start_offset_days(department: str) -> int:
+    _ensure_tables()
+    if not department:
+        return DEFAULT_EMAIL_START_OFFSET_DAYS
+    rows = db.execute_query(
+        "SELECT email_start_offset_days, email_include_send_day FROM shift_config WHERE department = %s LIMIT 1",
+        (department,),
+    )
+    if rows:
+        return _normalize_email_start_offset_days(
+            rows[0].get("email_start_offset_days"),
+            rows[0].get("email_include_send_day"),
+        )
+    return DEFAULT_EMAIL_START_OFFSET_DAYS
+
+
 def _shift_schedule_target_week_start(department: str, now: Optional[datetime] = None) -> date:
     """发送当日 17:00 邮件对应的排班周起始日。"""
     current = now or datetime.now()
-    include_send_day = _get_shift_email_include_send_day(department)
-    anchor = current.date() if include_send_day else current.date() + timedelta(days=1)
+    start_offset_days = _get_shift_email_start_offset_days(department)
+    include_send_day = start_offset_days == 0
+    anchor = current.date() + timedelta(days=start_offset_days)
     week_start, _ = _week_range_for_send_day(
         anchor,
         _get_shift_email_send_weekday(department),
         include_send_day,
+        start_offset_days,
     )
     return week_start
 
@@ -605,9 +668,11 @@ def _shift_coverage_check_range(
     today: date,
     send_weekday: int = DEFAULT_EMAIL_SEND_WEEKDAY,
     include_send_day: bool = False,
+    start_offset_days=None,
 ) -> Tuple[date, date]:
     """日常排班缺口检测区间：与本科室邮件排班周期一致（含首尾，共 7 天）。"""
-    return _week_range_for_send_day(today, send_weekday, include_send_day)
+    offset = _normalize_email_start_offset_days(start_offset_days, include_send_day)
+    return _week_range_for_send_day(today + timedelta(days=offset), send_weekday, include_send_day, offset)
 
 
 def _prev_month_same_day(d: date) -> date:
@@ -846,7 +911,7 @@ async def get_shift_config(department: str = Query(...)):
     _ensure_tables()
     rows = db.execute_query(
         "SELECT workday_day, workday_night, weekend_day, weekend_night, email_recipients, "
-        "email_send_weekday, email_include_send_day "
+        "email_send_weekday, email_include_send_day, email_start_offset_days "
         "FROM shift_config WHERE department = %s LIMIT 1",
         (department,),
     )
@@ -855,6 +920,10 @@ async def get_shift_config(department: str = Query(...)):
         data["email_recipients"] = _parse_shift_email_recipients(data.get("email_recipients"))
         data["email_send_weekday"] = _normalize_email_send_weekday(data.get("email_send_weekday"))
         data["email_include_send_day"] = _normalize_email_include_send_day(data.get("email_include_send_day"))
+        data["email_start_offset_days"] = _normalize_email_start_offset_days(
+            data.get("email_start_offset_days"),
+            data.get("email_include_send_day"),
+        )
         data["email_feature_enabled"] = _is_shift_email_feature_enabled(department)
         return {"success": True, "data": data}
     return {
@@ -867,6 +936,7 @@ async def get_shift_config(department: str = Query(...)):
             "email_recipients": [],
             "email_send_weekday": DEFAULT_EMAIL_SEND_WEEKDAY,
             "email_include_send_day": False,
+            "email_start_offset_days": DEFAULT_EMAIL_START_OFFSET_DAYS,
             "email_feature_enabled": _is_shift_email_feature_enabled(department),
         },
     }
@@ -885,8 +955,9 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
 
     today = date.today()
     send_wd = _get_shift_email_send_weekday(dept)
-    include_send = _get_shift_email_include_send_day(dept)
-    start_day, end_day = _shift_coverage_check_range(today, send_wd, include_send)
+    start_offset = _get_shift_email_start_offset_days(dept)
+    include_send = start_offset == 0
+    start_day, end_day = _shift_coverage_check_range(today, send_wd, include_send, start_offset)
     dates = _daterange(start_day, end_day)
     years_set = {d.year for d in dates}
     holiday_by_date = _holiday_map_for_years(years_set)
@@ -1624,10 +1695,12 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     if not department or department == "__ALL__":
         raise HTTPException(status_code=400, detail="周排班表请选择具体科室")
 
+    start_offset = _get_shift_email_start_offset_days(department)
     week_start, week_end = _week_range_for_send_day(
-        anchor or date.today(),
+        (anchor or date.today()) + timedelta(days=start_offset),
         _get_shift_email_send_weekday(department),
-        _get_shift_email_include_send_day(department),
+        start_offset == 0,
+        start_offset,
     )
     dates = _daterange(week_start, week_end)
     employees = _get_dept_employees(department)
@@ -1894,10 +1967,12 @@ async def export_schedule_excel(
                 anchor = date(year, int(month or 1), 1) if month else date.today()
             except Exception:
                 anchor = date.today()
+        start_offset = _get_shift_email_start_offset_days(department)
         week_start, week_end = _week_range_for_send_day(
-            anchor,
+            anchor + timedelta(days=start_offset),
             _get_shift_email_send_weekday(department),
-            _get_shift_email_include_send_day(department),
+            start_offset == 0,
+            start_offset,
         )
         dates = _daterange(week_start, week_end)
         employees = _get_dept_employees(department)

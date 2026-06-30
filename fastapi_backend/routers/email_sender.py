@@ -2062,15 +2062,15 @@ async def run_shift_schedule_email_api(
             _parse_iso_date,
             _week_range_for_send_day,
             _get_shift_email_send_weekday,
-            _get_shift_email_include_send_day,
+            _get_shift_email_start_offset_days,
         )
         anchor = _parse_iso_date(week_date)
         if not anchor:
             raise HTTPException(status_code=400, detail="week_date 格式应为 YYYY-MM-DD")
         dept_key = scoped_department or department or (only_departments[0] if only_departments else "")
         send_wd = _get_shift_email_send_weekday(dept_key)
-        include_send = _get_shift_email_include_send_day(dept_key)
-        target_week_start, _ = _week_range_for_send_day(anchor, send_wd, include_send)
+        start_offset = _get_shift_email_start_offset_days(dept_key)
+        target_week_start, _ = _week_range_for_send_day(anchor + timedelta(days=start_offset), send_wd, start_offset == 0, start_offset)
     result = await run_shift_schedule_email_once(
         "手动触发周排班邮件",
         target_week_start=target_week_start,

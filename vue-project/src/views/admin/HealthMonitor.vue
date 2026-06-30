@@ -278,10 +278,11 @@
                     </select>
                   </label>
                   <label class="dept-email-include-send">
-                    <span>含发送日</span>
-                    <select v-model="item.email_include_send_day" class="email-include-send-select" @click.stop>
-                      <option :value="false">否</option>
-                      <option :value="true">是</option>
+                    <span>排班开始</span>
+                    <select v-model.number="item.email_start_offset_days" class="email-include-send-select" @click.stop>
+                      <option v-for="opt in emailStartOffsetOptions" :key="opt.value" :value="opt.value">
+                        {{ opt.label }}
+                      </option>
                     </select>
                   </label>
                 </div>
@@ -439,6 +440,16 @@ const emailSendWeekdayOptions = [
   { value: 6, label: '周日' },
 ]
 
+const emailStartOffsetOptions = [
+  { value: 0, label: '发送当天开始' },
+  { value: 1, label: '发送后1天开始' },
+  { value: 2, label: '发送后2天开始' },
+  { value: 3, label: '发送后3天开始' },
+  { value: 4, label: '发送后4天开始' },
+  { value: 5, label: '发送后5天开始' },
+  { value: 6, label: '发送后6天开始' },
+]
+
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const recipientUnitOptions = [
   '水电分厂',
@@ -452,17 +463,21 @@ const recipientUnitOptions = [
   '其他',
 ]
 
-function shiftEmailRangeHint(sendWeekday, includeSendDay) {
+function normalizeEmailStartOffsetDays(value, includeSendDay = false) {
+  const n = Number(value)
+  if (!Number.isFinite(n)) return includeSendDay ? 0 : 1
+  return Math.max(0, Math.min(6, Math.trunc(n)))
+}
+
+function shiftEmailRangeHint(sendWeekday, startOffsetDays, includeSendDay = false) {
   const sendWd = Number.isFinite(Number(sendWeekday)) ? Number(sendWeekday) : 4
-  const sendLabel = emailSendWeekdayOptions.find((o) => o.value === sendWd)?.label || '周五'
-  if (includeSendDay) {
-    const endWd = (sendWd + 6) % 7
-    const endLabel = emailSendWeekdayOptions.find((o) => o.value === endWd)?.label || ''
-    return `${sendLabel}至${endLabel}（7天，含发送日）`
-  }
-  const startWd = (sendWd + 1) % 7
+  const offset = normalizeEmailStartOffsetDays(startOffsetDays, includeSendDay)
+  const startWd = (sendWd + offset) % 7
+  const endWd = (startWd + 6) % 7
   const startLabel = emailSendWeekdayOptions.find((o) => o.value === startWd)?.label || ''
-  return `${startLabel}至下${sendLabel}（7天）`
+  const endLabel = emailSendWeekdayOptions.find((o) => o.value === endWd)?.label || ''
+  const offsetLabel = offset === 0 ? '发送当天开始' : `发送后${offset}天开始`
+  return `${startLabel}至${endLabel}（7天，${offsetLabel}）`
 }
 
 function mapShiftEmailItem(item) {
@@ -471,6 +486,7 @@ function mapShiftEmailItem(item) {
     enabled: !!item.enabled,
     email_send_weekday: Number.isFinite(Number(item.email_send_weekday)) ? Number(item.email_send_weekday) : 4,
     email_include_send_day: !!item.email_include_send_day,
+    email_start_offset_days: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day),
     email_recipients: (item.email_recipients || []).map((r) => ({
       name: (r?.name || '').trim(),
       email: (r?.email || '').trim(),
@@ -522,7 +538,8 @@ const shiftEmailPreviewLines = computed(() => {
   )
   for (const item of shiftEmailEnabledItems.value) {
     const wd = item.email_send_weekday
-    const includeSend = !!item.email_include_send_day
+    const startOffset = normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day)
+    const includeSend = startOffset === 0
     const leaders = item.leader_recipients || []
     const config = item.email_recipients || []
     const units = new Set()
@@ -540,11 +557,11 @@ const shiftEmailPreviewLines = computed(() => {
     ])
 
     for (const unit of units) {
-      const key = `${wd}|${includeSend ? 1 : 0}|${unit}`
+      const key = `${wd}|${startOffset}|${unit}`
       if (!buckets.has(key)) {
         buckets.set(key, {
           sendWeekday: wd,
-          includeSendDay: includeSend,
+          startOffsetDays: startOffset,
           unit,
           departments: [],
           configNames: new Set(),
@@ -588,9 +605,9 @@ const shiftEmailPreviewLines = computed(() => {
       const toPart = configPart ? `收件人（${configPart}）` : '收件人（未配置）'
       const ccSuffix = ccPieces.length ? `，抄送${ccPieces.join('；')}` : ''
 
-      const rangeHint = shiftEmailRangeHint(bucket.sendWeekday, bucket.includeSendDay)
+      const rangeHint = shiftEmailRangeHint(bucket.sendWeekday, bucket.startOffsetDays)
       return {
-        key: `${bucket.sendWeekday}|${bucket.includeSendDay ? 1 : 0}|${bucket.unit}|${bucket.departments.join(',')}`,
+        key: `${bucket.sendWeekday}|${bucket.startOffsetDays}|${bucket.unit}|${bucket.departments.join(',')}`,
         text: `将于${whenStr}，向${bucket.unit}发送${deptPart}排班表（${rangeHint}），${toPart}${ccSuffix}。`,
         unit: bucket.unit,
         departments: [...bucket.departments],
@@ -826,7 +843,8 @@ async function saveShiftEmailConfig() {
     departmentsPayload.push({
       department: item.department,
       email_send_weekday: item.email_send_weekday,
-      email_include_send_day: !!item.email_include_send_day,
+      email_start_offset_days: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day),
+      email_include_send_day: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day) === 0,
       email_recipients: parsed.recipients,
     })
   }

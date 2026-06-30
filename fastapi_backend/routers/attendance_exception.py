@@ -185,6 +185,39 @@ def _is_admin1_or_dakaman(name: str) -> bool:
     return (admin1 and n == admin1) or (dakaman and n == dakaman)
 
 
+def _active_dept_deputy_directors(lsys: str, exclude_name: str = "") -> list:
+    lsys = (lsys or "").strip()
+    if not lsys:
+        return []
+    fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+    rows = db.execute_query(
+        f"""
+        SELECT name, jb, lsys
+        FROM yggl
+        WHERE lsys = %s
+          AND {fzr_cond}
+          AND name IS NOT NULL AND name != ''
+          AND name != %s
+          AND (COALESCE(zaizhi,0)=0)
+        ORDER BY jb, name
+        """,
+        (lsys,) + fzr_p + ((exclude_name or "").strip(),),
+    )
+    return rows or []
+
+
+def _can_skip_first_approval(user: dict) -> bool:
+    """主任所在科室未设置在职副主任时，打卡异常申请跳过一级审批。"""
+    if not user:
+        return False
+    jb = (user.get("jb") or "").strip()
+    if not _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
+        return False
+    lsys = (user.get("lsys") or "").strip()
+    name = (user.get("name") or "").strip()
+    return len(_active_dept_deputy_directors(lsys, name)) == 0
+
+
 # ==================== 审批人列表 ====================
 
 @router.get("/approvers")
@@ -211,14 +244,19 @@ async def get_kqyc_approvers(
         # 一级: 同 lsys 的 主任/副主任/班组长（排除本人）
         if not lsys:
             return {"success": True, "approvers": []}
-        zz_cond, zz_p = _jb_sql_conditions("组长")
-        zr_cond, zr_p = _jb_sql_conditions("主任")
-        fzr_cond, fzr_p = _jb_sql_conditions("副主任")
-        cond = f"({zz_cond[1:-1]} OR {zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
-        rows = db.execute_query(
-            f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {cond} AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-            (lsys,) + zz_p + zr_p + fzr_p + (name,),
-        )
+        skip_first_approval = _can_skip_first_approval(user)
+        if _jb_match((user.get("jb") or "").strip(), "主任") and not _jb_match((user.get("jb") or "").strip(), "副主任"):
+            # 主任的一级审批仅允许同科室副主任；若无副主任则由提交接口跳过一级审批。
+            rows = [] if skip_first_approval else _active_dept_deputy_directors(lsys, name)
+        else:
+            zz_cond, zz_p = _jb_sql_conditions("组长")
+            zr_cond, zr_p = _jb_sql_conditions("主任")
+            fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+            cond = f"({zz_cond[1:-1]} OR {zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
+            rows = db.execute_query(
+                f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {cond} AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
+                (lsys,) + zz_p + zr_p + fzr_p + (name,),
+            )
 
     seen = set()
     approvers = []
@@ -230,7 +268,12 @@ async def get_kqyc_approvers(
         jb = (r.get("jb") or "").strip()
         approvers.append({"name": nm, "jb": jb, "lsys": r.get("lsys") or "", "label": f"{nm}（{jb}）"})
 
-    return {"success": True, "level": level, "approvers": approvers}
+    return {
+        "success": True,
+        "level": level,
+        "approvers": approvers,
+        "skip_first_approval": bool(level != "second" and _can_skip_first_approval(user)),
+    }
 
 
 # ==================== 提交申请 ====================
@@ -244,7 +287,7 @@ async def submit_kqyc_apply(
     time_to: str = Form(...),
     reason_type: str = Form(...),
     description: str = Form(...),
-    first_approver: str = Form(...),
+    first_approver: str = Form(""),
     second_approver: str = Form(...),
     attachment: UploadFile = File(...),
 ):
@@ -270,11 +313,9 @@ async def submit_kqyc_apply(
         raise HTTPException(status_code=400, detail="佐证材料附件为必传项")
     if reason_type and reason_type not in REASON_TYPES:
         raise HTTPException(status_code=400, detail=f"事由必须为以下之一: {'、'.join(REASON_TYPES)}")
-    if not first_approver:
-        raise HTTPException(status_code=400, detail="请选择一级审批人(主任/副主任/班组长)")
     if not second_approver:
         raise HTTPException(status_code=400, detail="请选择二级审批人(经理/副经理)")
-    if first_approver == second_approver:
+    if first_approver and first_approver == second_approver:
         raise HTTPException(status_code=400, detail="一级与二级审批人不能为同一人")
 
     # 时间合法性
@@ -302,9 +343,26 @@ async def submit_kqyc_apply(
         raise HTTPException(status_code=400, detail="未在 yggl 中找到该员工")
     if not department:
         department = (user.get("lsys") or "").strip()
+    skip_first_approval = _can_skip_first_approval(user)
+    if not first_approver and not skip_first_approval:
+        raise HTTPException(status_code=400, detail="请选择一级审批人(主任/副主任/班组长)")
+    applicant_jb = (user.get("jb") or "").strip()
+    if (
+        first_approver
+        and _jb_match(applicant_jb, "主任")
+        and not _jb_match(applicant_jb, "副主任")
+    ):
+        deputy_names = {
+            (r.get("name") or "").strip()
+            for r in _active_dept_deputy_directors((user.get("lsys") or "").strip(), applicant)
+        }
+        if first_approver not in deputy_names:
+            raise HTTPException(status_code=400, detail="主任的一级审批人必须为本科室副主任")
 
     # 校验审批人在 yggl 中存在
     for nm in (first_approver, second_approver):
+        if not nm:
+            continue
         u = _get_user_info(nm)
         if not u:
             raise HTTPException(status_code=400, detail=f"审批人 {nm} 不存在或已离职")
@@ -331,15 +389,17 @@ async def submit_kqyc_apply(
         INSERT INTO attendance_exception
             (applicant, department, attendance_date, time_from, time_to,
              reason_type, description, attachment, attachment_original,
-             first_approver, second_approver, first_status, second_status, apply_time)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, 0, NOW())
+             first_approver, second_approver, first_status, second_status, first_approve_time, apply_time)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, NOW())
     """
+    first_status = 1 if skip_first_approval and not first_approver else 0
+    first_approve_time = datetime.now() if first_status == 1 else None
     new_id = db.execute_insert(
         sql,
         (
             applicant, department, attendance_date, tf, tt,
             reason_type, description, stored_name, original_name,
-            first_approver, second_approver,
+            first_approver, second_approver, first_status, first_approve_time,
         ),
     )
     if new_id is None:

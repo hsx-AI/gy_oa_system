@@ -93,7 +93,7 @@
                 </td>
                 <td>
                   <div class="appr-cell">
-                    <span class="appr-name">{{ r.first_approver }}</span>
+                    <span class="appr-name">{{ r.first_approver || '无需一级审批' }}</span>
                     <span class="appr-status" :class="statusTagClass(r.first_status)">{{ approverStatusText(r.first_status) }}</span>
                   </div>
                 </td>

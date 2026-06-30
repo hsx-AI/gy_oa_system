@@ -26,6 +26,19 @@
           </svg>
           {{ loading ? '刷新中' : '刷新' }}
         </button>
+        <button
+          v-if="canExtend"
+          class="extend-btn"
+          type="button"
+          title="为本科室已通过且未返回登记的公出延长返回时间"
+          @click="openExtend()"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="9" />
+            <path d="M12 7v5l3 2" />
+          </svg>
+          公出延长
+        </button>
       </div>
     </section>
 
@@ -96,10 +109,16 @@
               v-for="(person, index) in dept.people"
               :key="person.gh || person.name"
               class="desk-card"
-              :class="[`desk-card--${person.status}`, `desk-card--${genderClass(person)}`]"
+              :class="[
+                `desk-card--${person.status}`,
+                `desk-card--${genderClass(person)}`,
+                { 'desk-card--extendable': canExtendPerson(person) },
+              ]"
               :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-              :title="personTitle(person)"
+              :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
+              @click="canExtendPerson(person) && openExtend(person)"
             >
+              <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
               <div class="desk-card__top">
                 <div class="person-name">
                   <strong>{{ person.name }}</strong>
@@ -164,10 +183,16 @@
           v-for="(person, index) in people"
           :key="person.gh || person.name"
           class="desk-card"
-          :class="[`desk-card--${person.status}`, `desk-card--${genderClass(person)}`]"
+          :class="[
+            `desk-card--${person.status}`,
+            `desk-card--${genderClass(person)}`,
+            { 'desk-card--extendable': canExtendPerson(person) },
+          ]"
           :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-          :title="personTitle(person)"
+          :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
+          @click="canExtendPerson(person) && openExtend(person)"
         >
+          <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
           <div class="desk-card__top">
             <div class="person-name">
               <strong>{{ person.name }}</strong>
@@ -225,12 +250,89 @@
         </article>
       </div>
     </section>
+
+    <!-- 公出延长弹窗 -->
+    <div v-if="showExtendModal" class="modal-overlay" @click.self="closeExtend">
+      <div class="modal-content">
+        <button type="button" class="modal-close-btn" @click="closeExtend">&times;</button>
+        <h2>公出延长</h2>
+        <p class="modal-hint">为本科室已通过审批且未返回登记的公出修改预计返回时间，将重新提交部领导审批。</p>
+        <form @submit.prevent="submitExtend" class="extend-form">
+          <div class="extend-row">
+            <div class="extend-field">
+              <label>年度</label>
+              <select v-model="extendFilterYear" :disabled="extendListLoading" @change="onExtendYearChange">
+                <option value="">全部（近15年）</option>
+                <option v-for="y in extendYearOptions" :key="'ex-y-' + y" :value="String(y)">{{ y }} 年</option>
+              </select>
+            </div>
+            <div class="extend-field">
+              <label>公出人</label>
+              <select v-model="extendFilterPerson" :disabled="extendListLoading" @change="onExtendPersonChange">
+                <option value="">全部</option>
+                <option v-for="p in extendPeopleOptions" :key="'ex-p-' + p" :value="p">{{ p }}</option>
+              </select>
+            </div>
+          </div>
+
+          <p v-if="extendListLoading" class="modal-hint">加载可延长列表…</p>
+          <p v-else-if="!extendableList.length" class="modal-hint extend-empty-hint">
+            当前筛选下暂无可延长记录（需已通过审批且未返回登记）。可切换「全部（近15年）」、其他年度或公出人后查看。
+          </p>
+
+          <div class="extend-field">
+            <label>选择公出记录</label>
+            <select v-model="extendForm.selectedId" :disabled="extendListLoading" @change="onExtendSelect">
+              <option value="">请选择</option>
+              <option v-for="r in extendableList" :key="r.id" :value="r.id">
+                {{ r.person }} · {{ r.location || '地点未填' }} · {{ r.expectedStartTime || '—' }}～{{ r.expectedReturnTime || '—' }}
+              </option>
+            </select>
+          </div>
+
+          <div v-if="extendForm.selectedId" class="extend-row">
+            <div class="extend-field">
+              <label>原预计返回时间</label>
+              <input type="text" :value="extendForm.oldReturnTime || '—'" readonly class="readonly-input">
+            </div>
+            <div class="extend-field">
+              <label>新预计返回时间</label>
+              <input type="datetime-local" v-model="extendForm.newReturnTime" required>
+            </div>
+          </div>
+
+          <div class="extend-field" v-if="extendForm.selectedId">
+            <label>部领导</label>
+            <select v-model="extendForm.deptLeader" required :disabled="extendLoadingApprovers">
+              <option value="">请选择部领导</option>
+              <option v-for="p in extendDeptLeaders" :key="p" :value="p">{{ p }}</option>
+            </select>
+          </div>
+
+          <div class="extend-field" v-if="extendForm.selectedId">
+            <label>备注（选填）</label>
+            <input type="text" v-model="extendForm.remark" placeholder="延长原因说明">
+          </div>
+
+          <p v-if="extendError" class="extend-error">{{ extendError }}</p>
+
+          <div class="extend-actions">
+            <button type="button" class="ghost-btn" @click="closeExtend">取消</button>
+            <button type="submit" class="primary-btn" :disabled="extendSubmitting || !extendForm.selectedId">
+              {{ extendSubmitting ? '提交中…' : '确认延长' }}
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup>
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
+import { getApprovers, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
+import { isDeptLeader } from '@/utils/roleMatch'
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -285,14 +387,25 @@ function formatLocalDate(d) {
   return `${y}-${m}-${day}`
 }
 
-function getCurrentUserName() {
+function getCurrentUser() {
   try {
     const raw = localStorage.getItem('userInfo')
-    const user = raw ? JSON.parse(raw) : {}
-    return (user.name || user.userName || '').trim()
+    return raw ? JSON.parse(raw) : {}
   } catch {
-    return ''
+    return {}
   }
+}
+
+function getCurrentUserName() {
+  const user = getCurrentUser()
+  return (user.name || user.userName || '').trim()
+}
+
+const currentUserJb = computed(() => (getCurrentUser().jb || '').trim())
+const canExtend = computed(() => isDeptLeader(currentUserJb.value))
+
+function canExtendPerson(person) {
+  return canExtend.value && person?.status === 'no_record'
 }
 
 function personTitle(person) {
@@ -342,6 +455,148 @@ async function loadScene() {
     scene.value = { ...scene.value, people: [] }
   } finally {
     loading.value = false
+  }
+}
+
+// ==================== 公出延长 ====================
+const showExtendModal = ref(false)
+const extendableList = ref([])
+const extendListLoading = ref(false)
+const extendFilterYear = ref(String(new Date().getFullYear()))
+const extendFilterPerson = ref('')
+const extendPeopleOptions = ref([])
+const extendYearOptions = computed(() => {
+  const y = new Date().getFullYear()
+  return Array.from({ length: 15 }, (_, i) => y - i)
+})
+const extendDeptLeaders = ref([])
+const extendLoadingApprovers = ref(false)
+const extendSubmitting = ref(false)
+const extendError = ref('')
+const extendForm = reactive({
+  selectedId: '',
+  oldReturnTime: '',
+  newReturnTime: '',
+  deptLeader: '',
+  remark: '',
+})
+
+async function fetchExtendableList() {
+  const name = getCurrentUserName()
+  if (!name) return
+  extendListLoading.value = true
+  extendError.value = ''
+  try {
+    const params = { name }
+    if (extendFilterYear.value !== '' && extendFilterYear.value != null) {
+      const yy = parseInt(String(extendFilterYear.value), 10)
+      if (!Number.isNaN(yy)) params.year = yy
+    }
+    if ((extendFilterPerson.value || '').trim()) params.person = extendFilterPerson.value.trim()
+    const res = await getExtendableBusinessTrips(params)
+    extendableList.value = (res && res.list) || []
+    extendPeopleOptions.value = (res && res.people) || []
+  } catch (e) {
+    extendError.value = e?.response?.data?.detail || e?.message || '获取可延长列表失败'
+    extendableList.value = []
+    extendPeopleOptions.value = []
+  } finally {
+    extendListLoading.value = false
+  }
+}
+
+function resetExtendSelection() {
+  extendForm.selectedId = ''
+  extendForm.oldReturnTime = ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  extendForm.remark = ''
+  extendDeptLeaders.value = []
+}
+
+async function onExtendYearChange() {
+  extendFilterPerson.value = ''
+  resetExtendSelection()
+  await fetchExtendableList()
+}
+
+async function onExtendPersonChange() {
+  resetExtendSelection()
+  await fetchExtendableList()
+}
+
+async function openExtend(person) {
+  if (!canExtend.value) return
+  extendError.value = ''
+  extendFilterYear.value = String(new Date().getFullYear())
+  extendFilterPerson.value = (person?.name || '').trim()
+  resetExtendSelection()
+  extendPeopleOptions.value = []
+  showExtendModal.value = true
+  await fetchExtendableList()
+  // 从某人卡片进入时：若该人恰好只有一条可延长记录，自动选中
+  const target = (person?.name || '').trim()
+  if (target) {
+    const mine = extendableList.value.filter((r) => (r.person || '').trim() === target)
+    if (mine.length === 1) {
+      extendForm.selectedId = mine[0].id
+      await onExtendSelect()
+    }
+  }
+}
+
+function closeExtend() {
+  showExtendModal.value = false
+}
+
+async function onExtendSelect() {
+  const rec = extendableList.value.find((r) => r.id === extendForm.selectedId)
+  extendForm.oldReturnTime = rec ? rec.expectedReturnTime : ''
+  extendForm.newReturnTime = ''
+  extendForm.deptLeader = ''
+  if (extendForm.selectedId) {
+    extendLoadingApprovers.value = true
+    try {
+      const res = await getApprovers({ name: rec?.person || getCurrentUserName(), level: 'dept_leader' })
+      extendDeptLeaders.value = res && res.approvers ? res.approvers.map((a) => a.name) : []
+    } catch {
+      extendDeptLeaders.value = []
+    }
+    extendLoadingApprovers.value = false
+    const origLeader = (rec?.deptLeader || '').trim()
+    if (origLeader && extendDeptLeaders.value.includes(origLeader)) {
+      extendForm.deptLeader = origLeader
+    }
+  }
+}
+
+async function submitExtend() {
+  extendError.value = ''
+  if (!extendForm.selectedId) { extendError.value = '请选择公出记录'; return }
+  if (!extendForm.newReturnTime) { extendError.value = '请填写新的预计返回时间'; return }
+  if (!extendForm.deptLeader) { extendError.value = '请选择部领导'; return }
+  extendSubmitting.value = true
+  try {
+    const res = await extendBusinessTrip(extendForm.selectedId, {
+      current_user: getCurrentUserName(),
+      new_return_time: extendForm.newReturnTime,
+      dept_leader: extendForm.deptLeader,
+      remark: extendForm.remark,
+    })
+    if (res.success) {
+      alert(res.message || '延长已提交')
+      showExtendModal.value = false
+      loadScene()
+    } else {
+      extendError.value = res.message || '提交失败'
+    }
+  } catch (err) {
+    const detail = err?.response?.data?.detail
+    extendError.value = Array.isArray(detail)
+      ? detail.map((d) => d.msg || d).join('; ')
+      : detail || err?.message || '延长提交失败'
+  } finally {
+    extendSubmitting.value = false
   }
 }
 
@@ -1365,6 +1620,225 @@ onMounted(loadScene)
 
 @keyframes spin {
   to { transform: rotate(360deg); }
+}
+
+.extend-btn {
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  border: 1px solid #f59e0b;
+  border-radius: 6px;
+  padding: 0 14px;
+  background: #fff;
+  color: #b45309;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.extend-btn:hover {
+  background: #fffbeb;
+}
+
+.extend-btn svg {
+  width: 15px;
+  height: 15px;
+}
+
+.desk-card--extendable {
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, transform 0.18s ease;
+}
+
+.desk-card--extendable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 16px 30px rgba(245, 158, 11, 0.26);
+  border-color: #f59e0b;
+}
+
+.extend-flag {
+  position: absolute;
+  z-index: 3;
+  top: -1px;
+  right: -1px;
+  padding: 3px 8px;
+  border-radius: 0 7px 0 10px;
+  background: #f59e0b;
+  color: #fff;
+  font-size: 11px;
+  font-weight: 800;
+  letter-spacing: 0.5px;
+  box-shadow: 0 4px 10px rgba(245, 158, 11, 0.3);
+}
+
+.office-scene--compact .extend-flag {
+  padding: 2px 5px;
+  font-size: 9px;
+  border-radius: 0 6px 0 8px;
+}
+
+.modal-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(15, 23, 42, 0.5);
+  padding: 16px;
+}
+
+.modal-content {
+  position: relative;
+  width: 540px;
+  max-width: 100%;
+  max-height: 88vh;
+  overflow-y: auto;
+  padding: 22px 24px 20px;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 24px 60px rgba(15, 23, 42, 0.28);
+}
+
+.modal-content h2 {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 800;
+  color: #0f172a;
+}
+
+.modal-close-btn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 22px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.modal-close-btn:hover {
+  background: #f1f5f9;
+  color: #0f172a;
+}
+
+.modal-hint {
+  margin: 0 0 12px;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.extend-empty-hint {
+  color: #b45309;
+  background: #fffbeb;
+  border: 1px solid #fde68a;
+  border-radius: 6px;
+  padding: 8px 10px;
+}
+
+.extend-form {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.extend-row {
+  display: flex;
+  gap: 12px;
+}
+
+.extend-field {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  min-width: 0;
+}
+
+.extend-field label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+}
+
+.extend-field input,
+.extend-field select {
+  height: 38px;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  padding: 0 10px;
+  background: #fff;
+  color: #172033;
+  font-size: 13px;
+}
+
+.extend-field input:focus,
+.extend-field select:focus {
+  border-color: #2563eb;
+  outline: none;
+}
+
+.readonly-input {
+  background: #f1f5f9;
+  cursor: default;
+}
+
+.extend-error {
+  margin: 0;
+  color: #dc2626;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.extend-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+  margin-top: 6px;
+  padding-top: 14px;
+  border-top: 1px solid #e2e8f0;
+}
+
+.ghost-btn,
+.primary-btn {
+  height: 38px;
+  padding: 0 18px;
+  border-radius: 6px;
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.ghost-btn {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #475569;
+}
+
+.ghost-btn:hover {
+  background: #f8fafc;
+}
+
+.primary-btn {
+  border: 1px solid #2563eb;
+  background: #2563eb;
+  color: #fff;
+}
+
+.primary-btn:hover:not(:disabled) {
+  background: #1d4ed8;
+}
+
+.primary-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 @media (max-width: 980px) {
