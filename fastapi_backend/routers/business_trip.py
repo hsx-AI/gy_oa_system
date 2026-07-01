@@ -85,7 +85,7 @@ def _parse_dt(s):
 def _check_trip_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None) -> list:
     """
     检查公出人 gcr 的新时间段 [start_dt, end_dt] 是否与已有公出记录重叠。
-    排除已驳回(bldzt=22 或 szrzt=22)的记录。
+    排除已驳回(bldzt=22 或 szrzt=22)的记录，以及 gcrw 为「打卡管理员代处理」的记录。
     返回重叠记录列表。
     """
     if not gcr or not start_dt or not end_dt:
@@ -104,6 +104,7 @@ def _check_trip_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None) -> l
         FROM gcsqb
         WHERE TRIM(gcr) = %s
           AND NOT (COALESCE(bldzt,0) = 22 OR COALESCE(szrzt,0) = 22)
+          AND TRIM(COALESCE(gcrw, '')) != '打卡管理员代处理'
     """
     params: list = [gcr]
     if exclude_id:

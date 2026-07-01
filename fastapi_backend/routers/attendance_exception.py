@@ -206,16 +206,43 @@ def _active_dept_deputy_directors(lsys: str, exclude_name: str = "") -> list:
     return rows or []
 
 
-def _can_skip_first_approval(user: dict) -> bool:
-    """主任所在科室未设置在职副主任时，打卡异常申请跳过一级审批。"""
+def _active_dept_first_approvers(lsys: str, exclude_name: str = "") -> list:
+    lsys = (lsys or "").strip()
+    if not lsys:
+        return []
+    zz_cond, zz_p = _jb_sql_conditions("组长")
+    zr_cond, zr_p = _jb_sql_conditions("主任")
+    fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+    cond = f"({zz_cond[1:-1]} OR {zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
+    rows = db.execute_query(
+        f"""
+        SELECT name, jb, lsys
+        FROM yggl
+        WHERE lsys = %s
+          AND {cond}
+          AND name IS NOT NULL AND name != ''
+          AND name != %s
+          AND (COALESCE(zaizhi,0)=0)
+        ORDER BY jb, name
+        """,
+        (lsys,) + zz_p + zr_p + fzr_p + ((exclude_name or "").strip(),),
+    )
+    return rows or []
+
+
+def _can_skip_first_approval(user: dict, applicant_name: str = "") -> bool:
+    """主任无副主任、经理/副经理无科室一级审批人时，打卡异常申请跳过一级审批。"""
     if not user:
         return False
     jb = (user.get("jb") or "").strip()
-    if not _jb_match(jb, "主任") or _jb_match(jb, "副主任"):
-        return False
     lsys = (user.get("lsys") or "").strip()
-    name = (user.get("name") or "").strip()
-    return len(_active_dept_deputy_directors(lsys, name)) == 0
+    name = (applicant_name or user.get("name") or "").strip()
+    is_director = _jb_match(jb, "主任") and not _jb_match(jb, "副主任")
+    if is_director:
+        return len(_active_dept_deputy_directors(lsys, name)) == 0
+    if _jb_match(jb, "部长") or _jb_match(jb, "副部长"):
+        return len(_active_dept_first_approvers(lsys, name)) == 0
+    return False
 
 
 # ==================== 审批人列表 ====================
@@ -243,20 +270,19 @@ async def get_kqyc_approvers(
     else:
         # 一级: 同 lsys 的 主任/副主任/班组长（排除本人）
         if not lsys:
-            return {"success": True, "approvers": []}
-        skip_first_approval = _can_skip_first_approval(user)
-        if _jb_match((user.get("jb") or "").strip(), "主任") and not _jb_match((user.get("jb") or "").strip(), "副主任"):
+            return {
+                "success": True,
+                "level": level,
+                "approvers": [],
+                "skip_first_approval": _can_skip_first_approval(user, name),
+            }
+        skip_first_approval = _can_skip_first_approval(user, name)
+        jb = (user.get("jb") or "").strip()
+        if _jb_match(jb, "主任") and not _jb_match(jb, "副主任"):
             # 主任的一级审批仅允许同科室副主任；若无副主任则由提交接口跳过一级审批。
             rows = [] if skip_first_approval else _active_dept_deputy_directors(lsys, name)
         else:
-            zz_cond, zz_p = _jb_sql_conditions("组长")
-            zr_cond, zr_p = _jb_sql_conditions("主任")
-            fzr_cond, fzr_p = _jb_sql_conditions("副主任")
-            cond = f"({zz_cond[1:-1]} OR {zr_cond[1:-1]} OR {fzr_cond[1:-1]})"
-            rows = db.execute_query(
-                f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {cond} AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name",
-                (lsys,) + zz_p + zr_p + fzr_p + (name,),
-            )
+            rows = _active_dept_first_approvers(lsys, name)
 
     seen = set()
     approvers = []
@@ -272,7 +298,7 @@ async def get_kqyc_approvers(
         "success": True,
         "level": level,
         "approvers": approvers,
-        "skip_first_approval": bool(level != "second" and _can_skip_first_approval(user)),
+        "skip_first_approval": bool(level != "second" and _can_skip_first_approval(user, name)),
     }
 
 
@@ -343,7 +369,7 @@ async def submit_kqyc_apply(
         raise HTTPException(status_code=400, detail="未在 yggl 中找到该员工")
     if not department:
         department = (user.get("lsys") or "").strip()
-    skip_first_approval = _can_skip_first_approval(user)
+    skip_first_approval = _can_skip_first_approval(user, applicant)
     if not first_approver and not skip_first_approval:
         raise HTTPException(status_code=400, detail="请选择一级审批人(主任/副主任/班组长)")
     applicant_jb = (user.get("jb") or "").strip()

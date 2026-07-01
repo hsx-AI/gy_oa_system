@@ -188,6 +188,21 @@ import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTi
 
 const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 
+/** 每月 10 号之前默认展示上月，10 号及之后展示当月 */
+function getDefaultAttendanceMonthStr(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date)
+  let year = d.getFullYear()
+  let month = d.getMonth() + 1
+  if (d.getDate() < 10) {
+    month -= 1
+    if (month < 1) {
+      month = 12
+      year -= 1
+    }
+  }
+  return `${year}-${String(month).padStart(2, '0')}`
+}
+
 const loading = ref(false)
 const loadError = ref('')
 const records = ref([])
@@ -224,8 +239,7 @@ const processModal = reactive({
   matchCount: 0,
 })
 
-const now = new Date()
-const monthStr = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
+const monthStr = ref(getDefaultAttendanceMonthStr())
 
 const departmentOptions = computed(() => {
   const set = new Set()
