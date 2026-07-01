@@ -167,7 +167,7 @@
           </div>
           <div class="modal-field">
             <label>备注</label>
-            <input type="text" v-model="processModal.reason" class="modal-input" placeholder="选填" />
+            <input type="text" class="modal-input modal-input-readonly" :value="DAKAMAN_PROCESS_REASON" readonly />
           </div>
         </div>
         <div class="modal-footer">
@@ -227,13 +227,14 @@ function toggleSort(field) {
 
 const leaveTypeOptions = ['换休', '带薪年休假', '事假', '病假', '婚假', '丧假', '哺乳假', '产假', '产前检查', '护理假', '探亲假', '异常打卡']
 
+const DAKAMAN_PROCESS_REASON = '打卡管理员代处理'
+
 const processModal = reactive({
   show: false,
   record: null,
   processType: 'leave',
   leaveType: '事假',
   tripScope: '境内公出',
-  reason: '打卡管理员代处理',
   dateFrom: '',
   dateTo: '',
   matchCount: 0,
@@ -439,7 +440,6 @@ function openProcessModal(record) {
   processModal.processType = 'leave'
   processModal.leaveType = '事假'
   processModal.tripScope = '境内公出'
-  processModal.reason = '打卡管理员代处理'
   processModal.dateFrom = record.attendance_date
   processModal.dateTo = record.attendance_date
   processModal.matchCount = 1
@@ -480,7 +480,7 @@ async function confirmProcess() {
         process_type: processModal.processType,
         leave_type: processModal.leaveType,
         trip_scope: processModal.tripScope,
-        reason: processModal.reason || '打卡管理员代处理',
+        reason: DAKAMAN_PROCESS_REASON,
       })
       if (res && res.success) {
         successCount++
@@ -840,6 +840,11 @@ onMounted(() => {
   color: var(--color-text-primary);
   background: var(--color-bg-container);
   box-sizing: border-box;
+}
+.modal-input-readonly {
+  color: var(--color-text-secondary);
+  background: var(--color-bg-layout);
+  cursor: default;
 }
 .date-range-row {
   display: flex;
