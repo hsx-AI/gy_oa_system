@@ -18,6 +18,7 @@ import { getPendingHxpApprovals } from '@/api/admin'
 import { getSSOLink, getSixianghuibaoTodos, getPersonnelPendingCount } from '@/api/sso'
 import { getLeaderInbox, getWallPending, getWallAssigned, getSystemList } from '@/api/feedback'
 import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
+import { getPendingLowValueReimbursements } from '@/api/lowValueReimbursement'
 import { getShiftCoverageGap } from '@/api/shift'
 import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
 import {
@@ -63,6 +64,7 @@ const hxpApprovalPendingList = ref([])
 const todoRealTotal = ref(0)
 const sealPendingList = ref([])
 const sealUsePendingList = ref([])
+const lowValuePendingList = ref([])
 const feedbackLeaderCount = ref(0)
 const feedbackWallPendingCount = ref(0)
 const feedbackSystemPendingCount = ref(0)
@@ -173,6 +175,18 @@ const displayTodoList = computed(() => {
       sealUseId: item.id,
     })
   }
+  for (const item of lowValuePendingList.value) {
+    list.push({
+      uniqueId: `low-value-${item.id}`,
+      type: '低值易耗报销审批',
+      description: `${item.applicant}提交的${item.material_name || '低值易耗'}报销单，金额${formatHxpAmount(item.total_price || 0)}元`,
+      applicant: item.applicant,
+      time: formatRelativeTime(item.apply_time),
+      applyTime: item.apply_time || '',
+      isLowValueApproval: true,
+      btnLabel: Number(item.status) === 2 ? '完成报销' : '去审批',
+    })
+  }
   if (feedbackLeaderCount.value > 0) {
     list.push({
       uniqueId: 'feedback-leader-inbox',
@@ -276,6 +290,7 @@ const totalBadgeCount = computed(() => {
   count += hxpApprovalPendingList.value.length
   count += sealPendingList.value.length
   count += sealUsePendingList.value.length
+  count += lowValuePendingList.value.length
   if (feedbackLeaderCount.value > 0) count += 1
   if (feedbackWallPendingCount.value > 0) count += 1
   count += feedbackWallAssignedList.value.length
@@ -531,6 +546,20 @@ async function fetchSealUsePending() {
   }
 }
 
+async function fetchLowValuePending() {
+  const name = readUserName()
+  if (!name) {
+    lowValuePendingList.value = []
+    return
+  }
+  try {
+    const res = await getPendingLowValueReimbursements({ approver: name })
+    lowValuePendingList.value = res?.data || []
+  } catch {
+    lowValuePendingList.value = []
+  }
+}
+
 async function fetchFeedbackTodos() {
   const userName = readUserName()
   if (!userName) {
@@ -594,6 +623,7 @@ export async function refreshWorkplaceTodos() {
     fetchHxpApprovalPending(),
     fetchSealPending(),
     fetchSealUsePending(),
+    fetchLowValuePending(),
     fetchFeedbackTodos(),
     fetchKqycPending(),
     fetchKqycDakaman(),
@@ -684,6 +714,10 @@ export function useWorkplaceTodos() {
     }
     if (task.isSealApproval) {
       router.push({ path: '/seal/apply', query: { tab: 'pending' } })
+      return
+    }
+    if (task.isLowValueApproval) {
+      router.push({ path: '/low-value-reimbursement', query: { tab: 'pending' } })
       return
     }
     if (task.isFeedback) {

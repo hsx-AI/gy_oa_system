@@ -301,6 +301,12 @@ const routes = [
     meta: { title: '部门用印申请' }
   },
   {
+    path: '/low-value-reimbursement',
+    name: 'LowValueReimbursement',
+    component: () => import('@/views/LowValueReimbursement.vue'),
+    meta: { title: '低值易耗报销' }
+  },
+  {
     path: '/massage-chair',
     name: 'MassageChairBooking',
     component: () => import('@/views/massage/MassageChairBooking.vue'),

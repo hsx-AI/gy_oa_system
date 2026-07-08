@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement
 import logging
 import time
 
@@ -91,6 +91,7 @@ app.include_router(personnel_visualization.router, prefix=settings.API_PREFIX)  
 app.include_router(info_feed.router, prefix=settings.API_PREFIX)  # 天气新闻中转缓存
 app.include_router(ai_assistant.router, prefix=settings.API_PREFIX)  # 智能制造工艺部 AI 助手
 app.include_router(massage_chair.router, prefix=settings.API_PREFIX)  # 休闲角预约
+app.include_router(low_value_reimbursement.router, prefix=settings.API_PREFIX)  # 低值易耗报销
 
 @app.on_event("startup")
 async def startup_event():

@@ -1016,6 +1016,7 @@ import {
   getUploadConfig,
 } from '@/api/attendance'
 import { getMySealApplications } from '@/api/seal'
+import { getMyLowValueApplications } from '@/api/lowValueReimbursement'
 import { getLeaderBriefing } from '@/api/admin'
 import { getContacts } from '@/api/contacts'
 import { getWallList, likeWall } from '@/api/feedback'
@@ -1745,6 +1746,15 @@ const rawFeatureGroups = [
         iconPath: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'
       },
       {
+        id: 'low-value-reimbursement',
+        title: '低值易耗报销',
+        description: '提交低值易耗报销申请，审批流转并导出台账',
+        path: '/low-value-reimbursement',
+        color: 'linear-gradient(135deg, #2563eb 0%, #14b8a6 100%)',
+        tag: '新功能',
+        iconPath: 'M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16zM3.27 6.96L12 12l8.73-5.04M12 22V12'
+      },
+      {
         id: 'massage-chair',
         title: '休闲角预约',
         description: '部门休闲角按 15 分钟时段预约，每人每日最多 30 分钟',
@@ -2444,6 +2454,10 @@ function goMyApplication(req) {
     router.push({ path: '/seal/apply', query: { tab: 'mine' } })
     return
   }
+  if (req.source === 'low-value') {
+    router.push({ path: '/low-value-reimbursement', query: { tab: 'mine' } })
+    return
+  }
   const path = req.source === 'leave' ? '/attendance/leave'
     : req.source === 'overtime' ? '/attendance/overtime'
     : '/attendance/business-trip'
@@ -2474,11 +2488,12 @@ async function fetchRequestList() {
   }
   requestLoading.value = true
   try {
-    const [leaveRes, overtimeRes, btRes, sealRes] = await Promise.all([
+    const [leaveRes, overtimeRes, btRes, sealRes, lowValueRes] = await Promise.all([
       getLeaveList({ name, status: 'all', all_years: true }),
       getOvertimeList({ name, status: 'all', all_years: true }),
       getBusinessTripList({ name, all_years: true }),
       getMySealApplications({ name }),
+      getMyLowValueApplications({ name }),
     ])
     const items = []
     // ---------- 跳转筛选一律用业务时间，禁止用登记/申请时间 ----------
@@ -2564,6 +2579,26 @@ async function fetchRequestList() {
         time: applyDate,
         businessTimeLabel: applyDate ? `申请时间：${applyDate}` : '',
         source: 'seal',
+      })
+    })
+    const lowValues = (lowValueRes?.data || []).filter((r) => {
+      return Number(r.status) !== 3
+    })
+    lowValues.forEach(r => {
+      const applyDate = (r.apply_time || '').slice(0, 10)
+      const statusText = r.status_text || '处理中'
+      const statusCls = Number(r.status) === 22 ? 'status-rejected' : (Number(r.status) === 3 ? 'status-approved' : 'status-processing')
+      items.push({
+        uniqueId: `low-value-${r.id}`,
+        id: `DZYH${r.id}`,
+        recordId: r.id,
+        year: applyDate ? applyDate.slice(0, 4) : '',
+        title: `${r.material_name || '低值易耗'}报销`,
+        status: statusText,
+        statusClass: statusCls,
+        time: applyDate,
+        businessTimeLabel: applyDate ? `申请日期：${applyDate}` : '',
+        source: 'low-value',
       })
     })
     items.sort((a, b) => (b.time || '').localeCompare(a.time || ''))
