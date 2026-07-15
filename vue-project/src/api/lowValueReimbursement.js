@@ -56,6 +56,12 @@ export function batchActionLowValueReimbursement(data) {
   return request({ url: `${P}/action-batch`, method: 'post', data: fd })
 }
 
+export function checkLowValueInvoices(data) {
+  const fd = new FormData()
+  fd.append('operator', data.operator ?? '')
+  return request({ url: `${P}/invoice/check`, method: 'post', data: fd })
+}
+
 export function deleteLowValueReimbursement(data) {
   const fd = new FormData()
   fd.append('id', data.id)

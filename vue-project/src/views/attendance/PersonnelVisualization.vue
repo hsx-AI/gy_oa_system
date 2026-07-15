@@ -17,6 +17,14 @@
             <option v-for="dept in availableDepartments" :key="dept" :value="dept">{{ dept }}</option>
           </select>
         </label>
+        <label v-if="showStatusFilter" class="field">
+          <span>状态</span>
+          <select v-model="selectedStatus">
+            <option v-for="opt in statusFilterOptions" :key="opt.value || 'all'" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
         <button class="refresh-btn" type="button" :disabled="loading" @click="loadScene" title="刷新">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
             <path d="M21 2v6h-6" />
@@ -89,8 +97,8 @@
         <span class="loader"></span>
         <p>正在布置办公室...</p>
       </div>
-      <div v-else-if="!people.length" class="scene-empty">
-        <p>{{ errorMessage || '暂无人员数据' }}</p>
+      <div v-else-if="!filteredPeople.length" class="scene-empty">
+        <p>{{ errorMessage || (selectedStatus ? '当前状态下暂无人员' : '暂无人员数据') }}</p>
       </div>
       <div v-else-if="isAllView" class="dept-office-list">
         <section v-for="dept in peopleByDept" :key="dept.name" class="dept-office-section">
@@ -104,150 +112,162 @@
               <span class="stat-empty">{{ dept.summary.noRecord }} 暂无打卡</span>
             </div>
           </header>
-          <div class="desk-grid desk-grid--dept">
-            <article
-              v-for="(person, index) in dept.people"
-              :key="person.gh || person.name"
-              class="desk-card"
-              :class="[
-                `desk-card--${person.status}`,
-                `desk-card--${genderClass(person)}`,
-                { 'desk-card--extendable': canExtendPerson(person) },
-              ]"
-              :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-              :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
-              @click="canExtendPerson(person) && openExtend(person)"
+          <div class="desk-sections desk-sections--dept">
+            <div
+              v-for="row in dept.rows"
+              :key="row.key"
+              class="desk-grid desk-grid--dept"
             >
-              <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
-              <div class="desk-card__top">
-                <div class="person-name">
-                  <strong>{{ person.name }}</strong>
-                  <span class="dept-mini">{{ person.department }}</span>
-                  <span v-if="person.jb">{{ person.jb }}</span>
+              <article
+                v-for="(person, index) in row.people"
+                :key="person.gh || person.name"
+                class="desk-card"
+                :class="[
+                  `desk-card--${person.status}`,
+                  `desk-card--${genderClass(person)}`,
+                  { 'desk-card--extendable': canExtendPerson(person) },
+                ]"
+                :style="{ '--delay': `${(index % 6) * 0.12}s` }"
+                :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
+                @click="canExtendPerson(person) && openExtend(person)"
+              >
+                <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
+                <div class="desk-card__top">
+                  <div class="person-name">
+                    <strong>{{ person.name }}</strong>
+                    <span class="dept-mini">{{ person.department }}</span>
+                    <span v-if="person.jb">{{ person.jb }}</span>
+                  </div>
+                  <span class="status-pill">{{ person.statusLabel }}</span>
                 </div>
-                <span class="status-pill">{{ person.statusLabel }}</span>
-              </div>
-              <div class="workstation" :class="{ travelling: person.status === 'business_trip' }">
-                <div class="desk-surface">
-                  <div class="monitor"><span class="monitor-glow"></span></div>
-                  <div class="keyboard"></div>
-                  <div class="coffee"></div>
+                <div class="workstation" :class="{ travelling: person.status === 'business_trip' }">
+                  <div class="desk-surface">
+                    <div class="monitor"><span class="monitor-glow"></span></div>
+                    <div class="keyboard"></div>
+                    <div class="coffee"></div>
+                  </div>
+                  <div v-if="person.status === 'business_trip'" class="trip-motion" aria-hidden="true">
+                    <div class="route-line"></div>
+                    <div class="suitcase"><span></span></div>
+                    <svg class="plane" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                      <path d="M22 2L11 13" />
+                      <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                    </svg>
+                  </div>
+                  <div
+                    v-if="hasLeaveMarker(person)"
+                    class="leave-marker"
+                    :class="{ pending: !person.leave.approved }"
+                  >
+                    {{ person.leave.approved ? '假' : '审' }}
+                  </div>
+                  <div class="worker" :class="[person.status, genderClass(person)]" aria-hidden="true">
+                    <div class="head"><span class="hair"></span></div>
+                    <div class="body"></div>
+                    <div class="arm arm-left"></div>
+                    <div class="arm arm-right"></div>
+                  </div>
+                  <div class="chair"></div>
                 </div>
-                <div v-if="person.status === 'business_trip'" class="trip-motion" aria-hidden="true">
-                  <div class="route-line"></div>
-                  <div class="suitcase"><span></span></div>
-                  <svg class="plane" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M22 2L11 13" />
-                    <path d="M22 2l-7 20-4-9-9-4 20-7z" />
-                  </svg>
+                <div class="desk-meta">
+                  <template v-if="person.status === 'business_trip'">
+                    <span class="meta-main">{{ person.businessTrip?.location || '公出地点未填' }}</span>
+                    <span class="meta-sub">{{ person.businessTrip?.startTime || '-' }} 至 {{ person.businessTrip?.endTime || '-' }}</span>
+                  </template>
+                  <template v-else-if="hasLeaveMarker(person)">
+                    <span class="meta-main">{{ person.leave.statusLabel }} · {{ person.leave.type }}</span>
+                    <span class="meta-sub">{{ person.leave.startTime || '-' }} 至 {{ person.leave.endTime || '-' }}</span>
+                  </template>
+                  <template v-else-if="person.attendance">
+                    <span class="meta-main">首次 {{ person.attendance.firstTime || '-' }} · 最近 {{ person.attendance.lastTime || '-' }}</span>
+                    <span class="meta-sub">打卡 {{ person.attendance.times?.length || 0 }} 次</span>
+                  </template>
+                  <template v-else>
+                    <span class="meta-main">未查询到当天打卡</span>
+                    <span class="meta-sub">可能未到岗、未同步或非工作日</span>
+                  </template>
                 </div>
-                <div
-                  v-if="hasLeaveMarker(person)"
-                  class="leave-marker"
-                  :class="{ pending: !person.leave.approved }"
-                >
-                  {{ person.leave.approved ? '假' : '审' }}
-                </div>
-                <div class="worker" :class="[person.status, genderClass(person)]" aria-hidden="true">
-                  <div class="head"><span class="hair"></span></div>
-                  <div class="body"></div>
-                  <div class="arm arm-left"></div>
-                  <div class="arm arm-right"></div>
-                </div>
-                <div class="chair"></div>
-              </div>
-              <div class="desk-meta">
-                <template v-if="person.status === 'business_trip'">
-                  <span class="meta-main">{{ person.businessTrip?.location || '公出地点未填' }}</span>
-                  <span class="meta-sub">{{ person.businessTrip?.startTime || '-' }} 至 {{ person.businessTrip?.endTime || '-' }}</span>
-                </template>
-                <template v-else-if="hasLeaveMarker(person)">
-                  <span class="meta-main">{{ person.leave.statusLabel }} · {{ person.leave.type }}</span>
-                  <span class="meta-sub">{{ person.leave.startTime || '-' }} 至 {{ person.leave.endTime || '-' }}</span>
-                </template>
-                <template v-else-if="person.attendance">
-                  <span class="meta-main">首次 {{ person.attendance.firstTime || '-' }} · 最近 {{ person.attendance.lastTime || '-' }}</span>
-                  <span class="meta-sub">打卡 {{ person.attendance.times?.length || 0 }} 次</span>
-                </template>
-                <template v-else>
-                  <span class="meta-main">未查询到当天打卡</span>
-                  <span class="meta-sub">可能未到岗、未同步或非工作日</span>
-                </template>
-              </div>
-            </article>
+              </article>
+            </div>
           </div>
         </section>
       </div>
-      <div v-else class="desk-grid">
-        <article
-          v-for="(person, index) in people"
-          :key="person.gh || person.name"
-          class="desk-card"
-          :class="[
-            `desk-card--${person.status}`,
-            `desk-card--${genderClass(person)}`,
-            { 'desk-card--extendable': canExtendPerson(person) },
-          ]"
-          :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-          :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
-          @click="canExtendPerson(person) && openExtend(person)"
+      <div v-else class="desk-sections">
+        <div
+          v-for="row in peopleRows"
+          :key="row.key"
+          class="desk-grid"
         >
-          <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
-          <div class="desk-card__top">
-            <div class="person-name">
-              <strong>{{ person.name }}</strong>
-              <span v-if="person.jb">{{ person.jb }}</span>
+          <article
+            v-for="(person, index) in row.people"
+            :key="person.gh || person.name"
+            class="desk-card"
+            :class="[
+              `desk-card--${person.status}`,
+              `desk-card--${genderClass(person)}`,
+              { 'desk-card--extendable': canExtendPerson(person) },
+            ]"
+            :style="{ '--delay': `${(index % 6) * 0.12}s` }"
+            :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
+            @click="canExtendPerson(person) && openExtend(person)"
+          >
+            <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
+            <div class="desk-card__top">
+              <div class="person-name">
+                <strong>{{ person.name }}</strong>
+                <span v-if="person.jb">{{ person.jb }}</span>
+              </div>
+              <span class="status-pill">{{ person.statusLabel }}</span>
             </div>
-            <span class="status-pill">{{ person.statusLabel }}</span>
-          </div>
-          <div class="workstation" :class="{ travelling: person.status === 'business_trip' }">
-            <div class="desk-surface">
-              <div class="monitor"><span class="monitor-glow"></span></div>
-              <div class="keyboard"></div>
-              <div class="coffee"></div>
+            <div class="workstation" :class="{ travelling: person.status === 'business_trip' }">
+              <div class="desk-surface">
+                <div class="monitor"><span class="monitor-glow"></span></div>
+                <div class="keyboard"></div>
+                <div class="coffee"></div>
+              </div>
+              <div v-if="person.status === 'business_trip'" class="trip-motion" aria-hidden="true">
+                <div class="route-line"></div>
+                <div class="suitcase"><span></span></div>
+                <svg class="plane" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                  <path d="M22 2L11 13" />
+                  <path d="M22 2l-7 20-4-9-9-4 20-7z" />
+                </svg>
+              </div>
+              <div
+                v-if="hasLeaveMarker(person)"
+                class="leave-marker"
+                :class="{ pending: !person.leave.approved }"
+              >
+                {{ person.leave.approved ? '假' : '审' }}
+              </div>
+              <div class="worker" :class="[person.status, genderClass(person)]" aria-hidden="true">
+                <div class="head"><span class="hair"></span></div>
+                <div class="body"></div>
+                <div class="arm arm-left"></div>
+                <div class="arm arm-right"></div>
+              </div>
+              <div class="chair"></div>
             </div>
-            <div v-if="person.status === 'business_trip'" class="trip-motion" aria-hidden="true">
-              <div class="route-line"></div>
-              <div class="suitcase"><span></span></div>
-              <svg class="plane" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <path d="M22 2L11 13" />
-                <path d="M22 2l-7 20-4-9-9-4 20-7z" />
-              </svg>
+            <div class="desk-meta">
+              <template v-if="person.status === 'business_trip'">
+                <span class="meta-main">{{ person.businessTrip?.location || '公出地点未填' }}</span>
+                <span class="meta-sub">{{ person.businessTrip?.startTime || '-' }} 至 {{ person.businessTrip?.endTime || '-' }}</span>
+              </template>
+              <template v-else-if="hasLeaveMarker(person)">
+                <span class="meta-main">{{ person.leave.statusLabel }} · {{ person.leave.type }}</span>
+                <span class="meta-sub">{{ person.leave.startTime || '-' }} 至 {{ person.leave.endTime || '-' }}</span>
+              </template>
+              <template v-else-if="person.attendance">
+                <span class="meta-main">首次 {{ person.attendance.firstTime || '-' }} · 最近 {{ person.attendance.lastTime || '-' }}</span>
+                <span class="meta-sub">打卡 {{ person.attendance.times?.length || 0 }} 次</span>
+              </template>
+              <template v-else>
+                <span class="meta-main">未查询到当天打卡</span>
+                <span class="meta-sub">可能未到岗、未同步或非工作日</span>
+              </template>
             </div>
-            <div
-              v-if="hasLeaveMarker(person)"
-              class="leave-marker"
-              :class="{ pending: !person.leave.approved }"
-            >
-              {{ person.leave.approved ? '假' : '审' }}
-            </div>
-            <div class="worker" :class="[person.status, genderClass(person)]" aria-hidden="true">
-              <div class="head"><span class="hair"></span></div>
-              <div class="body"></div>
-              <div class="arm arm-left"></div>
-              <div class="arm arm-right"></div>
-            </div>
-            <div class="chair"></div>
-          </div>
-          <div class="desk-meta">
-            <template v-if="person.status === 'business_trip'">
-              <span class="meta-main">{{ person.businessTrip?.location || '公出地点未填' }}</span>
-              <span class="meta-sub">{{ person.businessTrip?.startTime || '-' }} 至 {{ person.businessTrip?.endTime || '-' }}</span>
-            </template>
-            <template v-else-if="hasLeaveMarker(person)">
-              <span class="meta-main">{{ person.leave.statusLabel }} · {{ person.leave.type }}</span>
-              <span class="meta-sub">{{ person.leave.startTime || '-' }} 至 {{ person.leave.endTime || '-' }}</span>
-            </template>
-            <template v-else-if="person.attendance">
-              <span class="meta-main">首次 {{ person.attendance.firstTime || '-' }} · 最近 {{ person.attendance.lastTime || '-' }}</span>
-              <span class="meta-sub">打卡 {{ person.attendance.times?.length || 0 }} 次</span>
-            </template>
-            <template v-else>
-              <span class="meta-main">未查询到当天打卡</span>
-              <span class="meta-sub">可能未到岗、未同步或非工作日</span>
-            </template>
-          </div>
-        </article>
+          </article>
+        </div>
       </div>
     </section>
 
@@ -332,12 +352,20 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getApprovers, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
-import { isDeptLeader } from '@/utils/roleMatch'
+import { isDeptLeader, jbMatch } from '@/utils/roleMatch'
 
 const loading = ref(false)
 const errorMessage = ref('')
 const selectedDate = ref(formatLocalDate(new Date()))
 const selectedDept = ref('')
+const selectedStatus = ref('')
+const statusFilterOptions = [
+  { value: '', label: '全部状态' },
+  { value: 'present', label: '在岗' },
+  { value: 'business_trip', label: '公出' },
+  { value: 'leave', label: '请假' },
+  { value: 'no_record', label: '暂无打卡' },
+]
 const scene = ref({
   department: '',
   generatedAt: '',
@@ -347,7 +375,13 @@ const scene = ref({
 })
 
 const people = computed(() => scene.value.people || [])
-const summary = computed(() => ({
+const showStatusFilter = computed(() => selectedDept.value === '全员' || scene.value.department === '全员')
+const filteredPeople = computed(() => {
+  const list = people.value
+  if (!showStatusFilter.value || !selectedStatus.value) return list
+  return list.filter((p) => p.status === selectedStatus.value)
+})
+const sceneSummary = computed(() => ({
   total: 0,
   present: 0,
   businessTrip: 0,
@@ -356,12 +390,28 @@ const summary = computed(() => ({
   noRecord: 0,
   ...(scene.value.summary || {}),
 }))
+const summary = computed(() => {
+  if (!showStatusFilter.value || !selectedStatus.value) return sceneSummary.value
+  const s = { total: 0, present: 0, businessTrip: 0, leave: 0, leavePending: 0, noRecord: 0 }
+  for (const p of filteredPeople.value) {
+    s.total += 1
+    if (p.status === 'present') s.present += 1
+    else if (p.status === 'business_trip') s.businessTrip += 1
+    else if (p.status === 'leave') s.leave += 1
+    else {
+      s.noRecord += 1
+      if (p.leave && !p.leave.approved) s.leavePending += 1
+    }
+  }
+  return s
+})
 const availableDepartments = computed(() => scene.value.availableDepartments || [])
 const isAllView = computed(() => scene.value.department === '全员')
-const isCompactView = computed(() => isAllView.value || people.value.length > 35)
+const isCompactView = computed(() => isAllView.value || filteredPeople.value.length > 35)
+const peopleRows = computed(() => buildDeskRows(filteredPeople.value))
 const peopleByDept = computed(() => {
   const groups = new Map()
-  for (const person of people.value) {
+  for (const person of filteredPeople.value) {
     const dept = person.department || '未分科室'
     if (!groups.has(dept)) {
       groups.set(dept, {
@@ -378,7 +428,70 @@ const peopleByDept = computed(() => {
     else group.summary.noRecord += 1
   }
   return [...groups.values()]
+    .map((group) => ({
+      ...group,
+      rows: buildDeskRows(group.people),
+    }))
+    .filter((group) => group.people.length > 0)
 })
+
+/** 领导岗排序：经理 → 副经理 → 主任/主任责 → 副主任 → 班组长/组长 */
+function leadershipRank(jb) {
+  const j = (jb || '').trim()
+  if (!j) return 0
+  if (j.includes('副经理')) return 2
+  if (j === '经理' || (j.startsWith('经理') && !j.includes('经理助理'))) return 1
+  if (j.includes('副主任')) return 4
+  if (j.includes('主任责') || jbMatch(j, '主任')) return 3
+  if (jbMatch(j, '组长')) return 5
+  return 0
+}
+
+function compareByName(a, b) {
+  return String(a?.name || '').localeCompare(String(b?.name || ''), 'zh-Hans-CN')
+}
+
+/**
+ * 工位分组：
+ * 1. 经理/副经理、主任/主任责、副主任、班组长/组长（固定首行）
+ * 2. 其他在岗（姓名首字母）
+ * 3. 其他公出
+ * 4. 其他请假
+ * 5. 其他暂无打卡
+ * 各组另起一行展示
+ */
+function buildDeskRows(list) {
+  const leaders = []
+  const present = []
+  const trip = []
+  const leave = []
+  const noRecord = []
+
+  for (const person of list || []) {
+    if (leadershipRank(person.jb) > 0) {
+      leaders.push(person)
+      continue
+    }
+    if (person.status === 'present') present.push(person)
+    else if (person.status === 'business_trip') trip.push(person)
+    else if (person.status === 'leave') leave.push(person)
+    else noRecord.push(person)
+  }
+
+  leaders.sort((a, b) => leadershipRank(a.jb) - leadershipRank(b.jb) || compareByName(a, b))
+  present.sort(compareByName)
+  trip.sort(compareByName)
+  leave.sort(compareByName)
+  noRecord.sort(compareByName)
+
+  return [
+    { key: 'leaders', people: leaders },
+    { key: 'present', people: present },
+    { key: 'business_trip', people: trip },
+    { key: 'leave', people: leave },
+    { key: 'no_record', people: noRecord },
+  ].filter((row) => row.people.length > 0)
+}
 
 function formatLocalDate(d) {
   const y = d.getFullYear()
@@ -813,6 +926,24 @@ onMounted(loadScene)
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 12px;
   padding: 16px;
+}
+
+.desk-sections {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px;
+}
+
+.desk-sections .desk-grid {
+  padding: 0;
+}
+
+.desk-sections--dept {
+  padding: 8px;
+  gap: 10px;
 }
 
 .dept-office-list {
@@ -1406,6 +1537,19 @@ onMounted(loadScene)
   padding: 10px;
 }
 
+.office-scene--compact .desk-sections {
+  padding: 10px;
+  gap: 10px;
+}
+
+.office-scene--compact .desk-sections .desk-grid {
+  padding: 0;
+}
+
+.office-scene--compact .desk-sections--dept {
+  padding: 8px;
+}
+
 .office-scene--compact .desk-card {
   min-height: 128px;
   padding: 6px;
@@ -1894,6 +2038,18 @@ onMounted(loadScene)
   .desk-grid {
     grid-template-columns: 1fr;
     padding: 14px;
+  }
+
+  .desk-sections {
+    padding: 14px;
+  }
+
+  .desk-sections .desk-grid {
+    padding: 0;
+  }
+
+  .desk-sections--dept {
+    padding: 8px;
   }
 }
 </style>

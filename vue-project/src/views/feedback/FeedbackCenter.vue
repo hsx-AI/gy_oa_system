@@ -499,6 +499,11 @@ function wallStatusLabel(w) {
   return n === 0 ? '正在审核' : n === 2 ? '已驳回' : '已上墙'
 }
 
+function formatEmailNotice(notice, successText) {
+  if (!notice) return ''
+  return notice.sent ? successText : `操作已完成，但邮件未发送：${notice.message || '未知原因'}`
+}
+
 onMounted(async () => {
   try {
     const { getUploadConfig } = await import('@/api/attendance')
@@ -695,6 +700,8 @@ async function doReview(id, action) {
       wallPendingList.value = wallPendingList.value.filter(p => p.id !== id)
       wallPendingCount.value = wallPendingList.value.length
       await loadWall()
+      const noticeText = action === 'approve' ? formatEmailNotice(res.emailNotice, '已发送吐槽邮件提醒给经理/副经理') : ''
+      alert(noticeText || res.message || '操作成功')
     } else {
       alert(res.message || '操作失败')
     }
@@ -925,10 +932,11 @@ async function doReplyWall() {
   if (!detailData.value || !detailReplyDraft.value.trim()) { alert('请输入回复内容'); return }
   detailReplying.value = true
   try {
+    const assignedName = detailAssignee.value || ''
     const res = await replyWall(detailData.value.id, {
       reply_content: detailReplyDraft.value.trim(),
       current_user: userName,
-      assignee: detailAssignee.value || ''
+      assignee: assignedName
     })
     if (res.success) {
       detailReplyDraft.value = ''
@@ -942,6 +950,8 @@ async function doReplyWall() {
       loadWall()
       loadWallRecords()
       refreshWorkplaceTodos()
+      const noticeText = assignedName ? formatEmailNotice(res.emailNotice, '已发送吐槽任务指派邮件，并抄送领导') : ''
+      alert(noticeText || res.message || '回复成功')
     } else {
       alert(res.message || '回复失败')
     }

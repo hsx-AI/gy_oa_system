@@ -19,6 +19,7 @@ from pydantic import BaseModel
 from database import db
 from config import settings
 from routers.db_manager import _get_admin1
+from routers.email_sender import _build_email_message, _get_email_config, _smtp_send
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +178,116 @@ def _is_wall_privileged_user(current_user: str) -> bool:
     )
     jb = (rows[0].get("jb") if rows else "") or ""
     return bool(re.search(r"经理助理|副经理|经理|副部长|部长", jb))
+
+
+def _unique_email_people(rows) -> list[dict]:
+    people = []
+    seen = set()
+    for row in rows or []:
+        email = (row.get("enterprise_email") or row.get("email") or "").strip()
+        name = (row.get("name") or "").strip()
+        if not email:
+            continue
+        key = email.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        people.append({"name": name, "email": email, "jb": (row.get("jb") or "").strip()})
+    return people
+
+
+def _get_wall_mail_leaders() -> list[dict]:
+    rows = db.execute_query(
+        """
+        SELECT name, jb, enterprise_email
+        FROM yggl
+        WHERE COALESCE(zaizhi,0) = 0
+          AND name IS NOT NULL AND TRIM(name) != ''
+          AND enterprise_email IS NOT NULL AND TRIM(enterprise_email) != ''
+          AND (jb = %s OR jb = %s)
+        ORDER BY jb, name
+        """,
+        ("经理", "副经理"),
+    )
+    return _unique_email_people(rows)
+
+
+def _get_wall_mail_person(name: str) -> dict | None:
+    person_name = (name or "").strip()
+    if not person_name:
+        return None
+    rows = db.execute_query(
+        """
+        SELECT name, jb, enterprise_email
+        FROM yggl
+        WHERE name = %s AND COALESCE(zaizhi,0) = 0
+        LIMIT 1
+        """,
+        (person_name,),
+    )
+    people = _unique_email_people(rows)
+    return people[0] if people else None
+
+
+def _send_wall_mail(to_people: list[dict], cc_people: list[dict], subject: str, content: str) -> dict:
+    cfg = _get_email_config()
+    sender = cfg.get("address") or ""
+    password = cfg.get("auth_code") or ""
+    if not sender or not password:
+        return {"sent": False, "message": "系统邮箱未配置，未发送邮件", "toCount": 0, "ccCount": 0}
+
+    to = [p["email"] for p in _unique_email_people(to_people)]
+    cc = [p["email"] for p in _unique_email_people(cc_people) if p["email"].lower() not in {x.lower() for x in to}]
+    if not to:
+        return {"sent": False, "message": "未找到可用收件人企业邮箱", "toCount": 0, "ccCount": len(cc)}
+
+    try:
+        message = _build_email_message(sender, to, cc, subject, content, "plain", None)
+        _smtp_send(sender, password, list(set(to + cc)), message)
+        cc_part = f"，抄送 {len(cc)} 人" if cc else ""
+        return {"sent": True, "message": f"邮件已发送给 {len(to)} 人{cc_part}", "toCount": len(to), "ccCount": len(cc)}
+    except HTTPException as e:
+        return {"sent": False, "message": str(e.detail), "toCount": len(to), "ccCount": len(cc)}
+    except Exception as e:  # noqa: BLE001
+        logger.warning("吐槽墙邮件发送失败: %s", e)
+        return {"sent": False, "message": f"邮件发送失败: {e}", "toCount": len(to), "ccCount": len(cc)}
+
+
+def _get_wall_item(item_id: str) -> dict:
+    rows = db.execute_query(
+        "SELECT id, content, image_url, created_at FROM feedback_wall WHERE id = %s LIMIT 1",
+        (item_id,),
+    )
+    return rows[0] if rows else {}
+
+
+def _send_wall_approved_notice(item: dict, reviewer: str, reviewed_at: str) -> dict:
+    leaders = _get_wall_mail_leaders()
+    content = (
+        "各位领导：\n\n"
+        "有一条新的吐槽已通过审核并上墙，请关注处理。\n\n"
+        f"吐槽内容：{item.get('content') or ''}\n"
+        f"审核人：{reviewer}\n"
+        f"审核时间：{reviewed_at}\n\n"
+        "此邮件由 OA 系统自动发送，请勿直接回复。"
+    )
+    return _send_wall_mail(leaders, [], "【OA吐槽墙】新吐槽已上墙", content)
+
+
+def _send_wall_assignment_notice(item: dict, reply_content: str, assignee: str, assigner: str, assigned_at: str) -> dict:
+    assignee_person = _get_wall_mail_person(assignee)
+    leaders = _get_wall_mail_leaders()
+    to_people = [assignee_person] if assignee_person else []
+    content = (
+        f"{assignee}：\n\n"
+        "领导已在 OA 吐槽墙指派你处理一条吐槽事项，请及时跟进。\n\n"
+        f"吐槽内容：{item.get('content') or ''}\n"
+        f"领导回复/处理意见：{reply_content}\n"
+        f"指派人：{assigner}\n"
+        f"指派时间：{assigned_at}\n\n"
+        "此邮件由 OA 系统自动发送，请勿直接回复。"
+    )
+    return _send_wall_mail(to_people, leaders, "【OA吐槽墙】吐槽任务指派提醒", content)
 
 
 # ==================== 1. 部门吐槽墙 ====================
@@ -363,7 +474,12 @@ async def wall_review(item_id: str, req: WallReview):
         raise HTTPException(status_code=400, detail="action 须为 approve 或 reject")
     if not n:
         raise HTTPException(status_code=404, detail="记录不存在或已处理")
-    return {"success": True, "message": "已通过" if req.action == "approve" else "已拒绝"}
+    message = "已通过" if req.action == "approve" else "已拒绝"
+    email_notice = None
+    if req.action == "approve":
+        item = _get_wall_item(item_id)
+        email_notice = _send_wall_approved_notice(item, req.current_user.strip(), now)
+    return {"success": True, "message": message, "emailNotice": email_notice}
 
 
 class WallLike(BaseModel):
@@ -492,7 +608,7 @@ async def wall_reply(item_id: str, req: WallReplyReq):
         raise HTTPException(status_code=400, detail="缺少用户信息")
     if not reply_content:
         raise HTTPException(status_code=400, detail="回复内容不能为空")
-    rows = db.execute_query("SELECT id FROM feedback_wall WHERE id = %s AND status = 1", (item_id,))
+    rows = db.execute_query("SELECT id, content, image_url, created_at FROM feedback_wall WHERE id = %s AND status = 1", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     if assignee:
@@ -524,7 +640,10 @@ async def wall_reply(item_id: str, req: WallReplyReq):
             "WHERE id = %s",
             (item_id,),
         )
-    return {"success": True, "message": "回复成功"}
+    email_notice = None
+    if assignee:
+        email_notice = _send_wall_assignment_notice(rows[0], reply_content, assignee, name, now)
+    return {"success": True, "message": "回复成功", "emailNotice": email_notice}
 
 
 class WallResolve(BaseModel):

@@ -184,6 +184,34 @@ def _to_float(value):
         return None
 
 
+def _extract_invoice_number(text: str) -> str:
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    label_pattern = re.compile(r"(发票号码|发票号|数电票号码)")
+    same_line_pattern = re.compile(r"(?:发票号码|发票号|数电票号码)[:：]?\s*([0-9]{8,30})")
+    pure_number_pattern = re.compile(r"^[0-9]{8,30}$")
+
+    for idx, line in enumerate(lines):
+        match = same_line_pattern.search(line)
+        if match:
+            return match.group(1)
+        if label_pattern.search(line):
+            for candidate in lines[idx + 1:idx + 45]:
+                compact = re.sub(r"\s+", "", candidate)
+                if pure_number_pattern.fullmatch(compact):
+                    return compact
+
+    normalized = re.sub(r"[ \t\r\n]+", "", text or "")
+    for pattern in (r"发票号码[:：]?([0-9]{8,30})", r"数电票号码[:：]?([0-9]{8,30})"):
+        match = re.search(pattern, normalized)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def _normalize_supplier(value: str) -> str:
+    return re.sub(r"\s+", "", value or "")
+
+
 def _extract_item_numbers(lines: list[str], item_start: int | None) -> tuple[float | None, float | None]:
     """Return (quantity, raw_unit_price) from the item-detail area only."""
     if item_start is None:
@@ -261,6 +289,7 @@ def _extract_invoice_fields(text: str, filename: str = "") -> dict:
 
     return {
         "supplier": supplier,
+        "invoice_number": _extract_invoice_number(text),
         "quantity": quantity,
         "quantity_defaulted": quantity_defaulted,
         "unit_price": unit_price,
@@ -720,6 +749,103 @@ async def reimbursement_action_batch(
         "processed": processed,
         "failed": failed,
         "total": len(id_list),
+    }
+
+
+@router.post("/invoice/check")
+async def check_reimbursement_invoices(
+    operator: str = Form(""),
+):
+    """智能校验近一年内未驳回发票：重复发票号、同供应商同开票日期拆分风险。"""
+    _ensure_table()
+    _ensure_dirs()
+    name = operator.strip()
+    _require_ledger_permission(name)
+
+    checked = []
+    skipped = []
+    rows = db.execute_query(
+        """
+        SELECT *
+        FROM low_value_reimbursement
+        WHERE status != %s
+          AND apply_time >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
+        ORDER BY apply_time DESC
+        """,
+        (STATUS_REJECTED,),
+    )
+    for row in rows:
+        rid = int(row.get("id") or 0)
+        status = int(row.get("status") or 0)
+        if status not in (STATUS_PENDING_SECOND, STATUS_PENDING_THIRD, STATUS_PENDING_COMPLETE, STATUS_COMPLETED):
+            skipped.append({"id": rid, "reason": "当前状态不在校验范围"})
+            continue
+
+        stored = row.get("invoice_attachment") or ""
+        file_path = UPLOAD_DIR / stored
+        if Path(stored).suffix.lower() != ".pdf":
+            skipped.append({"id": rid, "reason": "仅支持 PDF 发票校验"})
+            continue
+        if not file_path.exists():
+            skipped.append({"id": rid, "reason": "发票文件不存在"})
+            continue
+        try:
+            text = _extract_pdf_text(file_path.read_bytes())
+            fields = _extract_invoice_fields(text, row.get("invoice_original") or stored)
+        except HTTPException as e:
+            skipped.append({"id": rid, "reason": str(e.detail)})
+            continue
+        checked.append({
+            "id": rid,
+            "material_name": row.get("material_name") or "",
+            "applicant": row.get("applicant") or "",
+            "supplier": fields.get("supplier") or row.get("supplier") or "",
+            "invoice_number": fields.get("invoice_number") or "",
+            "invoice_date": fields.get("invoice_date") or "",
+            "invoice_original": row.get("invoice_original") or "",
+            "total_price": _to_money(row.get("total_price")),
+            "apply_time": _fmt_dt(row.get("apply_time")),
+            "status": status,
+            "status_text": _status_text(status),
+        })
+
+    duplicate_groups = []
+    by_number: dict[str, list[dict]] = {}
+    for item in checked:
+        number = item.get("invoice_number") or ""
+        if number:
+            by_number.setdefault(number, []).append(item)
+    for number, items in by_number.items():
+        if len(items) > 1:
+            duplicate_groups.append({"invoice_number": number, "items": items})
+
+    split_groups = []
+    by_supplier_date: dict[tuple[str, str], list[dict]] = {}
+    for item in checked:
+        supplier_key = _normalize_supplier(item.get("supplier") or "")
+        invoice_date = item.get("invoice_date") or ""
+        if supplier_key and invoice_date:
+            by_supplier_date.setdefault((supplier_key, invoice_date), []).append(item)
+    for (supplier_key, invoice_date), items in by_supplier_date.items():
+        if len(items) > 1:
+            supplier = items[0].get("supplier") or supplier_key
+            split_groups.append({"supplier": supplier, "invoice_date": invoice_date, "items": items})
+
+    return {
+        "success": True,
+        "data": {
+            "checked": checked,
+            "skipped": skipped,
+            "duplicate_invoices": duplicate_groups,
+            "split_risks": split_groups,
+            "summary": {
+                "checked_count": len(checked),
+                "skipped_count": len(skipped),
+                "duplicate_count": len(duplicate_groups),
+                "split_risk_count": len(split_groups),
+                "scope": "近一年未驳回申请",
+            },
+        },
     }
 
 

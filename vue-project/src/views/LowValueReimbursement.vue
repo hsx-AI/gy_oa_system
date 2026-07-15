@@ -119,7 +119,12 @@
     <section v-if="activeTab === 'pending'" class="table-card">
       <div class="table-card__header">
         <h2 class="panel-title">待我处理（{{ pendingList.length }}）</h2>
-        <button class="btn-plain" @click="loadPending">刷新</button>
+        <div class="header-actions">
+          <button class="btn-primary btn-outline" :disabled="!userName || invoiceCheckLoading" @click="runInvoiceCheck">
+            {{ invoiceCheckLoading ? '校验中...' : '智能校验' }}
+          </button>
+          <button class="btn-plain" @click="loadPending">刷新</button>
+        </div>
       </div>
       <div v-if="pendingList.length" class="batch-bar">
         <label class="batch-check">
@@ -385,6 +390,54 @@
       </div>
     </div>
 
+    <div v-if="invoiceCheckVisible" class="modal-overlay" @click.self="invoiceCheckVisible = false">
+      <div class="check-modal">
+        <div class="check-modal__header">
+          <h3 class="panel-title" style="margin:0">发票智能校验</h3>
+          <button type="button" class="preview-close" aria-label="关闭" @click="invoiceCheckVisible = false">×</button>
+        </div>
+        <div class="check-summary" v-if="invoiceCheckResult?.summary">
+          <span>{{ invoiceCheckResult.summary.scope || '近一年未驳回申请' }}</span>
+          <span>已校验 {{ invoiceCheckResult.summary.checked_count }} 项</span>
+          <span>重复发票 {{ invoiceCheckResult.summary.duplicate_count }} 组</span>
+          <span>拆分风险 {{ invoiceCheckResult.summary.split_risk_count }} 组</span>
+          <span v-if="invoiceCheckResult.summary.skipped_count">跳过 {{ invoiceCheckResult.summary.skipped_count }} 项</span>
+        </div>
+        <div class="check-modal__body">
+          <section class="check-section">
+            <h4>重复提交发票</h4>
+            <p v-if="!invoiceCheckResult?.duplicate_invoices?.length" class="check-empty">未发现重复发票号码。</p>
+            <div v-for="group in invoiceCheckResult?.duplicate_invoices || []" :key="group.invoice_number" class="risk-group">
+              <strong>发票号码：{{ group.invoice_number }}</strong>
+              <ul>
+                <li v-for="item in group.items" :key="item.id">
+                  #{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，{{ item.supplier || '-' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}
+                </li>
+              </ul>
+            </div>
+          </section>
+          <section class="check-section">
+            <h4>拆分报销风险</h4>
+            <p v-if="!invoiceCheckResult?.split_risks?.length" class="check-empty">未发现同供应商同开票日期的多张发票。</p>
+            <div v-for="group in invoiceCheckResult?.split_risks || []" :key="`${group.supplier}-${group.invoice_date}`" class="risk-group">
+              <strong>{{ group.supplier }}，开票日期：{{ group.invoice_date }}</strong>
+              <ul>
+                <li v-for="item in group.items" :key="item.id">
+                  #{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，发票号 {{ item.invoice_number || '未识别' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}
+                </li>
+              </ul>
+            </div>
+          </section>
+          <section v-if="invoiceCheckResult?.skipped?.length" class="check-section">
+            <h4>未校验项目</h4>
+            <ul class="skip-list">
+              <li v-for="item in invoiceCheckResult.skipped" :key="item.id">#{{ item.id }}：{{ item.reason }}</li>
+            </ul>
+          </section>
+        </div>
+      </div>
+    </div>
+
     <div v-if="toastMsg" class="toast" :class="toastType">{{ toastMsg }}</div>
   </div>
 </template>
@@ -395,6 +448,7 @@ import { useRoute } from 'vue-router'
 import {
   actionLowValueReimbursement,
   batchActionLowValueReimbursement,
+  checkLowValueInvoices,
   deleteLowValueReimbursement,
   getLowValueApprovers,
   getLowValueBudgetList,
@@ -623,6 +677,9 @@ const rejectReason = ref('')
 const rejectMode = ref('single')
 const selectedIds = ref([])
 const batchLoading = ref(false)
+const invoiceCheckLoading = ref(false)
+const invoiceCheckVisible = ref(false)
+const invoiceCheckResult = ref(null)
 const toastMsg = ref('')
 const toastType = ref('success')
 let toastTimer = null
@@ -903,6 +960,23 @@ function toggleSelect(id) {
 
 function toggleSelectAll(checked) {
   selectedIds.value = checked ? pendingList.value.map((r) => r.id) : []
+}
+
+async function runInvoiceCheck() {
+  invoiceCheckLoading.value = true
+  try {
+    const res = await checkLowValueInvoices({ operator: userName.value })
+    invoiceCheckResult.value = res?.data || null
+    invoiceCheckVisible.value = true
+    const summary = invoiceCheckResult.value?.summary || {}
+    const riskCount = Number(summary.duplicate_count || 0) + Number(summary.split_risk_count || 0)
+    showToast(riskCount ? `发现 ${riskCount} 组发票风险` : '未发现发票风险', riskCount ? 'error' : 'success')
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '发票校验失败'
+    showToast(typeof msg === 'string' ? msg : '发票校验失败', 'error')
+  } finally {
+    invoiceCheckLoading.value = false
+  }
 }
 
 function batchSummary(res) {
@@ -1719,6 +1793,12 @@ watch(rejectVisible, (visible) => {
   flex-wrap: wrap;
   align-items: center;
 }
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
 .batch-bar {
   display: flex;
   align-items: center;
@@ -1947,6 +2027,76 @@ watch(rejectVisible, (visible) => {
   justify-content: flex-end;
   gap: 8px;
   margin-top: var(--spacing-md);
+}
+
+.check-modal {
+  width: min(760px, 94vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-container);
+  box-shadow: var(--shadow-elevated);
+  overflow: hidden;
+}
+.check-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--spacing-md);
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border-lighter);
+  background: var(--color-bg-spotlight);
+}
+.check-summary {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: var(--spacing-base) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+.check-summary span {
+  padding: 3px 9px;
+  border-radius: var(--radius-circle);
+  background: var(--color-primary-lightest);
+  color: var(--color-primary-dark);
+  font-size: var(--font-size-xs);
+  font-weight: var(--font-weight-bold);
+}
+.check-modal__body {
+  overflow-y: auto;
+  padding: var(--spacing-lg);
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-lg);
+}
+.check-section h4 {
+  margin: 0 0 8px;
+  font-size: var(--font-size-base);
+  color: var(--color-text-primary);
+}
+.check-empty {
+  margin: 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-sm);
+}
+.risk-group {
+  padding: 10px 12px;
+  border: 1px solid var(--color-error-light);
+  border-radius: var(--radius-base);
+  background: var(--color-error-bg);
+  color: var(--color-text-primary);
+}
+.risk-group + .risk-group {
+  margin-top: 8px;
+}
+.risk-group ul,
+.skip-list {
+  margin: 8px 0 0;
+  padding-left: 18px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-sm);
+  line-height: 1.65;
 }
 
 /* 详情弹窗 */
