@@ -82,6 +82,18 @@ def _init_table():
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='低值易耗报销申请表';
     """
     db.execute_update(sql)
+    budget_sql = """
+    CREATE TABLE IF NOT EXISTS low_value_budget (
+        id INT AUTO_INCREMENT PRIMARY KEY,
+        budget_year INT NOT NULL COMMENT '年度',
+        total_amount DECIMAL(14,2) NOT NULL DEFAULT 0.00 COMMENT '年度低值易耗总额度',
+        remark VARCHAR(500) DEFAULT '' COMMENT '备注',
+        updated_by VARCHAR(50) DEFAULT '' COMMENT '最后修改人',
+        updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP COMMENT '更新时间',
+        UNIQUE KEY uk_budget_year (budget_year)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='低值易耗年度额度配置';
+    """
+    db.execute_update(budget_sql)
 
 
 _table_ready = False
@@ -92,6 +104,56 @@ def _ensure_table():
     if not _table_ready:
         _init_table()
         _table_ready = True
+
+
+def _to_money(value) -> float:
+    try:
+        return round(float(value or 0), 2)
+    except Exception:
+        return 0.0
+
+
+def _budget_summary(year: int) -> dict:
+    """按年度汇总：总额度、已完成消耗、审核中金额、结余。"""
+    budget_row = db.execute_query(
+        "SELECT total_amount, remark, updated_by, updated_at FROM low_value_budget WHERE budget_year = %s LIMIT 1",
+        (year,),
+    )
+    total_amount = _to_money(budget_row[0].get("total_amount")) if budget_row else 0.0
+    remark = (budget_row[0].get("remark") or "") if budget_row else ""
+    updated_by = (budget_row[0].get("updated_by") or "") if budget_row else ""
+    updated_at = _fmt_dt(budget_row[0].get("updated_at")) if budget_row else ""
+
+    completed_amount = _to_money(db.execute_scalar(
+        """
+        SELECT COALESCE(SUM(total_price), 0)
+        FROM low_value_reimbursement
+        WHERE status = %s AND complete_time IS NOT NULL AND YEAR(complete_time) = %s
+        """,
+        (STATUS_COMPLETED, year),
+    ))
+    pending_amount = _to_money(db.execute_scalar(
+        """
+        SELECT COALESCE(SUM(total_price), 0)
+        FROM low_value_reimbursement
+        WHERE status IN (%s, %s, %s) AND YEAR(apply_time) = %s
+        """,
+        (STATUS_PENDING_SECOND, STATUS_PENDING_THIRD, STATUS_PENDING_COMPLETE, year),
+    ))
+    remaining_amount = round(total_amount - completed_amount, 2)
+    projected_remaining = round(total_amount - completed_amount - pending_amount, 2)
+    return {
+        "year": year,
+        "total_amount": total_amount,
+        "completed_amount": completed_amount,
+        "pending_amount": pending_amount,
+        "remaining_amount": remaining_amount,
+        "projected_remaining": projected_remaining,
+        "configured": bool(budget_row),
+        "remark": remark,
+        "updated_by": updated_by,
+        "updated_at": updated_at,
+    }
 
 
 def _fmt_dt(value):
@@ -698,6 +760,83 @@ async def delete_rejected_reimbursement(
         (id, STATUS_REJECTED),
     )
     return {"success": True, "message": "已删除"}
+
+
+@router.get("/budget/summary")
+async def get_budget_summary(
+    year: int = Query(0, ge=0),
+    current_user: str = Query(""),
+):
+    """获取指定年度低值易耗额度统计（结余 / 已完成 / 审核中）。"""
+    _ensure_table()
+    _require_ledger_permission(current_user)
+    target_year = year or datetime.now().year
+    return {"success": True, "data": _budget_summary(target_year)}
+
+
+@router.get("/budget/list")
+async def list_budget_years(current_user: str = Query("")):
+    """列出已配置的年度额度。"""
+    _ensure_table()
+    _require_ledger_permission(current_user)
+    rows = db.execute_query(
+        """
+        SELECT budget_year, total_amount, remark, updated_by, updated_at
+        FROM low_value_budget
+        ORDER BY budget_year DESC
+        """
+    )
+    data = []
+    for row in rows:
+        data.append({
+            "year": int(row.get("budget_year") or 0),
+            "total_amount": _to_money(row.get("total_amount")),
+            "remark": row.get("remark") or "",
+            "updated_by": row.get("updated_by") or "",
+            "updated_at": _fmt_dt(row.get("updated_at")),
+        })
+    return {"success": True, "data": data}
+
+
+@router.post("/budget")
+async def upsert_budget(
+    budget_year: int = Form(...),
+    total_amount: float = Form(...),
+    remark: str = Form(""),
+    operator: str = Form(""),
+):
+    """新增或更新某年度低值易耗总额度。"""
+    _ensure_table()
+    _require_ledger_permission(operator)
+    year = int(budget_year)
+    if year < 2000 or year > 2100:
+        raise HTTPException(status_code=400, detail="请输入有效年度")
+    amount = _to_money(total_amount)
+    if amount < 0:
+        raise HTTPException(status_code=400, detail="额度不能为负数")
+    name = (operator or "").strip()
+    existing = db.execute_query(
+        "SELECT id FROM low_value_budget WHERE budget_year = %s LIMIT 1",
+        (year,),
+    )
+    if existing:
+        db.execute_update(
+            """
+            UPDATE low_value_budget
+            SET total_amount = %s, remark = %s, updated_by = %s
+            WHERE budget_year = %s
+            """,
+            (amount, (remark or "").strip()[:500], name, year),
+        )
+    else:
+        db.execute_insert(
+            """
+            INSERT INTO low_value_budget (budget_year, total_amount, remark, updated_by)
+            VALUES (%s, %s, %s, %s)
+            """,
+            (year, amount, (remark or "").strip()[:500], name),
+        )
+    return {"success": True, "message": "年度额度已保存", "data": _budget_summary(year)}
 
 
 @router.get("/records")

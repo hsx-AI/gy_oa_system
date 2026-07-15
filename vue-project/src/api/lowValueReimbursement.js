@@ -67,6 +67,23 @@ export function getLowValueRecords(params) {
   return request({ url: `${P}/records`, method: 'get', params })
 }
 
+export function getLowValueBudgetSummary(params) {
+  return request({ url: `${P}/budget/summary`, method: 'get', params })
+}
+
+export function getLowValueBudgetList(params) {
+  return request({ url: `${P}/budget/list`, method: 'get', params })
+}
+
+export function saveLowValueBudget(data) {
+  const fd = new FormData()
+  fd.append('budget_year', data.budget_year)
+  fd.append('total_amount', data.total_amount)
+  fd.append('remark', data.remark ?? '')
+  fd.append('operator', data.operator ?? '')
+  return request({ url: `${P}/budget`, method: 'post', data: fd })
+}
+
 export function getMyLowValueApplications(params) {
   return request({ url: `${P}/my-applications`, method: 'get', params })
 }

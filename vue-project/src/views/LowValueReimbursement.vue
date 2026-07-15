@@ -156,33 +156,113 @@
       <RecordTable :rows="myList" mode="mine" @preview="openPreview" @delete="handleDelete" @detail="openDetail" />
     </section>
 
-    <section v-if="activeTab === 'records'" class="table-card">
-      <div class="table-card__header">
-        <h2 class="panel-title">报销台账</h2>
-        <div class="filter-bar">
-          <input v-model="filter.keyword" class="filter-input" placeholder="物资/供应商/申请人/用途" @keyup.enter="loadRecords(1)" />
-          <select v-model="filter.status" class="filter-select" @change="loadRecords(1)">
-            <option value="">全部状态</option>
-            <option value="pending2">待二级审批</option>
-            <option value="pending3">待三级审批</option>
-            <option value="pending-complete">待报销完成</option>
-            <option value="completed">已完成</option>
-            <option value="rejected">已驳回</option>
-          </select>
-          <input v-model="filter.date_from" class="filter-date" type="date" @change="loadRecords(1)" />
-          <input v-model="filter.date_to" class="filter-date" type="date" @change="loadRecords(1)" />
-          <button class="btn-plain" @click="loadRecords(1)">查询</button>
-          <a class="btn-primary btn-link" :href="exportHref" target="_blank">导出Excel</a>
-          <a class="btn-primary btn-link btn-outline" :href="invoiceZipHref" target="_blank">发票ZIP</a>
+    <section v-if="activeTab === 'records'" class="records-panel">
+      <div class="budget-stats">
+        <div class="budget-stats__head">
+          <div>
+            <h2 class="panel-title">{{ budgetYear }} 年部门低值易耗额度</h2>
+            <p class="budget-stats__hint">
+              已完成按报销完成时间统计；审核中按申请年份统计；结余 = 年度总额 − 已完成。
+              <template v-if="!budgetSummary.configured">（本年度总额尚未配置）</template>
+            </p>
+          </div>
+          <div class="budget-stats__tools">
+            <select v-model.number="budgetYear" class="filter-select" @change="loadBudgetSummary">
+              <option v-for="y in budgetYearOptions" :key="y" :value="y">{{ y }} 年</option>
+            </select>
+            <button type="button" class="btn-primary" @click="openBudgetModal">配置年度额度</button>
+          </div>
+        </div>
+        <div class="budget-stats__cards">
+          <div class="budget-card">
+            <span class="budget-card__label">年度总额</span>
+            <strong class="budget-card__value">¥ {{ formatMoney(budgetSummary.total_amount) }}</strong>
+          </div>
+          <div class="budget-card budget-card--done">
+            <span class="budget-card__label">本年度已完成</span>
+            <strong class="budget-card__value">¥ {{ formatMoney(budgetSummary.completed_amount) }}</strong>
+          </div>
+          <div class="budget-card budget-card--pending">
+            <span class="budget-card__label">正在审核中</span>
+            <strong class="budget-card__value">¥ {{ formatMoney(budgetSummary.pending_amount) }}</strong>
+          </div>
+          <div class="budget-card budget-card--remain" :class="{ 'is-negative': Number(budgetSummary.remaining_amount) < 0 }">
+            <span class="budget-card__label">当前结余</span>
+            <strong class="budget-card__value">¥ {{ formatMoney(budgetSummary.remaining_amount) }}</strong>
+            <small>扣除在审后预计结余 ¥ {{ formatMoney(budgetSummary.projected_remaining) }}</small>
+          </div>
         </div>
       </div>
-      <RecordTable :rows="recordsList" mode="records" :page="recordsPage" :page-size="pageSize" @preview="openPreview" @delete="handleDelete" @detail="openDetail" />
-      <div class="pagination" v-if="recordsTotal > pageSize">
-        <button :disabled="recordsPage <= 1" @click="loadRecords(recordsPage - 1)">上一页</button>
-        <span>第 {{ recordsPage }} / {{ Math.ceil(recordsTotal / pageSize) }} 页，共 {{ recordsTotal }} 条</span>
-        <button :disabled="recordsPage >= Math.ceil(recordsTotal / pageSize)" @click="loadRecords(recordsPage + 1)">下一页</button>
+
+      <div class="table-card">
+        <div class="table-card__header">
+          <h2 class="panel-title">报销台账</h2>
+          <div class="filter-bar">
+            <input v-model="filter.keyword" class="filter-input" placeholder="物资/供应商/申请人/用途" @keyup.enter="loadRecords(1)" />
+            <select v-model="filter.status" class="filter-select" @change="loadRecords(1)">
+              <option value="">全部状态</option>
+              <option value="pending2">待二级审批</option>
+              <option value="pending3">待三级审批</option>
+              <option value="pending-complete">待报销完成</option>
+              <option value="completed">已完成</option>
+              <option value="rejected">已驳回</option>
+            </select>
+            <input v-model="filter.date_from" class="filter-date" type="date" @change="loadRecords(1)" />
+            <input v-model="filter.date_to" class="filter-date" type="date" @change="loadRecords(1)" />
+            <button class="btn-plain" @click="loadRecords(1)">查询</button>
+            <a class="btn-primary btn-link" :href="exportHref" target="_blank">导出Excel</a>
+            <a class="btn-primary btn-link btn-outline" :href="invoiceZipHref" target="_blank">发票ZIP</a>
+          </div>
+        </div>
+        <RecordTable :rows="recordsList" mode="records" :page="recordsPage" :page-size="pageSize" @preview="openPreview" @delete="handleDelete" @detail="openDetail" />
+        <div class="pagination" v-if="recordsTotal > pageSize">
+          <button :disabled="recordsPage <= 1" @click="loadRecords(recordsPage - 1)">上一页</button>
+          <span>第 {{ recordsPage }} / {{ Math.ceil(recordsTotal / pageSize) }} 页，共 {{ recordsTotal }} 条</span>
+          <button :disabled="recordsPage >= Math.ceil(recordsTotal / pageSize)" @click="loadRecords(recordsPage + 1)">下一页</button>
+        </div>
       </div>
     </section>
+
+    <div v-if="budgetModalVisible" class="modal-overlay" @click.self="budgetModalVisible = false">
+      <div class="budget-modal">
+        <div class="budget-modal__header">
+          <h3 class="panel-title" style="margin:0">配置年度低值易耗总额</h3>
+          <button type="button" class="preview-close" aria-label="关闭" @click="budgetModalVisible = false">×</button>
+        </div>
+        <div class="budget-modal__body">
+          <p class="budget-modal__tip">可按年份配置部门低值易耗报销总额。台账结余会按「总额 − 当年已完成报销」自动计算。</p>
+          <div class="budget-form">
+            <label class="form-row required">
+              <span>年度</span>
+              <input v-model.number="budgetForm.budget_year" type="number" min="2000" max="2100" class="form-input" />
+            </label>
+            <label class="form-row required">
+              <span>年度总额（元）</span>
+              <input v-model.number="budgetForm.total_amount" type="number" step="0.01" min="0" class="form-input" placeholder="例如 20000" />
+            </label>
+            <label class="form-row form-row--full">
+              <span>备注</span>
+              <input v-model="budgetForm.remark" class="form-input" placeholder="可选" />
+            </label>
+          </div>
+          <div class="budget-list" v-if="budgetList.length">
+            <h4>已配置年度</h4>
+            <ul>
+              <li v-for="item in budgetList" :key="item.year">
+                <button type="button" class="budget-list__item" @click="editBudgetYear(item)">
+                  <strong>{{ item.year }} 年</strong>
+                  <span>¥ {{ formatMoney(item.total_amount) }}</span>
+                </button>
+              </li>
+            </ul>
+          </div>
+        </div>
+        <div class="budget-modal__footer">
+          <button type="button" class="btn-plain" @click="budgetModalVisible = false">取消</button>
+          <button type="button" class="btn-primary" :disabled="budgetSaving" @click="saveBudget">{{ budgetSaving ? '保存中...' : '保存' }}</button>
+        </div>
+      </div>
+    </div>
 
     <div v-if="rejectVisible" class="modal-overlay" @click.self="rejectVisible = false">
       <div class="reject-modal">
@@ -207,6 +287,10 @@
             <span class="preview-name" :title="previewItem?.original">{{ previewItem?.original || '附件预览' }}</span>
           </div>
           <div class="preview-modal__tools">
+            <template v-if="previewCanApprove">
+              <button type="button" class="btn-reject btn-sm" @click="previewReject">驳回</button>
+              <button type="button" class="btn-approve btn-sm" @click="previewApprove">{{ Number(previewActionRow?.status) === 2 ? '完成报销' : '通过' }}</button>
+            </template>
             <a class="btn-plain btn-sm" :href="previewInlineUrl" target="_blank" rel="noopener">新窗口打开</a>
             <a class="btn-plain btn-sm" :href="previewDownloadUrl">下载</a>
             <button type="button" class="preview-close" aria-label="关闭" @click="closePreview">×</button>
@@ -254,7 +338,7 @@
             <div class="detail-attach-grid">
               <div class="detail-attach">
                 <label>实物照片</label>
-                <button v-if="detailItem.photo_attachment" type="button" class="attach-cell" @click="openPreview({ kind: 'photo', stored: detailItem.photo_attachment, original: detailItem.photo_original })">
+                <button v-if="detailItem.photo_attachment" type="button" class="attach-cell" @click="openPreview({ kind: 'photo', stored: detailItem.photo_attachment, original: detailItem.photo_original, row: detailItem, mode: detailMode })">
                   <img v-if="isLowValueImage(detailItem.photo_attachment)" class="attach-thumb" :src="lowValueAttachmentUrl('photo', detailItem.photo_attachment, 'inline')" :alt="detailItem.photo_original || ''" loading="lazy" />
                   <span v-else class="attach-thumb attach-thumb--file">文件</span>
                   <span class="attach-name">{{ detailItem.photo_original || '查看' }}</span>
@@ -263,7 +347,7 @@
               </div>
               <div class="detail-attach">
                 <label>发票</label>
-                <button v-if="detailItem.invoice_attachment" type="button" class="attach-cell" @click="openPreview({ kind: 'invoice', stored: detailItem.invoice_attachment, original: detailItem.invoice_original })">
+                <button v-if="detailItem.invoice_attachment" type="button" class="attach-cell" @click="openPreview({ kind: 'invoice', stored: detailItem.invoice_attachment, original: detailItem.invoice_original, row: detailItem, mode: detailMode })">
                   <img v-if="isLowValueImage(detailItem.invoice_attachment)" class="attach-thumb" :src="lowValueAttachmentUrl('invoice', detailItem.invoice_attachment, 'inline')" :alt="detailItem.invoice_original || ''" loading="lazy" />
                   <span v-else class="attach-thumb attach-thumb--file" :class="{ 'is-pdf': isLowValuePdf(detailItem.invoice_attachment) }">{{ isLowValuePdf(detailItem.invoice_attachment) ? 'PDF' : '文件' }}</span>
                   <span class="attach-name">{{ detailItem.invoice_original || '查看' }}</span>
@@ -313,6 +397,8 @@ import {
   batchActionLowValueReimbursement,
   deleteLowValueReimbursement,
   getLowValueApprovers,
+  getLowValueBudgetList,
+  getLowValueBudgetSummary,
   getLowValueRecords,
   getMyLowValueApplications,
   getPendingLowValueReimbursements,
@@ -322,6 +408,7 @@ import {
   lowValueAttachmentUrl,
   lowValueExportUrl,
   parseLowValueInvoice,
+  saveLowValueBudget,
   submitLowValueReimbursement,
 } from '@/api/lowValueReimbursement'
 
@@ -361,7 +448,7 @@ const FileBox = defineComponent({
   },
 })
 
-function attachmentCell(kind, stored, original, emit) {
+function attachmentCell(kind, stored, original, emit, row = null, mode = '') {
   if (!stored) return h('td', [h('span', { class: 'cell-dash' }, '-')])
   const isImg = isLowValueImage(stored)
   const isPdf = isLowValuePdf(stored)
@@ -378,7 +465,7 @@ function attachmentCell(kind, stored, original, emit) {
       type: 'button',
       class: 'attach-cell',
       title: original ? `${original}（点击预览）` : '点击预览',
-      onClick: () => emit('preview', { kind, stored, original }),
+      onClick: () => emit('preview', { kind, stored, original, row, mode }),
     }, [thumb, h('span', { class: 'attach-name' }, original || '查看')]),
   ])
 }
@@ -440,9 +527,9 @@ const RecordTable = defineComponent({
               cell(formatMoney(r.unit_price)),
               cell(formatNumber(r.quantity)),
               cell(formatMoney(r.total_price)),
-              attachmentCell('photo', r.photo_attachment, r.photo_original, emit),
+              attachmentCell('photo', r.photo_attachment, r.photo_original, emit, r, props.mode),
               cell(r.usage_detail, 'wide-cell'),
-              attachmentCell('invoice', r.invoice_attachment, r.invoice_original, emit),
+              attachmentCell('invoice', r.invoice_attachment, r.invoice_original, emit, r, props.mode),
               cell(r.supplier, 'supplier-cell'),
               cell(r.work_no),
               cell(r.part_no),
@@ -514,6 +601,22 @@ const recordsTotal = ref(0)
 const recordsPage = ref(1)
 const pageSize = 20
 const filter = ref({ keyword: '', status: '', date_from: '', date_to: '' })
+const currentYear = new Date().getFullYear()
+const budgetYear = ref(currentYear)
+const budgetYearOptions = Array.from({ length: 8 }, (_, i) => currentYear - 2 + i)
+const budgetSummary = ref({
+  year: currentYear,
+  total_amount: 0,
+  completed_amount: 0,
+  pending_amount: 0,
+  remaining_amount: 0,
+  projected_remaining: 0,
+  configured: false,
+})
+const budgetList = ref([])
+const budgetModalVisible = ref(false)
+const budgetSaving = ref(false)
+const budgetForm = ref({ budget_year: currentYear, total_amount: '', remark: '' })
 const rejectVisible = ref(false)
 const rejectTarget = ref(null)
 const rejectReason = ref('')
@@ -549,6 +652,11 @@ const previewDownloadUrl = computed(() => {
   const item = previewItem.value
   if (!item?.stored) return ''
   return lowValueAttachmentUrl(item.kind, item.stored)
+})
+const previewActionRow = computed(() => previewItem.value?.row || null)
+const previewCanApprove = computed(() => {
+  const row = previewActionRow.value
+  return previewItem.value?.mode === 'pending' && row && [0, 1, 2].includes(Number(row.status))
 })
 
 const pendingCount = computed(() => pendingList.value.length)
@@ -631,6 +739,23 @@ function openPreview(item) {
 function closePreview() {
   previewVisible.value = false
   previewItem.value = null
+}
+
+async function previewApprove() {
+  const row = previewActionRow.value
+  if (!row) return
+  const action = Number(row.status) === 2 ? 'complete' : 'approve'
+  await handleAction(row, action)
+  closePreview()
+  if (detailVisible.value) closeDetail()
+}
+
+function previewReject() {
+  const row = previewActionRow.value
+  if (!row) return
+  closePreview()
+  if (detailVisible.value) closeDetail()
+  openReject(row)
 }
 
 function openDetail(row) {
@@ -799,6 +924,7 @@ async function batchApprove() {
     selectedIds.value = []
     await loadPending()
     if (activeTab.value === 'records') await loadRecords(recordsPage.value)
+    else if (canViewLedger.value) await loadBudgetSummary()
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '批量操作失败'
     showToast(typeof msg === 'string' ? msg : '批量操作失败', 'error')
@@ -840,6 +966,94 @@ async function loadRecords(page = 1) {
     recordsList.value = []
     recordsTotal.value = 0
   }
+  await loadBudgetSummary()
+}
+
+async function loadBudgetSummary() {
+  if (!canViewLedger.value || !userName.value) return
+  try {
+    const res = await getLowValueBudgetSummary({ year: budgetYear.value, current_user: userName.value })
+    budgetSummary.value = {
+      year: budgetYear.value,
+      total_amount: 0,
+      completed_amount: 0,
+      pending_amount: 0,
+      remaining_amount: 0,
+      projected_remaining: 0,
+      configured: false,
+      ...(res?.data || {}),
+    }
+  } catch {
+    budgetSummary.value = {
+      year: budgetYear.value,
+      total_amount: 0,
+      completed_amount: 0,
+      pending_amount: 0,
+      remaining_amount: 0,
+      projected_remaining: 0,
+      configured: false,
+    }
+  }
+}
+
+async function loadBudgetList() {
+  if (!canViewLedger.value || !userName.value) return
+  try {
+    const res = await getLowValueBudgetList({ current_user: userName.value })
+    budgetList.value = res?.data || []
+  } catch {
+    budgetList.value = []
+  }
+}
+
+function openBudgetModal() {
+  budgetForm.value = {
+    budget_year: budgetYear.value,
+    total_amount: budgetSummary.value.configured ? budgetSummary.value.total_amount : '',
+    remark: budgetSummary.value.remark || '',
+  }
+  budgetModalVisible.value = true
+  loadBudgetList()
+}
+
+function editBudgetYear(item) {
+  budgetForm.value = {
+    budget_year: item.year,
+    total_amount: item.total_amount,
+    remark: item.remark || '',
+  }
+}
+
+async function saveBudget() {
+  const year = Number(budgetForm.value.budget_year)
+  const amount = Number(budgetForm.value.total_amount)
+  if (!Number.isInteger(year) || year < 2000 || year > 2100) {
+    showToast('请输入有效年度', 'error')
+    return
+  }
+  if (!(amount >= 0) || Number.isNaN(amount)) {
+    showToast('请输入有效的年度总额', 'error')
+    return
+  }
+  budgetSaving.value = true
+  try {
+    const res = await saveLowValueBudget({
+      budget_year: year,
+      total_amount: amount,
+      remark: budgetForm.value.remark || '',
+      operator: userName.value,
+    })
+    showToast(res?.message || '年度额度已保存')
+    budgetYear.value = year
+    budgetModalVisible.value = false
+    await loadBudgetSummary()
+    await loadBudgetList()
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '保存失败'
+    showToast(typeof msg === 'string' ? msg : '保存失败', 'error')
+  } finally {
+    budgetSaving.value = false
+  }
 }
 
 async function handleAction(row, action) {
@@ -847,7 +1061,11 @@ async function handleAction(row, action) {
     await actionLowValueReimbursement({ id: row.id, operator: userName.value, action })
     showToast(action === 'complete' ? '已完成报销闭环' : '已审批通过')
     await loadPending()
-    if (activeTab.value === 'records') await loadRecords(recordsPage.value)
+    if (activeTab.value === 'records') {
+      await loadRecords(recordsPage.value)
+    } else if (canViewLedger.value) {
+      await loadBudgetSummary()
+    }
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '操作失败'
     showToast(typeof msg === 'string' ? msg : '操作失败', 'error')
@@ -924,7 +1142,10 @@ watch(activeTab, (tab) => {
   }
   if (tab === 'pending') loadPending()
   if (tab === 'mine') loadMine()
-  if (tab === 'records') loadRecords(1)
+  if (tab === 'records') {
+    loadRecords(1)
+    loadBudgetSummary()
+  }
 })
 
 onMounted(() => {
@@ -1308,6 +1529,174 @@ watch(rejectVisible, (visible) => {
   cursor: not-allowed;
 }
 
+/* 年度额度统计 */
+.records-panel {
+  display: flex;
+  flex-direction: column;
+  gap: var(--spacing-base);
+}
+.budget-stats {
+  background: var(--color-bg-container);
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-md);
+  box-shadow: var(--shadow-card);
+  padding: var(--spacing-lg);
+}
+.budget-stats__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--spacing-base);
+  flex-wrap: wrap;
+  margin-bottom: var(--spacing-base);
+}
+.budget-stats__head .panel-title {
+  margin: 0 0 4px;
+}
+.budget-stats__hint {
+  margin: 0;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+  line-height: 1.5;
+}
+.budget-stats__tools {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.budget-stats__cards {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: var(--spacing-md);
+}
+.budget-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 14px 16px;
+  border-radius: var(--radius-md);
+  background: var(--color-bg-spotlight);
+  border: 1px solid var(--color-border-lighter);
+}
+.budget-card--done {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
+.budget-card--pending {
+  background: #fffbeb;
+  border-color: #fde68a;
+}
+.budget-card--remain {
+  background: var(--color-primary-lightest);
+  border-color: var(--color-primary-light);
+}
+.budget-card--remain.is-negative {
+  background: var(--color-error-bg);
+  border-color: var(--color-error-light);
+}
+.budget-card__label {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.budget-card__value {
+  font-size: 22px;
+  font-weight: var(--font-weight-bold);
+  color: var(--color-text-primary);
+  font-variant-numeric: tabular-nums;
+}
+.budget-card--remain .budget-card__value {
+  color: var(--color-primary-dark);
+}
+.budget-card--remain.is-negative .budget-card__value {
+  color: var(--color-error);
+}
+.budget-card small {
+  font-size: 11px;
+  color: var(--color-text-tertiary);
+  line-height: 1.4;
+}
+.budget-modal {
+  width: min(520px, 94vw);
+  max-height: 90vh;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius-lg);
+  background: var(--color-bg-container);
+  box-shadow: var(--shadow-elevated);
+  overflow: hidden;
+}
+.budget-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border-lighter);
+  background: var(--color-bg-spotlight);
+}
+.budget-modal__body {
+  padding: var(--spacing-lg);
+  overflow-y: auto;
+}
+.budget-modal__tip {
+  margin: 0 0 var(--spacing-base);
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  line-height: 1.55;
+}
+.budget-form {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: var(--spacing-base);
+}
+.budget-list {
+  margin-top: var(--spacing-lg);
+}
+.budget-list h4 {
+  margin: 0 0 8px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.budget-list ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.budget-list__item {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-spotlight);
+  cursor: pointer;
+  color: var(--color-text-primary);
+}
+.budget-list__item:hover {
+  border-color: var(--color-primary-light);
+  background: var(--color-primary-lightest);
+}
+.budget-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: var(--spacing-md) var(--spacing-lg);
+  border-top: 1px solid var(--color-border-lighter);
+}
+@media (max-width: 900px) {
+  .budget-stats__cards {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .budget-form {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* 表格 */
 .table-card {
   overflow: hidden;
@@ -1668,7 +2057,7 @@ watch(rejectVisible, (visible) => {
 .preview-overlay {
   position: fixed;
   inset: 0;
-  z-index: var(--z-index-modal);
+  z-index: var(--z-index-popover);
   background: rgba(0, 0, 0, .72);
   display: flex;
   align-items: center;
@@ -1690,6 +2079,7 @@ watch(rejectVisible, (visible) => {
   align-items: center;
   justify-content: space-between;
   gap: var(--spacing-md);
+  flex-wrap: wrap;
   padding: var(--spacing-md) var(--spacing-lg);
   border-bottom: 1px solid var(--color-border-lighter);
   background: var(--color-bg-spotlight);
@@ -1720,6 +2110,7 @@ watch(rejectVisible, (visible) => {
   display: flex;
   align-items: center;
   gap: 8px;
+  flex-wrap: wrap;
   flex-shrink: 0;
 }
 .preview-close {
