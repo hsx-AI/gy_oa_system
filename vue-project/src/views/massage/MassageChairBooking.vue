@@ -3,8 +3,8 @@
     <div class="page-header">
       <div class="header-content">
         <div class="header-info">
-          <h1 class="header-title">休闲角预约</h1>
-          <p class="header-subtitle">部门休闲角 · 以 15 分钟为单位预约 · 每人每日最多 2 个时段（30 分钟）</p>
+          <h1 class="header-title">健康角预约</h1>
+          <p class="header-subtitle">部门健康角 · 以 15 分钟为单位预约 · 每人每日最多 2 个时段（30 分钟）</p>
         </div>
       </div>
     </div>
@@ -27,7 +27,7 @@
           <li v-for="(item, idx) in usageNotice" :key="idx">{{ item }}</li>
         </ol>
         <p v-show="noticeExpanded" class="notice-emphasis">
-          特别提醒：8:00–10:00、10:15–12:00、13:00–15:00、15:15–17:00 为正常上班工作时间，<strong>严禁使用休闲角</strong>；仅可在系统开放的可预约时段内使用。
+          特别提醒：8:00–10:00、10:15–12:00、13:00–15:00、15:15–17:00 为正常上班工作时间，<strong>严禁使用健康角</strong>；仅可在系统开放的可预约时段内使用。
         </p>
       </section>
 

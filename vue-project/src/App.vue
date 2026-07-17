@@ -65,11 +65,11 @@
             <button
               type="button"
               class="sidebar-group-toggle"
-              title="休闲娱乐"
+              title="健康工作"
               :aria-expanded="isSidebarGroupOpen('leisure') ? 'true' : 'false'"
               @click="toggleSidebarGroup('leisure')"
             >
-              <span>休闲娱乐</span>
+              <span>健康工作</span>
               <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('leisure') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
@@ -92,7 +92,7 @@
               <path d="M7 12h2"/>
               <path d="M15 12h2"/>
             </svg>
-            <span>休闲角预约</span>
+            <span>健康角预约</span>
           </router-link>
             </div>
           </section>
