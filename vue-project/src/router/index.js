@@ -6,6 +6,7 @@ import UploadAttendance from '../views/UploadAttendance.vue'
 import Statistics from '../views/Statistics.vue'
 import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
+import Performance from '../views/Performance.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
@@ -81,6 +82,12 @@ const routes = [
     path: '/overtime-pay',
     name: 'OvertimePay',
     component: OvertimePay
+  },
+  {
+    path: '/performance',
+    name: 'Performance',
+    component: Performance,
+    meta: { title: '月度绩效' }
   },
   {
     path: '/attendance/manual',

@@ -568,6 +568,7 @@
         <div v-if="!hasFetched && !loading" class="init-hint card">
           <p>选择年份（可选月份）后点击「查询」查看本科室汇总、满勤率、科室对比与全员排序。</p>
         </div>
+        <PerformanceHistoryPanel dashboard />
       </template>
     </div>
   </div>
@@ -590,6 +591,7 @@ import {
   getLeaderWorkIntensity,
 } from '@/api/attendance'
 import { canAccessLeaderOvertimeStats, isMinisterLevel } from '@/utils/roleMatch'
+import PerformanceHistoryPanel from '@/components/PerformanceHistoryPanel.vue'
 
 const router = useRouter()
 const PUBLIC_DASHBOARD_URL = 'http://10.42.60.230:8088/public-dashboard'

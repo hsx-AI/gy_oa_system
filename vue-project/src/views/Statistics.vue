@@ -580,6 +580,7 @@
           <p>请输入您的姓名并选择年份，点击"查询统计"查看加班、请假、公出数据</p>
         </div>
       </div>
+      <PerformanceHistoryPanel />
     </div>
   </div>
 </template>
@@ -588,6 +589,7 @@
 import { ref, computed, onMounted, watch } from 'vue'
 import { getMonthlySummary, getOvertimeRecords, getBusinessTripRecords, getLeaveRecords, getStatisticsPermission, getStatisticsEmployees, getDeptLeaveStats, getDeptOvertimeStats, getDeptBusinessTripStats, getLeaderFullAttendance, getLeaderFullAttendanceYear, getLeaderWorkIntensity, getUploadConfig } from '@/api/attendance'
 import { canSeeWorkIntensityInStatistics, hasWorkIntensityAllScope } from '@/utils/roleMatch'
+import PerformanceHistoryPanel from '@/components/PerformanceHistoryPanel.vue'
 
 // 权限：1=仅自己 2=科室下拉 3=全部输入
 const permLevel = ref(1)

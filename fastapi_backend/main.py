@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance
 import logging
 import time
 
@@ -92,6 +92,7 @@ app.include_router(info_feed.router, prefix=settings.API_PREFIX)  # 天气新闻
 app.include_router(ai_assistant.router, prefix=settings.API_PREFIX)  # 智能制造工艺部 AI 助手
 app.include_router(massage_chair.router, prefix=settings.API_PREFIX)  # 休闲角预约
 app.include_router(low_value_reimbursement.router, prefix=settings.API_PREFIX)  # 低值易耗报销
+app.include_router(performance.router, prefix=settings.API_PREFIX)  # 月度绩效
 
 @app.on_event("startup")
 async def startup_event():
@@ -107,10 +108,11 @@ async def startup_event():
     init_attendance_fetch_scheduler()
     # 考勤异常提醒自动发送后台任务
     import asyncio as _asyncio
-    from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop, shift_schedule_email_background_loop
+    from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop, shift_schedule_email_background_loop, shift_holiday_email_background_loop
     _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
     _asyncio.get_event_loop().create_task(todo_reminder_background_loop())
     _asyncio.get_event_loop().create_task(shift_schedule_email_background_loop())
+    _asyncio.get_event_loop().create_task(shift_holiday_email_background_loop())
     # 共用邮箱自动拉取后台任务
     from routers.inbox_email import inbox_email_background_loop, inbox_email_analysis_background_loop
     _asyncio.get_event_loop().create_task(inbox_email_background_loop())

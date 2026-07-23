@@ -203,7 +203,7 @@
           <div class="config-card-head">
             <div>
               <h2 class="section-title">排班邮件配置</h2>
-              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间、排班区间是否含发送当天与收件人（固定 17:00 发送）。</p>
+              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间、排班区间是否含发送当天与收件人（固定 17:00 发送）。节假日值班表可按「假期首日前 N 天」自动发送，收件人与排班表收件人共用。</p>
             </div>
             <div class="config-actions">
               <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">功能全选</button>
@@ -281,6 +281,14 @@
                     <span>排班开始</span>
                     <select v-model.number="item.email_start_offset_days" class="email-include-send-select" @click.stop>
                       <option v-for="opt in emailStartOffsetOptions" :key="opt.value" :value="opt.value">
+                        {{ opt.label }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="dept-email-include-send" title="按假期首日提前发送该假期的值班值宿安排表；收件人与排班表收件人共用">
+                    <span>节假日值班表</span>
+                    <select v-model.number="item.holiday_email_days_before" class="email-include-send-select" @click.stop>
+                      <option v-for="opt in holidayEmailDaysBeforeOptions" :key="opt.value" :value="opt.value">
                         {{ opt.label }}
                       </option>
                     </select>
@@ -450,6 +458,16 @@ const emailStartOffsetOptions = [
   { value: 6, label: '发送后6天开始' },
 ]
 
+const holidayEmailDaysBeforeOptions = [
+  { value: -1, label: '关闭' },
+  { value: 0, label: '假期首日当天 17:00' },
+  { value: 1, label: '节前1天 17:00' },
+  { value: 2, label: '节前2天 17:00' },
+  { value: 3, label: '节前3天 17:00' },
+  { value: 5, label: '节前5天 17:00' },
+  { value: 7, label: '节前7天 17:00' },
+]
+
 const EMAIL_PATTERN = /^[^@\s]+@[^@\s]+\.[^@\s]+$/
 const recipientUnitOptions = [
   '水电分厂',
@@ -480,6 +498,12 @@ function shiftEmailRangeHint(sendWeekday, startOffsetDays, includeSendDay = fals
   return `${startLabel}至${endLabel}（7天，${offsetLabel}）`
 }
 
+function normalizeHolidayEmailDaysBefore(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return -1
+  return Math.min(15, Math.floor(n))
+}
+
 function mapShiftEmailItem(item) {
   return {
     department: item.department,
@@ -487,6 +511,7 @@ function mapShiftEmailItem(item) {
     email_send_weekday: Number.isFinite(Number(item.email_send_weekday)) ? Number(item.email_send_weekday) : 4,
     email_include_send_day: !!item.email_include_send_day,
     email_start_offset_days: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day),
+    holiday_email_days_before: normalizeHolidayEmailDaysBefore(item.holiday_email_days_before),
     email_recipients: (item.email_recipients || []).map((r) => ({
       name: (r?.name || '').trim(),
       email: (r?.email || '').trim(),
@@ -845,6 +870,7 @@ async function saveShiftEmailConfig() {
       email_send_weekday: item.email_send_weekday,
       email_start_offset_days: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day),
       email_include_send_day: normalizeEmailStartOffsetDays(item.email_start_offset_days, item.email_include_send_day) === 0,
+      holiday_email_days_before: normalizeHolidayEmailDaysBefore(item.holiday_email_days_before),
       email_recipients: parsed.recipients,
     })
   }

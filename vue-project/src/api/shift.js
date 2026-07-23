@@ -48,6 +48,10 @@ export function setDayLocks(data) {
   return request({ url: '/shift/day-locks', method: 'post', data })
 }
 
+export function setDayNoDuty(data) {
+  return request({ url: '/shift/day-noduty', method: 'post', data })
+}
+
 export function runShiftScheduleEmail(params) {
   return request({ url: '/email/run-shift-schedule-email', method: 'post', params })
 }

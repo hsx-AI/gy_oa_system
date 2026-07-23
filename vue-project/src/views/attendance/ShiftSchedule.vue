@@ -20,7 +20,7 @@
             <section class="header-rules-section">
               <h3 class="header-rules-h">二、班次与操作</h3>
               <ul>
-                <li>每人每天一个班次：点击格子一次弹出 <strong>白服 / 白准 / 夜服 / 夜准</strong> 四个选项（白/夜班 + 服务组/准备组）；可选「不值班」清空。长按约 0.5 秒可切换「白+夜」。</li>
+                <li>每人每天一个班次：点击格子一次弹出 <strong>白服 / 白准 / 夜服 / 夜准</strong> 四个选项（白/夜班 + 服务组/准备组）；可选「不值班」清空。管理人员可点「当日不设置值班」标记整天无需排班（全厂放假等），该日不参与缺排提醒与排班邮件拦截。长按约 0.5 秒可切换「白+夜」。</li>
                 <li>「统计」列显示该员工在本屏日期内的白班、夜班次数；表脚「当日合计」显示每天白班、夜班人数。</li>
                 <li>日期下方第一行「<strong>计划</strong>」为<strong>当日值班工作计划</strong>：点击对应日期格子弹出编辑框（字数上限 2000）；与排班格子一样，需点工具栏「<strong>保存排班</strong>」才会写入服务器。</li>
               </ul>
@@ -239,6 +239,7 @@
       <span class="legend-item"><span class="legend-dot legend-day"></span>白班</span>
       <span class="legend-item"><span class="legend-dot legend-night"></span>夜班</span>
       <span class="legend-item"><span class="legend-dot legend-empty"></span>不值班</span>
+      <span class="legend-item"><span class="legend-dot legend-noduty"></span>当日不设置值班</span>
       <span class="legend-sep">|</span>
       <span class="legend-item"><span class="legend-dot legend-trip"></span>公出</span>
       <span class="legend-sep">|</span>
@@ -288,7 +289,7 @@
                 v-for="(d, di) in dates"
                 :key="d.date"
                 class="col-day th-date-head"
-                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'col-open': openDates[d.date] }, scheduleHlClass(2 + di, 0)]"
+                :class="[{ 'col-weekend': !d.isWorkday, 'col-today': d.date === todayStr, 'col-open': openDates[d.date], 'col-noduty': noDutyDates[d.date] }, scheduleHlClass(2 + di, 0)]"
                 :title="dateHeaderTitle(d)"
                 @mouseenter="scheduleSetHover(2 + di, 0)"
               >
@@ -299,6 +300,7 @@
                   class="th-holiday"
                   :class="holidayThClass(d)"
                 >{{ d.holidayMark }}</div>
+                <div v-if="noDutyDates[d.date]" class="th-noduty-badge" title="当日不设置值班：不参与缺排检测与邮件拦截">不排</div>
                 <template v-if="d.date >= editableFromStr">
                   <div
                     v-if="isManager"
@@ -436,6 +438,13 @@
             >{{ opt.label }}</button>
           </div>
           <button type="button" class="shift-picker-clear" @click="clearShiftCell">不值班</button>
+          <button
+            v-if="isManager"
+            type="button"
+            class="shift-picker-noduty"
+            :class="{ active: !!noDutyDates[locPickerDate] }"
+            @click="toggleDayNoDutyFromPicker"
+          >{{ noDutyDates[locPickerDate] ? '取消当日不设置' : '当日不设置值班' }}</button>
         </div>
       </div>
     </Teleport>
@@ -599,7 +608,7 @@
 
 <script setup>
 import { ref, reactive, computed, onMounted, onUnmounted, nextTick, watch } from 'vue'
-import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, getShiftHolidayOptions, runShiftScheduleEmail, getShiftScheduleEmailSentWeeks } from '@/api/shift'
+import { getDepartments, getShiftConfig, saveShiftConfig, getSchedule, saveSchedule, saveDayPlans, autoSchedule, copyLastMonth, clearSchedule, setDayLocks, setDayNoDuty, getShiftHolidayOptions, runShiftScheduleEmail, getShiftScheduleEmailSentWeeks } from '@/api/shift'
 import { getUploadConfig } from '@/api/attendance'
 import { isDeptLeader, isDirectorLevel } from '@/utils/roleMatch'
 
@@ -733,7 +742,7 @@ function showShiftPicker(emp, dateStr, event) {
   const rect = event?.currentTarget?.getBoundingClientRect?.() || event?.target?.getBoundingClientRect?.()
   if (rect) {
     const panelW = 168
-    const panelH = 140
+    const panelH = isManager.value ? 230 : 170
     let top = rect.bottom + 4
     let left = rect.left
     if (top + panelH > window.innerHeight - 8) top = Math.max(8, rect.top - panelH - 4)
@@ -787,6 +796,13 @@ function clearShiftCell() {
   dirty.value = true
   markShiftDateChanged(ds)
   shiftPickerVisible.value = false
+}
+
+async function toggleDayNoDutyFromPicker() {
+  const ds = locPickerDate.value
+  if (!ds || !isManager.value) return
+  shiftPickerVisible.value = false
+  await toggleDayNoDuty(ds)
 }
 
 function dismissShiftPicker() {
@@ -1432,6 +1448,7 @@ const isSameDept = computed(() => {
 })
 
 const openDates = reactive({})
+const noDutyDates = reactive({})
 
 const hasAnyOpenDate = computed(() => Object.values(openDates).some(Boolean))
 
@@ -1560,6 +1577,10 @@ async function loadSchedule() {
     Object.keys(openDates).forEach(k => delete openDates[k])
     for (const ds of schRes?.openDates || []) {
       openDates[ds] = true
+    }
+    Object.keys(noDutyDates).forEach(k => delete noDutyDates[k])
+    for (const ds of schRes?.noDutyDates || []) {
+      noDutyDates[ds] = true
     }
     Object.keys(businessTrips).forEach(k => delete businessTrips[k])
     const bTrips = schRes?.businessTrips || {}
@@ -1805,9 +1826,14 @@ function daySummaryTooltip(d) {
 
 function dateHeaderTitle(d) {
   const base = `${d.date} 星期${d.label}`
-  if (!d.holidayType && !d.holidayFestival) return base
-  const extra = [d.holidayFestival, d.holidayType].filter(Boolean).join(' · ')
-  return extra ? `${base} · ${extra}` : base
+  const parts = [base]
+  if (d.holidayFestival || d.holidayType) {
+    parts.push([d.holidayFestival, d.holidayType].filter(Boolean).join(' · '))
+  }
+  if (noDutyDates[d.date]) {
+    parts.push('当日不设置值班')
+  }
+  return parts.join(' · ')
 }
 
 function holidayThClass(d) {
@@ -2028,6 +2054,24 @@ async function toggleDayLock(dateStr) {
     })
     openDates[dateStr] = willOpen || undefined
     if (!willOpen) delete openDates[dateStr]
+  } catch (e) {
+    alert(e?.response?.data?.detail || '操作失败')
+  }
+}
+
+async function toggleDayNoDuty(dateStr) {
+  if (!isManager.value || !selectedDept.value || !dateStr) return
+  const willNoDuty = !noDutyDates[dateStr]
+  try {
+    await setDayNoDuty({
+      department: selectedDept.value,
+      dates: [dateStr],
+      no_duty: willNoDuty,
+      current_user: getCurrentUser(),
+    })
+    if (willNoDuty) noDutyDates[dateStr] = true
+    else delete noDutyDates[dateStr]
+    await loadNextWeekScheduleCompletion()
   } catch (e) {
     alert(e?.response?.data?.detail || '操作失败')
   }
@@ -2408,6 +2452,7 @@ async function handleExportExcel() {
 .legend-day { background: #dbeafe; border: 1px solid #93c5fd; }
 .legend-night { background: #fef3c7; border: 1px solid #fbbf24; }
 .legend-empty { background: white; border: 1px solid #d1d5db; }
+.legend-noduty { background: #f3f4f6; border: 1px dashed #9ca3af; }
 .legend-trip { background: #d1fae5; border: 1px solid #34d399; }
 .legend-loc-zhunbei { background: #22c55e; border: 1px solid #16a34a; border-radius: 50%; }
 .legend-loc-fuwu { background: #f97316; border: 1px solid #ea580c; border-radius: 50%; }
@@ -2711,6 +2756,18 @@ async function handleExportExcel() {
 
 /* 日期开放 / 锁定 */
 .col-open { background-color: #f0fdf4 !important; }
+.col-noduty { background-color: #f3f4f6 !important; }
+.th-noduty-badge {
+  font-size: 8px;
+  line-height: 1;
+  margin-top: 2px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  background: #e5e7eb;
+  color: #4b5563;
+  border: 1px dashed #9ca3af;
+  display: inline-block;
+}
 .th-lock-btn {
   display: inline-block;
   font-size: 9px;
@@ -3340,6 +3397,25 @@ thead tr:first-child .sticky-col2 {
   background: #f1f5f9;
   border-color: #94a3b8;
   color: #475569;
+}
+.shift-picker-noduty {
+  width: 100%;
+  margin-top: 6px;
+  padding: 9px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 8px;
+  border: 1.5px dashed #9ca3af;
+  background: #f9fafb;
+  color: #4b5563;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.shift-picker-noduty:hover,
+.shift-picker-noduty.active {
+  background: #eef2ff;
+  border-color: #6366f1;
+  color: #3730a3;
 }
 
 @media (max-width: 768px) {

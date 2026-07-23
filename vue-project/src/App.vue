@@ -136,7 +136,7 @@
             </svg>
             <span>公出管理</span>
           </router-link>
-          <router-link v-if="!isOtherDeptUser && !canSeeLeaderDashboard" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="!isOtherDeptUser" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="18" y1="20" x2="18" y2="10" />
               <line x1="12" y1="20" x2="12" y2="4" />
@@ -159,6 +159,14 @@
               <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" />
             </svg>
             <span>其他绩效激励统计</span>
+          </router-link>
+          <router-link v-if="canManagePerformance" to="/performance" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 19V5m0 14h16" />
+              <path d="m7 15 3-4 3 2 4-6" />
+              <circle cx="7" cy="15" r="1" /><circle cx="10" cy="11" r="1" /><circle cx="13" cy="13" r="1" /><circle cx="17" cy="7" r="1" />
+            </svg>
+            <span>月度绩效</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -701,6 +709,7 @@ function getSidebarGroupByPath(path) {
     path === '/statistics' ||
     path === '/reports-hub' ||
     path === '/overtime-pay' ||
+    path === '/performance' ||
     path === '/leader-dashboard' ||
     path === '/upload'
   ) {
@@ -1134,6 +1143,11 @@ const canSeeLeaderDashboard = computed(() => {
     admin1: admin1.value,
     admin2: admin2.value,
   })
+})
+
+const canManagePerformance = computed(() => {
+  const jb = (currentUser.value?.jb || '').trim()
+  return isDirectorLevel(jb) || jb.includes('组长')
 })
 
 // 其他绩效激励统计：全员可访问，页面内按权限显示本人/本室/全部门

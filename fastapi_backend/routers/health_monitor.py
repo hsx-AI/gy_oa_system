@@ -32,6 +32,7 @@ class ShiftEmailDeptSettingsItem(BaseModel):
     email_send_weekday: int = 4
     email_include_send_day: bool = False
     email_start_offset_days: int = 1
+    holiday_email_days_before: int = -1
     email_recipients: List[ShiftEmailRecipientItem] = Field(default_factory=list)
 
 

@@ -51,6 +51,16 @@ CREATE TABLE IF NOT EXISTS shift_day_lock (
   UNIQUE KEY uk_dept_lock_date (department, lock_date)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='排班日期开放配置';
 
+CREATE TABLE IF NOT EXISTS shift_day_noduty (
+  id INT AUTO_INCREMENT PRIMARY KEY,
+  department VARCHAR(100) NOT NULL,
+  noduty_date DATE NOT NULL COMMENT '标记为当日不设置值班的日期',
+  updated_by VARCHAR(50) NULL,
+  updated_at DATETIME NULL,
+  UNIQUE KEY uk_dept_noduty_date (department, noduty_date),
+  INDEX idx_dept_noduty_date (department, noduty_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='当日不设置值班标记（跳过缺排检测与邮件拦截）';
+
 CREATE TABLE IF NOT EXISTS shift_schedule_email_log (
   id INT AUTO_INCREMENT PRIMARY KEY,
   department VARCHAR(100) NOT NULL,

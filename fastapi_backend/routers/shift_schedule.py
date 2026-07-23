@@ -108,6 +108,16 @@ def _ensure_tables():
         db.execute_update(
             "UPDATE shift_config SET email_start_offset_days = CASE WHEN email_include_send_day = 1 THEN 0 ELSE 1 END"
         )
+    holiday_days_col = db.execute_query(
+        "SELECT 1 FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'shift_config' AND COLUMN_NAME = 'holiday_email_days_before' "
+        "LIMIT 1"
+    )
+    if not holiday_days_col:
+        db.execute_update(
+            "ALTER TABLE shift_config ADD COLUMN holiday_email_days_before INT NOT NULL DEFAULT -1 "
+            "COMMENT '节假日值班表邮件：假期首日前几天17:00自动发送(-1=关闭,0=首日当天,1=前1天…)' AFTER email_start_offset_days"
+        )
     db.execute_update("""
         CREATE TABLE IF NOT EXISTS shift_schedule (
           id INT AUTO_INCREMENT PRIMARY KEY,
@@ -161,6 +171,40 @@ def _ensure_tables():
           UNIQUE KEY uk_dept_lock_date (department, lock_date)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
     """)
+    db.execute_update("""
+        CREATE TABLE IF NOT EXISTS shift_day_noduty (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          department VARCHAR(100) NOT NULL,
+          noduty_date DATE NOT NULL,
+          updated_by VARCHAR(50) NULL,
+          updated_at DATETIME NULL,
+          UNIQUE KEY uk_dept_noduty_date (department, noduty_date),
+          INDEX idx_dept_noduty_date (department, noduty_date)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+    """)
+
+
+def _load_no_duty_dates(department: str, date_lo: str, date_hi: str) -> Set[str]:
+    """读取科室在区间内标记为「当日不设置值班」的日期集合。"""
+    try:
+        rows = db.execute_query(
+            "SELECT noduty_date FROM shift_day_noduty "
+            "WHERE department = %s AND noduty_date >= %s AND noduty_date <= %s",
+            (department, date_lo, date_hi),
+        )
+    except Exception as e:
+        logger.warning("读取 shift_day_noduty 失败: %s", e)
+        return set()
+    result = set()
+    for r in rows or []:
+        nd = r.get("noduty_date")
+        if hasattr(nd, "strftime"):
+            result.add(nd.strftime("%Y-%m-%d"))
+        else:
+            ds = str(nd)[:10] if nd else ""
+            if ds:
+                result.add(ds)
+    return result
 
 
 def _get_dept_employees(department: str) -> List[str]:
@@ -315,7 +359,7 @@ def _get_shift_email_feature_config_items() -> dict:
     enabled, configured = _load_shift_email_feature_config(departments)
     _ensure_tables()
     rows = db.execute_query(
-        "SELECT department, email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days FROM shift_config"
+        "SELECT department, email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days, holiday_email_days_before FROM shift_config"
     )
     by_dept = {(r.get("department") or "").strip(): r for r in (rows or [])}
     items = []
@@ -329,6 +373,9 @@ def _get_shift_email_feature_config_items() -> dict:
             "email_start_offset_days": _normalize_email_start_offset_days(
                 row.get("email_start_offset_days"),
                 row.get("email_include_send_day"),
+            ),
+            "holiday_email_days_before": _normalize_holiday_email_days_before(
+                row.get("holiday_email_days_before") if row else DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE
             ),
             "email_recipients": _parse_shift_email_recipients(row.get("email_recipients")),
             "leader_recipients": _get_shift_dept_leader_recipients(dept),
@@ -349,6 +396,7 @@ def _upsert_shift_email_settings(
     updated_by: str,
     email_include_send_day: bool = False,
     email_start_offset_days=None,
+    holiday_email_days_before=None,
 ) -> None:
     """仅更新科室排班邮件发送时间与收件人（系统管理员配置）。"""
     _ensure_tables()
@@ -357,21 +405,23 @@ def _upsert_shift_email_settings(
     send_wd = _normalize_email_send_weekday(email_send_weekday)
     start_offset = _normalize_email_start_offset_days(email_start_offset_days, email_include_send_day)
     include_send = 1 if start_offset == 0 else 0
+    holiday_days = _normalize_holiday_email_days_before(holiday_email_days_before)
     existing = db.execute_query(
         "SELECT id FROM shift_config WHERE department = %s LIMIT 1", (department,)
     )
     if existing:
         db.execute_update(
             "UPDATE shift_config SET email_recipients=%s, email_send_weekday=%s, "
-            "email_include_send_day=%s, email_start_offset_days=%s, updated_by=%s, updated_at=%s WHERE department=%s",
-            (recipients_json, send_wd, include_send, start_offset, updated_by, now, department),
+            "email_include_send_day=%s, email_start_offset_days=%s, holiday_email_days_before=%s, "
+            "updated_by=%s, updated_at=%s WHERE department=%s",
+            (recipients_json, send_wd, include_send, start_offset, holiday_days, updated_by, now, department),
         )
     else:
         db.execute_update(
             "INSERT INTO shift_config (department, workday_day, workday_night, weekend_day, weekend_night, "
-            "email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days, updated_by, updated_at) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (department, 2, 2, 2, 2, recipients_json, send_wd, include_send, start_offset, updated_by, now),
+            "email_recipients, email_send_weekday, email_include_send_day, email_start_offset_days, holiday_email_days_before, updated_by, updated_at) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (department, 2, 2, 2, 2, recipients_json, send_wd, include_send, start_offset, holiday_days, updated_by, now),
         )
 
 
@@ -403,21 +453,26 @@ def _save_shift_email_feature_config(
                 send_wd = item.get("email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
                 include_send = item.get("email_include_send_day", False)
                 start_offset = item.get("email_start_offset_days", None)
+                holiday_days = item.get("holiday_email_days_before", DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE)
                 recipients = item.get("email_recipients") or []
             else:
                 dept = (getattr(item, "department", None) or "").strip()
                 send_wd = getattr(item, "email_send_weekday", DEFAULT_EMAIL_SEND_WEEKDAY)
                 include_send = getattr(item, "email_include_send_day", False)
                 start_offset = getattr(item, "email_start_offset_days", None)
+                holiday_days = getattr(item, "holiday_email_days_before", DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE)
                 recipients = getattr(item, "email_recipients", None) or []
             if not dept or dept not in valid:
                 continue
-            by_dept[dept] = (send_wd, include_send, start_offset, recipients)
+            by_dept[dept] = (send_wd, include_send, start_offset, holiday_days, recipients)
         for dept in departments:
             if dept in by_dept:
-                send_wd, include_send, start_offset, recipients = by_dept[dept]
+                send_wd, include_send, start_offset, holiday_days, recipients = by_dept[dept]
             else:
-                send_wd, include_send, start_offset, recipients = DEFAULT_EMAIL_SEND_WEEKDAY, False, DEFAULT_EMAIL_START_OFFSET_DAYS, []
+                send_wd, include_send, start_offset, holiday_days, recipients = (
+                    DEFAULT_EMAIL_SEND_WEEKDAY, False, DEFAULT_EMAIL_START_OFFSET_DAYS,
+                    DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE, [],
+                )
             _upsert_shift_email_settings(
                 dept,
                 send_wd,
@@ -425,6 +480,7 @@ def _save_shift_email_feature_config(
                 updated_by,
                 email_include_send_day=include_send,
                 email_start_offset_days=start_offset,
+                holiday_email_days_before=holiday_days,
             )
     return _get_shift_email_feature_config_items()
 
@@ -587,6 +643,35 @@ def _normalize_email_start_offset_days(value, include_send_day=None) -> int:
     if offset > 6:
         return 6
     return offset
+
+
+DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE = -1  # -1=关闭
+
+
+def _normalize_holiday_email_days_before(value) -> int:
+    """节假日值班表邮件提前天数：-1=关闭，0=假期首日当天，1..15=节前N天。"""
+    try:
+        days = int(value)
+    except (TypeError, ValueError):
+        return DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE
+    if days < 0:
+        return -1
+    if days > 15:
+        return 15
+    return days
+
+
+def _get_shift_holiday_email_days_before(department: str) -> int:
+    _ensure_tables()
+    if not department:
+        return DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE
+    rows = db.execute_query(
+        "SELECT holiday_email_days_before FROM shift_config WHERE department = %s LIMIT 1",
+        (department,),
+    )
+    if rows:
+        return _normalize_holiday_email_days_before(rows[0].get("holiday_email_days_before"))
+    return DEFAULT_HOLIDAY_EMAIL_DAYS_BEFORE
 
 
 def _week_range_for_send_day(
@@ -831,6 +916,43 @@ async def set_day_locks(req: SetDayLocksRequest):
     return {"success": True, "message": f"已{action} {cnt} 天排班权限"}
 
 
+class SetDayNoDutyRequest(BaseModel):
+    department: str
+    dates: List[str]
+    no_duty: bool = True
+    current_user: str = ""
+
+
+@router.post("/day-noduty")
+async def set_day_noduty(req: SetDayNoDutyRequest):
+    """管理人员标记/取消「当日不设置值班」（该日不参与缺排检测与排班邮件拦截）。"""
+    _ensure_tables()
+    if not _is_manager_of_dept(req.current_user, req.department):
+        raise HTTPException(status_code=403, detail="仅本科室管理人员可设置当日不值班")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    cnt = 0
+    for date_str in req.dates:
+        d = _parse_iso_date(date_str)
+        if not d:
+            continue
+        ds = d.strftime("%Y-%m-%d")
+        if req.no_duty:
+            db.execute_update(
+                "INSERT INTO shift_day_noduty (department, noduty_date, updated_by, updated_at) "
+                "VALUES (%s, %s, %s, %s) "
+                "ON DUPLICATE KEY UPDATE updated_by = %s, updated_at = %s",
+                (req.department, ds, req.current_user, now, req.current_user, now),
+            )
+        else:
+            db.execute_update(
+                "DELETE FROM shift_day_noduty WHERE department = %s AND noduty_date = %s",
+                (req.department, ds),
+            )
+        cnt += 1
+    action = "标记不设置值班" if req.no_duty else "取消不设置值班"
+    return {"success": True, "message": f"已{action} {cnt} 天"}
+
+
 # ==================== 配置 ====================
 
 EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
@@ -975,6 +1097,9 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
     }
 
     employees = _get_dept_employees(dept)
+    ds_lo = start_day.strftime("%Y-%m-%d")
+    ds_hi = end_day.strftime("%Y-%m-%d")
+    no_duty_dates = _load_no_duty_dates(dept, ds_lo, ds_hi)
     counts = {}
     if employees:
         ph = ",".join(["%s"] * len(employees))
@@ -983,7 +1108,7 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
             f"WHERE department = %s AND shift_date >= %s AND shift_date <= %s "
             f"AND employee_name IN ({ph}) AND shift_type IN ('白班', '夜班', '白+夜') "
             f"GROUP BY shift_date, shift_type",
-            (dept, start_day.strftime("%Y-%m-%d"), end_day.strftime("%Y-%m-%d")) + tuple(employees),
+            (dept, ds_lo, ds_hi) + tuple(employees),
         )
         for r in rows or []:
             sd = r.get("shift_date")
@@ -1004,7 +1129,7 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
     issues = []
     for d in dates:
         ds = d.strftime("%Y-%m-%d")
-        if ds in holiday_by_date:
+        if ds in holiday_by_date or ds in no_duty_dates:
             continue
         is_workday = d.weekday() < 5
         req_day = max(0, int(cfg.get("workday_day" if is_workday else "weekend_day") or 0))
@@ -1189,6 +1314,7 @@ async def get_schedule(
     except Exception as e:
         logger.warning("读取 shift_day_lock 失败: %s", e)
 
+    no_duty_dates = sorted(_load_no_duty_dates(department, ds_lo, ds_hi))
     business_trips = _get_dept_business_trips(department, dates[0], dates[-1])
 
     return {
@@ -1199,6 +1325,7 @@ async def get_schedule(
         "dates": date_info,
         "dayPlans": day_plans,
         "openDates": open_dates,
+        "noDutyDates": no_duty_dates,
         "businessTrips": business_trips,
     }
 
@@ -1653,9 +1780,8 @@ async def get_departments():
     return {"success": True, "departments": _get_shift_departments()}
 
 
-@router.get("/holiday-options")
-async def get_shift_holiday_options(year: int = Query(...)):
-    """返回某年可导出的假期选项，按 holiday.festival 分组。"""
+def _holiday_options_for_year(year: int) -> List[dict]:
+    """某年的假期选项列表，按 holiday.festival 分组（供导出选择与节假日邮件共用）。"""
     grouped = {}
     for r in load_holidays_for_year(str(year)):
         ds = _normalize_date_key(r.get("date"))
@@ -1678,7 +1804,13 @@ async def get_shift_holiday_options(year: int = Query(...)):
             "dates": dates_sorted,
         })
     options.sort(key=lambda x: x["startDate"])
-    return {"success": True, "year": year, "options": options}
+    return options
+
+
+@router.get("/holiday-options")
+async def get_shift_holiday_options(year: int = Query(...)):
+    """返回某年可导出的假期选项，按 holiday.festival 分组。"""
+    return {"success": True, "year": year, "options": _holiday_options_for_year(year)}
 
 
 def build_week_schedule_report(department: str, anchor: Optional[date] = None) -> dict:
@@ -1759,6 +1891,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     except Exception:
         pass
 
+    no_duty_dates = _load_no_duty_dates(department, ds_lo, ds_hi)
     people = _get_dept_people(department)
     people_by_name = {p["name"]: p for p in people}
 
@@ -1776,6 +1909,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
     rows_data = []
     for di in date_info:
         ds = di["date"]
+        is_no_duty = ds in no_duty_dates
         day_prepare, day_service, night_prepare, night_service = [], [], [], []
         duty_names = []
         for emp in employees:
@@ -1794,6 +1928,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
                 else:
                     night_service.append(emp)
         contact_names = _uniq(duty_names)
+        remark = "当日不设置值班" if is_no_duty else ""
         rows_data.append({
             "date": ds,
             "weekday": "\n".join([x for x in [f"星期{di['label']}", di.get("holidayFestival"), di.get("holidayType")] if x]),
@@ -1804,7 +1939,8 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
             "contacts": "\n".join(_phone_line(n) for n in contact_names),
             "plan": day_plans.get(ds, ""),
             "count": len(set(duty_names)),
-            "remark": "",
+            "remark": remark,
+            "noDuty": is_no_duty,
             "dateInfo": di,
         })
 
