@@ -485,8 +485,8 @@
             <span class="mo-badge" :class="{ 'mo-badge-edit': moEditable }">{{ moEditable ? '可编辑' : '仅查看' }}</span>
             <span v-if="moDirty" class="mo-badge mo-badge-dirty">未保存</span>
             <div class="mo-view-toggle">
-              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'table' }" @click="moViewMode = 'table'">表格</button>
-              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'calendar' }" @click="moViewMode = 'calendar'">日历</button>
+              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'table' }" @click="moSetViewMode('table')">表格</button>
+              <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'calendar' }" @click="moSetViewMode('calendar')">日历</button>
             </div>
           </div>
           <div class="mo-header-nav">
@@ -504,117 +504,124 @@
           </div>
         </div>
         <p class="mo-hint">
-          <template v-if="moEditable">日历视图下点击「昨天及之后」的日期格即可编辑当日排班：输入姓名自动补全（可整段粘贴多个姓名），也可按日复制 / 粘贴；改动需点「保存修改」写入服务器。</template>
+          <template v-if="moEditable">日历视图下点击「昨天及之后」的日期格，右侧打开编辑面板；左侧月览会同步刷新，便于对照整月效果排班。输入姓名可自动补全（可整段粘贴多个姓名），也可按日复制 / 粘贴；改动需点「保存修改」写入服务器。</template>
           <template v-else>与下方双周编辑区无关；在此仅浏览，修改请关闭后回到主表操作。</template>
         </p>
         <div v-if="monthOverviewLoading" class="mo-loading">加载中…</div>
         <div v-else-if="!monthOverviewEmployees.length" class="mo-empty">该科室当月无在职人员数据</div>
 
-        <!-- 表格视图 -->
-        <div v-else-if="moViewMode === 'table'" class="mo-scroll-wrap">
-          <table class="mo-table">
-            <thead>
-              <tr>
-                <th class="mo-col-name mo-sticky">姓名</th>
-                <th class="mo-col-stat mo-sticky2">白/夜</th>
-                <th
-                  v-for="d in monthOverviewDates"
-                  :key="d.date"
-                  class="mo-col-day"
-                  :class="{ 'mo-col-weekend': !d.isWorkday, 'mo-col-today': d.date === todayStr }"
-                  :title="dateHeaderTitle(d)"
-                >
-                  <div class="mo-th-day">{{ d.date.slice(8) }}</div>
-                  <div class="mo-th-wd">{{ d.label }}</div>
-                  <div v-if="d.holidayMark" class="mo-th-holiday" :class="holidayThClass(d)">{{ d.holidayMark }}</div>
-                </th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr v-for="emp in monthOverviewEmployees" :key="'mo-' + emp">
-                <td class="mo-col-name mo-sticky" :title="emp">{{ emp }}</td>
-                <td class="mo-col-stat mo-sticky2">
-                  <span class="stat-day">{{ moEmpStats[emp]?.day ?? 0 }}</span>/<span class="stat-night">{{ moEmpStats[emp]?.night ?? 0 }}</span>
-                </td>
-                <td
-                  v-for="d in monthOverviewDates"
-                  :key="emp + d.date"
-                  class="mo-cell"
-                  :class="moCellClass(emp, d)"
-                  :title="moBusinessTrips[emp]?.[d.date] ? `公出：${moBusinessTrips[emp][d.date]}` : ''"
-                >
-                  <span class="mo-cell-text">{{ moCellLabel(emp, d.date) }}</span>
-                </td>
-              </tr>
-            </tbody>
-            <tfoot>
-              <tr class="mo-summary-row">
-                <td class="mo-col-name mo-sticky"><strong>当日合计</strong></td>
-                <td class="mo-col-stat mo-sticky2">—</td>
-                <td v-for="d in monthOverviewDates" :key="'sum-' + d.date" class="mo-cell mo-summary-cell">
-                  <span class="stat-day">{{ moDaySummary[d.date]?.day ?? 0 }}</span><span class="mo-slash">/</span><span class="stat-night">{{ moDaySummary[d.date]?.night ?? 0 }}</span>
-                </td>
-              </tr>
-            </tfoot>
-          </table>
-        </div>
+        <div v-else class="mo-body" :class="{ 'mo-body-split': !!moEditDate && moViewMode === 'calendar' }">
+          <div class="mo-main">
+            <!-- 表格视图 -->
+            <div v-if="moViewMode === 'table'" class="mo-scroll-wrap">
+              <table class="mo-table">
+                <thead>
+                  <tr>
+                    <th class="mo-col-name mo-sticky">姓名</th>
+                    <th class="mo-col-stat mo-sticky2">白/夜</th>
+                    <th
+                      v-for="d in monthOverviewDates"
+                      :key="d.date"
+                      class="mo-col-day"
+                      :class="{ 'mo-col-weekend': !d.isWorkday, 'mo-col-today': d.date === todayStr }"
+                      :title="dateHeaderTitle(d)"
+                    >
+                      <div class="mo-th-day">{{ d.date.slice(8) }}</div>
+                      <div class="mo-th-wd">{{ d.label }}</div>
+                      <div v-if="d.holidayMark" class="mo-th-holiday" :class="holidayThClass(d)">{{ d.holidayMark }}</div>
+                    </th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr v-for="emp in monthOverviewEmployees" :key="'mo-' + emp">
+                    <td class="mo-col-name mo-sticky" :title="emp">{{ emp }}</td>
+                    <td class="mo-col-stat mo-sticky2">
+                      <span class="stat-day">{{ moEmpStats[emp]?.day ?? 0 }}</span>/<span class="stat-night">{{ moEmpStats[emp]?.night ?? 0 }}</span>
+                    </td>
+                    <td
+                      v-for="d in monthOverviewDates"
+                      :key="emp + d.date"
+                      class="mo-cell"
+                      :class="moCellClass(emp, d)"
+                      :title="moBusinessTrips[emp]?.[d.date] ? `公出：${moBusinessTrips[emp][d.date]}` : ''"
+                    >
+                      <span class="mo-cell-text">{{ moCellLabel(emp, d.date) }}</span>
+                    </td>
+                  </tr>
+                </tbody>
+                <tfoot>
+                  <tr class="mo-summary-row">
+                    <td class="mo-col-name mo-sticky"><strong>当日合计</strong></td>
+                    <td class="mo-col-stat mo-sticky2">—</td>
+                    <td v-for="d in monthOverviewDates" :key="'sum-' + d.date" class="mo-cell mo-summary-cell">
+                      <span class="stat-day">{{ moDaySummary[d.date]?.day ?? 0 }}</span><span class="mo-slash">/</span><span class="stat-night">{{ moDaySummary[d.date]?.night ?? 0 }}</span>
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
 
-        <!-- 日历视图 -->
-        <div v-else class="mo-scroll-wrap cal-wrap">
-          <div class="cal-legend">
-            <span class="cal-legend-item"><span class="cal-dot cal-dot-day"></span>白班</span>
-            <span class="cal-legend-item"><span class="cal-dot cal-dot-night"></span>夜班</span>
-            <span class="cal-legend-item"><span class="cal-dot cal-dot-trip"></span>公出</span>
-            <span class="cal-legend-item"><span class="cal-dot cal-dot-off"></span>不值班</span>
-          </div>
-          <div class="cal-grid">
-            <div class="cal-weekday-header" v-for="wd in ['一','二','三','四','五','六','日']" :key="wd">{{ wd }}</div>
-            <div v-for="blank in calLeadingBlanks" :key="'blank-' + blank" class="cal-day-cell cal-blank"></div>
-            <div
-              v-for="d in monthOverviewDates"
-              :key="'cal-' + d.date"
-              class="cal-day-cell"
-              :class="{ 'cal-today': d.date === todayStr, 'cal-weekend': !d.isWorkday, 'cal-editable': moCanEditDate(d.date) }"
-              @click="moOpenDayEditor(d)"
-            >
-              <div class="cal-day-num">
-                <span>{{ parseInt(d.date.slice(8)) }}</span>
-                <span v-if="d.holidayMark" class="cal-holiday-tag" :class="holidayThClass(d)">{{ d.holidayMark }}</span>
-                <span v-if="moDayPlans[d.date]" class="cal-plan-chip" title="鼠标悬浮查看值班计划">计划</span>
-                <span v-if="moCanEditDate(d.date)" class="cal-edit-chip" title="点击编辑当日排班">编辑</span>
+            <!-- 日历视图 -->
+            <div v-else class="mo-scroll-wrap cal-wrap">
+              <div class="cal-legend">
+                <span class="cal-legend-item"><span class="cal-dot cal-dot-day"></span>白班</span>
+                <span class="cal-legend-item"><span class="cal-dot cal-dot-night"></span>夜班</span>
+                <span class="cal-legend-item"><span class="cal-dot cal-dot-trip"></span>公出</span>
+                <span class="cal-legend-item"><span class="cal-dot cal-dot-off"></span>不值班</span>
               </div>
-              <div class="cal-day-people">
-                <template v-if="calDayData[d.date]?.day?.length">
-                  <div class="cal-shift-row cal-shift-day">
-                    <span class="cal-shift-label">白</span>
-                    <span class="cal-shift-names">{{ calDayData[d.date].day.join('、') }}</span>
+              <div class="cal-grid">
+                <div class="cal-weekday-header" v-for="wd in ['一','二','三','四','五','六','日']" :key="wd">{{ wd }}</div>
+                <div v-for="blank in calLeadingBlanks" :key="'blank-' + blank" class="cal-day-cell cal-blank"></div>
+                <div
+                  v-for="d in monthOverviewDates"
+                  :key="'cal-' + d.date"
+                  class="cal-day-cell"
+                  :class="{
+                    'cal-today': d.date === todayStr,
+                    'cal-weekend': !d.isWorkday,
+                    'cal-editable': moCanEditDate(d.date),
+                    'cal-editing': moEditDate === d.date,
+                  }"
+                  @click="moOpenDayEditor(d)"
+                >
+                  <div class="cal-day-num">
+                    <span>{{ parseInt(d.date.slice(8)) }}</span>
+                    <span v-if="d.holidayMark" class="cal-holiday-tag" :class="holidayThClass(d)">{{ d.holidayMark }}</span>
+                    <span v-if="moDayPlans[d.date]" class="cal-plan-chip" title="鼠标悬浮查看值班计划">计划</span>
+                    <span v-if="moCanEditDate(d.date)" class="cal-edit-chip" title="点击编辑当日排班">编辑</span>
                   </div>
-                </template>
-                <template v-if="calDayData[d.date]?.night?.length">
-                  <div class="cal-shift-row cal-shift-night">
-                    <span class="cal-shift-label">夜</span>
-                    <span class="cal-shift-names">{{ calDayData[d.date].night.join('、') }}</span>
+                  <div class="cal-day-people">
+                    <template v-if="calDayData[d.date]?.day?.length">
+                      <div class="cal-shift-row cal-shift-day">
+                        <span class="cal-shift-label">白</span>
+                        <span class="cal-shift-names">{{ calDayData[d.date].day.join('、') }}</span>
+                      </div>
+                    </template>
+                    <template v-if="calDayData[d.date]?.night?.length">
+                      <div class="cal-shift-row cal-shift-night">
+                        <span class="cal-shift-label">夜</span>
+                        <span class="cal-shift-names">{{ calDayData[d.date].night.join('、') }}</span>
+                      </div>
+                    </template>
+                    <template v-if="calDayData[d.date]?.trip?.length">
+                      <div class="cal-shift-row cal-shift-trip">
+                        <span class="cal-shift-label">出</span>
+                        <span class="cal-shift-names">{{ calDayData[d.date].trip.join('、') }}</span>
+                      </div>
+                    </template>
+                    <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length && !calDayData[d.date]?.trip?.length" class="cal-shift-empty">无排班</div>
                   </div>
-                </template>
-                <template v-if="calDayData[d.date]?.trip?.length">
-                  <div class="cal-shift-row cal-shift-trip">
-                    <span class="cal-shift-label">出</span>
-                    <span class="cal-shift-names">{{ calDayData[d.date].trip.join('、') }}</span>
+                  <div v-if="moDayPlans[d.date]" class="cal-plan-popover">
+                    <div class="cal-plan-title">值班计划</div>
+                    <div class="cal-plan-text">{{ moDayPlans[d.date] }}</div>
                   </div>
-                </template>
-                <div v-if="!calDayData[d.date]?.day?.length && !calDayData[d.date]?.night?.length && !calDayData[d.date]?.trip?.length" class="cal-shift-empty">无排班</div>
-              </div>
-              <div v-if="moDayPlans[d.date]" class="cal-plan-popover">
-                <div class="cal-plan-title">值班计划</div>
-                <div class="cal-plan-text">{{ moDayPlans[d.date] }}</div>
+                </div>
               </div>
             </div>
           </div>
-        </div>
 
-        <!-- 日历排班快捷编辑面板 -->
-        <div v-if="moEditDate" class="mo-edit-overlay" @click.self="moCloseDayEditor">
-          <div class="mo-edit-panel">
+          <!-- 右侧并排编辑面板（不遮挡月览） -->
+          <aside v-if="moEditDate && moViewMode === 'calendar'" class="mo-edit-panel">
             <div class="mo-edit-head">
               <div class="mo-edit-head-nav">
                 <button
@@ -704,7 +711,7 @@
               </button>
               <button type="button" class="btn btn-danger-outline btn-sm" @click="moClearDay">清空本日</button>
             </div>
-          </div>
+          </aside>
         </div>
       </div>
     </div>
@@ -1365,6 +1372,11 @@ const moDayPlans = reactive({})
 const moBusinessTrips = reactive({})
 const moDept = ref('')
 const moViewMode = ref('calendar')
+
+function moSetViewMode(mode) {
+  if (mode === 'table' && moEditDate.value) moCloseDayEditor()
+  moViewMode.value = mode
+}
 
 const monthOverviewTitle = computed(() => `${monthOverviewYear.value}年${monthOverviewMonth.value}月`)
 
@@ -3425,6 +3437,23 @@ thead tr:first-child .sticky-col2 {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  transition: width 0.18s ease;
+}
+.mo-panel:has(.mo-body-split) {
+  width: min(1480px, 100%);
+}
+.mo-body {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+.mo-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 .mo-header {
   display: flex;
@@ -3702,6 +3731,10 @@ thead tr:first-child .sticky-col2 {
 
 .cal-day-cell.cal-editable { cursor: pointer; }
 .cal-day-cell.cal-editable:hover { background: #eff6ff; box-shadow: inset 0 0 0 1.5px #93c5fd; }
+.cal-day-cell.cal-editing {
+  background: #eff6ff !important;
+  box-shadow: inset 0 0 0 2px #3b82f6;
+}
 .cal-edit-chip {
   margin-left: 4px;
   font-size: 9px;
@@ -3717,24 +3750,17 @@ thead tr:first-child .sticky-col2 {
 }
 .cal-day-cell.cal-editable:hover .cal-edit-chip { opacity: 1; }
 
-/* 月览日历快捷编辑面板 */
-.mo-edit-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 130;
-  background: rgba(15, 23, 42, 0.35);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-}
+/* 月览右侧并排编辑面板（不遮挡日历） */
 .mo-edit-panel {
-  width: min(520px, 94vw);
-  max-height: 86vh;
-  overflow-y: auto;
+  width: min(420px, 42%);
+  flex-shrink: 0;
+  border-left: 1px solid #e2e8f0;
   background: #fff;
-  border-radius: 12px;
-  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.3);
-  padding: 14px 16px 16px;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+  padding: 12px 14px 14px;
+  box-sizing: border-box;
 }
 .mo-edit-head {
   display: flex;
@@ -4060,5 +4086,13 @@ thead tr:first-child .sticky-col2 {
   .toolbar { flex-direction: column; align-items: flex-start; }
   .cal-day-cell { min-height: 70px; padding: 3px; }
   .cal-shift-names { font-size: 10px; }
+  .mo-panel:has(.mo-body-split) { width: min(1180px, 100%); }
+  .mo-body-split { flex-direction: column; }
+  .mo-edit-panel {
+    width: 100%;
+    max-height: 42vh;
+    border-left: none;
+    border-top: 1px solid #e2e8f0;
+  }
 }
 </style>
