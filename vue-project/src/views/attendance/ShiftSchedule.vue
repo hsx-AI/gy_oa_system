@@ -479,10 +479,11 @@
         <div class="mo-header">
           <div class="mo-header-left">
             <h2 class="mo-title">整月排班总览</h2>
-            <select v-model="moDept" class="mo-dept-select" @change="loadMonthOverview">
+            <select v-model="moDept" class="mo-dept-select" @change="moDeptChanged">
               <option v-for="d in departments" :key="d" :value="d">{{ d }}</option>
             </select>
-            <span class="mo-badge">仅查看</span>
+            <span class="mo-badge" :class="{ 'mo-badge-edit': moEditable }">{{ moEditable ? '可编辑' : '仅查看' }}</span>
+            <span v-if="moDirty" class="mo-badge mo-badge-dirty">未保存</span>
             <div class="mo-view-toggle">
               <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'table' }" @click="moViewMode = 'table'">表格</button>
               <button type="button" class="mo-toggle-btn" :class="{ active: moViewMode === 'calendar' }" @click="moViewMode = 'calendar'">日历</button>
@@ -492,10 +493,20 @@
             <button type="button" class="btn btn-sm" @click="shiftOverviewMonth(-1)" :disabled="monthOverviewLoading" title="上一月">&lt;</button>
             <span class="mo-period">{{ monthOverviewTitle }}</span>
             <button type="button" class="btn btn-sm" @click="shiftOverviewMonth(1)" :disabled="monthOverviewLoading" title="下一月">&gt;</button>
+            <button
+              v-if="moEditable"
+              type="button"
+              class="btn btn-success btn-sm"
+              :disabled="!moDirty || moSaving || monthOverviewLoading"
+              @click="moSaveChanges"
+            >{{ moSaving ? '保存中…' : '保存修改' }}</button>
             <button type="button" class="btn btn-primary btn-sm" @click="closeMonthOverview">关闭</button>
           </div>
         </div>
-        <p class="mo-hint">与下方双周编辑区无关；在此仅浏览，修改请关闭后回到主表操作。</p>
+        <p class="mo-hint">
+          <template v-if="moEditable">日历视图下点击「昨天及之后」的日期格即可编辑当日排班：输入姓名自动补全（可整段粘贴多个姓名），也可按日复制 / 粘贴；改动需点「保存修改」写入服务器。</template>
+          <template v-else>与下方双周编辑区无关；在此仅浏览，修改请关闭后回到主表操作。</template>
+        </p>
         <div v-if="monthOverviewLoading" class="mo-loading">加载中…</div>
         <div v-else-if="!monthOverviewEmployees.length" class="mo-empty">该科室当月无在职人员数据</div>
 
@@ -563,12 +574,14 @@
               v-for="d in monthOverviewDates"
               :key="'cal-' + d.date"
               class="cal-day-cell"
-              :class="{ 'cal-today': d.date === todayStr, 'cal-weekend': !d.isWorkday }"
+              :class="{ 'cal-today': d.date === todayStr, 'cal-weekend': !d.isWorkday, 'cal-editable': moCanEditDate(d.date) }"
+              @click="moOpenDayEditor(d)"
             >
               <div class="cal-day-num">
                 <span>{{ parseInt(d.date.slice(8)) }}</span>
                 <span v-if="d.holidayMark" class="cal-holiday-tag" :class="holidayThClass(d)">{{ d.holidayMark }}</span>
                 <span v-if="moDayPlans[d.date]" class="cal-plan-chip" title="鼠标悬浮查看值班计划">计划</span>
+                <span v-if="moCanEditDate(d.date)" class="cal-edit-chip" title="点击编辑当日排班">编辑</span>
               </div>
               <div class="cal-day-people">
                 <template v-if="calDayData[d.date]?.day?.length">
@@ -595,6 +608,101 @@
                 <div class="cal-plan-title">值班计划</div>
                 <div class="cal-plan-text">{{ moDayPlans[d.date] }}</div>
               </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- 日历排班快捷编辑面板 -->
+        <div v-if="moEditDate" class="mo-edit-overlay" @click.self="moCloseDayEditor">
+          <div class="mo-edit-panel">
+            <div class="mo-edit-head">
+              <div class="mo-edit-head-nav">
+                <button
+                  type="button"
+                  class="mo-edit-day-nav"
+                  :disabled="!moEditPrevDate"
+                  title="上一天"
+                  @click="moShiftEditDay(-1)"
+                >&lt;</button>
+                <strong>{{ moEditDateTitle }}</strong>
+                <button
+                  type="button"
+                  class="mo-edit-day-nav"
+                  :disabled="!moEditNextDate"
+                  title="下一天"
+                  @click="moShiftEditDay(1)"
+                >&gt;</button>
+              </div>
+              <button type="button" class="mo-edit-close" @click="moCloseDayEditor">&times;</button>
+            </div>
+            <div class="mo-edit-opts">
+              <div class="mo-edit-opt-group">
+                <span class="mo-edit-opt-label">班次</span>
+                <button
+                  v-for="s in ['白班', '夜班', '白+夜']"
+                  :key="s"
+                  type="button"
+                  class="mo-edit-opt-btn"
+                  :class="{ active: moEditShift === s }"
+                  @click="moEditShift = s"
+                >{{ s }}</button>
+              </div>
+              <div class="mo-edit-opt-group">
+                <span class="mo-edit-opt-label">位置</span>
+                <button
+                  v-for="l in ['服务组', '准备组']"
+                  :key="l"
+                  type="button"
+                  class="mo-edit-opt-btn"
+                  :class="{ active: moEditLoc === l }"
+                  @click="moEditLoc = l"
+                >{{ l }}</button>
+              </div>
+            </div>
+            <div class="mo-edit-input-wrap">
+              <input
+                ref="moEditInputRef"
+                v-model="moEditInput"
+                type="text"
+                class="mo-edit-input"
+                placeholder="输入姓名，回车按上方班次添加；可粘贴多个姓名（逗号/顿号/空格分隔）"
+                @keydown.enter.prevent="moEditConfirm"
+                @keydown.down.prevent="moEditMove(1)"
+                @keydown.up.prevent="moEditMove(-1)"
+                @keydown.esc.stop="moCloseDayEditor"
+                @paste="moEditPaste"
+              >
+              <ul v-if="moEditSuggestions.length" class="mo-edit-sug">
+                <li
+                  v-for="(name, i) in moEditSuggestions"
+                  :key="name"
+                  :class="{ active: i === moEditActiveIdx }"
+                  @mousedown.prevent="moAssignPerson(name)"
+                  @mouseenter="moEditActiveIdx = i"
+                >{{ name }}</li>
+              </ul>
+            </div>
+            <div class="mo-edit-assigned">
+              <div v-for="grp in moEditAssignedGroups" :key="grp.key" class="mo-edit-assigned-row" :class="grp.cls">
+                <span class="mo-edit-assigned-label">{{ grp.label }}</span>
+                <span v-if="!grp.people.length" class="mo-edit-assigned-empty">—</span>
+                <span
+                  v-for="p in grp.people"
+                  :key="p.name"
+                  class="mo-edit-chip"
+                  :title="`点 × 移除；位置：${p.loc || '未指定'}`"
+                >
+                  {{ p.name }}<template v-if="p.loc">({{ p.loc === '准备组' ? '准' : '服' }})</template>
+                  <button type="button" class="mo-edit-chip-x" @click="moRemovePerson(p.name)">&times;</button>
+                </span>
+              </div>
+            </div>
+            <div class="mo-edit-actions">
+              <button type="button" class="btn btn-outline btn-sm" @click="moCopyDay">复制本日</button>
+              <button type="button" class="btn btn-outline btn-sm" :disabled="!moCopiedDay" @click="moPasteDay">
+                粘贴{{ moCopiedDay ? `（${moCopiedDay.from.slice(5)} 共${moCopiedDay.list.length}人）` : '' }}
+              </button>
+              <button type="button" class="btn btn-danger-outline btn-sm" @click="moClearDay">清空本日</button>
             </div>
           </div>
         </div>
@@ -1279,6 +1387,10 @@ const calDayData = computed(() => {
       const locTag = loc ? `(${loc === '准备组' ? '准' : loc === '服务组' ? '服' : loc})` : ''
       if (v === '白班') dayList.push(emp + locTag)
       else if (v === '夜班') nightList.push(emp + locTag)
+      else if (v === '白+夜') {
+        dayList.push(emp + locTag)
+        nightList.push(emp + locTag)
+      }
       else if (moBusinessTrips[emp]?.[d.date]) tripList.push(emp)
     }
     result[d.date] = { day: dayList, night: nightList, trip: tripList }
@@ -1295,6 +1407,7 @@ const moEmpStats = computed(() => {
     for (const v of Object.values(dm)) {
       if (v === '白班') day++
       else if (v === '夜班') night++
+      else if (v === '白+夜') { day++; night++ }
     }
     stats[emp] = { day, night }
   }
@@ -1310,6 +1423,7 @@ const moDaySummary = computed(() => {
       const v = moSchedule[emp]?.[d.date] || ''
       if (v === '白班') day++
       else if (v === '夜班') night++
+      else if (v === '白+夜') { day++; night++ }
     }
     summary[d.date] = { day, night }
   }
@@ -1321,7 +1435,9 @@ function openMonthOverview() {
   monthOverviewYear.value = x.getFullYear()
   monthOverviewMonth.value = x.getMonth() + 1
   moDept.value = selectedDept.value
+  moPrevDept = selectedDept.value
   moViewMode.value = 'calendar'
+  moResetEditState()
   monthOverviewVisible.value = true
   loadMonthOverview()
 }
@@ -1366,10 +1482,14 @@ async function loadMonthOverview() {
 }
 
 function closeMonthOverview() {
+  if (moDirty.value && !confirm('月览中有未保存的排班修改，关闭将丢失。确认关闭？')) return
+  moResetEditState()
   monthOverviewVisible.value = false
 }
 
 function shiftOverviewMonth(delta) {
+  if (moDirty.value && !confirm('月览中有未保存的排班修改，切换月份将丢失。继续？')) return
+  moResetEditState()
   let y = monthOverviewYear.value
   let m = monthOverviewMonth.value + delta
   if (m < 1) {
@@ -1384,12 +1504,342 @@ function shiftOverviewMonth(delta) {
   loadMonthOverview()
 }
 
+// ==================== 月览日历快捷编辑 ====================
+
+const moEditable = computed(() => {
+  try {
+    const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    const jb = (info.jb || '').trim()
+    const myDept = (info.dept || info.lsys || '').trim()
+    return isDeptLeader(jb) && !!moDept.value && moDept.value === myDept
+  } catch { return false }
+})
+
+const moDirty = ref(false)
+const moSaving = ref(false)
+const moChanged = reactive({}) // { 姓名: { 'YYYY-MM-DD': true } }
+const moEditDate = ref('')
+const moEditShift = ref('白班')
+const moEditLoc = ref('服务组')
+const moEditInput = ref('')
+const moEditActiveIdx = ref(0)
+const moCopiedDay = ref(null) // { from: 'YYYY-MM-DD', list: [{ name, shift, loc }] }
+const moEditInputRef = ref(null)
+let moPrevDept = ''
+
+function moResetEditState() {
+  moDirty.value = false
+  Object.keys(moChanged).forEach((k) => delete moChanged[k])
+  moEditDate.value = ''
+  moEditInput.value = ''
+}
+
+function moDeptChanged() {
+  if (moDirty.value && !confirm('月览中有未保存的排班修改，切换科室将丢失。继续？')) {
+    moDept.value = moPrevDept
+    return
+  }
+  moPrevDept = moDept.value
+  moResetEditState()
+  loadMonthOverview()
+}
+
+function moCanEditDate(dateStr) {
+  return moEditable.value && moViewMode.value === 'calendar' && dateStr >= editableFromStr
+}
+
+const moEditDateTitle = computed(() => {
+  const ds = moEditDate.value
+  if (!ds) return ''
+  const di = monthOverviewDates.value.find((d) => d.date === ds)
+  const wd = di ? `（星期${di.label}${di.holidayMark ? ' · ' + di.holidayMark : ''}）` : ''
+  return `${ds}${wd} 排班编辑`
+})
+
+const moEditPrevDate = computed(() => {
+  const ds = moEditDate.value
+  if (!ds) return ''
+  const dates = monthOverviewDates.value.map((d) => d.date)
+  const idx = dates.indexOf(ds)
+  for (let i = idx - 1; i >= 0; i--) {
+    if (moCanEditDate(dates[i])) return dates[i]
+  }
+  return ''
+})
+
+const moEditNextDate = computed(() => {
+  const ds = moEditDate.value
+  if (!ds) return ''
+  const dates = monthOverviewDates.value.map((d) => d.date)
+  const idx = dates.indexOf(ds)
+  for (let i = idx + 1; i < dates.length; i++) {
+    if (moCanEditDate(dates[i])) return dates[i]
+  }
+  return ''
+})
+
+function moOpenDayEditor(d) {
+  if (!moCanEditDate(d.date)) return
+  moEditDate.value = d.date
+  moEditInput.value = ''
+  moEditActiveIdx.value = 0
+  nextTick(() => moEditInputRef.value?.focus?.())
+}
+
+function moShiftEditDay(delta) {
+  const target = delta < 0 ? moEditPrevDate.value : moEditNextDate.value
+  if (!target) return
+  moEditDate.value = target
+  moEditInput.value = ''
+  moEditActiveIdx.value = 0
+  nextTick(() => moEditInputRef.value?.focus?.())
+}
+
+function moCloseDayEditor() {
+  moEditDate.value = ''
+  moEditInput.value = ''
+}
+
+const moEditSuggestions = computed(() => {
+  const ds = moEditDate.value
+  if (!ds) return []
+  const q = moEditInput.value.trim()
+  return monthOverviewEmployees.value
+    .filter((emp) => !(moSchedule[emp]?.[ds]) && (!q || emp.includes(q)))
+    .slice(0, 12)
+})
+
+watch([moEditInput, moEditDate], () => { moEditActiveIdx.value = 0 })
+
+const moEditAssignedGroups = computed(() => {
+  const ds = moEditDate.value
+  const groups = [
+    { key: 'day', label: '白班', cls: 'mo-edit-grp-day', shift: '白班', people: [] },
+    { key: 'night', label: '夜班', cls: 'mo-edit-grp-night', shift: '夜班', people: [] },
+    { key: 'both', label: '白+夜', cls: 'mo-edit-grp-both', shift: '白+夜', people: [] },
+  ]
+  if (!ds) return groups
+  for (const emp of monthOverviewEmployees.value) {
+    const v = moSchedule[emp]?.[ds] || ''
+    const grp = groups.find((g) => g.shift === v)
+    if (grp) grp.people.push({ name: emp, loc: moLocations[emp]?.[ds] || '' })
+  }
+  return groups
+})
+
+function moMarkChanged(emp, ds) {
+  if (!moChanged[emp]) moChanged[emp] = {}
+  moChanged[emp][ds] = true
+  moDirty.value = true
+}
+
+function moAssignPerson(name) {
+  const ds = moEditDate.value
+  if (!name || !ds || !monthOverviewEmployees.value.includes(name)) return
+  if (!moSchedule[name]) moSchedule[name] = {}
+  if (!moLocations[name]) moLocations[name] = {}
+  moSchedule[name][ds] = moEditShift.value
+  moLocations[name][ds] = moEditLoc.value
+  moMarkChanged(name, ds)
+  moEditInput.value = ''
+  moEditActiveIdx.value = 0
+  nextTick(() => moEditInputRef.value?.focus?.())
+}
+
+function moRemovePerson(name) {
+  const ds = moEditDate.value
+  if (!name || !ds) return
+  if (!moSchedule[name]) moSchedule[name] = {}
+  if (!moLocations[name]) moLocations[name] = {}
+  moSchedule[name][ds] = ''
+  moLocations[name][ds] = ''
+  moMarkChanged(name, ds)
+}
+
+function moEditMove(delta) {
+  const len = moEditSuggestions.value.length
+  if (!len) return
+  moEditActiveIdx.value = (moEditActiveIdx.value + delta + len) % len
+}
+
+/** 把整段文字拆成姓名并匹配本科室成员 */
+function moMatchNamesFromText(text) {
+  const tokens = String(text || '').split(/[\s,，、;；/|\n\r\t]+/).map((t) => t.trim()).filter(Boolean)
+  const matched = []
+  const unmatched = []
+  for (const token of tokens) {
+    // 去掉粘贴内容中可能带的班次/位置标注，如 张三(服)、李四（白班）
+    const pure = token.replace(/[（(].*?[)）]/g, '').trim()
+    if (!pure) continue
+    if (monthOverviewEmployees.value.includes(pure)) {
+      if (!matched.includes(pure)) matched.push(pure)
+    } else {
+      const hit = monthOverviewEmployees.value.filter((emp) => emp.includes(pure))
+      if (hit.length === 1) {
+        if (!matched.includes(hit[0])) matched.push(hit[0])
+      } else {
+        unmatched.push(pure)
+      }
+    }
+  }
+  return { matched, unmatched }
+}
+
+function moEditConfirm() {
+  const raw = moEditInput.value.trim()
+  if (!raw) return
+  const { matched, unmatched } = moMatchNamesFromText(raw)
+  if (matched.length > 1) {
+    for (const name of matched) moAssignPerson(name)
+    if (unmatched.length) showShiftCapToast(`未匹配到成员：${unmatched.join('、')}`)
+    return
+  }
+  const pick = moEditSuggestions.value[moEditActiveIdx.value] || matched[0]
+  if (pick) {
+    moAssignPerson(pick)
+  } else {
+    showShiftCapToast(`未匹配到本科室成员：${raw}`)
+  }
+}
+
+function moEditPaste(e) {
+  const text = e.clipboardData?.getData('text') || ''
+  const { matched, unmatched } = moMatchNamesFromText(text)
+  if (matched.length >= 2 || (matched.length === 1 && /[\s,，、;；/|\n]/.test(text.trim()))) {
+    e.preventDefault()
+    for (const name of matched) moAssignPerson(name)
+    showShiftCapToast(
+      `已按「${moEditShift.value}·${moEditLoc.value}」添加 ${matched.length} 人`
+      + (unmatched.length ? `；未匹配：${unmatched.join('、')}` : ''),
+    )
+  }
+}
+
+function moCopyDay() {
+  const ds = moEditDate.value
+  if (!ds) return
+  const list = []
+  for (const emp of monthOverviewEmployees.value) {
+    const v = moSchedule[emp]?.[ds] || ''
+    if (v) list.push({ name: emp, shift: v, loc: moLocations[emp]?.[ds] || '' })
+  }
+  if (!list.length) {
+    showShiftCapToast('本日暂无排班可复制')
+    return
+  }
+  moCopiedDay.value = { from: ds, list }
+  try {
+    const text = list.map((p) => `${p.name}(${p.shift}${p.loc ? '·' + p.loc : ''})`).join('、')
+    navigator.clipboard?.writeText?.(text)
+  } catch { /* 忽略系统剪贴板失败 */ }
+  showShiftCapToast(`已复制 ${ds.slice(5)} 的 ${list.length} 人排班，可到其他日期粘贴`)
+}
+
+function moPasteDay() {
+  const ds = moEditDate.value
+  const copied = moCopiedDay.value
+  if (!ds || !copied || !copied.list.length) return
+  let applied = 0
+  for (const p of copied.list) {
+    if (!monthOverviewEmployees.value.includes(p.name)) continue
+    if (!moSchedule[p.name]) moSchedule[p.name] = {}
+    if (!moLocations[p.name]) moLocations[p.name] = {}
+    moSchedule[p.name][ds] = p.shift
+    moLocations[p.name][ds] = p.loc
+    moMarkChanged(p.name, ds)
+    applied++
+  }
+  showShiftCapToast(`已粘贴 ${copied.from.slice(5)} 的排班到 ${ds.slice(5)}（${applied} 人）`)
+}
+
+function moClearDay() {
+  const ds = moEditDate.value
+  if (!ds) return
+  const assigned = monthOverviewEmployees.value.filter((emp) => moSchedule[emp]?.[ds])
+  if (!assigned.length) return
+  if (!confirm(`确认清空 ${ds} 的全部排班（${assigned.length} 人）？`)) return
+  for (const emp of assigned) moRemovePerson(emp)
+}
+
+async function moSaveChanges() {
+  if (!moDirty.value || moSaving.value || !moEditable.value) return
+  const schedule = {}
+  const locations = {}
+  const changedDates = new Set()
+  for (const [emp, dm] of Object.entries(moChanged)) {
+    for (const ds of Object.keys(dm)) {
+      if (!schedule[emp]) schedule[emp] = {}
+      if (!locations[emp]) locations[emp] = {}
+      schedule[emp][ds] = moSchedule[emp]?.[ds] || ''
+      locations[emp][ds] = moLocations[emp]?.[ds] || ''
+      changedDates.add(ds)
+    }
+  }
+  const sortedDates = [...changedDates].sort()
+  if (!sortedDates.length) return
+  moSaving.value = true
+  try {
+    let resendWeeks = []
+    try {
+      const res = await getShiftScheduleEmailSentWeeks({
+        current_user: getCurrentUser(),
+        department: moDept.value,
+        start_date: sortedDates[0],
+        end_date: sortedDates[sortedDates.length - 1],
+      })
+      const weeks = (res?.weeks || []).filter((week) => (
+        sortedDates.some((ds) => ds >= week.weekStart && ds <= week.weekEnd)
+      ))
+      if (weeks.length && confirmResendScheduleEmail(weeks)) resendWeeks = weeks
+    } catch (e) {
+      console.error('检查排班邮件发送记录失败:', e)
+    }
+    await saveSchedule({
+      department: moDept.value,
+      year: monthOverviewYear.value,
+      month: monthOverviewMonth.value,
+      schedule,
+      locations,
+      current_user: getCurrentUser(),
+    })
+    let resendError = ''
+    for (const week of resendWeeks) {
+      try {
+        await runShiftScheduleEmail({
+          current_user: getCurrentUser(),
+          department: moDept.value,
+          week_date: week.weekStart,
+          force: true,
+        })
+      } catch (mailErr) {
+        resendError = mailErr?.response?.data?.detail || mailErr?.message || '发送失败'
+      }
+    }
+    moDirty.value = false
+    Object.keys(moChanged).forEach((k) => delete moChanged[k])
+    if (moDept.value === selectedDept.value) {
+      await loadSchedule()
+      await loadNextWeekScheduleCompletion()
+    }
+    if (resendError) {
+      alert(`已保存，但重新发送排班邮件失败：${resendError}`)
+    } else {
+      alert(resendWeeks.length ? '已保存，并已重新发送排班邮件' : '已保存')
+    }
+  } catch (e) {
+    alert(e?.response?.data?.detail || '保存失败')
+  } finally {
+    moSaving.value = false
+  }
+}
+
 function moCellLabel(emp, dateStr) {
   const v = moSchedule[emp]?.[dateStr] || ''
   const loc = moLocations[emp]?.[dateStr] || ''
   const ls = loc === '准备组' ? '准' : loc === '服务组' ? '服' : ''
   if (v === '白班') return ls ? `白${ls}` : '白'
   if (v === '夜班') return ls ? `夜${ls}` : '夜'
+  if (v === '白+夜') return '白夜'
   if (!v && moBusinessTrips[emp]?.[dateStr]) return '出'
   return ''
 }
@@ -2813,6 +3263,9 @@ async function handleExportExcel() {
 
 .btn-success-outline { background: white; border-color: #22c55e; color: #16a34a; }
 .btn-success-outline:hover { background: #f0fdf4; }
+.btn-success { background: #16a34a; border-color: #16a34a; color: #fff; }
+.btn-success:hover:not(:disabled) { background: #15803d; }
+.btn-success:disabled { opacity: 0.55; cursor: not-allowed; }
 
 .col-name {
   width: var(--shift-col-name);
@@ -3004,6 +3457,8 @@ thead tr:first-child .sticky-col2 {
   color: #4338ca;
   font-weight: 600;
 }
+.mo-badge-edit { background: #dcfce7; color: #15803d; }
+.mo-badge-dirty { background: #fef3c7; color: #b45309; }
 .mo-header-nav { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }
 .mo-period { font-weight: 700; font-size: 13px; min-width: 88px; text-align: center; color: #334155; }
 .mo-hint {
@@ -3244,6 +3699,189 @@ thead tr:first-child .sticky-col2 {
   font-weight: 600;
   border: 1px solid #93c5fd;
 }
+
+.cal-day-cell.cal-editable { cursor: pointer; }
+.cal-day-cell.cal-editable:hover { background: #eff6ff; box-shadow: inset 0 0 0 1.5px #93c5fd; }
+.cal-edit-chip {
+  margin-left: 4px;
+  font-size: 9px;
+  line-height: 1;
+  padding: 2px 4px;
+  border-radius: 3px;
+  background: #dcfce7;
+  color: #15803d;
+  font-weight: 600;
+  border: 1px solid #86efac;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+.cal-day-cell.cal-editable:hover .cal-edit-chip { opacity: 1; }
+
+/* 月览日历快捷编辑面板 */
+.mo-edit-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 130;
+  background: rgba(15, 23, 42, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.mo-edit-panel {
+  width: min(520px, 94vw);
+  max-height: 86vh;
+  overflow-y: auto;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 50px rgba(15, 23, 42, 0.3);
+  padding: 14px 16px 16px;
+}
+.mo-edit-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 10px;
+  font-size: 14px;
+  color: #1e293b;
+  gap: 8px;
+}
+.mo-edit-head-nav {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.mo-edit-head-nav strong {
+  white-space: nowrap;
+}
+.mo-edit-day-nav {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #475569;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+}
+.mo-edit-day-nav:hover:not(:disabled) {
+  background: #e2e8f0;
+  color: #1e293b;
+}
+.mo-edit-day-nav:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.mo-edit-close {
+  border: none;
+  background: transparent;
+  font-size: 22px;
+  line-height: 1;
+  color: #94a3b8;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.mo-edit-close:hover { color: #475569; }
+.mo-edit-opts { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 10px; }
+.mo-edit-opt-group { display: flex; align-items: center; gap: 6px; }
+.mo-edit-opt-label { font-size: 12px; color: #64748b; }
+.mo-edit-opt-btn {
+  padding: 5px 12px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: 6px;
+  border: 1.5px solid #cbd5e1;
+  background: #f8fafc;
+  color: #475569;
+  cursor: pointer;
+  transition: all 0.12s;
+}
+.mo-edit-opt-btn:hover { border-color: #94a3b8; }
+.mo-edit-opt-btn.active {
+  background: #dbeafe;
+  border-color: #3b82f6;
+  color: #1d4ed8;
+}
+.mo-edit-input-wrap { margin-bottom: 10px; }
+.mo-edit-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  font-size: 13px;
+  border: 1.5px solid #cbd5e1;
+  border-radius: 8px;
+  outline: none;
+}
+.mo-edit-input:focus { border-color: #3b82f6; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.15); }
+.mo-edit-sug {
+  margin: 6px 0 0;
+  padding: 6px;
+  list-style: none;
+  background: #f8fafc;
+  border: 1px dashed #cbd5e1;
+  border-radius: 8px;
+  max-height: 150px;
+  overflow-y: auto;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+.mo-edit-sug li {
+  padding: 5px 10px;
+  font-size: 12px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: #334155;
+  background: #fff;
+  border: 1px solid #e2e8f0;
+}
+.mo-edit-sug li.active { background: #dbeafe; border-color: #3b82f6; color: #1d4ed8; }
+.mo-edit-assigned { display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px; }
+.mo-edit-assigned-row {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 5px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+.mo-edit-grp-day { background: #eff6ff; }
+.mo-edit-grp-night { background: #fffbeb; }
+.mo-edit-grp-both { background: #f5f3ff; }
+.mo-edit-assigned-label {
+  font-size: 12px;
+  font-weight: 700;
+  color: #475569;
+  min-width: 38px;
+  padding-top: 3px;
+}
+.mo-edit-assigned-empty { font-size: 12px; color: #94a3b8; padding-top: 3px; }
+.mo-edit-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  font-size: 12px;
+  padding: 3px 4px 3px 8px;
+  border-radius: 999px;
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  color: #334155;
+}
+.mo-edit-chip-x {
+  border: none;
+  background: transparent;
+  color: #94a3b8;
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0 3px;
+}
+.mo-edit-chip-x:hover { color: #dc2626; }
+.mo-edit-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 
 .cal-day-people { flex: 1; overflow-y: auto; }
 

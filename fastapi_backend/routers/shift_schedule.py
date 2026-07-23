@@ -2428,7 +2428,7 @@ async def export_schedule_excel(
                 attendance_count = len(set(day_shift + night_shift + trip_names))
                 daily_total += attendance_count
                 prepare_text = _format_group_lines(dept_name, prepare_names, people_by_name, trip_entries)
-                service_text = _format_group_lines(dept_name, service_names, people_by_name, trip_entries)
+                service_text = _format_group_lines(dept_name, service_names, people_by_name)
                 plan_text = _compact_plan(dept_plans.get(ds, ""))
                 trip_line = _format_trip_line(trip_entries)
                 if trip_line:
