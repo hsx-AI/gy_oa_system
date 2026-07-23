@@ -1618,7 +1618,6 @@ const moEditSuggestions = computed(() => {
   const q = moEditInput.value.trim()
   return monthOverviewEmployees.value
     .filter((emp) => !(moSchedule[emp]?.[ds]) && (!q || emp.includes(q)))
-    .slice(0, 12)
 })
 
 watch([moEditInput, moEditDate], () => { moEditActiveIdx.value = 0 })
@@ -3849,7 +3848,7 @@ thead tr:first-child .sticky-col2 {
   background: #f8fafc;
   border: 1px dashed #cbd5e1;
   border-radius: 8px;
-  max-height: 150px;
+  max-height: 220px;
   overflow-y: auto;
   display: flex;
   flex-wrap: wrap;
