@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS performance_records (
   rank_no INT NULL,
   rank_percent DECIMAL(10,6) NULL,
   performance_grade VARCHAR(4) NULL COMMENT '自动绩效等级：A、B+、B、C；不参与排名时为空',
+  grade_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=绩效等级由人工调整',
   created_by VARCHAR(64) NOT NULL,
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -18,3 +19,29 @@ CREATE TABLE IF NOT EXISTS performance_records (
   KEY idx_performance_dept_month (department, performance_month),
   KEY idx_performance_employee_month (employee_name, performance_month)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工月度绩效';
+
+CREATE TABLE IF NOT EXISTS quarterly_performance_records (
+  id BIGINT NOT NULL AUTO_INCREMENT,
+  quarter_start DATE NOT NULL COMMENT '季度首月，例如 2026-07-01',
+  department VARCHAR(100) NOT NULL,
+  employee_name VARCHAR(64) NOT NULL,
+  job_level VARCHAR(100) NULL,
+  monthly_total DECIMAL(12,2) NOT NULL DEFAULT 0 COMMENT '季度内月度绩效得分合计',
+  work_performance_score DECIMAL(12,2) NULL COMMENT '工作业绩得分，由主任/副主任填写',
+  ability_score DECIMAL(10,2) NULL COMMENT '能力素养得分',
+  behavior_score DECIMAL(10,2) NULL COMMENT '行为表现得分',
+  adjustment_score DECIMAL(10,2) NOT NULL DEFAULT 0 COMMENT '加/减分',
+  total_score DECIMAL(12,2) NULL COMMENT '总分',
+  rank_no INT NULL COMMENT '按月绩效总计排名',
+  rank_percent DECIMAL(10,6) NULL,
+  assessment_grade VARCHAR(4) NULL COMMENT '考核等级：A、B+、B、C',
+  grade_manual TINYINT(1) NOT NULL DEFAULT 0 COMMENT '1=考核等级由人工调整',
+  remark VARCHAR(500) NULL,
+  created_by VARCHAR(64) NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uk_quarter_employee (quarter_start, employee_name),
+  KEY idx_quarter_dept (quarter_start, department),
+  KEY idx_quarter_employee (employee_name, quarter_start)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='员工季度绩效';
