@@ -6,3 +6,5 @@ export const savePerformance = (data) => request({ url: '/performance/save', met
 export const getPerformanceRecords = (params) => request({ url: '/performance/records', method: 'get', params })
 export const getPerformanceHistory = (params) => request({ url: '/performance/history', method: 'get', params })
 export const getPerformanceDepartments = (params) => request({ url: '/performance/departments', method: 'get', params })
+export const getQuarterlyPerformanceRoster = (params) => request({ url: '/performance/quarterly/roster', method: 'get', params })
+export const saveQuarterlyPerformance = (data) => request({ url: '/performance/quarterly/save', method: 'post', data, timeout: 120000 })

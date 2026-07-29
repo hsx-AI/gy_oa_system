@@ -9,7 +9,7 @@ import OvertimePay from '../views/OvertimePay.vue'
 import Performance from '../views/Performance.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -87,7 +87,7 @@ const routes = [
     path: '/performance',
     name: 'Performance',
     component: Performance,
-    meta: { title: '月度绩效' }
+    meta: { title: '绩效统计' }
   },
   {
     path: '/attendance/manual',
@@ -294,6 +294,60 @@ const routes = [
     name: 'Contacts',
     component: () => import('@/views/Contacts.vue'),
     meta: { title: '部门通讯录' }
+  },
+  {
+    path: '/action-items/dashboard',
+    name: 'ActionItemDashboard',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'dashboard' },
+    meta: { title: '行动项驾驶舱' }
+  },
+  {
+    path: '/action-items/minutes',
+    name: 'ActionItemMinutes',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'minutes' },
+    meta: { title: '会议纪要' }
+  },
+  {
+    path: '/action-items/ledger',
+    name: 'ActionItemLedger',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'ledger' },
+    meta: { title: '行动项台账' }
+  },
+  {
+    path: '/action-items/my',
+    name: 'MyActionItems',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'my' },
+    meta: { title: '我的行动项' }
+  },
+  {
+    path: '/action-items/messages',
+    name: 'MyActionItemMessages',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'messages' },
+    meta: { title: '行动项消息' }
+  },
+  {
+    path: '/action-items/approvals',
+    name: 'ActionItemApprovals',
+    component: () => import('@/views/action-items/ActionItemCenter.vue'),
+    props: { mode: 'approvals' },
+    meta: { title: '行动项审批' }
+  },
+  {
+    path: '/action-items/review/:meetingId',
+    name: 'ActionItemReview',
+    component: () => import('@/views/action-items/ActionItemReview.vue'),
+    meta: { title: 'AI提取确认' }
+  },
+  {
+    path: '/action-items/:id',
+    name: 'ActionItemDetail',
+    component: () => import('@/views/action-items/ActionItemDetail.vue'),
+    meta: { title: '行动项详情' }
   },
   {
     path: '/info-feed',
@@ -595,12 +649,15 @@ router.beforeEach(async (to, _from, next) => {
       const user = JSON.parse(raw)
       const name = (user.name || user.userName || '').trim()
       if (!name) { next('/'); return }
-      const jb = (user.jb || '').trim()
-      const minister = isMinisterLevel(jb)
       const res = await getUploadConfig()
-      const a1 = (res?.admin1 || '').trim()
-      const a2 = (res?.admin2 || '').trim()
-      if ((a1 && name === a1) || (a2 && name === a2) || minister) {
+      const allowed = canManageHxpBatch({
+        name,
+        jb: (user.jb || '').trim(),
+        lsys: (user.dept || user.lsys || '').trim(),
+        admin1: res?.admin1,
+        admin2: res?.admin2,
+      })
+      if (allowed) {
         next()
       } else {
         next('/')

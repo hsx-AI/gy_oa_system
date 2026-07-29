@@ -114,7 +114,7 @@
         <div class="wall-bottom">
           <button class="wb-btn wb-primary" @click="showWallInput = true">✏️ 发一条吐槽</button>
           <button class="wb-btn wb-secondary" @click="openAllWallRecords">📋 查看全部记录</button>
-          <button v-if="isAdmin1" class="wb-btn wb-outline" @click="openWallReview">
+          <button v-if="canReviewWall" class="wb-btn wb-outline" @click="openWallReview">
             ⚙️ 审核管理 <span v-if="wallPendingCount" class="badge">{{ wallPendingCount }}</span>
           </button>
         </div>
@@ -473,6 +473,8 @@ const isLeader = computed(() => {
   return /经理助理|副经理|经理|副部长|部长/.test(j) || isAdmin1.value
 })
 const canViewPrivateWallRecords = computed(() => isLeader.value || isAdmin1.value)
+/** 吐槽墙初级审核：管理员、经理或部长 */
+const canReviewWall = computed(() => isAdmin1.value || userJb === '经理' || userJb === '部长')
 
 function wallResolveLabel(v) {
   return Number(v) === 3 ? '已解决' : Number(v) === 2 ? '已回复' : Number(v) === 1 ? '处理中' : '未处理'

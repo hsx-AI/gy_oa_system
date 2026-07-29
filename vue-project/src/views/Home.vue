@@ -151,16 +151,20 @@
                 <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
               </svg>
             </span>
-            <span class="dashboard-card__title-text">部门通讯录</span>
+            <span class="dashboard-card__title-text">通讯录</span>
             <span v-if="contactsHomeTotal > 0" class="dashboard-card__badge">{{ contactsHomeTotal }}</span>
           </h2>
           <router-link to="/contacts" class="dashboard-card__link">查看全部</router-link>
         </header>
         <div class="dashboard-card__body contacts-home-body">
           <div class="contacts-home-toolbar">
+            <div class="contacts-home-tabs" role="tablist" aria-label="通讯录类型">
+              <button type="button" class="contacts-home-tab" :class="{ 'is-active': contactsHomeSource === 'department' }" @click="switchContactsHomeSource('department')">部门</button>
+              <button type="button" class="contacts-home-tab" :class="{ 'is-active': contactsHomeSource === 'company' }" @click="switchContactsHomeSource('company')">公司</button>
+            </div>
             <select v-model="contactsHomeDept" class="contacts-home-select" @change="loadContactsHome">
-              <option value="">全部科室</option>
-              <option v-for="d in CONTACT_HOME_DEPT_OPTIONS" :key="d" :value="d">{{ d }}</option>
+              <option value="">{{ contactsHomeSource === 'company' ? '全部单位' : '全部科室' }}</option>
+              <option v-for="d in contactsHomeDeptOptions" :key="d" :value="d">{{ d }}</option>
             </select>
             <div class="contacts-home-search">
               <input
@@ -1026,7 +1030,7 @@ import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch } from '@/utils/roleMatch'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
@@ -1455,6 +1459,8 @@ function canShowFeature(permission) {
       return isAdmin1 || (!!d && name === d) || isMinisterOrDeptLeader(jb)
     case 'hxpRecords':
       return isMinisterLevel(jb) || (!!a2 && name === a2)
+    case 'hxpManage':
+      return canManageHxpBatch({ name, jb, lsys, admin1: a1, admin2: a2 })
     case 'employeeAdmin':
       return isAdmin1 || isMinisterOrDeptLeader(jb) || (!!a2 && name === a2)
     case 'rotorBladeBalance':
@@ -1484,6 +1490,8 @@ const contactsHomeDepartments = ref([])
 const contactsHomeLoading = ref(false)
 const contactsHomeKeyword = ref('')
 const contactsHomeDept = ref('')
+const contactsHomeSource = ref('department')
+const contactsHomeDeptOptions = ref([...CONTACT_HOME_DEPT_OPTIONS])
 const contactsHomeTotal = ref(0)
 let contactsHomeSearchTimer = null
 
@@ -1510,12 +1518,16 @@ async function loadContactsHome() {
   try {
     const params = {}
     if (contactsHomeDept.value) params.department = contactsHomeDept.value
+    params.source = contactsHomeSource.value
     const kw = contactsHomeKeyword.value.trim()
     if (kw) params.keyword = kw
     const res = await getContacts(params)
     if (res?.success) {
       const deps = res.departments || []
       contactsHomeDepartments.value = deps
+      if (!contactsHomeDept.value) {
+        contactsHomeDeptOptions.value = deps.map(d => d.name)
+      }
       contactsHomeTotal.value =
         typeof res.total === 'number'
           ? res.total
@@ -1526,6 +1538,15 @@ async function loadContactsHome() {
   } finally {
     contactsHomeLoading.value = false
   }
+}
+
+function switchContactsHomeSource(source) {
+  if (contactsHomeSource.value === source) return
+  contactsHomeSource.value = source
+  contactsHomeDept.value = ''
+  contactsHomeKeyword.value = ''
+  contactsHomeDeptOptions.value = source === 'department' ? [...CONTACT_HOME_DEPT_OPTIONS] : []
+  loadContactsHome()
 }
 
 function onContactsHomeSearchInput() {
@@ -1593,6 +1614,15 @@ const rawFeatureGroups = [
         permission: 'hxpRecords',
         color: 'linear-gradient(135deg, #fbc2eb 0%, #a6c1ee 100%)',
         iconPath: 'M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4'
+      },
+      {
+        id: 'hxp-manage',
+        title: '换休票批量管理',
+        description: '批量为员工增加或减少换休票，提交后需领导审批生效',
+        path: '/admin/hxp-manage',
+        permission: 'hxpManage',
+        color: 'linear-gradient(135deg, #f6d365 0%, #fda085 100%)',
+        iconPath: 'M3 7a2 2 0 012-2h14a2 2 0 012 2v10a2 2 0 01-2 2H5a2 2 0 01-2-2V7zm0 4h18M9 15h2m4 0h2'
       },
       {
         id: 'upload',
@@ -2937,6 +2967,31 @@ async function navigateTo(feature) {
   align-items: center;
   gap: var(--spacing-sm);
   margin-bottom: var(--spacing-sm);
+}
+
+.contacts-home-tabs {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--color-border-lighter);
+  border-radius: var(--radius-sm);
+  background: var(--color-bg-page, #f8fafc);
+}
+
+.contacts-home-tab {
+  border: 0;
+  border-radius: 3px;
+  padding: 3px 7px;
+  color: var(--color-text-secondary);
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.contacts-home-tab.is-active {
+  color: var(--color-primary, #2563eb);
+  background: var(--color-bg-container, #fff);
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .12);
+  font-weight: 600;
 }
 
 .contacts-home-select {

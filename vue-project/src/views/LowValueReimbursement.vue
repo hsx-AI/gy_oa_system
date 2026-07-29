@@ -95,14 +95,15 @@
         </label>
 
         <div class="upload-grid">
-          <FileBox title="已购买的实物照片" hint="支持拖拽或点击上传图片" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" :file="photoFile" @change="setPhotoFile" />
+          <FileBox title="已购买的实物照片" hint="支持拖拽、点击或 Ctrl+V 粘贴图片" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" :file="photoFile" @change="setPhotoFile" @invalid="showToast($event, 'error')" />
           <FileBox
             title="发票"
-            hint="上传PDF后自动识别供应商、数量、单价"
+            hint="上传PDF自动识别；也可从文件夹复制后 Ctrl+V 粘贴 PDF/图片"
             :status="invoiceParseStatus"
             accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf,.ofd"
             :file="invoiceFile"
             @change="setInvoiceFile"
+            @invalid="showToast($event, 'error')"
           />
         </div>
         <div v-if="invoiceParseMessage || invoiceParsedSummary" class="invoice-parse-panel" :class="invoiceParseStatus">
@@ -443,7 +444,7 @@
 </template>
 
 <script setup>
-import { computed, defineComponent, h, onMounted, ref, watch } from 'vue'
+import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   actionLowValueReimbursement,
@@ -468,23 +469,108 @@ import {
 
 const FileBox = defineComponent({
   props: { title: String, hint: String, status: String, accept: String, file: Object },
-  emits: ['change'],
+  emits: ['change', 'invalid'],
   setup(props, { emit }) {
     const inputRef = ref(null)
     const dragging = ref(false)
+    const pasteTarget = ref(false)
     const pick = () => inputRef.value?.click()
     const onChange = (e) => emit('change', e.target.files?.[0] || null)
+    const IMAGE_EXTS = ['.jpg', '.jpeg', '.png', '.gif', '.bmp', '.webp']
+    const MIME_EXT = {
+      'application/pdf': '.pdf',
+      'application/ofd': '.ofd',
+      'image/jpeg': '.jpg',
+      'image/jpg': '.jpg',
+      'image/png': '.png',
+      'image/gif': '.gif',
+      'image/bmp': '.bmp',
+      'image/webp': '.webp',
+    }
+    const normalizePastedFile = (file) => {
+      if (!file) return null
+      const name = String(file.name || '').trim()
+      if (name) return file
+      const type = String(file.type || '').toLowerCase()
+      let ext = MIME_EXT[type] || ''
+      if (!ext && type.startsWith('image/')) {
+        const sub = type.split('/')[1] || 'png'
+        ext = `.${sub === 'jpeg' ? 'jpg' : sub}`
+      }
+      if (!ext) return file
+      return new File([file], `粘贴文件${ext}`, { type: file.type || undefined, lastModified: file.lastModified || Date.now() })
+    }
+    const getClipboardFiles = (clipboardData) => {
+      const fromFiles = Array.from(clipboardData?.files || []).filter(Boolean)
+      if (fromFiles.length) return fromFiles.map(normalizePastedFile).filter(Boolean)
+      const fromItems = []
+      for (const item of Array.from(clipboardData?.items || [])) {
+        if (item?.kind !== 'file') continue
+        const file = normalizePastedFile(item.getAsFile())
+        if (file) fromItems.push(file)
+      }
+      return fromItems
+    }
+    const acceptsFile = (file) => {
+      const acceptList = String(props.accept || '')
+        .toLowerCase()
+        .split(',')
+        .map((item) => item.trim())
+        .filter(Boolean)
+      if (!acceptList.length) return true
+      const fileName = String(file?.name || '').toLowerCase()
+      const fileType = String(file?.type || '').toLowerCase()
+      if (fileType.startsWith('image/') && acceptList.some((accept) => IMAGE_EXTS.includes(accept))) {
+        return true
+      }
+      if (fileType === 'application/pdf' && acceptList.includes('.pdf')) return true
+      if ((fileType === 'application/ofd' || fileType.includes('ofd')) && acceptList.includes('.ofd')) return true
+      return acceptList.some((accept) => {
+        if (accept.startsWith('.')) return fileName.endsWith(accept)
+        if (accept.endsWith('/*')) return fileType.startsWith(accept.slice(0, -1))
+        return fileType === accept
+      })
+    }
+    const useFile = (file) => {
+      if (!file) return
+      if (!acceptsFile(file)) {
+        emit('invalid', `${props.title || '附件'}不支持该文件格式`)
+        return
+      }
+      emit('change', file)
+    }
     const onDrop = (e) => {
       dragging.value = false
-      const file = e.dataTransfer?.files?.[0]
-      if (file) emit('change', file)
+      useFile(normalizePastedFile(e.dataTransfer?.files?.[0]))
     }
+    const onPaste = (e) => {
+      if (e.defaultPrevented) return
+      const files = getClipboardFiles(e.clipboardData)
+      const file = files.find(acceptsFile)
+      if (!file) {
+        if (files.length) emit('invalid', `${props.title || '附件'}不支持剪贴板中的文件格式`)
+        else if (pasteTarget.value) emit('invalid', '未检测到可粘贴文件，请先在文件夹中复制 PDF/图片后再粘贴')
+        return
+      }
+      e.preventDefault()
+      useFile(file)
+    }
+    const onWindowPaste = (e) => {
+      if (pasteTarget.value) onPaste(e)
+    }
+    onMounted(() => window.addEventListener('paste', onWindowPaste))
+    onBeforeUnmount(() => window.removeEventListener('paste', onWindowPaste))
     return () => h('div', {
       class: ['file-box', props.file ? 'has-file' : '', dragging.value ? 'is-dragging' : '', props.status ? `status-${props.status}` : ''],
+      tabindex: 0,
+      title: '点击选择文件，或将鼠标移到此处后按 Ctrl+V 粘贴',
+      onPointerenter: () => { pasteTarget.value = true },
+      onPointerleave: () => { pasteTarget.value = false },
       onDragenter: (e) => { e.preventDefault(); dragging.value = true },
       onDragover: (e) => { e.preventDefault(); dragging.value = true },
       onDragleave: () => { dragging.value = false },
       onDrop: (e) => { e.preventDefault(); onDrop(e) },
+      onPaste,
     }, [
       h('input', { ref: inputRef, class: 'file-hidden', type: 'file', accept: props.accept, onChange }),
       props.file
@@ -1437,6 +1523,11 @@ watch(rejectVisible, (visible) => {
 :deep(.file-box.is-dragging) {
   border-color: var(--color-primary);
   background: var(--color-primary-lightest);
+}
+:deep(.file-box:focus),
+:deep(.file-box:focus-within) {
+  border-color: var(--color-primary);
+  outline: 3px solid var(--color-primary-lightest);
 }
 :deep(.file-box.status-loading) {
   border-color: var(--color-primary-light);

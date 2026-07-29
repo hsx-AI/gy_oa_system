@@ -115,6 +115,13 @@ export function canUseAiAssistant({ jb, lsys }) {
   return j === '经理' || j === '副经理' || j === '经理助理'
 }
 
+/** 换休票批量管理：admin1、admin2、部长/副部长、综合技术室主任/副主任 */
+export function canManageHxpBatch({ name, jb, lsys, admin1, admin2 }) {
+  if (isAdmin1User(name, admin1) || isAdmin2User(name, admin2)) return true
+  if (isMinisterLevel(jb)) return true
+  return isZongheTechDirector({ jb, lsys })
+}
+
 /** 管理驾驶舱 / 考勤纪律审查：部长副部长、综合技术室主任副主任、admin1、admin2 */
 export function canAccessLeaderDashboard({ name, jb, lsys, admin1, admin2 }) {
   const n = (name || '').trim()

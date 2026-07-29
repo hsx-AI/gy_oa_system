@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 意见与建议模块
-  1. 部门吐槽墙（匿名弹幕，admin1 审核后上墙，支持点赞/领导回复/图片）
+  1. 部门吐槽墙（匿名弹幕，admin1/经理层审核后上墙，支持点赞/领导回复/图片）
   2. 领导匿名信箱（匿名投递，经理/副经理回复）
   3. 系统功能建议（实名提交，admin1 回复）
 """
@@ -178,6 +178,21 @@ def _is_wall_privileged_user(current_user: str) -> bool:
     )
     jb = (rows[0].get("jb") if rows else "") or ""
     return bool(re.search(r"经理助理|副经理|经理|副部长|部长", jb))
+
+
+def _require_wall_reviewer(current_user: str):
+    """吐槽墙初级审核：admin1、经理或部长。"""
+    name = (current_user or "").strip()
+    admin1 = _get_admin1()
+    if admin1 and name == admin1:
+        return
+    rows = db.execute_query(
+        "SELECT jb FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+        (name,),
+    )
+    jb = ((rows[0].get("jb") if rows else "") or "").strip()
+    if jb not in {"经理", "部长"}:
+        raise HTTPException(status_code=403, detail="仅管理员、经理或部长可审核吐槽")
 
 
 def _unique_email_people(rows) -> list[dict]:
@@ -434,9 +449,9 @@ async def wall_assigned(current_user: str = Query(...)):
 
 @router.get("/wall/pending")
 async def wall_pending(current_user: str = Query(...)):
-    """待审核列表（仅 admin1）"""
+    """待审核列表（admin1 或经理层）"""
     _ensure_tables()
-    _require_admin1(current_user)
+    _require_wall_reviewer(current_user)
     rows = db.execute_query(
         "SELECT id, content, image_url, created_at FROM feedback_wall WHERE status = 0 ORDER BY created_at DESC"
     )
@@ -456,9 +471,9 @@ async def wall_pending(current_user: str = Query(...)):
 
 @router.post("/wall/{item_id}/review")
 async def wall_review(item_id: str, req: WallReview):
-    """审核吐槽（approve/reject，仅 admin1）"""
+    """审核吐槽（approve/reject，admin1 或经理层）"""
     _ensure_tables()
-    _require_admin1(req.current_user)
+    _require_wall_reviewer(req.current_user)
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     if req.action == "approve":
         n = db.execute_update(

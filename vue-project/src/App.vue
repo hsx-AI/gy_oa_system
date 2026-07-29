@@ -58,6 +58,14 @@
             </svg>
             <span>通讯录</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/action-items/dashboard" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+              <path d="M7 7h5" />
+            </svg>
+            <span>行动项督办</span>
+          </router-link>
             </div>
           </section>
 
@@ -166,7 +174,7 @@
               <path d="m7 15 3-4 3 2 4-6" />
               <circle cx="7" cy="15" r="1" /><circle cx="10" cy="11" r="1" /><circle cx="13" cy="13" r="1" /><circle cx="17" cy="7" r="1" />
             </svg>
-            <span>月度绩效</span>
+            <span>绩效统计</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/attendance/shift-schedule" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -653,7 +661,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
 import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
 
 const route = useRoute()
@@ -719,7 +727,8 @@ function getSidebarGroupByPath(path) {
     path === '/' ||
     path === '/ai-assistant' ||
     path === '/profile' ||
-    path === '/contacts'
+    path === '/contacts' ||
+    path.startsWith('/action-items')
   ) {
     return 'common'
   }
@@ -1122,13 +1131,15 @@ const canShowEmployeeAdmin = computed(() => {
   return isLeaderOrDept || isAdmin2
 })
 
+// 换休票批量管理：admin1、admin2、部长/副部长、综合技术室主任/副主任
 const canManageHxp = computed(() => {
-  const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
-  const a1 = (admin1.value || '').trim()
-  const a2 = (admin2.value || '').trim()
-  if ((a1 && name === a1) || (a2 && name === a2)) return true
-  const jb = (currentUser.value?.jb || '').trim()
-  return isMinisterLevel(jb)
+  return canManageHxpBatch({
+    name: (currentUser.value?.name || currentUser.value?.userName || '').trim(),
+    jb: (currentUser.value?.jb || '').trim(),
+    lsys: (currentUser.value?.dept || currentUser.value?.lsys || '').trim(),
+    admin1: admin1.value,
+    admin2: admin2.value,
+  })
 })
 
 // 是否显示管理驾驶舱（部长/副部长、综合技术室主任/副主任、admin1、admin2）

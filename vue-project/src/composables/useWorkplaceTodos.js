@@ -21,6 +21,7 @@ import { getPendingSeal, getPendingSealUse, markSealUsed } from '@/api/seal'
 import { getPendingLowValueReimbursements } from '@/api/lowValueReimbursement'
 import { getShiftCoverageGap } from '@/api/shift'
 import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
+import { getActions, getMyActionReminders, readActionReminder } from '@/api/actionItems'
 import {
   getPendingKqyc,
   getKqycDakamanPending,
@@ -36,6 +37,22 @@ function readUserName() {
   } catch {
     return ''
   }
+}
+
+function readUserJb() {
+  try {
+    const s = localStorage.getItem('userInfo')
+    const u = s ? JSON.parse(s) : {}
+    return (u.jb || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+function isWallReviewer(userName, admin1) {
+  if (admin1 && userName === admin1.trim()) return true
+  const jb = readUserJb()
+  return jb === '经理' || jb === '部长'
 }
 
 function formatRelativeTime(dtStr) {
@@ -76,6 +93,8 @@ const kqycPendingList = ref([])
 /** dakaman 待"已读确认"列表（仅 dakaman 可见有数据） */
 const kqycDakamanList = ref([])
 const autoReminderNoticeList = ref([])
+/** 行动项督办未读提醒 */
+const actionReminderList = ref([])
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -277,6 +296,20 @@ const displayTodoList = computed(() => {
       btnLabel: '已阅',
     })
   }
+  for (const item of actionReminderList.value) {
+    list.push({
+      uniqueId: `action-reminder-${item.id}`,
+      type: `行动项${item.reminder_type || '提醒'}`,
+      description: item.reminder_note || item.title || item.action_title || '您有一条行动项待处理',
+      applicant: '行动项督办',
+      time: formatRelativeTime(item.reminder_time),
+      applyTime: item.reminder_time || '',
+      isActionReminder: true,
+      actionReminderId: item.is_pending_action ? null : item.id,
+      actionItemId: item.action_item_id,
+      btnLabel: item.is_pending_action ? '查看并接收' : '去处理',
+    })
+  }
   return list
 })
 
@@ -298,6 +331,7 @@ const totalBadgeCount = computed(() => {
   count += kqycPendingList.value.length
   count += kqycDakamanList.value.length
   count += autoReminderNoticeList.value.length
+  count += actionReminderList.value.length
   return count
 })
 
@@ -518,6 +552,53 @@ async function fetchAutoReminderNotices() {
   }
 }
 
+async function fetchActionReminders() {
+  const name = readUserName()
+  if (!name) {
+    actionReminderList.value = []
+    return
+  }
+  try {
+    const [reminderResult, pendingResult] = await Promise.allSettled([
+      getMyActionReminders({
+        current_user: name,
+        unread_only: true,
+        limit: 200,
+      }),
+      getActions({
+        current_user: name,
+        mine: true,
+        status: '待接收',
+        page: 1,
+        page_size: 200,
+      }),
+    ])
+    const reminders = reminderResult.status === 'fulfilled'
+      ? (reminderResult.value?.items || reminderResult.value?.data || [])
+      : []
+    const pendingActions = pendingResult.status === 'fulfilled'
+      ? (pendingResult.value?.items || [])
+      : []
+    const representedActionIds = new Set(
+      reminders.map(item => Number(item.action_item_id)).filter(Boolean),
+    )
+    const missingPending = pendingActions
+      .filter(item => !representedActionIds.has(Number(item.id)))
+      .map(item => ({
+        id: `pending-${item.id}`,
+        action_item_id: item.id,
+        title: item.title,
+        reminder_type: '待接收',
+        reminder_note: '您有一条行动项尚未接收，请选择由本人接收或分配科室成员完成',
+        reminder_time: item.published_at || item.updated_at || item.created_at || '',
+        is_pending_action: true,
+      }))
+    actionReminderList.value = [...reminders, ...missingPending]
+  } catch {
+    actionReminderList.value = []
+  }
+}
+
 async function fetchSealPending() {
   const name = readUserName()
   if (!name) {
@@ -570,10 +651,13 @@ async function fetchFeedbackTodos() {
     return
   }
   let isAdmin = false
+  let admin1 = ''
   try {
     const cfg = await getUploadConfig()
-    isAdmin = !!(cfg?.admin1 && userName === cfg.admin1.trim())
+    admin1 = (cfg?.admin1 || '').trim()
+    isAdmin = !!(admin1 && userName === admin1)
   } catch { /* ignore */ }
+  const canReviewWall = isWallReviewer(userName, admin1)
 
   const tasks = []
 
@@ -591,12 +675,17 @@ async function fetchFeedbackTodos() {
       .catch(() => { feedbackLeaderCount.value = 0 })
   )
 
-  if (isAdmin) {
+  if (canReviewWall) {
     tasks.push(
       getWallPending({ current_user: userName })
         .then(res => { feedbackWallPendingCount.value = (res?.data || []).length })
         .catch(() => { feedbackWallPendingCount.value = 0 })
     )
+  } else {
+    feedbackWallPendingCount.value = 0
+  }
+
+  if (isAdmin) {
     tasks.push(
       getSystemList()
         .then(res => {
@@ -605,7 +694,6 @@ async function fetchFeedbackTodos() {
         .catch(() => { feedbackSystemPendingCount.value = 0 })
     )
   } else {
-    feedbackWallPendingCount.value = 0
     feedbackSystemPendingCount.value = 0
   }
 
@@ -628,6 +716,7 @@ export async function refreshWorkplaceTodos() {
     fetchKqycPending(),
     fetchKqycDakaman(),
     fetchAutoReminderNotices(),
+    fetchActionReminders(),
   ])
 }
 
@@ -753,6 +842,26 @@ export function useWorkplaceTodos() {
       } catch (e) {
         const msg = e?.response?.data?.detail || e?.response?.data?.message || e?.message || '标记已阅失败'
         alert(typeof msg === 'string' ? msg : '标记已阅失败')
+      }
+      return
+    }
+    if (task.isActionReminder) {
+      const name = readUserName()
+      if (!name) return
+      if (!task.actionReminderId && task.actionItemId) {
+        router.push(`/action-items/${task.actionItemId}`)
+        return
+      }
+      if (!task.actionReminderId) return
+      try {
+        await readActionReminder(task.actionReminderId, { current_user: name })
+        actionReminderList.value = actionReminderList.value.filter(
+          (item) => item.id !== task.actionReminderId
+        )
+        if (task.actionItemId) router.push(`/action-items/${task.actionItemId}`)
+      } catch (e) {
+        const msg = e?.response?.data?.detail || e?.message || '行动项提醒处理失败'
+        alert(typeof msg === 'string' ? msg : '行动项提醒处理失败')
       }
       return
     }

@@ -39,7 +39,7 @@
                   <td>{{ task.applyTime }}</td>
                   <td>
                     <button type="button" class="btn btn-primary btn-sm" @click="goApprove(task)">
-                      {{ task.isAutoReminderNotice ? '已阅' : (task.isShiftCoverageGap ? '去排班' : (task.isReturnReminder ? '去登记' : '处理')) }}
+                      {{ task.isActionReminder ? '查看并接收' : (task.isAutoReminderNotice ? '已阅' : (task.isShiftCoverageGap ? '去排班' : (task.isReturnReminder ? '去登记' : '处理'))) }}
                     </button>
                   </td>
                 </tr>
@@ -71,6 +71,7 @@ import {
 } from '@/api/attendance'
 import { getShiftCoverageGap } from '@/api/shift'
 import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
+import { getMyActionReminders, readActionReminder } from '@/api/actionItems'
 
 const router = useRouter()
 const canApprove = ref(false)
@@ -80,6 +81,7 @@ const loading = ref(false)
 const tripReturnPendingCount = ref(0)
 const shiftCoverageGap = ref(null)
 const autoReminderNoticeList = ref([])
+const actionReminderList = ref([])
 
 const userInfo = (() => {
   try {
@@ -135,6 +137,19 @@ const displayTodoList = computed(() => {
       autoReminderNoticeId: item.id
     })
   }
+  for (const item of actionReminderList.value) {
+    list.push({
+      uniqueId: `action-reminder-${item.id}`,
+      type: `行动项${item.reminder_type || '提醒'}`,
+      typeClass: 'type-action',
+      description: `${item.title || '行动项'}：${item.reminder_note || '请及时处理'}`,
+      applicant: '行动项督办',
+      applyTime: item.reminder_time || '',
+      isActionReminder: true,
+      actionReminderId: item.id,
+      actionItemId: item.action_item_id
+    })
+  }
   return list
 })
 
@@ -159,6 +174,19 @@ async function goApprove(task) {
     }
     return
   }
+  if (task.isActionReminder) {
+    if (!userName || !task.actionReminderId) return
+    try {
+      await readActionReminder(task.actionReminderId, { current_user: userName })
+      actionReminderList.value = actionReminderList.value.filter(
+        item => item.id !== task.actionReminderId
+      )
+      if (task.actionItemId) router.push(`/action-items/${task.actionItemId}`)
+    } catch (e) {
+      alert(e?.response?.data?.detail || e?.message || '打开行动项消息失败')
+    }
+    return
+  }
   router.push({ path: '/attendance/approvals', query: { type: task.tabType } })
 }
 
@@ -179,6 +207,16 @@ async function fetchData() {
       autoReminderNoticeList.value = noticeRes?.data || []
     } catch {
       autoReminderNoticeList.value = []
+    }
+    try {
+      const actionRes = await getMyActionReminders({
+        current_user: userName,
+        unread_only: true,
+        limit: 200
+      })
+      actionReminderList.value = actionRes?.items || []
+    } catch {
+      actionReminderList.value = []
     }
     if (canApprove.value) {
       const [leaveRes, overtimeRes, btRes, heRes] = await Promise.all([
@@ -378,6 +416,11 @@ onMounted(fetchData)
 .type-shift {
   background: #fff7e6;
   color: #d46b08;
+}
+
+.type-action {
+  background: #eff6ff;
+  color: #1d4ed8;
 }
 
 .btn-primary.btn-sm {

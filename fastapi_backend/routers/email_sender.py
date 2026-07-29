@@ -2831,10 +2831,17 @@ def _query_manager_todos(name: str) -> List[Dict]:
             r.get("assigned_at") or r.get("created_at"),
         )
 
-    # 吐槽墙待审核 & 系统建议待回复（仅 admin1）
+    # 吐槽墙待审核（admin1、经理或部长）& 系统建议待回复（仅 admin1）
     try:
         admin1 = _get_admin1()
-        if admin1 and n == admin1:
+        is_admin1 = bool(admin1 and n == admin1)
+        jb_rows = db.execute_query(
+            "SELECT jb FROM yggl WHERE name = %s AND COALESCE(zaizhi,0) = 0 LIMIT 1",
+            (n,),
+        ) or []
+        jb = (jb_rows[0].get("jb") if jb_rows else "") or ""
+        can_review_wall = is_admin1 or jb.strip() in {"经理", "部长"}
+        if can_review_wall:
             wall_pending_rows = db.execute_query(
                 "SELECT id, content, created_at FROM feedback_wall WHERE status = 0 ORDER BY created_at DESC"
             ) or []
@@ -2847,6 +2854,7 @@ def _query_manager_todos(name: str) -> List[Dict]:
                     wall_pending_rows[0].get("created_at") if len(wall_pending_rows) == 1 else None,
                 )
 
+        if is_admin1:
             sys_pending_rows = db.execute_query(
                 "SELECT id, content, created_at FROM feedback_system WHERE status != 1 ORDER BY created_at DESC"
             ) or []

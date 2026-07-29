@@ -31,7 +31,7 @@
             <div>
               <h2 class="section-title">大模型配置</h2>
               <p class="section-desc">
-                配置智能助手所用大模型。优先级：填写 DeepSeek 密钥时使用联网 DeepSeek；密钥为空时使用下方选中的本地模型（写入 webconfig 的 llm_base_url / llm_model）。
+                配置智能助手所用大模型。优先级：填写 DeepSeek 密钥时使用联网 DeepSeek；密钥为空时使用下方选中的本地或 OpenAI 兼容模型。
               </p>
             </div>
             <div class="config-actions">
@@ -43,7 +43,7 @@
             <div class="llm-active-banner" :class="llmConfig.provider === 'deepseek' ? 'is-deepseek' : 'is-local'">
               <span class="llm-active-label">当前生效</span>
               <strong v-if="llmConfig.provider === 'deepseek'">联网 DeepSeek</strong>
-              <strong v-else>本地模型：{{ llmConfig.active.model || '未设置' }}</strong>
+              <strong v-else>兼容模型：{{ llmConfig.active.model || '未设置' }}</strong>
               <span v-if="llmConfig.provider === 'local' && llmConfig.active.base_url" class="llm-active-url">{{ llmConfig.active.base_url }}</span>
               <button type="button" class="btn btn-secondary btn-sm llm-banner-test" :disabled="llmTestingTarget !== null" @click="testModel(null)">
                 {{ llmTestingTarget === 'active' ? '测试中…' : '健康测试' }}
@@ -62,16 +62,16 @@
 
             <h3 class="email-settings-title">联网 DeepSeek 密钥</h3>
             <p class="email-settings-hint">
-              {{ llmConfig.deepseek_configured ? `已配置（${llmConfig.deepseek_key_masked}），系统优先使用联网模型` : '未配置，系统将使用本地模型' }}
+              {{ llmConfig.deepseek_configured ? `已配置（${llmConfig.deepseek_key_masked}），系统优先使用联网模型` : '未配置，系统将使用已选兼容模型' }}
             </p>
             <div class="llm-key-row">
               <input v-model.trim="deepseekKeyInput" type="password" autocomplete="new-password" class="recipient-input llm-key-input" placeholder="输入新的 DeepSeek API Key">
               <button type="button" class="btn btn-primary btn-sm" :disabled="llmSaving" @click="saveDeepseekKeyAction">更新密钥</button>
-              <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving || !llmConfig.deepseek_configured" @click="clearDeepseekKeyAction">清空（用本地）</button>
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="llmSaving || !llmConfig.deepseek_configured" @click="clearDeepseekKeyAction">清空（用兼容模型）</button>
             </div>
 
-            <h3 class="email-settings-title">本地大模型候选</h3>
-            <p v-if="!llmConfig.models.length" class="email-settings-hint">暂无本地模型，请在下方添加后点击「选用」。</p>
+            <h3 class="email-settings-title">模型候选</h3>
+            <p v-if="!llmConfig.models.length" class="email-settings-hint">暂无候选模型，请在下方添加后点击「选用」。</p>
             <div v-else class="llm-model-list">
               <div v-for="m in llmConfig.models" :key="m.id" class="llm-model-row" :class="{ 'is-active': m.is_active }">
                 <div class="llm-model-info">
@@ -100,7 +100,7 @@
 
             <h3 class="email-settings-title">功能场景模型</h3>
             <p class="email-settings-hint">
-              AI 助手继续使用上方“当前选中”模型与 DeepSeek 开关；AI 待办看板和假期通知解析可单独指定 Ollama 本地小模型。
+              行动项提取可明确选择联网 DeepSeek、OpenAI 兼容联网模型或本地模型；其他场景继续支持单独指定 Ollama 本地小模型。
             </p>
             <div class="llm-scene-list">
               <div v-for="scene in llmSceneRows" :key="scene.scene" class="llm-scene-row">
@@ -109,15 +109,22 @@
                   <span class="llm-scene-desc">{{ scene.desc }}</span>
                 </div>
                 <select v-model.number="llmSceneDraft[scene.scene]" class="recipient-select llm-scene-select">
-                  <option :value="0">跟随当前本地模型</option>
-                  <option v-for="m in llmOllamaModels" :key="scene.scene + '-' + m.id" :value="m.id">
-                    {{ m.name }} · {{ m.model }}
+                  <option :value="0">跟随当前全局模型</option>
+                  <option
+                    v-if="scene.scene === 'action_items'"
+                    :value="-1"
+                    :disabled="!llmConfig.deepseek_configured"
+                  >
+                    联网 DeepSeek{{ llmConfig.deepseek_configured ? ' · 已配置' : ' · 请先配置 API Key' }}
+                  </option>
+                  <option v-for="m in sceneModelOptions(scene.scene)" :key="scene.scene + '-' + m.id" :value="m.id">
+                    {{ m.use_extra ? '本地' : '联网/兼容网关' }} · {{ m.name }} · {{ m.model }}
                   </option>
                 </select>
                 <button
                   type="button"
                   class="btn btn-secondary btn-sm"
-                  :disabled="llmSceneSaving === scene.scene || !llmOllamaModels.length"
+                  :disabled="llmSceneSaving === scene.scene"
                   @click="saveSceneModel(scene.scene)"
                 >
                   {{ llmSceneSaving === scene.scene ? '保存中…' : '保存' }}
@@ -125,13 +132,13 @@
               </div>
             </div>
 
-            <h3 class="email-settings-title">添加本地模型</h3>
+            <h3 class="email-settings-title">添加本地或联网兼容模型</h3>
             <div class="llm-add-grid">
-              <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 本地 DeepSeek-V4">
+              <input v-model.trim="newModel.name" type="text" class="recipient-input" placeholder="名称，如 联网模型或本地 DeepSeek-V4">
               <input v-model.trim="newModel.model" type="text" class="recipient-input" placeholder="模型名，如 DeepSeek-V4">
               <select v-model="newModel.use_extra" class="recipient-select llm-add-wide">
                 <option :value="true">接口类型：Ollama 本地（带 enable_thinking 参数）</option>
-                <option :value="false">接口类型：OpenAI 兼容网关（如本地 DeepSeek-V4）</option>
+                <option :value="false">接口类型：OpenAI 兼容网关（支持联网 API）</option>
               </select>
               <input v-model.trim="newModel.base_url" type="text" class="recipient-input llm-add-wide" placeholder="base_url，如 http://10.3.26.243:30080/prod-api/api_ability/202605212224_v1/v1">
               <input v-model.trim="newModel.api_key" type="password" autocomplete="new-password" class="recipient-input llm-add-wide" placeholder="鉴权 Token（Ollama 可留空；DeepSeek-V4 填 JWT）">
@@ -140,6 +147,78 @@
 
             <p v-if="llmMessage" class="config-message">{{ llmMessage }}</p>
           </template>
+        </section>
+
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
+              <h2 class="section-title">行动项分管领导配置</h2>
+              <p class="section-desc">
+                为经理、副经理配置分管科室和工作分工。会议纪要 AI 提取会结合责任人所属科室、责任科室及行动内容自动匹配主管领导。
+              </p>
+            </div>
+            <div class="config-actions">
+              <button
+                type="button"
+                class="btn btn-primary btn-sm"
+                :disabled="supervisionLoading || supervisionSaving"
+                @click="saveSupervisionConfig"
+              >
+                {{ supervisionSaving ? '保存中…' : '保存配置' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="supervisionLoading" class="status-message">正在加载分管领导配置…</div>
+          <p v-else-if="!supervisionLeaders.length" class="status-message">未找到在职经理或副经理，请先维护人员职务。</p>
+          <p v-if="!supervisionLoading && supervisionUncoveredDepartments.length" class="supervision-warning">
+            尚未配置主管领导：{{ supervisionUncoveredDepartments.join('、') }}。涉及这些科室时，AI 提取将提示补充配置，不会虚构主管领导。
+          </p>
+          <div v-if="!supervisionLoading && supervisionLeaders.length" class="supervision-list">
+            <article
+              v-for="leader in supervisionLeaders"
+              :key="leader.leader_name"
+              class="supervision-card"
+              :class="{ 'is-enabled': leader.enabled }"
+            >
+              <div class="supervision-card-head">
+                <label class="supervision-enable">
+                  <input v-model="leader.enabled" type="checkbox">
+                  <strong>{{ leader.leader_name }}</strong>
+                  <span>{{ leader.job }}</span>
+                </label>
+                <small v-if="leader.updated_at">
+                  {{ leader.updated_by || '管理员' }} 更新于 {{ leader.updated_at }}
+                </small>
+              </div>
+              <div class="supervision-field">
+                <span class="supervision-label">分管科室</span>
+                <div class="supervision-departments">
+                  <label
+                    v-for="department in supervisionDepartments"
+                    :key="`${leader.leader_name}-${department}`"
+                    class="supervision-department"
+                    :class="{ selected: leader.departments.includes(department) }"
+                  >
+                    <input v-model="leader.departments" type="checkbox" :value="department">
+                    <span>{{ department }}</span>
+                  </label>
+                </div>
+              </div>
+              <label class="supervision-field">
+                <span class="supervision-label">工作分工</span>
+                <textarea
+                  v-model.trim="leader.work_division"
+                  rows="3"
+                  maxlength="4000"
+                  placeholder="例如：负责焊接、智能制造领域的技术准备和降本增效工作"
+                ></textarea>
+              </label>
+            </article>
+          </div>
+          <p class="email-settings-hint supervision-hint">
+            同一科室可配置多名主管领导；此时 AI 将结合“工作分工”判断。无法唯一确定时不会猜测，仍标记为待确认。
+          </p>
+          <p v-if="supervisionMessage" class="config-message">{{ supervisionMessage }}</p>
         </section>
 
         <section class="card admin-config-card">
@@ -380,6 +459,8 @@ import {
   saveShiftEmailFeatureConfig,
   getAttendanceFetchConfig,
   saveAttendanceFetchConfig as saveAttendanceFetchConfigApi,
+  getActionSupervisionConfig,
+  saveActionSupervisionConfig,
   runTodoReminder,
   getLlmConfig,
   saveDeepseekKey,
@@ -411,6 +492,12 @@ const attendanceFetchSaving = ref(false)
 const attendanceFetchMessage = ref('')
 const attendanceSchedules = ref([])
 const attendanceFetchTimezone = ref('Asia/Shanghai')
+const supervisionLoading = ref(false)
+const supervisionSaving = ref(false)
+const supervisionMessage = ref('')
+const supervisionDepartments = ref([])
+const supervisionLeaders = ref([])
+const supervisionUncoveredDepartments = ref([])
 
 const llmLoading = ref(false)
 const llmSaving = ref(false)
@@ -690,9 +777,15 @@ function statusLabel(status) {
 const llmSceneRows = computed(() => [
   { scene: 'inbox_tasks', label: 'AI 待办看板', desc: '/admin/inbox-emails 邮件任务抽取' },
   { scene: 'holiday_parse', label: '假期通知解析', desc: '/attendance/holiday-settings 通知文本解析' },
+  { scene: 'action_items', label: '行动项提取', desc: '/action-items/minutes 会议纪要行动项结构化提取' },
 ])
 
 const llmOllamaModels = computed(() => (llmConfig.value.models || []).filter((m) => m.use_extra))
+
+function sceneModelOptions(scene) {
+  if (scene === 'action_items') return llmConfig.value.models || []
+  return llmOllamaModels.value
+}
 
 function syncLlmSceneDraft(sceneConfigs) {
   const draft = {}
@@ -943,6 +1036,66 @@ async function fetchLlmConfig() {
   }
 }
 
+async function fetchSupervisionConfig() {
+  const name = currentName()
+  if (!name) return
+  supervisionLoading.value = true
+  supervisionMessage.value = ''
+  try {
+    const res = await getActionSupervisionConfig({ current_user: name })
+    supervisionDepartments.value = res?.departments || []
+    supervisionUncoveredDepartments.value = res?.uncovered_departments || []
+    supervisionLeaders.value = (res?.leaders || []).map((leader) => ({
+      ...leader,
+      enabled: !!leader.enabled,
+      departments: [...(leader.departments || [])],
+      work_division: leader.work_division || '',
+    }))
+  } catch (e) {
+    supervisionMessage.value = e?.response?.data?.detail || e?.message || '分管领导配置加载失败'
+  } finally {
+    supervisionLoading.value = false
+  }
+}
+
+async function saveSupervisionConfig() {
+  const name = currentName()
+  if (!name) return
+  const invalid = supervisionLeaders.value.find(
+    (leader) => leader.enabled && !leader.departments.length,
+  )
+  if (invalid) {
+    supervisionMessage.value = `请至少为 ${invalid.leader_name} 选择一个分管科室`
+    return
+  }
+  supervisionSaving.value = true
+  supervisionMessage.value = ''
+  try {
+    const res = await saveActionSupervisionConfig({
+      current_user: name,
+      items: supervisionLeaders.value.map((leader) => ({
+        leader_name: leader.leader_name,
+        departments: leader.departments,
+        work_division: leader.work_division,
+        enabled: !!leader.enabled,
+      })),
+    })
+    supervisionMessage.value = res?.message || '分管领导配置已保存'
+    supervisionDepartments.value = res?.departments || supervisionDepartments.value
+    supervisionUncoveredDepartments.value = res?.uncovered_departments || []
+    supervisionLeaders.value = (res?.leaders || supervisionLeaders.value).map((leader) => ({
+      ...leader,
+      enabled: !!leader.enabled,
+      departments: [...(leader.departments || [])],
+      work_division: leader.work_division || '',
+    }))
+  } catch (e) {
+    supervisionMessage.value = e?.response?.data?.detail || e?.message || '保存分管领导配置失败'
+  } finally {
+    supervisionSaving.value = false
+  }
+}
+
 async function saveSceneModel(scene) {
   const name = currentName()
   if (!name || !scene) return
@@ -1109,7 +1262,10 @@ onMounted(async () => {
     const res = await getHealthMonitorPermission({ current_user: name })
     canAccess.value = !!(res && res.canAccess)
     if (canAccess.value) {
-      await Promise.all([fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig(), fetchLlmConfig()])
+      await Promise.all([
+        fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig(),
+        fetchLlmConfig(), fetchSupervisionConfig(),
+      ])
     }
   } catch {
     canAccess.value = false
@@ -1246,6 +1402,103 @@ onMounted(async () => {
   margin: var(--spacing-sm) 0 0;
   font-size: 0.85rem;
   color: var(--color-text-secondary);
+}
+.supervision-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.supervision-warning {
+  margin: 0 0 12px;
+  padding: 9px 11px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+  color: #c2410c;
+  font-size: 0.84rem;
+}
+.supervision-card {
+  padding: 14px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 10px;
+  background: var(--color-bg-layout);
+  opacity: 0.72;
+}
+.supervision-card.is-enabled {
+  border-color: #bfdbfe;
+  background: #f8fbff;
+  opacity: 1;
+}
+.supervision-card-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+.supervision-card-head small {
+  color: var(--color-text-tertiary);
+}
+.supervision-enable {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.supervision-enable span {
+  color: var(--color-text-secondary);
+  font-size: 0.83rem;
+}
+.supervision-field {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin-top: 10px;
+}
+.supervision-label {
+  color: var(--color-text-secondary);
+  font-size: 0.84rem;
+  font-weight: 600;
+}
+.supervision-departments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+.supervision-department {
+  position: relative;
+  padding: 5px 9px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 999px;
+  background: var(--color-bg-container);
+  color: var(--color-text-secondary);
+  cursor: pointer;
+  font-size: 0.8rem;
+}
+.supervision-department.selected {
+  border-color: #60a5fa;
+  background: #dbeafe;
+  color: #1d4ed8;
+}
+.supervision-department input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.supervision-field textarea {
+  width: 100%;
+  box-sizing: border-box;
+  resize: vertical;
+  padding: 8px 10px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 7px;
+  background: var(--color-bg-container);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-size: 0.85rem;
+  line-height: 1.5;
+}
+.supervision-hint {
+  margin-top: 12px;
 }
 .email-settings-title {
   margin: var(--spacing-lg) 0 var(--spacing-md);

@@ -30,6 +30,16 @@ export function saveAttendanceFetchConfig(data) {
   return request({ url: '/health-monitor/attendance-fetch-config', method: 'post', data })
 }
 
+/** 获取行动项科室分管领导及工作分工配置 */
+export function getActionSupervisionConfig(params) {
+  return request({ url: '/health-monitor/action-supervision-config', method: 'get', params })
+}
+
+/** 保存行动项科室分管领导及工作分工配置 */
+export function saveActionSupervisionConfig(data) {
+  return request({ url: '/health-monitor/action-supervision-config', method: 'post', data })
+}
+
 /** 手动触发一次管理人员待办邮件提醒（仅 admin1） */
 export function runTodoReminder(params) {
   return request({ url: '/email/run-todo-reminder', method: 'post', params })

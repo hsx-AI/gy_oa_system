@@ -3,17 +3,21 @@
     <div class="page-header">
       <div class="header-content">
         <div class="header-info">
-          <h1 class="header-title">部门通讯录</h1>
-          <p class="header-subtitle">按科室查看员工联系方式，支持搜索和筛选</p>
+          <h1 class="header-title">{{ directoryLabel }}</h1>
+          <p class="header-subtitle">按单位查看联系方式，支持搜索、筛选和快速拨号</p>
         </div>
       </div>
     </div>
 
     <div class="toolbar card">
       <div class="toolbar-left">
-        <label class="toolbar-label">科室</label>
+        <div class="directory-tabs" role="tablist" aria-label="通讯录类型">
+          <button type="button" class="directory-tab" :class="{ active: directorySource === 'department' }" @click="switchDirectory('department')">部门通讯录</button>
+          <button type="button" class="directory-tab" :class="{ active: directorySource === 'company' }" @click="switchDirectory('company')">公司通讯录</button>
+        </div>
+        <label class="toolbar-label">{{ directorySource === 'company' ? '单位' : '科室' }}</label>
         <select v-model="selectedDept" class="toolbar-select" @change="loadContacts">
-          <option value="">全部科室</option>
+          <option value="">{{ directorySource === 'company' ? '全部单位' : '全部科室' }}</option>
           <option v-for="d in deptOptions" :key="d" :value="d">{{ d }}</option>
         </select>
         <span class="toolbar-total" v-if="!loading">共 {{ totalCount }} 人</span>
@@ -35,6 +39,10 @@
         <button type="button" class="btn btn-outline btn-sm" @click="toggleExpandAll">
           {{ allExpanded ? '全部收起' : '全部展开' }}
         </button>
+        <label v-if="canManageCompany" class="btn btn-primary btn-sm upload-directory-btn" :class="{ disabled: importing }">
+          <input ref="companyFileInput" type="file" accept=".xlsx" @change="onCompanyFileSelected" />
+          {{ importing ? '更新中…' : '更新公司通讯录' }}
+        </label>
       </div>
     </div>
 
@@ -73,6 +81,7 @@
                   <span class="contact-name">{{ p.name }}</span>
                   <span v-if="p.jb" class="jb-badge" :class="jbBadgeClass(p.jb)">{{ p.jb }}</span>
                 </div>
+                <div v-if="p.group" class="contact-group">{{ p.group }}</div>
                 <div class="contact-card-phones">
                   <div v-if="p.mobile" class="contact-phone-row">
                     <svg class="contact-phone-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="5" y="2" width="14" height="20" rx="2" /><line x1="12" y1="18" x2="12.01" y2="18" /></svg>
@@ -97,7 +106,7 @@
 
 <script setup>
 import { ref, reactive, onMounted, computed } from 'vue'
-import { getContacts } from '@/api/contacts'
+import { canManageCompanyContacts, getContacts, importCompanyContacts } from '@/api/contacts'
 
 const departments = ref([])
 const loading = ref(false)
@@ -105,14 +114,15 @@ const searchKeyword = ref('')
 const selectedDept = ref('')
 const totalCount = ref(0)
 const expandedDepts = reactive({})
-
-const deptOptions = [
-  '部办',
-  '综合技术室', '工具技术室', '数控编程室', '智能制造技术室',
-  '水发工艺室', '水轮机工艺室', '汽发工艺室', '焊接工艺室', '非标技术室',
-]
+const deptOptions = ref([])
+const directorySource = ref('department')
+const canManageCompany = ref(false)
+const importing = ref(false)
+const companyFileInput = ref(null)
 
 let searchTimer = null
+
+const directoryLabel = computed(() => directorySource.value === 'company' ? '公司通讯录' : '部门通讯录')
 
 const allExpanded = computed(() => {
   const keys = Object.keys(expandedDepts)
@@ -153,16 +163,64 @@ function clearSearch() {
   loadContacts()
 }
 
+function currentUserName() {
+  try {
+    const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    return (user.name || user.userName || user.username || '').trim()
+  } catch (_) {
+    return ''
+  }
+}
+
+function switchDirectory(source) {
+  if (directorySource.value === source) return
+  directorySource.value = source
+  selectedDept.value = ''
+  searchKeyword.value = ''
+  deptOptions.value = []
+  Object.keys(expandedDepts).forEach(key => delete expandedDepts[key])
+  loadContacts()
+}
+
+async function onCompanyFileSelected(event) {
+  const file = event.target.files?.[0]
+  if (!file || importing.value) return
+  if (!/\.xlsx$/i.test(file.name)) {
+    window.alert('请上传 .xlsx 格式的公司电话号码表')
+    event.target.value = ''
+    return
+  }
+  importing.value = true
+  try {
+    const res = await importCompanyContacts(file, currentUserName())
+    window.alert(res?.message || '公司通讯录已更新')
+    if (directorySource.value === 'company') {
+      selectedDept.value = ''
+      searchKeyword.value = ''
+      await loadContacts()
+    }
+  } catch (error) {
+    window.alert(error?.response?.data?.detail || error?.message || '公司通讯录更新失败')
+  } finally {
+    importing.value = false
+    if (companyFileInput.value) companyFileInput.value.value = ''
+  }
+}
+
 async function loadContacts() {
   loading.value = true
   try {
     const params = {}
     if (selectedDept.value) params.department = selectedDept.value
     if (searchKeyword.value.trim()) params.keyword = searchKeyword.value.trim()
+    params.source = directorySource.value
     const res = await getContacts(params)
     if (res?.success) {
       departments.value = res.departments || []
       totalCount.value = res.total || 0
+      if (!selectedDept.value) {
+        deptOptions.value = departments.value.map(dept => dept.name)
+      }
       for (const dept of departments.value) {
         if (!(dept.name in expandedDepts)) {
           expandedDepts[dept.name] = true
@@ -178,6 +236,9 @@ async function loadContacts() {
 
 onMounted(() => {
   loadContacts()
+  canManageCompanyContacts(currentUserName())
+    .then(res => { canManageCompany.value = Boolean(res?.canManage) })
+    .catch(() => { canManageCompany.value = false })
 })
 </script>
 
@@ -204,6 +265,9 @@ onMounted(() => {
 .toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .toolbar-label { font-size: 13px; color: var(--color-text-secondary); font-weight: 500; }
+.directory-tabs { display: inline-flex; padding: 3px; border: 1px solid #dbe3ef; border-radius: 7px; background: #f8fafc; }
+.directory-tab { border: 0; border-radius: 5px; padding: 5px 10px; color: #64748b; background: transparent; font-size: 13px; cursor: pointer; }
+.directory-tab.active { color: #1d4ed8; background: #fff; box-shadow: 0 1px 3px rgba(15, 23, 42, .12); font-weight: 600; }
 .toolbar-select {
   padding: 6px 10px;
   border: 1px solid var(--color-border-base, #d1d5db);
@@ -254,6 +318,11 @@ onMounted(() => {
 .btn:hover { background: #f8fafc; }
 .btn-outline { border-color: var(--color-primary, #3b82f6); color: var(--color-primary, #3b82f6); }
 .btn-outline:hover { background: #eff6ff; }
+.btn-primary { border-color: var(--color-primary, #3b82f6); background: var(--color-primary, #3b82f6); color: #fff; }
+.btn-primary:hover { background: #2563eb; }
+.upload-directory-btn { display: inline-flex; align-items: center; }
+.upload-directory-btn input { display: none; }
+.upload-directory-btn.disabled { cursor: wait; opacity: .7; pointer-events: none; }
 
 .loading-state { text-align: center; padding: 48px; color: #94a3b8; }
 .loading-spinner {
@@ -335,6 +404,7 @@ onMounted(() => {
   gap: 8px;
   margin-bottom: 6px;
 }
+.contact-group { margin: -3px 0 6px; color: #64748b; font-size: 12px; }
 .contact-name {
   font-size: 14px;
   font-weight: 700;

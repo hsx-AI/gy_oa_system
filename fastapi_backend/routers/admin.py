@@ -66,7 +66,8 @@ def _jb_is_minister_or_deputy(jb: str) -> bool:
 
 
 def _can_manage_hxp_batch(name: str) -> bool:
-    """换休票批量管理页：系统管理员 admin1、人事管理员 admin2、或 yggl 部长/副部长。"""
+    """换休票批量管理页：系统管理员 admin1、人事管理员 admin2、yggl 部长/副部长，
+    或综合技术室主任/副主任。"""
     ns = (name or "").strip()
     if not ns:
         return False
@@ -76,10 +77,13 @@ def _can_manage_hxp_batch(name: str) -> bool:
     a2 = _get_admin2()
     if a2 and ns == a2:
         return True
-    rows = db.execute_query("SELECT jb FROM yggl WHERE name = %s LIMIT 1", (ns,))
+    rows = db.execute_query("SELECT jb, lsys FROM yggl WHERE name = %s LIMIT 1", (ns,))
     if not rows:
         return False
-    return _jb_is_minister_or_deputy(rows[0].get("jb") or "")
+    if _jb_is_minister_or_deputy(rows[0].get("jb") or ""):
+        return True
+    from routers.approvers import is_zonghe_tech_director
+    return is_zonghe_tech_director(rows[0])
 
 
 def _get_admin_scope(name: str) -> Optional[Dict[str, Any]]:
@@ -608,7 +612,7 @@ async def hxp_summary(
     keyword: Optional[str] = Query(None, description="姓名关键字"),
     lsys: Optional[str] = Query(None, description="隶属室筛选"),
 ):
-    """全员换休票余额汇总（系统管理员、人事管理员或部长/副部长）"""
+    """全员换休票余额汇总（系统管理员、人事管理员、部长/副部长或综合技术室主任/副主任）"""
     cu = (current_user or "").strip()
     if not cu or not _can_manage_hxp_batch(cu):
         raise HTTPException(status_code=403, detail="无权查看换休票统计")
@@ -663,7 +667,7 @@ async def hxp_detail(
     current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
     name: str = Query(..., description="员工姓名"),
 ):
-    """查询指定员工的全部换休票获取记录（系统管理员、人事管理员或部长/副部长）"""
+    """查询指定员工的全部换休票获取记录（系统管理员、人事管理员、部长/副部长或综合技术室主任/副主任）"""
     cu = (current_user or "").strip()
     if not cu or not _can_manage_hxp_batch(cu):
         raise HTTPException(status_code=403, detail="无权查看换休票明细")
@@ -736,7 +740,7 @@ class HxpApplyRequest(BaseModel):
 
 @router.post("/hxp/apply")
 async def hxp_apply(req: HxpApplyRequest):
-    """提交换休票增减审批申请。系统管理员、人事管理员或 yggl 部长/副部长可操作。"""
+    """提交换休票增减审批申请。系统管理员、人事管理员、yggl 部长/副部长或综合技术室主任/副主任可操作。"""
     name = (req.current_user or "").strip()
     if not name:
         raise HTTPException(status_code=403, detail="未登录")

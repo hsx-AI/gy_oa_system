@@ -5,6 +5,7 @@
 """
 import logging
 import asyncio
+import json
 import os
 import platform
 import shutil
@@ -81,6 +82,18 @@ class LlmTestRequest(BaseModel):
 class LlmSceneModelRequest(BaseModel):
     current_user: str
     model_id: Optional[int] = None
+
+
+class ActionSupervisionItem(BaseModel):
+    leader_name: str
+    departments: List[str] = Field(default_factory=list)
+    work_division: str = ""
+    enabled: bool = True
+
+
+class ActionSupervisionConfigRequest(BaseModel):
+    current_user: str
+    items: List[ActionSupervisionItem] = Field(default_factory=list)
 
 
 def _require_admin1(current_user: str) -> None:
@@ -431,6 +444,135 @@ async def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
     return {"success": True, "message": "打卡配置已保存并已更新定时任务", **data}
 
 
+# ==================== 行动项分管领导配置 ====================
+
+def _action_supervision_payload() -> dict:
+    from routers.action_items import (
+        _action_directory_maps, _load_supervision_configs, ensure_tables,
+    )
+    from routers.ai_assistant import SHIFT_BUSINESS_DEPARTMENTS
+
+    ensure_tables()
+    departments, _, _, _, _ = _action_directory_maps()
+    departments = departments.intersection({*SHIFT_BUSINESS_DEPARTMENTS, "部办"})
+    rows = db.execute_query(
+        "SELECT name,jb FROM yggl WHERE COALESCE(zaizhi,0)=0 "
+        "AND name IS NOT NULL AND TRIM(name)<>'' ORDER BY name"
+    ) or []
+    candidates = []
+    seen = set()
+    for row in rows:
+        name = (row.get("name") or "").strip()
+        job = (row.get("jb") or "").strip()
+        if not name or name in seen or job not in {"经理", "副经理", "部长", "副部长"}:
+            continue
+        seen.add(name)
+        candidates.append({"leader_name": name, "job": job})
+    configs = {
+        item["leader_name"]: item for item in _load_supervision_configs(enabled_only=False)
+    }
+    enabled_configs = [item for item in configs.values() if item.get("enabled")]
+    covered_departments = {
+        department
+        for item in enabled_configs
+        for department in item.get("departments") or []
+    }
+    leaders = []
+    for candidate in candidates:
+        configured = configs.get(candidate["leader_name"], {})
+        leaders.append({
+            **candidate,
+            "departments": configured.get("departments") or [],
+            "work_division": configured.get("work_division") or "",
+            "enabled": bool(configured.get("enabled")),
+            "updated_by": configured.get("updated_by") or "",
+            "updated_at": configured.get("updated_at") or "",
+        })
+    return {
+        "departments": sorted(departments),
+        "leaders": leaders,
+        "uncovered_departments": sorted(departments - covered_departments),
+    }
+
+
+@router.get("/action-supervision-config")
+async def get_action_supervision_config(
+    current_user: str = Query(..., description="当前登录用户，用于权限校验"),
+):
+    """获取行动项科室分管领导及工作分工配置。仅 admin1。"""
+    _require_admin1(current_user)
+    return {"success": True, **_action_supervision_payload()}
+
+
+@router.post("/action-supervision-config")
+async def save_action_supervision_config(req: ActionSupervisionConfigRequest):
+    """批量保存行动项科室分管领导及工作分工配置。仅 admin1。"""
+    _require_admin1(req.current_user)
+    from routers.action_items import (
+        _event, _load_supervision_configs, _normalize_department_name, ensure_tables,
+    )
+
+    ensure_tables()
+    payload = _action_supervision_payload()
+    allowed_leaders = {item["leader_name"] for item in payload["leaders"]}
+    allowed_departments = set(payload["departments"])
+    requested: dict[str, ActionSupervisionItem] = {}
+    for item in req.items:
+        leader = (item.leader_name or "").strip()
+        if not leader or leader not in allowed_leaders:
+            raise HTTPException(status_code=400, detail=f"无效或非在职部门领导：{leader or '未填写'}")
+        if leader in requested:
+            raise HTTPException(status_code=400, detail=f"主管领导重复：{leader}")
+        departments = list(dict.fromkeys(
+            _normalize_department_name(name) for name in item.departments
+            if (name or "").strip()
+        ))
+        invalid = [name for name in departments if name not in allowed_departments]
+        if invalid:
+            raise HTTPException(
+                status_code=400, detail=f"{leader} 存在无效科室：{'、'.join(invalid)}"
+            )
+        division = (item.work_division or "").strip()
+        if len(division) > 4000:
+            raise HTTPException(status_code=400, detail=f"{leader} 的工作分工不能超过4000字")
+        if item.enabled and not departments:
+            raise HTTPException(status_code=400, detail=f"{leader} 启用时至少选择一个分管科室")
+        requested[leader] = item.model_copy(update={
+            "leader_name": leader,
+            "departments": departments,
+            "work_division": division,
+        })
+
+    before = _load_supervision_configs(enabled_only=False)
+    for leader in allowed_leaders:
+        item = requested.get(leader)
+        departments = item.departments if item else []
+        work_division = item.work_division if item else ""
+        enabled = 1 if item and item.enabled else 0
+        db.execute_update(
+            "INSERT INTO action_supervision_config "
+            "(leader_name,departments,work_division,enabled,updated_by) "
+            "VALUES (%s,%s,%s,%s,%s) ON DUPLICATE KEY UPDATE "
+            "departments=VALUES(departments),work_division=VALUES(work_division),"
+            "enabled=VALUES(enabled),updated_by=VALUES(updated_by),updated_at=NOW()",
+            (
+                leader,
+                json.dumps(departments, ensure_ascii=False),
+                work_division, enabled, req.current_user.strip(),
+            ),
+        )
+    after = _load_supervision_configs(enabled_only=False)
+    _event(
+        req.current_user.strip(), "系统配置", "更新行动项科室分管领导及工作分工",
+        data={"before": before, "after": after},
+    )
+    return {
+        "success": True,
+        "message": "行动项分管领导配置已保存，后续 AI 提取将立即使用",
+        **_action_supervision_payload(),
+    }
+
+
 # ==================== 大模型配置（DeepSeek 开关 + 多本地模型管理） ====================
 
 def _ensure_column(table: str, column: str, ddl: str) -> None:
@@ -481,7 +623,9 @@ def _ensure_llm_models_table() -> None:
 LLM_SCENES = {
     "inbox_tasks": "AI 待办看板",
     "holiday_parse": "假期通知解析",
+    "action_items": "行动项提取",
 }
+ONLINE_DEEPSEEK_MODEL_ID = -1
 
 
 def _ensure_llm_scene_config_table() -> None:
@@ -530,12 +674,18 @@ def _get_llm_scene_configs() -> List[dict]:
     out = []
     for scene, label in LLM_SCENES.items():
         model_id = by_scene.get(scene)
-        model_row = _get_llm_model_row(model_id) if model_id else None
+        model_row = (
+            _get_llm_model_row(model_id)
+            if model_id and int(model_id) != ONLINE_DEEPSEEK_MODEL_ID else None
+        )
         out.append({
             "scene": scene,
             "label": label,
             "model_id": model_id or 0,
             "model": _model_row_to_public(model_row),
+            "provider": "deepseek" if model_id == ONLINE_DEEPSEEK_MODEL_ID else (
+                "configured" if model_row else "follow"
+            ),
         })
     return out
 
@@ -706,17 +856,27 @@ async def activate_llm_model_api(model_id: int, req: ActivateRequest):
 
 @router.post("/llm-scenes/{scene}/model")
 async def save_llm_scene_model_api(scene: str, req: LlmSceneModelRequest):
-    """为指定功能场景绑定本地模型。model_id 为空或 0 时改为跟随当前本地模型。"""
+    """为指定功能场景绑定模型；0 跟随全局，-1 为联网 DeepSeek，正数为候选模型。"""
     _require_admin1(req.current_user)
     _ensure_llm_scene_config_table()
     scene_key = (scene or "").strip()
     if scene_key not in LLM_SCENES:
         raise HTTPException(status_code=404, detail="未知的大模型功能场景")
     model_id = int(req.model_id or 0)
-    if model_id:
+    if model_id == ONLINE_DEEPSEEK_MODEL_ID:
+        if scene_key != "action_items":
+            raise HTTPException(status_code=400, detail="该功能场景暂不支持联网 DeepSeek")
+        rows = db.execute_query(
+            "SELECT deepseek_api_key FROM webconfig WHERE id=%s LIMIT 1", ("1",)
+        ) or []
+        if not rows or not (rows[0].get("deepseek_api_key") or "").strip():
+            raise HTTPException(status_code=400, detail="请先保存联网 DeepSeek API Key")
+    elif model_id < 0:
+        raise HTTPException(status_code=400, detail="无效的模型选项")
+    elif model_id:
         row = _get_llm_model_row(model_id)
         if not row:
-            raise HTTPException(status_code=404, detail="选择的本地模型不存在")
+            raise HTTPException(status_code=404, detail="选择的模型不存在")
     db.execute_update(
         "INSERT INTO llm_scene_config (scene, model_id) VALUES (%s, %s) "
         "ON DUPLICATE KEY UPDATE model_id=VALUES(model_id), updated_at=CURRENT_TIMESTAMP",

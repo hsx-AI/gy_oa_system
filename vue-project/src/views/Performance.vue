@@ -1,13 +1,13 @@
 <template>
   <div class="performance-page">
     <div class="page-header">
-      <div><h1>月度绩效</h1><p>按姓名首字母排序录入；可直接从 Excel 复制一列得分后粘贴到任一得分格。</p></div>
+      <div><h1>绩效统计</h1><p>按姓名首字母排序录入；可直接从 Excel 复制一列得分后粘贴到任一得分格。</p></div>
       <div class="header-actions"><button class="btn btn-secondary" @click="activeTab = 'history'">查看往期统计</button></div>
     </div>
 
     <div v-if="loadingPermission" class="card empty">正在加载权限…</div>
     <template v-else-if="permission.can_edit">
-      <div class="tabs"><button :class="{ active: activeTab === 'entry' }" @click="activeTab = 'entry'">绩效录入</button><button :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">往期统计</button></div>
+      <div class="tabs"><button :class="{ active: activeTab === 'entry' }" @click="activeTab = 'entry'">月度绩效录入</button><button v-if="permission.can_quarterly" :class="{ active: activeTab === 'quarterly' }" @click="activeTab = 'quarterly'">季度绩效录入</button><button :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">往期统计</button></div>
       <section v-if="activeTab === 'entry'" class="card">
         <div class="toolbar">
           <label>考核月份 <input v-model="month" type="month" @change="loadRoster" /></label>
@@ -21,11 +21,12 @@
             <tbody><tr v-for="(row, index) in roster" :key="row.employee_name"><td>{{ index + 1 }}</td><td>{{ row.department }}</td><td class="name">{{ row.employee_name }}</td>
               <td><input v-model="row.score" inputmode="decimal" class="score-input" placeholder="粘贴得分" @paste="pasteScores(index, $event)" /></td><td>{{ row.job_level || '—' }}</td>
               <td><select v-model="row.marker"><option value="">无</option><option value="总师">总师</option><option value="新入职">新入职</option></select></td>
-              <td>{{ formatPercent(row.rank_percent) }}</td><td>{{ row.rank_no ?? '—' }}</td><td><span v-if="row.performance_grade" class="grade">{{ row.performance_grade }}</span><span v-else>—</span></td></tr></tbody>
+              <td>{{ formatPercent(row.rank_percent) }}</td><td>{{ row.rank_no ?? '—' }}</td><td><select v-model="row.gradeValue" @change="row.grade_manual = !!row.gradeValue"><option value="">自动（{{ row.auto_grade || '待计算' }}）</option><option value="A">A</option><option value="B+">B+</option><option value="B">B</option><option value="C">C</option></select></td></tr></tbody>
           </table>
           <p v-if="!roster.length" class="empty">该班组暂无在职人员。</p>
         </div>
       </section>
+      <QuarterlyPerformanceEntry v-else-if="activeTab === 'quarterly'" />
       <PerformanceHistoryPanel v-else />
     </template>
     <div v-else class="card empty">仅班组长、主任或副主任可录入绩效。</div>
@@ -36,6 +37,7 @@
 import { computed, onMounted, ref } from 'vue'
 import { getPerformancePermission, getPerformanceRoster, savePerformance } from '@/api/performance'
 import PerformanceHistoryPanel from '@/components/PerformanceHistoryPanel.vue'
+import QuarterlyPerformanceEntry from '@/components/QuarterlyPerformanceEntry.vue'
 
 const now = new Date()
 const month = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
@@ -52,7 +54,7 @@ async function loadRoster () {
   loading.value = true
   try {
     const res = await getPerformanceRoster({ current_user: currentUser.value, month: month.value })
-    roster.value = (res.list || []).sort((a, b) => collator.compare(a.employee_name, b.employee_name))
+    roster.value = (res.list || []).map(row => ({ ...row, gradeValue: row.grade_manual ? row.performance_grade : '', auto_grade: row.performance_grade || '' })).sort((a, b) => collator.compare(a.employee_name, b.employee_name))
   } catch (error) { alert(error?.response?.data?.detail || '加载绩效人员失败') } finally { loading.value = false }
 }
 function pasteScores (startIndex, event) {
@@ -65,7 +67,7 @@ function pasteScores (startIndex, event) {
 async function save () {
   saving.value = true
   try {
-    await savePerformance({ current_user: currentUser.value, month: month.value, entries: roster.value.map(row => ({ employee_name: row.employee_name, score: row.score === '' || row.score == null ? null : Number(row.score), marker: row.marker || '', job_level: row.job_level })) })
+    await savePerformance({ current_user: currentUser.value, month: month.value, entries: roster.value.map(row => ({ employee_name: row.employee_name, score: row.score === '' || row.score == null ? null : Number(row.score), marker: row.marker || '', job_level: row.job_level, performance_grade: row.gradeValue || '', grade_manual: !!row.gradeValue })) })
     await loadRoster()
     alert('已保存，并按科室有效得分重新计算排名。')
   } catch (error) { alert(error?.response?.data?.detail || '保存失败，请检查得分格式') } finally { saving.value = false }

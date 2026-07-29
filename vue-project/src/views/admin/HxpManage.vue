@@ -14,7 +14,7 @@
       </header>
 
       <div v-if="!canAccess" class="card no-permission">
-        <p>您暂无权限访问此页面，仅系统管理员、人事管理员或部长/副部长可操作。</p>
+        <p>您暂无权限访问此页面，仅系统管理员、人事管理员、部长/副部长或综合技术室主任/副主任可操作。</p>
         <router-link to="/" class="btn btn-primary">返回首页</router-link>
       </div>
 
@@ -240,12 +240,13 @@
 import { ref, computed, onMounted } from 'vue'
 import { getHxpSummary, getHxpDetail, submitHxpApproval, getMyHxpRequests, resubmitHxpApproval } from '@/api/admin'
 import { getUploadConfig, getApprovers } from '@/api/attendance'
-import { isMinisterLevel } from '@/utils/roleMatch'
+import { isMinisterLevel, canManageHxpBatch } from '@/utils/roleMatch'
 
 const canAccess = ref(false)
 const canAccessRecords = ref(false)
 const currentUserName = ref('')
 const currentUserJb = ref('')
+const currentUserLsys = ref('')
 
 function isDeptLeaderJb(jb) {
   return isMinisterLevel(jb)
@@ -409,11 +410,18 @@ onMounted(async () => {
     const name = (userInfo.name || userInfo.userName || '').trim()
     currentUserName.value = name
     currentUserJb.value = (userInfo.jb || '').trim()
+    currentUserLsys.value = (userInfo.dept || userInfo.lsys || '').trim()
     if (!name) return
     const res = await getUploadConfig()
     const a1 = (res?.admin1 || '').trim()
     const a2 = (res?.admin2 || '').trim()
-    canAccess.value = (a1 && name === a1) || (a2 && name === a2) || isDeptLeaderJb(currentUserJb.value)
+    canAccess.value = canManageHxpBatch({
+      name,
+      jb: currentUserJb.value,
+      lsys: currentUserLsys.value,
+      admin1: a1,
+      admin2: a2,
+    })
     canAccessRecords.value = isDeptLeaderJb(currentUserJb.value) || !!(a2 && name === a2)
     if (canAccess.value) {
       loadSummary()
