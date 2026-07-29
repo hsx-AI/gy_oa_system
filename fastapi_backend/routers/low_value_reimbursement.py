@@ -802,6 +802,7 @@ async def check_reimbursement_invoices(
             "supplier": fields.get("supplier") or row.get("supplier") or "",
             "invoice_number": fields.get("invoice_number") or "",
             "invoice_date": fields.get("invoice_date") or "",
+            "invoice_attachment": stored,
             "invoice_original": row.get("invoice_original") or "",
             "total_price": _to_money(row.get("total_price")),
             "apply_time": _fmt_dt(row.get("apply_time")),
@@ -831,6 +832,18 @@ async def check_reimbursement_invoices(
             supplier = items[0].get("supplier") or supplier_key
             split_groups.append({"supplier": supplier, "invoice_date": invoice_date, "items": items})
 
+    risk_reasons_by_id: dict[int, list[str]] = {}
+    for group in duplicate_groups:
+        for item in group["items"]:
+            risk_reasons_by_id.setdefault(item["id"], []).append("发票号码重复")
+    for group in split_groups:
+        for item in group["items"]:
+            risk_reasons_by_id.setdefault(item["id"], []).append("疑似拆分报销")
+    for item in checked:
+        reasons = risk_reasons_by_id.get(item["id"], [])
+        item["check_passed"] = not reasons
+        item["risk_reasons"] = reasons
+
     return {
         "success": True,
         "data": {
@@ -840,6 +853,7 @@ async def check_reimbursement_invoices(
             "split_risks": split_groups,
             "summary": {
                 "checked_count": len(checked),
+                "passed_count": sum(1 for item in checked if item["check_passed"]),
                 "skipped_count": len(skipped),
                 "duplicate_count": len(duplicate_groups),
                 "split_risk_count": len(split_groups),

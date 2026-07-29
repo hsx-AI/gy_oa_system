@@ -124,6 +124,9 @@
           <button class="btn-primary btn-outline" :disabled="!userName || invoiceCheckLoading" @click="runInvoiceCheck">
             {{ invoiceCheckLoading ? '校验中...' : '智能校验' }}
           </button>
+          <button v-if="invoiceCheckResult" class="btn-approve" :disabled="!selectablePassedIds.length" @click="selectCheckedPassed">
+            全选校验通过（{{ selectablePassedIds.length }}）
+          </button>
           <button class="btn-plain" @click="loadPending">刷新</button>
         </div>
       </div>
@@ -400,6 +403,7 @@
         <div class="check-summary" v-if="invoiceCheckResult?.summary">
           <span>{{ invoiceCheckResult.summary.scope || '近一年未驳回申请' }}</span>
           <span>已校验 {{ invoiceCheckResult.summary.checked_count }} 项</span>
+          <span>校验通过 {{ invoiceCheckResult.summary.passed_count || 0 }} 项</span>
           <span>重复发票 {{ invoiceCheckResult.summary.duplicate_count }} 组</span>
           <span>拆分风险 {{ invoiceCheckResult.summary.split_risk_count }} 组</span>
           <span v-if="invoiceCheckResult.summary.skipped_count">跳过 {{ invoiceCheckResult.summary.skipped_count }} 项</span>
@@ -412,7 +416,8 @@
               <strong>发票号码：{{ group.invoice_number }}</strong>
               <ul>
                 <li v-for="item in group.items" :key="item.id">
-                  #{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，{{ item.supplier || '-' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}
+                  <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，{{ item.supplier || '-' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
+                  <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
                 </li>
               </ul>
             </div>
@@ -424,7 +429,8 @@
               <strong>{{ group.supplier }}，开票日期：{{ group.invoice_date }}</strong>
               <ul>
                 <li v-for="item in group.items" :key="item.id">
-                  #{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，发票号 {{ item.invoice_number || '未识别' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}
+                  <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，发票号 {{ item.invoice_number || '未识别' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
+                  <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
                 </li>
               </ul>
             </div>
@@ -804,6 +810,12 @@ const previewCanApprove = computed(() => {
 
 const pendingCount = computed(() => pendingList.value.length)
 const allPendingSelected = computed(() => pendingList.value.length > 0 && selectedIds.value.length === pendingList.value.length)
+const selectablePassedIds = computed(() => {
+  const pendingIds = new Set(pendingList.value.map((row) => Number(row.id)))
+  return (invoiceCheckResult.value?.checked || [])
+    .filter((item) => item.check_passed && pendingIds.has(Number(item.id)))
+    .map((item) => item.id)
+})
 const totalPrice = computed(() => formatMoney((Number(form.value.unit_price) || 0) * (Number(form.value.quantity) || 0)))
 const invoiceParsedSummary = computed(() => {
   const data = invoiceParsed.value
@@ -877,6 +889,20 @@ function openPreview(item) {
   if (!item?.stored) return
   previewItem.value = item
   previewVisible.value = true
+}
+
+function previewCheckedInvoice(item) {
+  if (!item?.invoice_attachment) {
+    showToast('该发票文件不存在，暂时无法预览', 'error')
+    return
+  }
+  openPreview({
+    kind: 'invoice',
+    stored: item.invoice_attachment,
+    original: item.invoice_original,
+    row: item,
+    mode: 'check',
+  })
 }
 
 function closePreview() {
@@ -1046,6 +1072,11 @@ function toggleSelect(id) {
 
 function toggleSelectAll(checked) {
   selectedIds.value = checked ? pendingList.value.map((r) => r.id) : []
+}
+
+function selectCheckedPassed() {
+  selectedIds.value = [...selectablePassedIds.value]
+  showToast(`已选中 ${selectedIds.value.length} 条校验通过且有权审批的申请`)
 }
 
 async function runInvoiceCheck() {
@@ -2188,6 +2219,23 @@ watch(rejectVisible, (visible) => {
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.65;
+}
+.risk-group li {
+  margin: 6px 0;
+}
+.risk-preview-btn {
+  margin-left: 10px;
+  padding: 3px 9px;
+  border: 1px solid #93c5fd;
+  border-radius: 6px;
+  color: #1d4ed8;
+  background: #eff6ff;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.risk-preview-btn:hover {
+  border-color: #3b82f6;
+  background: #dbeafe;
 }
 
 /* 详情弹窗 */
