@@ -689,7 +689,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/access-dashboard' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

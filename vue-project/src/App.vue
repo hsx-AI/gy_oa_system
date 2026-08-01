@@ -349,7 +349,7 @@
             </div>
           </section>
 
-          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canAccessInboxEmails" class="sidebar-group">
+          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canShowAccessDashboard || canAccessInboxEmails" class="sidebar-group">
             <button
               type="button"
               class="sidebar-group-toggle"
@@ -392,7 +392,7 @@
             </svg>
             <span>系统管理员</span>
           </router-link>
-          <router-link v-if="canAccessDbManager" to="/admin/access-dashboard" class="sidebar-item" active-class="sidebar-item-active">
+          <router-link v-if="canShowAccessDashboard" to="/admin/access-dashboard" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-7"/></svg>
             <span>系统访问看板</span>
           </router-link>
@@ -1169,6 +1169,12 @@ const canManagePerformance = computed(() => {
 
 // 是否显示数据库表管理入口（仅 webconfig.admin1 系统管理员）
 const canAccessDbManager = ref(false)
+// 看板入口仅经理、副经理和系统管理员可见；看板本身允许所有已登录用户直达。
+const canShowAccessDashboard = computed(() => {
+  if (canAccessDbManager.value) return true
+  const jb = (currentUser.value?.jb || '').trim()
+  return jb === '经理' || jb === '副经理'
+})
 
 const canAccessInboxEmails = computed(() => {
   if (canAccessDbManager.value) return true

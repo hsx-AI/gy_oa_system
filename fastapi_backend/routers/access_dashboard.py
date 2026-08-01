@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 from database import db
-from routers.health_monitor import _require_admin1, _check_database, _check_server_resources
+from routers.health_monitor import _check_database, _check_server_resources
 
 router = APIRouter(prefix="/access-dashboard", tags=["系统访问看板"])
 
@@ -38,8 +38,7 @@ async def track_visit(event: VisitEvent, request: Request):
 def rows(sql, params=None): return db.execute_query(sql, params) or []
 
 @router.get("/overview")
-async def access_overview(current_user: str = Query(...)):
-    _require_admin1(current_user)
+async def access_overview(current_user: str = Query(default="")):
     ensure_access_log_table()
     now = datetime.now(); start_day = (now - timedelta(days=6)).strftime("%Y-%m-%d")
     summary = (rows("""SELECT COUNT(*) visits, COUNT(DISTINCT user_name) unique_users,
