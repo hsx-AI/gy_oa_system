@@ -22,7 +22,7 @@
             <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".42"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient></defs>
             <g class="lines"><line v-for="n in 5" :key="n" x1="28" :y1="n*36" x2="705" :y2="n*36"/></g>
             <path :d="areaPath" fill="url(#area)"/><polyline :points="visitPoints" class="line visit"/><polyline :points="userPoints" class="line user"/>
-            <g v-for="(d,i) in data.daily" :key="d.day"><circle :cx="x(i, data.daily.length)" :cy="y(d.visits, dailyMax)" r="3.5"/><text :x="x(i,data.daily.length)" y="214">{{ d.day.slice(5) }}</text></g>
+            <g v-for="(d,i) in data.daily" :key="d.day"><circle :cx="x(i, data.daily.length)" :cy="y(d.visits, dailyMax)" r="3.5"/><text :x="x(i,data.daily.length)" y="207">{{ d.day.slice(5) }}</text></g>
           </svg>
         </article>
 
@@ -110,12 +110,12 @@ onMounted(()=>{load();refreshTimer=setInterval(load,30000);clockTimer=setInterva
 .screen{height:100vh;min-height:720px;padding:14px 24px 8px;display:flex;flex-direction:column}
 .topbar{height:68px;min-height:68px}.metrics{margin:12px 0;flex:none}.metric-card{height:88px;padding-top:12px;padding-bottom:12px}
 .grid{grid-template-columns:1.28fr 1.08fr .9fr;grid-template-rows:minmax(260px,1.12fr) minmax(220px,.88fr);gap:12px;flex:1;min-height:0}
-.panel{padding:12px 15px;min-height:0}.trend{height:calc(100% - 42px)}
+.panel{padding:12px 15px;min-height:0}.trend-panel,.hourly-panel{display:flex;flex-direction:column}.trend-panel .panel-title,.hourly-panel .panel-title{flex:none}.trend{display:block;flex:1;width:100%;height:auto;min-height:0;margin:3px 0 0;overflow:hidden}
 .gauge-row{height:130px;display:grid;grid-template-columns:repeat(4,1fr);gap:8px;align-items:center;padding:5px 0}
 .mini-gauge{--gauge:0deg;--gauge-color:#22d3ee;width:min(86px,100%);aspect-ratio:1;border-radius:50%;display:grid;place-items:center;margin:auto;background:radial-gradient(circle,#071527 59%,transparent 61%),conic-gradient(var(--gauge-color) var(--gauge),rgba(40,91,122,.25) 0);filter:drop-shadow(0 0 8px rgba(34,211,238,.12))}
 .mini-gauge>div{text-align:center;max-width:76px}.mini-gauge strong{display:block;font:700 17px Arial;color:#fff}.mini-gauge small{display:block;margin-top:3px;font-size:7px;line-height:1.25;color:#6f99b2;white-space:normal}.mini-gauge.health{--gauge-color:#34d399}
 .services{grid-template-columns:repeat(3,1fr);gap:6px}.services div{height:27px;padding:0 8px}.services b{font-size:9px}
-.bars{height:calc(100% - 38px);padding-bottom:18px}.bar-wrap{height:100%}
+.bars{height:auto;flex:1;min-height:0;padding:8px 0 0;align-items:stretch}.bar-wrap{height:auto;min-height:0;padding-bottom:20px;justify-content:flex-end}.bar{max-height:calc(100% - 20px)}.bar-wrap span{bottom:2px;line-height:12px}
 .ranking{display:grid;grid-template-rows:repeat(6,minmax(27px,1fr));height:calc(100% - 37px);padding-top:6px}
 .ranking>div{grid-template-columns:25px minmax(145px,1.35fr) minmax(60px,.75fr) 35px;height:auto;min-height:27px}
 .ranking span{overflow:visible;text-overflow:clip;white-space:normal;line-height:1.25;word-break:break-word}
