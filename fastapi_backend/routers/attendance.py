@@ -1387,12 +1387,12 @@ async def export_leave_handler_table(
         except ImportError:
             raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法生成 Excel")
 
-        month_str = f"{year}-{month:02d}"
         _, last_day = calendar.monthrange(year, month)
         start_date = f"{year}-{month:02d}-01"
         end_date = f"{year}-{month:02d}-{last_day:02d}"
 
-        # 全员请假：已通过(qjzt=4) + 审核中(qjzt IN 0,1,3)，排除驳回；按月份筛选
+        # 全员请假：导出与所选月份有时间交叉的全部记录。
+        # 交叉条件：开始时间 <= 月末，并且结束时间 >= 月初。
         xm_expr = _yggl_real_name_sql("yggl", "qj.xm")
         sql = f"""
             SELECT {xm_expr} AS xm, qj.timefrom AS timefrom, qj.timeto AS timeto, qj.qjfs AS qjfs,
@@ -1400,29 +1400,28 @@ async def export_leave_handler_table(
             FROM qj
             LEFT JOIN yggl ON qj.xm = yggl.name
             WHERE qj.qjzt IN (0, 1, 3, 4)
-              AND (qj.timefrom LIKE %s OR SUBSTRING(qj.timefrom, 1, 7) = %s)
+              AND DATE(qj.timefrom) <= %s
+              AND DATE(qj.timeto) >= %s
               AND qj.xm NOT IN (SELECT name FROM yggl WHERE TRIM(lsys) IN ('其他部门员工','其他部门成员'))
             ORDER BY qj.timefrom ASC
         """
-        rows = db.execute_query(sql, (f"{month_str}%", month_str)) or []
+        rows = db.execute_query(sql, (end_date, start_date)) or []
 
-        # 公出：已通过 + 审核中，排除驳回(bldzt=22 或 szrzt=22)
+        # 公出：同样按区间交叉筛选；NULL 审批状态不是驳回，不应被 != 22 意外过滤。
         try:
             gcsqb_sql = f"""
                 SELECT {_yggl_real_name_sql('y', 'g.gcr')} AS xm, g.yjcfsj AS timefrom, g.yjfhsj AS timeto,
                        NULLIF(TRIM(COALESCE(g.gclx, '')), '') AS gclx, TRIM(y.gh) AS gh
                 FROM gcsqb g
                 LEFT JOIN yggl y ON g.gcr = y.name
-                WHERE g.bldzt != 22 AND g.szrzt != 22
+                WHERE COALESCE(g.bldzt, 0) != 22 AND COALESCE(g.szrzt, 0) != 22
                   AND (g.yjcfsj IS NOT NULL OR g.yjfhsj IS NOT NULL)
-                  AND (
-                    (g.yjcfsj IS NOT NULL AND DATE(g.yjcfsj) >= %s AND DATE(g.yjcfsj) <= %s)
-                    OR (g.yjfhsj IS NOT NULL AND DATE(g.yjfhsj) >= %s AND DATE(g.yjfhsj) <= %s)
-                  )
+                  AND DATE(COALESCE(g.yjcfsj, g.yjfhsj)) <= %s
+                  AND DATE(COALESCE(g.yjfhsj, g.yjcfsj)) >= %s
                   AND g.gcr NOT IN (SELECT name FROM yggl WHERE TRIM(lsys) IN ('其他部门员工','其他部门成员'))
                 ORDER BY g.yjcfsj ASC
             """
-            gcsqb_rows = db.execute_query(gcsqb_sql, (start_date, end_date, start_date, end_date)) or []
+            gcsqb_rows = db.execute_query(gcsqb_sql, (end_date, start_date)) or []
             for r in gcsqb_rows:
                 category = _leave_handler_category_from_gclx(_dict_get_ci(r, "gclx"))
                 gh_v = _dict_get_ci(r, "gh")
