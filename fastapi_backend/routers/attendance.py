@@ -1490,6 +1490,8 @@ async def export_leave_handler_table(
             c.alignment = Alignment(horizontal="center")
 
         dept_fixed = "智能制造工艺部"
+        export_month_start = datetime(year, month, 1, 0, 0, 0)
+        export_month_end = datetime(year, month, last_day, 23, 59, 59)
         for r in rows:
             gh = (r.get("gh") or "").strip()
             xm = (r.get("xm") or "").strip()
@@ -1499,6 +1501,13 @@ async def export_leave_handler_table(
 
             dt_start = _parse_datetime_for_excel(timefrom_val)
             dt_end = _parse_datetime_for_excel(timeto_val)
+
+            # 记录可以跨月，但公司系统接收的导出区间必须限制在所选月份内。
+            # 这里只裁剪导出值，不修改请假/公出原始数据。
+            if dt_start is not None and dt_start < export_month_start:
+                dt_start = export_month_start
+            if dt_end is not None and dt_end > export_month_end:
+                dt_end = export_month_end
 
             row_data = [
                 gh,
