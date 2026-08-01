@@ -2357,15 +2357,86 @@ async def _build_holiday_duty_excel(department: str, year: int, holiday_name: st
     return bytes(resp.body), filename
 
 
-def _build_shift_holiday_email_body(department: str, year: int, holiday_name: str, start_date: str, end_date: str) -> str:
+def _parse_holiday_date(value: str) -> Optional[date]:
+    try:
+        return date.fromisoformat(str(value or "").strip()[:10])
+    except Exception:
+        return None
+
+
+def _build_shift_holiday_intro_html(
+    dept_names: str,
+    year: int,
+    holiday_name: str,
+    start_d: Optional[date],
+    end_d: Optional[date],
+) -> str:
     from html import escape
-    period = f"{start_date} 至 {end_date}" if start_date and end_date else ""
+    if start_d and end_d:
+        period = f"{start_d.month}月{start_d.day}日至{end_d.month}月{end_d.day}日"
+    else:
+        period = f"{year}年{holiday_name}期间"
     return (
-        "<p>各位好：</p>"
-        f"<p>现将 <strong>{escape(department)}</strong> {year}年<strong>{escape(holiday_name)}</strong>期间"
-        f"（{escape(period)}）值班值宿人员安排表发送给您，请查收附件。</p>"
-        "<p style=\"color:#64748b;font-size:12px;\">（本邮件由系统按科室配置自动发送。）</p>"
+        "<p>各位领导、同事：</p>"
+        "<p>您好！</p>"
+        "<p>我是智能制造工艺部AI办公小助手，"
+        f"已为您整理好{escape(dept_names)}的{year}年{escape(holiday_name)}期间"
+        f"（{escape(period)}）值班值宿安排表，并附电话号码，便于您开展各项生产准备工作。"
+        "详细安排见附件中的值班值宿人员安排表电子表格文件，方便您留存和转发。</p>"
     )
+
+
+def _build_shift_holiday_email_body(report: dict) -> str:
+    return (
+        _build_shift_holiday_intro_html(
+            report["department"],
+            report["holiday_year"],
+            report["holiday_name"],
+            report.get("start_d"),
+            report.get("end_d"),
+        )
+        + _shift_schedule_footer_html()
+    )
+
+
+def _build_merged_shift_holiday_subject(reports: List[dict], unit: str) -> str:
+    if not reports:
+        return "节假日值班值宿安排（自动发送）"
+    r0 = reports[0]
+    year = r0["holiday_year"]
+    holiday_name = r0["holiday_name"]
+    start_d = r0.get("start_d")
+    day_prefix = f"{start_d.month}月{start_d.day}日" if start_d else f"{year}年"
+    dept_names = "、".join(r["department"] for r in reports)
+    if len(reports) == 1:
+        return (
+            f"{day_prefix}排班智能制造工艺部{dept_names}"
+            f"{holiday_name}期间值班值宿安排（自动发送）"
+        )
+    return (
+        f"{day_prefix}排班智能制造工艺部{dept_names}等单位"
+        f"{holiday_name}期间值班值宿安排（{unit}·自动发送）"
+    )
+
+
+def _build_merged_shift_holiday_body(reports: List[dict], unit: str) -> str:
+    r0 = reports[0]
+    dept_names = "、".join(r["department"] for r in reports)
+    parts = [
+        _build_shift_holiday_intro_html(
+            dept_names,
+            r0["holiday_year"],
+            r0["holiday_name"],
+            r0.get("start_d"),
+            r0.get("end_d"),
+        ),
+        f"<p>本次合并发送单位：<strong>{unit}</strong>；附件含以下科室安排表：</p><ul>",
+    ]
+    for report in reports:
+        parts.append(f"<li>{report['department']}：{report['filename']}</li>")
+    parts.append("</ul>")
+    parts.append(_shift_schedule_footer_html())
+    return "".join(parts)
 
 
 async def run_shift_holiday_email_once(
@@ -2375,7 +2446,7 @@ async def run_shift_holiday_email_once(
     target_year: Optional[int] = None,
     target_holiday: Optional[str] = None,
 ) -> dict:
-    """发送节假日值班表邮件。
+    """发送节假日值班表邮件（按收件人单位合并，同单位一封多附件；措辞对齐周排班邮件）。
 
     自动模式：各科室按 holiday_email_days_before 配置，在假期首日前 N 天当天触发。
     手动模式：给定 target_year + target_holiday 时立即发送指定假期（仍受已发送去重约束，可 force）。
@@ -2420,8 +2491,10 @@ async def run_shift_holiday_email_once(
         sent = 0
         skipped = 0
         errors = 0
+        mail_sent = 0
         details = []
-        company_leaders = _get_shift_company_leader_recipients()
+        # 同一假期一批合并；key=(year, holiday_name)
+        holiday_jobs: dict = {}
 
         for dept in departments:
             if dept not in enabled_departments:
@@ -2449,9 +2522,8 @@ async def run_shift_holiday_email_once(
                 candidate_years = {today.year, (today + timedelta(days=days_before + 1)).year}
                 for y in sorted(candidate_years):
                     for opt in _options_for(y):
-                        try:
-                            h_start = date.fromisoformat(opt["startDate"])
-                        except Exception:
+                        h_start = _parse_holiday_date(opt.get("startDate"))
+                        if not h_start:
                             continue
                         if h_start - timedelta(days=days_before) == today:
                             due_holidays.append((y, opt))
@@ -2462,14 +2534,9 @@ async def run_shift_holiday_email_once(
 
             config = _get_shift_config_recipients(dept)
             leaders = _get_shift_dept_leader_recipients(dept)
-            to_emails = sorted({(i.get("email") or "").strip() for i in (config or []) if (i.get("email") or "").strip()})
-            cc_emails = sorted(
-                {(i.get("email") or "").strip() for i in (leaders or []) + (company_leaders or []) if (i.get("email") or "").strip()}
-                - set(to_emails)
-            )
-            if not to_emails:
+            if not _shift_recipient_units(config, leaders):
                 skipped += len(due_holidays)
-                details.append({"department": dept, "status": "skipped", "message": "未配置排班表收件人"})
+                details.append({"department": dept, "status": "skipped", "message": "未配置有效收件人或领导邮箱"})
                 continue
 
             for h_year, opt in due_holidays:
@@ -2480,71 +2547,349 @@ async def run_shift_holiday_email_once(
                     continue
                 try:
                     excel_bytes, filename = await _build_holiday_duty_excel(dept, h_year, h_name)
-                    subject = f"{dept}{h_year}年{h_name}期间值班值宿安排表"
-                    body = _build_shift_holiday_email_body(dept, h_year, h_name, opt.get("startDate", ""), opt.get("endDate", ""))
-                    msg = _build_email_message(
-                        sender_addr,
-                        to_emails,
-                        cc_emails,
-                        subject,
-                        body,
-                        "html",
-                        [AttachmentItem(
-                            filename=filename,
-                            content_base64=base64.b64encode(excel_bytes).decode("utf-8"),
-                        )],
-                    )
-                    all_recipients = list(set(to_emails + cc_emails))
-                    success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
-                    if success_count:
-                        sent += 1
-                        log_msg = f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人"
-                        _record_shift_holiday_email_log(
-                            dept, h_year, h_name, opt.get("startDate", ""), opt.get("endDate", ""),
-                            trigger_label, len(all_recipients), "ok", log_msg,
-                        )
-                        details.append({
-                            "department": dept, "status": "ok", "holiday": f"{h_year}年{h_name}",
-                            "recipientCount": len(to_emails), "ccCount": len(cc_emails),
-                        })
-                        try:
-                            _create_mail_result_notifications(
-                                "节假日值班表邮件发送成功",
-                                f"{dept}{h_year}年{h_name}期间值班值宿安排表已发送，{log_msg}。",
-                                ["shift_holiday", trigger_label, dept, f"{h_year}-{h_name}"],
-                                target_year=h_year,
-                                target_month=int(str(opt.get("startDate", ""))[5:7] or 1),
-                                trigger_label=trigger_label,
-                            )
-                        except Exception as notify_err:
-                            logger.warning("[ShiftHolidayEmail] 写站内通知失败: %s", notify_err)
-                    else:
-                        errors += 1
-                        msg_text = "；".join(failures) if failures else "SMTP 未返回成功"
-                        _record_shift_holiday_email_log(
-                            dept, h_year, h_name, opt.get("startDate", ""), opt.get("endDate", ""),
-                            trigger_label, len(all_recipients), "error", msg_text,
-                        )
-                        details.append({"department": dept, "status": "error", "holiday": f"{h_year}年{h_name}", "message": msg_text[:200]})
+                    start_d = _parse_holiday_date(opt.get("startDate"))
+                    end_d = _parse_holiday_date(opt.get("endDate"))
+                    report = {
+                        "department": dept,
+                        "filename": filename,
+                        "excel_bytes": excel_bytes,
+                        "holiday_year": h_year,
+                        "holiday_name": h_name,
+                        "start_date": opt.get("startDate") or "",
+                        "end_date": opt.get("endDate") or "",
+                        "start_d": start_d,
+                        "end_d": end_d,
+                        # 兼容周排班合并桶结构（节假日按单位合并，send_weekday 固定）
+                        "week_start": start_d or today,
+                        "week_end": end_d or start_d or today,
+                    }
+                    holiday_jobs.setdefault((h_year, h_name), []).append({
+                        "department": dept,
+                        "send_weekday": 0,
+                        "report": report,
+                        "config_recipients": config,
+                        "leaders": leaders,
+                        "missing_rows": [],
+                    })
                 except Exception as e:
                     errors += 1
-                    logger.error("[ShiftHolidayEmail] %s %s年%s 发送失败: %s", dept, h_year, h_name, e)
+                    logger.error("[ShiftHolidayEmail] %s %s年%s 生成附件失败: %s", dept, h_year, h_name, e)
                     _record_shift_holiday_email_log(
                         dept, h_year, h_name, opt.get("startDate", ""), opt.get("endDate", ""),
                         trigger_label, 0, "error", str(e)[:400],
                     )
                     details.append({"department": dept, "status": "error", "holiday": f"{h_year}年{h_name}", "message": str(e)[:200]})
 
+        for (h_year, h_name), jobs in holiday_jobs.items():
+            buckets = _collect_shift_email_send_buckets(jobs)
+            if not buckets and jobs:
+                for job in jobs:
+                    skipped += 1
+                    details.append({"department": job["department"], "status": "skipped", "message": "无法归入发送批次"})
+                continue
+
+            for bucket in buckets.values():
+                to_emails = sorted(bucket["to_emails"])
+                cc_emails = sorted(bucket["cc_emails"])
+                reports = bucket["reports"]
+                unit = bucket["unit"]
+                if not reports:
+                    continue
+                if not to_emails:
+                    for dept in bucket["departments"]:
+                        skipped += 1
+                        details.append({
+                            "department": dept,
+                            "status": "skipped",
+                            "message": "该单位未配置排班表收件人（管理人员仅抄送，不能单独作为收件人）",
+                            "unit": unit,
+                        })
+                    continue
+
+                subject = _build_merged_shift_holiday_subject(reports, unit)
+                body = (
+                    _build_shift_holiday_email_body(reports[0])
+                    if len(reports) == 1
+                    else _build_merged_shift_holiday_body(reports, unit)
+                )
+                attachments = [
+                    AttachmentItem(
+                        filename=report["filename"],
+                        content_base64=base64.b64encode(report["excel_bytes"]).decode("utf-8"),
+                    )
+                    for report in reports
+                ]
+                msg = _build_email_message(
+                    sender_addr,
+                    to_emails,
+                    cc_emails,
+                    subject,
+                    body,
+                    "html",
+                    attachments,
+                    inline_images=_shift_schedule_inline_images(),
+                )
+                all_recipients = list(set(to_emails + cc_emails))
+                try:
+                    success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
+                    if success_count:
+                        mail_sent += 1
+                        log_msg = (
+                            f"已向{unit}发送 {len(reports)} 个科室{h_year}年{h_name}值班表，"
+                            f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人"
+                        )
+                        dept_names = "、".join(r["department"] for r in reports)
+                        start_d = reports[0].get("start_d")
+                        try:
+                            _create_mail_result_notifications(
+                                "节假日值班表邮件发送成功",
+                                (
+                                    f"{h_year}年{h_name}期间，{dept_names}值班值宿安排表已向{unit}发送成功，"
+                                    f"收件人 {len(to_emails)} 人，抄送 {len(cc_emails)} 人。"
+                                ),
+                                [
+                                    "shift_holiday",
+                                    trigger_label,
+                                    unit,
+                                    f"{h_year}-{h_name}",
+                                    ",".join(r["department"] for r in reports),
+                                ],
+                                target_year=h_year,
+                                target_month=(start_d.month if start_d else 1),
+                                trigger_label=trigger_label,
+                            )
+                        except Exception as notify_err:
+                            logger.warning("[ShiftHolidayEmail] 写站内通知失败: %s", notify_err)
+                        for report in reports:
+                            sent += 1
+                            _record_shift_holiday_email_log(
+                                report["department"],
+                                h_year,
+                                h_name,
+                                report.get("start_date", ""),
+                                report.get("end_date", ""),
+                                trigger_label,
+                                len(all_recipients),
+                                "ok",
+                                log_msg,
+                            )
+                            details.append({
+                                "department": report["department"],
+                                "status": "ok",
+                                "holiday": f"{h_year}年{h_name}",
+                                "recipientCount": len(to_emails),
+                                "ccCount": len(cc_emails),
+                                "unit": unit,
+                                "merged": len(reports) > 1,
+                            })
+                    else:
+                        errors += len(reports)
+                        msg_text = "；".join(failures) if failures else "SMTP 未返回成功"
+                        for report in reports:
+                            _record_shift_holiday_email_log(
+                                report["department"],
+                                h_year,
+                                h_name,
+                                report.get("start_date", ""),
+                                report.get("end_date", ""),
+                                trigger_label,
+                                len(all_recipients),
+                                "error",
+                                msg_text,
+                            )
+                            details.append({
+                                "department": report["department"],
+                                "status": "error",
+                                "holiday": f"{h_year}年{h_name}",
+                                "message": msg_text[:200],
+                                "unit": unit,
+                            })
+                except Exception as e:
+                    errors += len(reports)
+                    logger.error("[ShiftHolidayEmail] 合并发送失败 unit=%s holiday=%s: %s", unit, h_name, e)
+                    for report in reports:
+                        _record_shift_holiday_email_log(
+                            report["department"],
+                            h_year,
+                            h_name,
+                            report.get("start_date", ""),
+                            report.get("end_date", ""),
+                            trigger_label,
+                            0,
+                            "error",
+                            str(e)[:400],
+                        )
+                        details.append({
+                            "department": report["department"],
+                            "status": "error",
+                            "holiday": f"{h_year}年{h_name}",
+                            "message": str(e)[:200],
+                            "unit": unit,
+                        })
+
         return {
             "success": errors == 0,
-            "message": f"节假日值班表邮件发送完成：成功 {sent} 封，跳过 {skipped} 个，失败 {errors} 个",
+            "message": (
+                f"节假日值班表邮件发送完成：成功 {sent} 个科室（{mail_sent} 封合并邮件），"
+                f"跳过 {skipped} 个科室，失败 {errors} 个科室"
+            ),
             "sent": sent,
             "skipped": skipped,
             "errors": errors,
+            "mailCount": mail_sent,
             "details": details,
         }
     finally:
         _release_mysql_lock(lock_conn, lock_name, "ShiftHolidayEmail")
+
+
+def _shift_holiday_body_html_for_preview(body: str) -> str:
+    """预览页无法解析 cid 内嵌图，替换为占位说明。"""
+    import re
+    text = body or ""
+    text = re.sub(
+        r'<img\s+[^>]*src=["\']cid:[^"\']+["\'][^>]*/?>',
+        '<p style="color:#64748b;font-size:12px;border:1px dashed #94a3b8;'
+        'padding:10px;width:132px;text-align:center;">[投诉二维码，正式发送时附带]</p>',
+        text,
+        flags=re.I,
+    )
+    return text
+
+
+async def preview_shift_holiday_email(
+    only_departments: Optional[List[str]] = None,
+    force: bool = False,
+    target_year: Optional[int] = None,
+    target_holiday: Optional[str] = None,
+) -> dict:
+    """预览节假日值班表合并邮件（不生成附件、不发信）。"""
+    from routers.shift_schedule import (
+        _get_shift_departments,
+        _holiday_options_for_year,
+        _load_shift_email_feature_config,
+    )
+
+    year = int(target_year or 0)
+    holiday = (target_holiday or "").strip()
+    if not year or not holiday:
+        return {"success": False, "message": "请指定年份与假期", "mails": [], "skipped": []}
+
+    options = _holiday_options_for_year(year)
+    opt = next((o for o in options if o["name"] == holiday), None)
+    if not opt:
+        return {"success": False, "message": f"{year}年未找到假期「{holiday}」", "mails": [], "skipped": []}
+
+    all_departments = _get_shift_departments()
+    enabled_departments, _configured = _load_shift_email_feature_config(all_departments)
+    departments = [d for d in (only_departments or all_departments) if d]
+    start_d = _parse_holiday_date(opt.get("startDate"))
+    end_d = _parse_holiday_date(opt.get("endDate"))
+    today = date.today()
+    jobs = []
+    skipped = []
+
+    for dept in departments:
+        if dept not in enabled_departments:
+            skipped.append({"department": dept, "message": "本科室未启用排班邮件功能"})
+            continue
+        if not force and _shift_holiday_email_sent(dept, year, holiday):
+            skipped.append({"department": dept, "message": f"{year}年{holiday}值班表已发送过（可勾选强制重发）"})
+            continue
+        config = _get_shift_config_recipients(dept)
+        leaders = _get_shift_dept_leader_recipients(dept)
+        if not _shift_recipient_units(config, leaders):
+            skipped.append({"department": dept, "message": "未配置有效收件人或领导邮箱"})
+            continue
+        filename = f"{dept}_{year}年{holiday}期间值班值宿人员安排表.xlsx"
+        report = {
+            "department": dept,
+            "filename": filename,
+            "excel_bytes": b"",
+            "holiday_year": year,
+            "holiday_name": holiday,
+            "start_date": opt.get("startDate") or "",
+            "end_date": opt.get("endDate") or "",
+            "start_d": start_d,
+            "end_d": end_d,
+            "week_start": start_d or today,
+            "week_end": end_d or start_d or today,
+        }
+        jobs.append({
+            "department": dept,
+            "send_weekday": 0,
+            "report": report,
+            "config_recipients": config,
+            "leaders": leaders,
+            "missing_rows": [],
+        })
+
+    buckets = _collect_shift_email_send_buckets(jobs)
+    mails = []
+    for bucket in buckets.values():
+        to_emails = sorted(bucket["to_emails"])
+        cc_emails = sorted(bucket["cc_emails"])
+        reports = bucket["reports"]
+        unit = bucket["unit"]
+        if not reports:
+            continue
+        if not to_emails:
+            for dept in bucket["departments"]:
+                skipped.append({
+                    "department": dept,
+                    "message": f"单位「{unit}」未配置排班表收件人（管理人员仅抄送）",
+                    "unit": unit,
+                })
+            continue
+        subject = _build_merged_shift_holiday_subject(reports, unit)
+        body = (
+            _build_shift_holiday_email_body(reports[0])
+            if len(reports) == 1
+            else _build_merged_shift_holiday_body(reports, unit)
+        )
+        mails.append({
+            "unit": unit,
+            "subject": subject,
+            "bodyHtml": _shift_holiday_body_html_for_preview(body),
+            "to": to_emails,
+            "cc": cc_emails,
+            "departments": [r["department"] for r in reports],
+            "attachments": [r["filename"] for r in reports],
+            "merged": len(reports) > 1,
+        })
+
+    mails.sort(key=lambda m: (m.get("unit") or "", ",".join(m.get("departments") or [])))
+    return {
+        "success": True,
+        "message": f"预览完成：将发送 {len(mails)} 封合并邮件，涉及 {len(jobs)} 个科室，跳过 {len(skipped)} 个",
+        "year": year,
+        "holiday": holiday,
+        "startDate": opt.get("startDate") or "",
+        "endDate": opt.get("endDate") or "",
+        "mailCount": len(mails),
+        "departmentCount": len(jobs),
+        "mails": mails,
+        "skipped": skipped,
+    }
+
+
+@router.get("/preview-shift-holiday-email")
+async def preview_shift_holiday_email_api(
+    current_user: str = Query(...),
+    year: int = Query(..., description="假期年份"),
+    holiday: str = Query(..., description="假期名称（与 /shift/holiday-options 一致）"),
+    department: Optional[str] = Query(None, description="只预览指定科室，留空则全部启用科室"),
+    force: bool = Query(False, description="是否忽略已发送记录（与正式发送一致）"),
+):
+    """预览节假日值班表合并邮件（不发信）。"""
+    scoped_department = _resolve_shift_schedule_email_scope(current_user, department)
+    only_departments = [scoped_department] if scoped_department else None
+    return await preview_shift_holiday_email(
+        only_departments=only_departments,
+        force=force,
+        target_year=year,
+        target_holiday=holiday,
+    )
 
 
 @router.post("/run-shift-holiday-email")

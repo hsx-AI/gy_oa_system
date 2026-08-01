@@ -312,7 +312,7 @@
           <div class="config-card-head">
             <div>
               <h2 class="section-title">排班邮件配置</h2>
-              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间、排班区间是否含发送当天与收件人（固定 17:00 发送）。节假日值班表可按「假期首日前 N 天」自动发送，收件人与排班表收件人共用。</p>
+              <p class="section-desc">控制各科室是否启用周排班自动/手动发送与提醒，并配置自动发送时间、排班区间是否含发送当天与收件人（固定 17:00 发送）。节假日值班表可按「假期首日前 N 天」自动发送；定时与临时补发均按收件人单位合并（同单位一封多附件），邮件措辞与周五周排班一致，收件人与排班表收件人共用。</p>
             </div>
             <div class="config-actions">
               <button type="button" class="btn btn-secondary btn-sm" :disabled="shiftEmailLoading || shiftEmailSaving" @click="setAllShiftEmailEnabled(true)">功能全选</button>
@@ -376,7 +376,8 @@
                   <span>临时补发节假日值班表</span>
                 </div>
                 <p class="shift-email-empty shift-holiday-send-hint">
-                  按各科室「排班表收件人」配置立即发送指定假期的值班值宿安排表（与自动发送附件格式相同）。关闭了节假日自动发送的科室也可在此补发。
+                  与周排班自动发送相同：按收件人单位合并，同一单位只发一封邮件（可含多个科室附件）；
+                  邮件措辞对齐周五排班邮件。关闭了节假日自动发送的科室也可在此补发。
                 </p>
                 <div class="shift-holiday-send-form">
                   <label class="shift-holiday-field">
@@ -392,7 +393,7 @@
                   </label>
                   <label class="shift-holiday-field">
                     <span>假期</span>
-                    <select v-model="holidaySendName" class="shift-holiday-select" :disabled="holidaySendOptionsLoading">
+                    <select v-model="holidaySendName" class="shift-holiday-select" :disabled="holidaySendOptionsLoading" @change="clearHolidaySendPreview">
                       <option value="">{{ holidaySendOptionsLoading ? '加载中…' : '请选择假期' }}</option>
                       <option v-for="opt in holidaySendOptions" :key="opt.name" :value="opt.name">
                         {{ opt.name }}（{{ opt.startDate }} 至 {{ opt.endDate }}）
@@ -401,7 +402,7 @@
                   </label>
                   <label class="shift-holiday-field">
                     <span>科室</span>
-                    <select v-model="holidaySendDepartment" class="shift-holiday-select">
+                    <select v-model="holidaySendDepartment" class="shift-holiday-select" @change="clearHolidaySendPreview">
                       <option value="">全部已启用排班邮件的科室</option>
                       <option v-for="item in shiftEmailEnabledItems" :key="'hs-' + item.department" :value="item.department">
                         {{ item.department }}
@@ -409,17 +410,56 @@
                     </select>
                   </label>
                   <label class="shift-holiday-force">
-                    <input v-model="holidaySendForce" type="checkbox">
+                    <input v-model="holidaySendForce" type="checkbox" @change="clearHolidaySendPreview">
                     <span>忽略已发送记录强制重发</span>
                   </label>
                   <button
                     type="button"
-                    class="btn btn-primary btn-sm"
-                    :disabled="holidaySendLoading || !holidaySendName || shiftEmailLoading || shiftEmailSaving"
-                    @click="sendHolidayShiftEmail"
+                    class="btn btn-secondary btn-sm"
+                    :disabled="holidayPreviewLoading || holidaySendLoading || !holidaySendName || shiftEmailLoading || shiftEmailSaving"
+                    @click="previewHolidayShiftEmail"
                   >
-                    {{ holidaySendLoading ? '发送中…' : '立即补发' }}
+                    {{ holidayPreviewLoading ? '预览生成中…' : '生成预览' }}
                   </button>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="holidaySendLoading || holidayPreviewLoading || !holidaySendPreview || !holidaySendPreview.mails?.length"
+                    @click="confirmSendHolidayShiftEmail"
+                  >
+                    {{ holidaySendLoading ? '发送中…' : `确认发送（${holidaySendPreview?.mailCount || 0} 封）` }}
+                  </button>
+                </div>
+                <div v-if="holidaySendPreview" class="shift-holiday-preview-box">
+                  <div class="shift-email-subhead">
+                    <span>发送预览 · {{ holidaySendPreview.year }}年{{ holidaySendPreview.holiday }}</span>
+                    <button type="button" class="btn btn-secondary btn-sm" @click="clearHolidaySendPreview">关闭预览</button>
+                  </div>
+                  <p class="shift-email-empty">{{ holidaySendPreview.message }}</p>
+                  <div
+                    v-for="(mail, idx) in holidaySendPreview.mails"
+                    :key="'hm-' + idx"
+                    class="shift-holiday-mail-card"
+                  >
+                    <div class="shift-holiday-mail-meta">
+                      <strong>第 {{ idx + 1 }} 封 · {{ mail.unit }}</strong>
+                      <span v-if="mail.merged" class="shift-holiday-merged-tag">合并</span>
+                    </div>
+                    <p class="shift-holiday-mail-row"><span>主题</span>{{ mail.subject }}</p>
+                    <p class="shift-holiday-mail-row"><span>科室</span>{{ (mail.departments || []).join('、') }}</p>
+                    <p class="shift-holiday-mail-row"><span>收件人</span>{{ (mail.to || []).join('；') || '—' }}</p>
+                    <p class="shift-holiday-mail-row"><span>抄送</span>{{ (mail.cc || []).join('；') || '—' }}</p>
+                    <p class="shift-holiday-mail-row"><span>附件</span>{{ (mail.attachments || []).join('；') || '—' }}</p>
+                    <div class="shift-holiday-mail-body" v-html="mail.bodyHtml"></div>
+                  </div>
+                  <div v-if="holidaySendPreview.skipped?.length" class="shift-holiday-skipped">
+                    <h5>将跳过</h5>
+                    <ul>
+                      <li v-for="(s, i) in holidaySendPreview.skipped" :key="'hs-' + i">
+                        {{ s.department }}：{{ s.message }}
+                      </li>
+                    </ul>
+                  </div>
                 </div>
                 <p v-if="holidaySendMessage" class="config-message shift-holiday-send-result">{{ holidaySendMessage }}</p>
               </div>
@@ -552,7 +592,7 @@ import {
   saveLlmSceneModel,
   testLlmModel,
 } from '@/api/healthMonitor'
-import { getShiftHolidayOptions, getShiftScheduleEmailBlockedPlans, runShiftScheduleEmail, runShiftHolidayEmail } from '@/api/shift'
+import { getShiftHolidayOptions, getShiftScheduleEmailBlockedPlans, previewShiftHolidayEmail, runShiftScheduleEmail, runShiftHolidayEmail } from '@/api/shift'
 import { getInboxConfig, updateInboxConfig } from '@/api/inboxEmail'
 import InboxEmailConfigBody from '@/components/inbox/InboxEmailConfigBody.vue'
 
@@ -578,6 +618,8 @@ const holidaySendForce = ref(true)
 const holidaySendOptions = ref([])
 const holidaySendOptionsLoading = ref(false)
 const holidaySendLoading = ref(false)
+const holidayPreviewLoading = ref(false)
+const holidaySendPreview = ref(null)
 const holidaySendMessage = ref('')
 const attendanceFetchLoading = ref(false)
 const attendanceFetchSaving = ref(false)
@@ -1164,9 +1206,30 @@ async function resendShiftScheduleEmail(line) {
   }
 }
 
+function clearHolidaySendPreview() {
+  holidaySendPreview.value = null
+}
+
+function holidaySendParams() {
+  const name = currentName()
+  const year = Number(holidaySendYear.value)
+  const holiday = (holidaySendName.value || '').trim()
+  const dept = (holidaySendDepartment.value || '').trim()
+  if (!name || !holiday || !Number.isFinite(year)) return null
+  const params = {
+    current_user: name,
+    year,
+    holiday,
+    force: !!holidaySendForce.value,
+  }
+  if (dept) params.department = dept
+  return params
+}
+
 async function fetchHolidaySendOptions() {
   const year = Number(holidaySendYear.value)
   if (!Number.isFinite(year) || year < 2000) return
+  clearHolidaySendPreview()
   holidaySendOptionsLoading.value = true
   holidaySendMessage.value = ''
   try {
@@ -1184,43 +1247,55 @@ async function fetchHolidaySendOptions() {
   }
 }
 
-async function sendHolidayShiftEmail() {
-  const name = currentName()
-  const year = Number(holidaySendYear.value)
-  const holiday = (holidaySendName.value || '').trim()
-  if (!name || holidaySendLoading.value || !holiday) return
-  if (!Number.isFinite(year)) {
-    holidaySendMessage.value = '请填写有效年份'
-    return
+async function previewHolidayShiftEmail() {
+  const params = holidaySendParams()
+  if (!params || holidayPreviewLoading.value) return
+  holidayPreviewLoading.value = true
+  holidaySendMessage.value = ''
+  holidaySendPreview.value = null
+  try {
+    const res = await previewShiftHolidayEmail(params)
+    if (!res?.success) {
+      holidaySendMessage.value = res?.message || '预览失败'
+      return
+    }
+    holidaySendPreview.value = res
+    if (!(res.mails || []).length) {
+      holidaySendMessage.value = res.message || '没有可发送的合并邮件，请查看跳过项'
+    }
+  } catch (e) {
+    holidaySendMessage.value = e?.response?.data?.detail || e?.message || '预览节假日值班表失败'
+  } finally {
+    holidayPreviewLoading.value = false
   }
-  const dept = (holidaySendDepartment.value || '').trim()
-  const scopeText = dept || '全部已启用排班邮件的科室'
-  const forceHint = holidaySendForce.value ? '（强制重发）' : ''
+}
+
+async function confirmSendHolidayShiftEmail() {
+  const params = holidaySendParams()
+  const preview = holidaySendPreview.value
+  if (!params || holidaySendLoading.value || !preview?.mails?.length) return
+  const mailCount = preview.mailCount || preview.mails.length
   if (!window.confirm(
-    `确认按各科室收件人配置补发节假日值班表吗？\n\n`
-    + `${year}年「${holiday}」\n科室：${scopeText}\n${forceHint}\n\n`
-    + `将立即生成附件并发送邮件。`
+    `确认按预览发送吗？\n\n`
+    + `${params.year}年「${params.holiday}」\n`
+    + `共 ${mailCount} 封合并邮件，涉及 ${preview.departmentCount || 0} 个科室。\n`
+    + `正式发送时会生成 Excel 附件。`
   )) return
 
   holidaySendLoading.value = true
   holidaySendMessage.value = ''
   try {
-    const params = {
-      current_user: name,
-      year,
-      holiday,
-      force: !!holidaySendForce.value,
-    }
-    if (dept) params.department = dept
     const res = await runShiftHolidayEmail(params)
     const details = (res?.details || [])
       .slice(0, 12)
       .map((d) => {
         const st = d.status === 'ok' ? '成功' : (d.status === 'skipped' ? '跳过' : '失败')
-        return `${d.department || '-'}：${st}${d.message ? `（${d.message}）` : ''}${d.holiday ? ` [${d.holiday}]` : ''}`
+        const unit = d.unit ? ` · ${d.unit}` : ''
+        return `${d.department || '-'}${unit}：${st}${d.message ? `（${d.message}）` : ''}`
       })
-    const detailText = details.length ? `\n${details.join('\n')}${res.details.length > 12 ? '\n…' : ''}` : ''
+    const detailText = details.length ? `\n${details.join('\n')}${(res.details || []).length > 12 ? '\n…' : ''}` : ''
     holidaySendMessage.value = (res?.message || '节假日值班表补发已执行') + detailText
+    clearHolidaySendPreview()
   } catch (e) {
     holidaySendMessage.value = e?.response?.data?.detail || e?.message || '补发节假日值班表失败'
   } finally {
@@ -2005,6 +2080,70 @@ onMounted(async () => {
 .shift-holiday-send-result {
   white-space: pre-line;
   margin-top: 10px;
+}
+.shift-holiday-preview-box {
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-layout);
+}
+.shift-holiday-mail-card {
+  margin-top: 10px;
+  padding: 12px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 8px;
+  background: var(--color-bg-container);
+}
+.shift-holiday-mail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.shift-holiday-merged-tag {
+  font-size: 0.75rem;
+  color: #0369a1;
+  background: #e0f2fe;
+  padding: 1px 6px;
+  border-radius: 4px;
+}
+.shift-holiday-mail-row {
+  margin: 0 0 4px;
+  font-size: 0.85rem;
+  line-height: 1.45;
+  word-break: break-all;
+}
+.shift-holiday-mail-row > span {
+  display: inline-block;
+  min-width: 3.2em;
+  color: var(--color-text-tertiary);
+  margin-right: 6px;
+}
+.shift-holiday-mail-body {
+  margin-top: 10px;
+  padding: 10px 12px;
+  border-radius: 6px;
+  border: 1px dashed var(--color-border-base);
+  background: #fafafa;
+  font-size: 0.88rem;
+  line-height: 1.55;
+}
+.shift-holiday-mail-body :deep(p) {
+  margin: 0 0 0.55em;
+}
+.shift-holiday-skipped {
+  margin-top: 12px;
+  font-size: 0.85rem;
+}
+.shift-holiday-skipped h5 {
+  margin: 0 0 6px;
+  font-size: 0.88rem;
+}
+.shift-holiday-skipped ul {
+  margin: 0;
+  padding-left: 1.2em;
+  color: var(--color-text-secondary);
 }
 .shift-email-preview-resend {
   flex: 0 0 auto;
