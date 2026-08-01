@@ -108,8 +108,8 @@
       <div class="news-main panel">
         <div class="panel-head">
           <div>
-            <h2>国际新闻</h2>
-            <p>默认展示国际栏目，也可切换其他分类</p>
+            <h2>新闻资讯</h2>
+            <p>默认展示即时新闻，也可切换其他分类</p>
           </div>
           <div class="news-tabs">
             <button
@@ -171,10 +171,10 @@ import {
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, cityOptions, weatherIcon } from '@/utils/infoFeedDisplay'
 
 const newsTypes = [
-  { label: '国际', value: 'world' },
+  { label: '即时', value: 'scroll' },
   { label: '要闻', value: 'import' },
   { label: '时政', value: 'politics' },
-  { label: '即时', value: 'scroll' },
+  { label: '国际', value: 'world' },
   { label: '财经', value: 'finance' },
   { label: '社会', value: 'society' },
   { label: '生活', value: 'life' },

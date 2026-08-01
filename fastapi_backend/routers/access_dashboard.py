@@ -1,10 +1,15 @@
 # -*- coding: utf-8 -*-
 """系统访问情况看板：记录前端页面访问并提供管理员聚合数据。"""
 from datetime import datetime, timedelta
+import os
+import platform
+import shutil
 from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 from database import db
-from routers.health_monitor import _check_database, _check_server_resources
+from routers.health_monitor import (
+    _check_database, _check_server_resources, _get_cpu_percent, _get_memory_usage,
+)
 
 router = APIRouter(prefix="/access-dashboard", tags=["系统访问看板"])
 
@@ -60,6 +65,22 @@ async def access_overview(current_user: str = Query(default="")):
     recent=rows("""SELECT user_name,department,page_path path,page_title title,DATE_FORMAT(visited_at,'%%H:%%i:%%s') time
       FROM system_access_log ORDER BY visited_at DESC LIMIT 12""")
     db_health, resources = await _check_database(), await _check_server_resources()
+    hardware = {"available": False, "cpu": None, "memory": None, "disk": None}
+    if platform.system() == "Linux":
+        cpu = await _get_cpu_percent()
+        memory = _get_memory_usage()
+        disk = shutil.disk_usage("/")
+        hardware = {
+            "available": True,
+            "cpu": cpu,
+            "memory": memory.get("percent") if memory else None,
+            "disk": round(disk.used / disk.total * 100, 1) if disk.total else None,
+            "cpu_cores": os.cpu_count() or 1,
+            "memory_used_gb": round(memory["used"] / 1024**3, 1) if memory else None,
+            "memory_total_gb": round(memory["total"] / 1024**3, 1) if memory else None,
+            "disk_used_gb": round(disk.used / 1024**3, 1),
+            "disk_total_gb": round(disk.total / 1024**3, 1),
+        }
     return {'success':True,'generated_at':now.strftime('%Y-%m-%d %H:%M:%S'),'summary':summary,'daily':daily,'hourly':hourly,
-      'pages':pages,'departments':departments,'recent':recent,'services':[
+      'pages':pages,'departments':departments,'recent':recent,'hardware':hardware,'services':[
         {'name':'OA 应用服务','status':'ok','message':'运行正常'}, {'name':'业务数据库',**db_health}, {'name':'服务器资源',**resources}]}

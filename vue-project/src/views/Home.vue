@@ -770,11 +770,11 @@
                 type="button"
                 @click.stop="router.push('/info-feed')"
               >
-                <span>{{ item.category || '国际' }}</span>
+                <span>{{ item.category || '即时' }}</span>
                 <strong>{{ item.title }}</strong>
               </button>
             </div>
-            <div v-else class="dashboard-empty"><p>等待中转服务推送国际新闻</p></div>
+            <div v-else class="dashboard-empty"><p>等待中转服务推送即时新闻</p></div>
           </template>
         </div>
       </article>

@@ -1,5 +1,5 @@
 export const DEFAULT_WEATHER_LOCATION = '126.66,45.72'
-export const DEFAULT_NEWS_TYPE = 'world'
+export const DEFAULT_NEWS_TYPE = 'scroll'
 
 export function shortWeatherDate(value) {
   if (!value) return '-'

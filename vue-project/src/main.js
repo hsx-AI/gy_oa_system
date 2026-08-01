@@ -26,7 +26,8 @@ router.afterEach((to) => {
     if (!name) return
     import('./api/accessDashboard').then(({ trackPageVisit }) => trackPageVisit({
       user_name: name, department: String(user.dept || user.lsys || '').trim(),
-      path: to.path, title: String(to.meta?.title || document.title || '').trim()
+      // 未配置路由标题时保留为空，由看板按路径显示具体功能名；避免统一站点标题造成重名。
+      path: to.path, title: String(to.meta?.title || '').trim()
     }).catch(() => {}))
   } catch { /* 访问统计不阻断导航 */ }
 })
