@@ -1350,6 +1350,9 @@ async def auto_reminder_background_loop():
 # ==================== 周排班自动邮件 ====================
 
 SHIFT_SCHEDULE_SEND_HOUR = 17
+# 每 60 秒轮询；原先仅允许 minute<=1（约 2 分钟窗口），进程卡顿/重启后整天漏发。
+# 改为 17:00 起 CATCHUP 小时内补触发，靠 last_triggered + DB 已发记录防重复。
+SHIFT_SCHEDULE_SEND_CATCHUP_HOURS = 3
 SHIFT_SCHEDULE_SEND_CHECK_SECONDS = 60
 
 
@@ -2209,38 +2212,71 @@ async def get_shift_schedule_email_sent_weeks_api(
 
 
 async def shift_schedule_email_background_loop():
-    """按各科室配置的星期几 17:00 自动发送对应周期的排班邮件。"""
+    """每天 17:00 统一触发排班相关自动邮件：先周排班，再节假日值班表。
+
+    此前周排班与节假日各开一条循环，且都只允许 minute<=1（约 2 分钟窗口）。
+    节假日任务里的同步导表/SMTP 会占住事件循环，导致周排班任务错过窗口、整天不发
+    （也不会进入缺排拦截，管理页「待补发」为空）。合并为同一轮触发可避免互相抢窗口。
+    """
     from routers.shift_schedule import _get_shift_departments, _get_shift_email_send_weekday, _load_shift_email_feature_config
 
-    logger.info("[ShiftScheduleEmail] 周排班自动邮件后台任务已启动")
-    print("[System] 周排班自动邮件后台任务已启动")
+    logger.info("[ShiftScheduleEmail] 排班自动邮件后台任务已启动（周排班优先 + 节假日）")
+    print("[System] 排班自动邮件后台任务已启动（周排班优先 + 节假日）")
     last_triggered = set()
     weekday_labels = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"]
     while True:
         try:
             await asyncio.sleep(SHIFT_SCHEDULE_SEND_CHECK_SECONDS)
             now = datetime.now()
-            if now.hour != SHIFT_SCHEDULE_SEND_HOUR or now.minute > 1:
-                continue
-            enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
-            due_departments = [
-                dept for dept in enabled_departments
-                if _get_shift_email_send_weekday(dept) == now.weekday()
-            ]
-            if not due_departments:
-                continue
-            run_key = f"{now.strftime('%Y-%m-%d')}|shift-email-batch"
+            run_key = f"{now.strftime('%Y-%m-%d')}|shift-email-daily"
             if run_key in last_triggered:
                 continue
+            # 17:00 起 CATCHUP 小时内补触发，避免卡顿/重启后整天漏发
+            if now.hour < SHIFT_SCHEDULE_SEND_HOUR:
+                continue
+            if now.hour >= SHIFT_SCHEDULE_SEND_HOUR + SHIFT_SCHEDULE_SEND_CATCHUP_HOURS:
+                continue
+
             last_triggered.add(run_key)
             if len(last_triggered) > 200:
                 last_triggered = set(sorted(last_triggered)[-100:])
-            send_wd = now.weekday()
-            label = weekday_labels[send_wd] if 0 <= send_wd <= 6 else "周"
-            await run_shift_schedule_email_once(
-                f"{label}17:00自动发送",
-                only_departments=due_departments,
-            )
+
+            # 1) 周排班（优先，避免被节假日任务拖死）
+            try:
+                enabled_departments, _configured = _load_shift_email_feature_config(_get_shift_departments())
+                due_departments = [
+                    dept for dept in enabled_departments
+                    if _get_shift_email_send_weekday(dept) == now.weekday()
+                ]
+                if due_departments:
+                    send_wd = now.weekday()
+                    label = weekday_labels[send_wd] if 0 <= send_wd <= 6 else "周"
+                    logger.info(
+                        "[ShiftScheduleEmail] 触发周排班自动发送 now=%s due=%s",
+                        now.strftime("%Y-%m-%d %H:%M:%S"),
+                        ",".join(due_departments),
+                    )
+                    await run_shift_schedule_email_once(
+                        f"{label}17:00自动发送",
+                        only_departments=due_departments,
+                    )
+                else:
+                    logger.info(
+                        "[ShiftScheduleEmail] %s 无科室需发周排班（非发送日或未启用）",
+                        now.strftime("%Y-%m-%d"),
+                    )
+            except Exception as week_err:
+                logger.error("[ShiftScheduleEmail] 周排班自动发送异常: %s", week_err)
+
+            # 2) 节假日值班表（与周排班同日 17:00 检查，互不影响结果）
+            try:
+                logger.info(
+                    "[ShiftHolidayEmail] 触发节假日值班表检查 now=%s",
+                    now.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+                await run_shift_holiday_email_once("节前17:00自动发送")
+            except Exception as holiday_err:
+                logger.error("[ShiftHolidayEmail] 自动发送异常: %s", holiday_err)
         except Exception as e:
             logger.error("[ShiftScheduleEmail] 循环异常: %s", e)
             await asyncio.sleep(300)
@@ -2532,26 +2568,11 @@ async def run_shift_holiday_email_api(
 
 
 async def shift_holiday_email_background_loop():
-    """每天 17:00 检查各科室节假日值班表邮件（假期首日前 N 天发送）。"""
-    logger.info("[ShiftHolidayEmail] 节假日值班表自动邮件后台任务已启动")
-    print("[System] 节假日值班表自动邮件后台任务已启动")
-    last_triggered = set()
+    """兼容保留：节假日检查已并入 shift_schedule_email_background_loop，此处不再单独轮询。"""
+    logger.info("[ShiftHolidayEmail] 已并入周排班后台任务，独立循环不启动")
+    print("[System] 节假日值班表自动邮件已并入周排班后台任务")
     while True:
-        try:
-            await asyncio.sleep(SHIFT_SCHEDULE_SEND_CHECK_SECONDS)
-            now = datetime.now()
-            if now.hour != SHIFT_SCHEDULE_SEND_HOUR or now.minute > 1:
-                continue
-            run_key = f"{now.strftime('%Y-%m-%d')}|shift-holiday-email"
-            if run_key in last_triggered:
-                continue
-            last_triggered.add(run_key)
-            if len(last_triggered) > 200:
-                last_triggered = set(sorted(last_triggered)[-100:])
-            await run_shift_holiday_email_once("节前17:00自动发送")
-        except Exception as e:
-            logger.error("[ShiftHolidayEmail] 循环异常: %s", e)
-            await asyncio.sleep(300)
+        await asyncio.sleep(3600)
 
 
 # ==================== 管理人员待办邮件提醒 ====================

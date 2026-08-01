@@ -93,13 +93,14 @@
               type="button"
               class="btn btn-sm btn-ghost"
               :disabled="syncing || !configured"
-              :title="configured ? '从邮箱拉取红旗邮件' : '请先配置邮箱'"
+              :title="configured ? '同步公用邮箱全部新邮件' : '请联系系统管理员配置邮箱'"
               @click="manualSync"
             >
               <span v-if="syncing">同步中…</span>
               <span v-else>立即同步</span>
             </button>
             <button
+              v-if="isSystemAdmin"
               type="button"
               class="btn btn-sm btn-ghost board-config-toggle"
               @click="toggleBoardConfig"
@@ -113,7 +114,7 @@
             >{{ configured ? '已配置' : '未配置' }}</span>
           </div>
 
-          <div v-if="showBoardConfig" class="board-config-panel">
+          <div v-if="isSystemAdmin && showBoardConfig" class="board-config-panel">
             <InboxEmailConfigBody
               compact
               :configured="configured"
@@ -133,7 +134,7 @@
 
           <div class="board-body board-body-main">
             <div v-if="!tasks.length && !taskLoading" class="board-empty">
-              <p>暂无识别出的待办任务。请先配置邮箱（或更新 IMAP 授权码），再点「立即同步」拉取邮件，最后点「立即分析」。</p>
+              <p>暂无识别出的待办任务。系统会从公用邮箱的全部新邮件中智能筛选；如邮箱未配置，请联系系统管理员。</p>
             </div>
 
             <div
@@ -233,9 +234,9 @@
         <!-- 邮件列表模式 -->
         <template v-else>
           <!-- 邮箱配置区 -->
-          <div class="card config-section">
+          <div v-if="isSystemAdmin" class="card config-section">
             <div class="section-header" @click="showConfig = !showConfig">
-              <h3 class="section-title">个人企业邮箱配置</h3>
+              <h3 class="section-title">经理层公用邮箱配置</h3>
               <span class="config-status" :class="configured ? 'ok' : 'warn'">
                 {{ configured ? '已配置' : '未配置' }}
               </span>
@@ -401,13 +402,14 @@ import {
   completeInboxTask,
 } from '@/api/inboxEmail'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
+import { isManagerLevel } from '@/utils/roleMatch'
 import InboxEmailConfigBody from '@/components/inbox/InboxEmailConfigBody.vue'
 
 const router = useRouter()
 const route = useRoute()
 
 const canAccess = ref(false)
+const isSystemAdmin = ref(false)
 const currentUserName = ref('')
 
 const showConfig = ref(false)
@@ -872,20 +874,21 @@ onMounted(async () => {
       jb = (u.jb || '').trim()
     } catch {}
     const res = await getDbManagerPermission({ current_user: name })
-    canAccess.value = !!(res && res.canAccess) || isMinisterOrDeptLeader(jb)
+    isSystemAdmin.value = !!(res && res.canAccess)
+    canAccess.value = isSystemAdmin.value || isManagerLevel(jb)
   } catch {
     let jb = ''
     try {
       const u = JSON.parse(localStorage.getItem('userInfo') || '{}')
       jb = (u.jb || '').trim()
     } catch {}
-    canAccess.value = isMinisterOrDeptLeader(jb)
+    canAccess.value = isManagerLevel(jb)
   }
   if (!canAccess.value) return
   // 支持从首页跳转时自动打开邮件列表+配置区
   if (route.query.tab === 'emails') {
     activeTab.value = 'emails'
-    showConfig.value = true
+    showConfig.value = isSystemAdmin.value
   }
   await loadConfig()
   await loadList()

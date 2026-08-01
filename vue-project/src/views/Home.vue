@@ -566,18 +566,15 @@
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="ai-task-unconfigured__icon">
               <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
             </svg>
-            <p>您尚未配置个人企业邮箱授权码，无法同步和分析邮件任务。</p>
+            <p>经理层公用邮箱尚未配置，暂时无法同步和分析邮件任务，请联系系统管理员。</p>
             <ol class="ai-task-unconfigured__steps">
-              <li>点击下方按钮，填写您的企业邮箱地址和 IMAP 授权码</li>
-              <li>在企业邮箱客户端中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong>，系统将自动同步并由 AI 提取待办任务</li>
+              <li>由系统管理员填写公用邮箱地址和 IMAP 授权码</li>
+              <li>系统会同步全部新邮件，并由 AI 智能筛选、提取其中的待办任务</li>
             </ol>
             <div class="ai-task-unconfigured__img-wrap">
               <img src="/assets/images/imap-auth-code-guide.png" alt="如何获取授权码" class="ai-task-unconfigured__img" />
               <span class="ai-task-unconfigured__img-caption">图示：网易企业邮箱客户端授权码获取位置</span>
             </div>
-            <router-link to="/admin/inbox-emails?tab=emails" class="ai-task-unconfigured__link">
-              前往配置邮箱 →
-            </router-link>
           </div>
           <div v-else-if="!inboxTasks.length && !inboxTaskLoading" class="dashboard-empty">
             <p>暂无识别出的邮件待办任务</p>
@@ -1057,7 +1054,7 @@ import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch } from '@/utils/roleMatch'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
@@ -1093,9 +1090,7 @@ const admin1 = ref('')
 const personnelArchiveUrl = ref('')
 const canAccessDbManager = ref(false)
 const canAccessInboxBoard = computed(() => {
-  if (canAccessDbManager.value) return true
-  const jb = (userJb.value || '').trim()
-  return isMinisterOrDeptLeader(jb)
+  return isManagerLevel(userJb.value)
 })
 
 const inboxTasks = ref([])

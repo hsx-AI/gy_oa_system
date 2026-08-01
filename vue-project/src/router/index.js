@@ -9,7 +9,7 @@ import OvertimePay from '../views/OvertimePay.vue'
 import Performance from '../views/Performance.vue'
 import { getUploadConfig } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -246,7 +246,7 @@ const routes = [
     path: '/admin/inbox-emails',
     name: 'InboxEmails',
     component: () => import('../views/admin/InboxEmails.vue'),
-    meta: { title: '共用邮箱收件箱' }
+    meta: { title: '经理层重要邮箱' }
   },
   {
     path: '/attendance/shift-schedule',
@@ -681,7 +681,7 @@ router.beforeEach(async (to, _from, next) => {
       if (!name) { next('/'); return }
       const res = await getDbManagerPermission({ current_user: name })
       const canDbAdmin = !!(res && res.canAccess)
-      const canLeader = isMinisterOrDeptLeader(jb)
+      const canLeader = isManagerLevel(jb)
       if (canDbAdmin || canLeader) next()
       else next('/')
     } catch {

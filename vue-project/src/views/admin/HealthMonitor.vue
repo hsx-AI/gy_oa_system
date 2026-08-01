@@ -29,6 +29,36 @@
         <section class="card admin-config-card">
           <div class="config-card-head">
             <div>
+              <h2 class="section-title">经理层公用邮箱配置</h2>
+              <p class="section-desc">
+                配置经理、副经理和经理助理共用的重要邮件邮箱。系统会同步收件箱全部新邮件，并由 AI 自动筛选、提取待办任务。
+              </p>
+            </div>
+            <div class="config-actions">
+              <button type="button" class="btn btn-secondary btn-sm" :disabled="inboxConfigLoading" @click="fetchInboxConfig">
+                {{ inboxConfigLoading ? '刷新中…' : '刷新' }}
+              </button>
+            </div>
+          </div>
+          <div v-if="inboxConfigLoading" class="status-message">正在加载公用邮箱配置…</div>
+          <InboxEmailConfigBody
+            v-else
+            :configured="inboxConfigured"
+            :imap-server="inboxImapServer"
+            :imap-port="inboxImapPort"
+            :poll-interval-seconds="inboxPollInterval"
+            v-model:email-address="inboxConfigForm.email_address"
+            v-model:email-auth-code="inboxConfigForm.email_auth_code"
+            :saving="inboxConfigSaving"
+            :message="inboxConfigMessage"
+            :message-type="inboxConfigMessageType"
+            @save="saveInboxConfig"
+          />
+        </section>
+
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
               <h2 class="section-title">大模型配置</h2>
               <p class="section-desc">
                 配置智能助手所用大模型。优先级：填写 DeepSeek 密钥时使用联网 DeepSeek；密钥为空时使用下方选中的本地或 OpenAI 兼容模型。
@@ -341,6 +371,58 @@
                   <span class="shift-email-preview-text">{{ line.text }}</span>
                 </li>
               </ul>
+              <div class="shift-email-blocked-panel shift-holiday-send-panel">
+                <div class="shift-email-subhead">
+                  <span>临时补发节假日值班表</span>
+                </div>
+                <p class="shift-email-empty shift-holiday-send-hint">
+                  按各科室「排班表收件人」配置立即发送指定假期的值班值宿安排表（与自动发送附件格式相同）。关闭了节假日自动发送的科室也可在此补发。
+                </p>
+                <div class="shift-holiday-send-form">
+                  <label class="shift-holiday-field">
+                    <span>年份</span>
+                    <input
+                      v-model.number="holidaySendYear"
+                      type="number"
+                      min="2020"
+                      max="2100"
+                      class="shift-holiday-input"
+                      @change="fetchHolidaySendOptions"
+                    >
+                  </label>
+                  <label class="shift-holiday-field">
+                    <span>假期</span>
+                    <select v-model="holidaySendName" class="shift-holiday-select" :disabled="holidaySendOptionsLoading">
+                      <option value="">{{ holidaySendOptionsLoading ? '加载中…' : '请选择假期' }}</option>
+                      <option v-for="opt in holidaySendOptions" :key="opt.name" :value="opt.name">
+                        {{ opt.name }}（{{ opt.startDate }} 至 {{ opt.endDate }}）
+                      </option>
+                    </select>
+                  </label>
+                  <label class="shift-holiday-field">
+                    <span>科室</span>
+                    <select v-model="holidaySendDepartment" class="shift-holiday-select">
+                      <option value="">全部已启用排班邮件的科室</option>
+                      <option v-for="item in shiftEmailEnabledItems" :key="'hs-' + item.department" :value="item.department">
+                        {{ item.department }}
+                      </option>
+                    </select>
+                  </label>
+                  <label class="shift-holiday-force">
+                    <input v-model="holidaySendForce" type="checkbox">
+                    <span>忽略已发送记录强制重发</span>
+                  </label>
+                  <button
+                    type="button"
+                    class="btn btn-primary btn-sm"
+                    :disabled="holidaySendLoading || !holidaySendName || shiftEmailLoading || shiftEmailSaving"
+                    @click="sendHolidayShiftEmail"
+                  >
+                    {{ holidaySendLoading ? '发送中…' : '立即补发' }}
+                  </button>
+                </div>
+                <p v-if="holidaySendMessage" class="config-message shift-holiday-send-result">{{ holidaySendMessage }}</p>
+              </div>
             </div>
             <h3 v-if="shiftEmailEnabledItems.length" class="email-settings-title">各科室邮件发送时间与收件人</h3>
             <p v-else class="email-settings-hint">当前无启用邮件功能的科室；在上方打开开关后可配置发送时间与收件人。</p>
@@ -470,7 +552,9 @@ import {
   saveLlmSceneModel,
   testLlmModel,
 } from '@/api/healthMonitor'
-import { getShiftScheduleEmailBlockedPlans, runShiftScheduleEmail } from '@/api/shift'
+import { getShiftHolidayOptions, getShiftScheduleEmailBlockedPlans, runShiftScheduleEmail, runShiftHolidayEmail } from '@/api/shift'
+import { getInboxConfig, updateInboxConfig } from '@/api/inboxEmail'
+import InboxEmailConfigBody from '@/components/inbox/InboxEmailConfigBody.vue'
 
 const router = useRouter()
 const canAccess = ref(false)
@@ -487,6 +571,14 @@ const shiftEmailBlockedPlans = ref([])
 const shiftEmailItems = ref([])
 const shiftEmailCompanyLeaders = ref([])
 const shiftEmailMessage = ref('')
+const holidaySendYear = ref(new Date().getFullYear())
+const holidaySendName = ref('')
+const holidaySendDepartment = ref('')
+const holidaySendForce = ref(true)
+const holidaySendOptions = ref([])
+const holidaySendOptionsLoading = ref(false)
+const holidaySendLoading = ref(false)
+const holidaySendMessage = ref('')
 const attendanceFetchLoading = ref(false)
 const attendanceFetchSaving = ref(false)
 const attendanceFetchMessage = ref('')
@@ -498,6 +590,15 @@ const supervisionMessage = ref('')
 const supervisionDepartments = ref([])
 const supervisionLeaders = ref([])
 const supervisionUncoveredDepartments = ref([])
+const inboxConfigLoading = ref(false)
+const inboxConfigSaving = ref(false)
+const inboxConfigured = ref(false)
+const inboxImapServer = ref('imap.qiye.163.com')
+const inboxImapPort = ref(993)
+const inboxPollInterval = ref(15)
+const inboxConfigForm = ref({ email_address: '', email_auth_code: '' })
+const inboxConfigMessage = ref('')
+const inboxConfigMessageType = ref('')
 
 const llmLoading = ref(false)
 const llmSaving = ref(false)
@@ -516,6 +617,56 @@ const llmTestingTarget = ref(null)   // null=未测试；'active'=当前模型�
 const llmTestResult = ref(null)
 const llmSceneSaving = ref('')
 const llmSceneDraft = ref({})
+
+async function fetchInboxConfig() {
+  const name = currentName()
+  if (!name) return
+  inboxConfigLoading.value = true
+  try {
+    const res = await getInboxConfig(name)
+    inboxConfigured.value = !!res?.configured
+    inboxConfigForm.value.email_address = res?.emailAddress || ''
+    inboxConfigForm.value.email_auth_code = ''
+    inboxImapServer.value = res?.imapServer || 'imap.qiye.163.com'
+    inboxImapPort.value = res?.imapPort || 993
+    inboxPollInterval.value = res?.pollIntervalSeconds || 15
+  } catch (e) {
+    inboxConfigMessage.value = e?.response?.data?.detail || e?.message || '公用邮箱配置加载失败'
+    inboxConfigMessageType.value = 'error'
+  } finally {
+    inboxConfigLoading.value = false
+  }
+}
+
+async function saveInboxConfig() {
+  const name = currentName()
+  const emailAddress = inboxConfigForm.value.email_address.trim()
+  const emailAuthCode = inboxConfigForm.value.email_auth_code.trim()
+  if (!emailAddress || !emailAuthCode) {
+    inboxConfigMessage.value = inboxConfigured.value ? '请输入新的 IMAP 授权码后保存' : '请输入邮箱账号和 IMAP 授权码'
+    inboxConfigMessageType.value = 'error'
+    return
+  }
+  inboxConfigSaving.value = true
+  inboxConfigMessage.value = ''
+  try {
+    const res = await updateInboxConfig({
+      current_user: name,
+      email_address: emailAddress,
+      email_auth_code: emailAuthCode,
+    })
+    inboxConfigured.value = true
+    inboxConfigForm.value.email_auth_code = ''
+    inboxConfigMessage.value = res?.message || '公用邮箱配置已保存'
+    inboxConfigMessageType.value = 'success'
+    await fetchInboxConfig()
+  } catch (e) {
+    inboxConfigMessage.value = e?.response?.data?.detail || e?.message || '公用邮箱配置保存失败'
+    inboxConfigMessageType.value = 'error'
+  } finally {
+    inboxConfigSaving.value = false
+  }
+}
 
 function currentName() {
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
@@ -1013,6 +1164,70 @@ async function resendShiftScheduleEmail(line) {
   }
 }
 
+async function fetchHolidaySendOptions() {
+  const year = Number(holidaySendYear.value)
+  if (!Number.isFinite(year) || year < 2000) return
+  holidaySendOptionsLoading.value = true
+  holidaySendMessage.value = ''
+  try {
+    const res = await getShiftHolidayOptions({ year })
+    holidaySendOptions.value = res?.options || []
+    if (!holidaySendOptions.value.some((o) => o.name === holidaySendName.value)) {
+      holidaySendName.value = holidaySendOptions.value[0]?.name || ''
+    }
+  } catch (e) {
+    holidaySendOptions.value = []
+    holidaySendName.value = ''
+    holidaySendMessage.value = e?.response?.data?.detail || e?.message || '假期列表加载失败'
+  } finally {
+    holidaySendOptionsLoading.value = false
+  }
+}
+
+async function sendHolidayShiftEmail() {
+  const name = currentName()
+  const year = Number(holidaySendYear.value)
+  const holiday = (holidaySendName.value || '').trim()
+  if (!name || holidaySendLoading.value || !holiday) return
+  if (!Number.isFinite(year)) {
+    holidaySendMessage.value = '请填写有效年份'
+    return
+  }
+  const dept = (holidaySendDepartment.value || '').trim()
+  const scopeText = dept || '全部已启用排班邮件的科室'
+  const forceHint = holidaySendForce.value ? '（强制重发）' : ''
+  if (!window.confirm(
+    `确认按各科室收件人配置补发节假日值班表吗？\n\n`
+    + `${year}年「${holiday}」\n科室：${scopeText}\n${forceHint}\n\n`
+    + `将立即生成附件并发送邮件。`
+  )) return
+
+  holidaySendLoading.value = true
+  holidaySendMessage.value = ''
+  try {
+    const params = {
+      current_user: name,
+      year,
+      holiday,
+      force: !!holidaySendForce.value,
+    }
+    if (dept) params.department = dept
+    const res = await runShiftHolidayEmail(params)
+    const details = (res?.details || [])
+      .slice(0, 12)
+      .map((d) => {
+        const st = d.status === 'ok' ? '成功' : (d.status === 'skipped' ? '跳过' : '失败')
+        return `${d.department || '-'}：${st}${d.message ? `（${d.message}）` : ''}${d.holiday ? ` [${d.holiday}]` : ''}`
+      })
+    const detailText = details.length ? `\n${details.join('\n')}${res.details.length > 12 ? '\n…' : ''}` : ''
+    holidaySendMessage.value = (res?.message || '节假日值班表补发已执行') + detailText
+  } catch (e) {
+    holidaySendMessage.value = e?.response?.data?.detail || e?.message || '补发节假日值班表失败'
+  } finally {
+    holidaySendLoading.value = false
+  }
+}
+
 async function fetchLlmConfig() {
   const name = currentName()
   if (!name) return
@@ -1264,7 +1479,8 @@ onMounted(async () => {
     if (canAccess.value) {
       await Promise.all([
         fetchOverview(), fetchShiftEmailConfig(), fetchAttendanceFetchConfig(),
-        fetchLlmConfig(), fetchSupervisionConfig(),
+        fetchLlmConfig(), fetchSupervisionConfig(), fetchInboxConfig(),
+        fetchHolidaySendOptions(),
       ])
     }
   } catch {
@@ -1745,6 +1961,50 @@ onMounted(async () => {
   font-size: 0.78rem;
   line-height: 1.45;
   color: #9a3412;
+}
+.shift-holiday-send-panel {
+  margin-top: 14px;
+}
+.shift-holiday-send-hint {
+  margin-bottom: 10px !important;
+}
+.shift-holiday-send-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 10px 12px;
+}
+.shift-holiday-field {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+}
+.shift-holiday-input,
+.shift-holiday-select {
+  min-width: 160px;
+  padding: 5px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: 6px;
+  font-size: 0.85rem;
+  background: var(--color-bg-container);
+}
+.shift-holiday-select {
+  min-width: 220px;
+  max-width: 360px;
+}
+.shift-holiday-force {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.82rem;
+  color: var(--color-text-secondary);
+  padding-bottom: 4px;
+}
+.shift-holiday-send-result {
+  white-space: pre-line;
+  margin-top: 10px;
 }
 .shift-email-preview-resend {
   flex: 0 0 auto;

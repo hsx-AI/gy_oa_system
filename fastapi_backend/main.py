@@ -110,11 +110,11 @@ async def startup_event():
     init_attendance_fetch_scheduler()
     # 考勤异常提醒自动发送后台任务
     import asyncio as _asyncio
-    from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop, shift_schedule_email_background_loop, shift_holiday_email_background_loop
+    from routers.email_sender import auto_reminder_background_loop, todo_reminder_background_loop, shift_schedule_email_background_loop
     _asyncio.get_event_loop().create_task(auto_reminder_background_loop())
     _asyncio.get_event_loop().create_task(todo_reminder_background_loop())
+    # 周排班 + 节假日值班表：同一后台循环，17:00 先发周排班再查节假日（避免双任务抢窗口）
     _asyncio.get_event_loop().create_task(shift_schedule_email_background_loop())
-    _asyncio.get_event_loop().create_task(shift_holiday_email_background_loop())
     # 共用邮箱自动拉取后台任务
     from routers.inbox_email import inbox_email_background_loop, inbox_email_analysis_background_loop
     _asyncio.get_event_loop().create_task(inbox_email_background_loop())

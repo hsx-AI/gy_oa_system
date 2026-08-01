@@ -56,6 +56,11 @@ export function runShiftScheduleEmail(params) {
   return request({ url: '/email/run-shift-schedule-email', method: 'post', params })
 }
 
+/** 手动/临时补发节假日值班表邮件（按各科室排班邮件收件人配置） */
+export function runShiftHolidayEmail(params) {
+  return request({ url: '/email/run-shift-holiday-email', method: 'post', params })
+}
+
 export function getShiftScheduleEmailBlockedPlans(params) {
   return request({ url: '/email/shift-schedule-email-blocked-plans', method: 'get', params })
 }

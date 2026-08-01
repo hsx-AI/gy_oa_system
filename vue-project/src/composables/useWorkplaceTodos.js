@@ -96,7 +96,9 @@ const autoReminderNoticeList = ref([])
 /** 行动项督办未读提醒 */
 const actionReminderList = ref([])
 
-const readableNoticeCount = computed(() => hxpUnreadList.value.length)
+const readableNoticeCount = computed(
+  () => hxpUnreadList.value.length + autoReminderNoticeList.value.length
+)
 
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
@@ -767,11 +769,44 @@ export function useWorkplaceTodos() {
   }
 
   async function markAllReadableNotices() {
-    const ids = hxpUnreadList.value.map((item) => item.id).filter(Boolean)
-    if (!ids.length) return { updated: 0 }
-    const res = await markHxpRead({ ids })
-    hxpUnreadList.value = []
-    return { updated: Number(res?.updated) || ids.length }
+    const hxpIds = hxpUnreadList.value.map((item) => item.id).filter(Boolean)
+    const autoReminderIds = autoReminderNoticeList.value.map((item) => item.id).filter(Boolean)
+    if (!hxpIds.length && !autoReminderIds.length) return { updated: 0 }
+
+    const userName = readUserName()
+    if (autoReminderIds.length && !userName) {
+      throw new Error('未获取到当前用户，无法批量标记已阅')
+    }
+
+    const operations = []
+    if (hxpIds.length) {
+      operations.push(
+        markHxpRead({ ids: hxpIds }).then((res) => {
+          const completedIds = new Set(hxpIds)
+          hxpUnreadList.value = hxpUnreadList.value.filter((item) => !completedIds.has(item.id))
+          return Number(res?.updated) || hxpIds.length
+        })
+      )
+    }
+    for (const id of autoReminderIds) {
+      operations.push(
+        markAutoReminderNoticeRead({ id, current_user: userName }).then(() => {
+          autoReminderNoticeList.value = autoReminderNoticeList.value.filter((item) => item.id !== id)
+          return 1
+        })
+      )
+    }
+
+    const results = await Promise.allSettled(operations)
+    const updated = results.reduce(
+      (total, result) => total + (result.status === 'fulfilled' ? result.value : 0),
+      0
+    )
+    const failedCount = results.filter((result) => result.status === 'rejected').length
+    if (failedCount) {
+      throw new Error(`已处理 ${updated} 条，另有 ${failedCount} 条处理失败，请重试`)
+    }
+    return { updated }
   }
 
   async function handleTodoAction(task) {

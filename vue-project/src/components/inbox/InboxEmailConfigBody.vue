@@ -10,7 +10,7 @@
       <template v-else>
         <p>IMAP 服务器：<code>{{ imapServer }}:{{ imapPort }}</code>（SSL）</p>
         <p>
-          同步范围：仅拉取您个人邮箱中已标旗（FLAGGED）的最新
+          同步范围：智能整理公用邮箱收件箱中的最新
           <code>50</code>
           封邮件；自动拉取间隔：约
           <code>{{ pollIntervalSeconds }}</code>
@@ -21,9 +21,9 @@
     <div v-if="!compact" class="config-guide">
       <h4 class="config-guide-title">使用步骤</h4>
       <ol class="config-guide-steps">
-        <li>在下方填写您的企业邮箱地址和 IMAP 授权码，点击"保存配置"</li>
-        <li>在企业邮箱客户端（网页版 / Outlook 等）中，将需要处理的邮件标记为<strong>红旗（FLAGGED）</strong></li>
-        <li>系统会自动同步红旗邮件并由 AI 提取待办任务，展示在"AI 待办看板"中</li>
+        <li>填写经理层公用邮箱地址和 IMAP 授权码，点击“保存配置”</li>
+        <li>系统自动同步收件箱中的全部新邮件，无需人工标记红旗</li>
+        <li>AI 会筛选并提取其中的待办任务，展示在经理层“AI 待办看板”中</li>
       </ol>
     </div>
     <div class="config-form">

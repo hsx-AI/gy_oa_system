@@ -423,7 +423,7 @@
               <path d="M22 12h-6l-2 3h-4l-2-3H2" />
               <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
             </svg>
-            <span>待办邮箱</span>
+            <span>{{ canAccessDbManager ? '公用邮箱配置' : '经理层重要邮箱' }}</span>
           </router-link>
             </div>
           </section>
@@ -665,7 +665,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
 import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
 
 const route = useRoute()
@@ -1178,8 +1178,7 @@ const canShowAccessDashboard = computed(() => {
 
 const canAccessInboxEmails = computed(() => {
   if (canAccessDbManager.value) return true
-  const jb = (currentUser.value?.jb || '').trim()
-  return isMinisterOrDeptLeader(jb)
+  return isManagerLevel(currentUser.value?.jb)
 })
 
 // 是否显示打卡数据上传（webconfig.dakaman 或 系统管理员 admin1）
