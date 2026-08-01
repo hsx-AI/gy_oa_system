@@ -392,6 +392,10 @@
             </svg>
             <span>系统管理员</span>
           </router-link>
+          <router-link v-if="canAccessDbManager" to="/admin/access-dashboard" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-7"/></svg>
+            <span>系统访问看板</span>
+          </router-link>
           <router-link v-if="canAccessDbManager" to="/admin/yggl-fill" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -1428,7 +1432,7 @@ async function goSixianghuibao() {
 
 // 不显示导航的路由
 const noNavRoutes = ['/login']
-const showNav = computed(() => !noNavRoutes.includes(route.path))
+const showNav = computed(() => !noNavRoutes.includes(route.path) && !route.meta.fullscreen)
 
 // 显示用户名：优先 currentUser.name，其次 username（有登录态时才显示主布局，此处不应出现空）
 const displayUserName = computed(() => {

@@ -96,6 +96,8 @@ const autoReminderNoticeList = ref([])
 /** 行动项督办未读提醒 */
 const actionReminderList = ref([])
 
+const readableNoticeCount = computed(() => hxpUnreadList.value.length)
+
 const displayTodoList = computed(() => {
   const list = [...(todoList.value || [])]
   if (tripReturnPendingCount.value > 0) {
@@ -764,6 +766,14 @@ export function useWorkplaceTodos() {
     }
   }
 
+  async function markAllReadableNotices() {
+    const ids = hxpUnreadList.value.map((item) => item.id).filter(Boolean)
+    if (!ids.length) return { updated: 0 }
+    const res = await markHxpRead({ ids })
+    hxpUnreadList.value = []
+    return { updated: Number(res?.updated) || ids.length }
+  }
+
   async function handleTodoAction(task) {
     if (task.isHxpNotice) {
       handleHxpRead(task)
@@ -879,9 +889,11 @@ export function useWorkplaceTodos() {
     todoRealTotal,
     displayTodoList,
     totalBadgeCount,
+    readableNoticeCount,
     todoPanelLoading,
     refreshWorkplaceTodos,
     handleTodoAction,
+    markAllReadableNotices,
     goApprove,
     goSixianghuibao,
   }

@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, action_items
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, access_dashboard, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, action_items
 import logging
 import time
 
@@ -73,6 +73,7 @@ app.include_router(department_policy.router, prefix=settings.API_PREFIX)
 app.include_router(admin.router, prefix=settings.API_PREFIX)  # 员工在职管理
 app.include_router(db_manager.router, prefix=settings.API_PREFIX)
 app.include_router(health_monitor.router, prefix=settings.API_PREFIX)  # 系统管理员页面（仅 admin1）
+app.include_router(access_dashboard.router, prefix=settings.API_PREFIX)
 app.include_router(sso.router, prefix=settings.API_PREFIX)  # 系统管理员-数据库表增删改查
 app.include_router(email_sender.router, prefix=settings.API_PREFIX)  # 邮件发送（仅 admin1）
 app.include_router(shift_schedule.router, prefix=settings.API_PREFIX)  # 排班管理

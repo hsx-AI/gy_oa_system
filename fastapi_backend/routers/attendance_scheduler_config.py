@@ -283,3 +283,13 @@ def _apply_jobs_to_scheduler(scheduler, cfg: dict) -> None:
             id=job_id,
             replace_existing=True,
         )
+
+    # 每月 1 日补拉上月完整报表。建议截止到前一日，即上月最后一天。
+    # 07:00 首次执行，10:00 再补偿一次，以覆盖早间报表尚未生成或临时拉取失败。
+    scheduler.add_job(
+        run_fetch_and_upload_report,
+        CronTrigger(day=1, hour="7,10", minute=0, timezone=tz),
+        kwargs={"suggestion_cutoff": "yesterday", "report_month": "previous"},
+        id="fetch_attendance_report_previous_month_day1",
+        replace_existing=True,
+    )

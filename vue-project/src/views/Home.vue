@@ -32,7 +32,18 @@
             <span class="dashboard-card__title-text">待办事项</span>
             <span class="dashboard-card__badge">{{ totalBadgeCount }}</span>
           </h2>
-          <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/attendance/pending-tasks')">查看全部</a>
+          <div class="dashboard-card__header-actions">
+            <button
+              v-if="readableNoticeCount > 0"
+              type="button"
+              class="dashboard-card__read-all"
+              :disabled="markingAllRead"
+              @click="handleMarkAllRead"
+            >
+              {{ markingAllRead ? '处理中…' : '全部已读' }}
+            </button>
+            <a href="javascript:;" class="dashboard-card__link" @click.prevent="router.push('/attendance/pending-tasks')">查看全部</a>
+          </div>
         </header>
         <div class="dashboard-card__body">
           <ul class="todo-list" v-if="displayTodoList.length > 0">
@@ -792,29 +803,33 @@
       </button>
       <article class="dashboard-card wall-preview-card">
         <header class="dashboard-card__header wall-preview-card__header">
-          <h2 class="dashboard-card__title">
+          <h2 class="dashboard-card__title wall-preview-tabs">
             <span class="dashboard-card__icon dashboard-card__icon--wall" aria-hidden="true">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>
               </svg>
             </span>
-            <span class="dashboard-card__title-text">吐槽墙</span>
-            <span class="dashboard-card__badge" v-if="wallList.length">{{ wallList.length }}</span>
+            <button type="button" :class="['wall-preview-tab', { active: wallPreviewTab === 'wall' }]" @click="wallPreviewTab = 'wall'">
+              吐槽墙 <span v-if="wallList.length">{{ wallList.length }}</span>
+            </button>
+            <button type="button" :class="['wall-preview-tab', 'wall-preview-tab--whistle', { active: wallPreviewTab === 'whistle' }]" @click="wallPreviewTab = 'whistle'">
+              吹哨站 <span v-if="whistlePreviewList.length">{{ whistlePreviewList.length }}</span>
+            </button>
           </h2>
           <div class="wall-preview-actions">
-            <button type="button" class="wall-preview-refresh" title="刷新" @click="loadWallList">
+            <button type="button" class="wall-preview-refresh" title="刷新" @click="refreshWallPreview">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="23 4 23 10 17 10"/>
                 <polyline points="1 20 1 14 7 14"/>
                 <path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
               </svg>
             </button>
-            <router-link to="/feedback" class="wall-preview-viewall">
+            <router-link :to="{ path: '/feedback', query: wallPreviewTab === 'whistle' ? { tab: 'whistle' } : {} }" class="wall-preview-viewall">
               查看全部
             </router-link>
           </div>
         </header>
-        <div class="wall-preview-body">
+        <div v-if="wallPreviewTab === 'wall'" class="wall-preview-body">
           <div v-if="wallLoading" class="dashboard-empty"><p>加载中...</p></div>
           <div v-else-if="!wallBarrageRows.length" class="dashboard-empty"><p>暂无吐槽</p></div>
           <div
@@ -854,6 +869,18 @@
             </div>
             <div class="wall-barrage-vignette wall-barrage-vignette--left"></div>
             <div class="wall-barrage-vignette wall-barrage-vignette--right"></div>
+          </div>
+        </div>
+        <div v-else class="wall-preview-body">
+          <div v-if="whistlePreviewLoading" class="dashboard-empty"><p>加载中...</p></div>
+          <div v-else-if="!whistlePreviewItems.length" class="dashboard-empty"><p>暂无吹哨动态</p></div>
+          <div v-else class="whistle-preview-stage" @click="router.push({ path: '/feedback', query: { tab: 'whistle' } })">
+            <button v-for="item in whistlePreviewItems" :key="item.id" type="button" class="whistle-preview-item">
+              <span class="whistle-preview-category">{{ item.category }}</span>
+              <span class="whistle-preview-text">{{ item.content }}</span>
+              <span :class="['whistle-preview-status', `status-${item.status}`]">{{ whistlePreviewStatus(item.status) }}</span>
+            </button>
+            <div class="whistle-preview-tip">发现质量、安全等隐患，请及时反馈</div>
           </div>
         </div>
       </article>
@@ -1023,7 +1050,7 @@ import { getMySealApplications } from '@/api/seal'
 import { getMyLowValueApplications } from '@/api/lowValueReimbursement'
 import { getLeaderBriefing } from '@/api/admin'
 import { getContacts } from '@/api/contacts'
-import { getWallList, likeWall } from '@/api/feedback'
+import { getWallList, getWhistleList, likeWall } from '@/api/feedback'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
@@ -1040,8 +1067,25 @@ const {
   totalBadgeCount,
   todoLoading,
   tripReturnLoading,
+  readableNoticeCount,
   handleTodoAction,
+  markAllReadableNotices,
 } = useWorkplaceTodos()
+
+const markingAllRead = ref(false)
+
+async function handleMarkAllRead() {
+  if (markingAllRead.value || readableNoticeCount.value <= 0) return
+  markingAllRead.value = true
+  try {
+    await markAllReadableNotices()
+  } catch (e) {
+    const msg = e?.response?.data?.detail || e?.message || '批量标记已读失败'
+    alert(typeof msg === 'string' ? msg : '批量标记已读失败')
+  } finally {
+    markingAllRead.value = false
+  }
+}
 
 const dakaman = ref('')
 const admin2 = ref('')
@@ -1074,8 +1118,12 @@ const inboxDeadlineSavingId = ref(null)
 let inboxTaskRefreshTimer = null
 
 // 吐槽墙首页预览
+const wallPreviewTab = ref('wall')
 const wallList = ref([])
 const wallLoading = ref(false)
+const whistlePreviewList = ref([])
+const whistlePreviewLoading = ref(false)
+const whistlePreviewItems = computed(() => (whistlePreviewList.value || []).slice(0, 3))
 const WALL_BARRAGE_COLORS = [
   '#38bdf8', '#fb7185', '#f59e0b', '#34d399', '#a78bfa', '#f97316', '#22c55e', '#60a5fa',
 ]
@@ -1172,6 +1220,24 @@ async function loadWallList() {
     if (res && res.success) wallList.value = res.data || []
   } catch { /* ignore */ }
   wallLoading.value = false
+}
+
+function whistlePreviewStatus(status) {
+  return ['待核实', '核实中', '已核实', '未采纳'][Number(status)] || '待核实'
+}
+
+async function loadWhistlePreview() {
+  whistlePreviewLoading.value = true
+  try {
+    const res = await getWhistleList({ current_user: (userName.value || '').trim() })
+    if (res?.success) whistlePreviewList.value = res.data || []
+  } catch { /* ignore */ }
+  whistlePreviewLoading.value = false
+}
+
+function refreshWallPreview() {
+  if (wallPreviewTab.value === 'whistle') loadWhistlePreview()
+  else loadWallList()
 }
 
 const wallLikedIds = ref(new Set())
@@ -2672,6 +2738,7 @@ onMounted(() => {
     loadInfoFeedHome()
   }
   loadWallList()
+  loadWhistlePreview()
   if (isHomeModuleVisible('personnelVisual')) {
     loadPersonnelVisualPreview()
   }
@@ -2933,6 +3000,35 @@ async function navigateTo(feature) {
 
 .dashboard-card__link:hover {
   text-decoration: underline;
+}
+
+.dashboard-card__header-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--spacing-sm);
+  flex-shrink: 0;
+}
+
+.dashboard-card__read-all {
+  padding: 3px 8px;
+  border: 1px solid var(--color-primary);
+  border-radius: 5px;
+  background: transparent;
+  color: var(--color-primary);
+  font-size: var(--font-size-xs);
+  line-height: 1.4;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.dashboard-card__read-all:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--color-primary) 8%, transparent);
+}
+
+.dashboard-card__read-all:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .dashboard-card__body {
@@ -4470,6 +4566,46 @@ async function navigateTo(feature) {
   gap: 8px;
 }
 
+.wall-preview-tabs {
+  gap: 5px;
+}
+
+.wall-preview-tab {
+  height: 32px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--color-text-secondary);
+  font: inherit;
+  font-size: 16px;
+  font-weight: 650;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.wall-preview-tab span {
+  margin-left: 3px;
+  font-size: 11px;
+  font-weight: 700;
+  opacity: .72;
+}
+
+.wall-preview-tab:hover {
+  background: #f8fafc;
+  color: var(--color-text-primary);
+}
+
+.wall-preview-tab.active {
+  background: #fff1f2;
+  color: #be123c;
+}
+
+.wall-preview-tab--whistle.active {
+  background: #fffbeb;
+  color: #b45309;
+}
+
 .wall-preview-refresh {
   width: 32px;
   height: 30px;
@@ -4520,6 +4656,75 @@ async function navigateTo(feature) {
   padding: var(--spacing-md) var(--spacing-xl) var(--spacing-xl);
   overflow: hidden;
   position: relative;
+}
+
+.whistle-preview-stage {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  height: 100%;
+  min-height: 190px;
+  padding: 12px;
+  border-radius: 8px;
+  background: linear-gradient(145deg, #fffbeb, #fff 62%, #fff7ed);
+  box-shadow: inset 0 0 0 1px rgba(245,158,11,.2);
+  cursor: pointer;
+}
+
+.whistle-preview-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 9px;
+  min-height: 42px;
+  padding: 8px 10px;
+  border: 1px solid #fde7bb;
+  border-radius: 8px;
+  background: rgba(255,255,255,.9);
+  color: #334155;
+  text-align: left;
+  cursor: pointer;
+}
+
+.whistle-preview-item:hover {
+  border-color: #f59e0b;
+  transform: translateY(-1px);
+}
+
+.whistle-preview-category {
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: #ffedd5;
+  color: #9a3412;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.whistle-preview-text {
+  overflow: hidden;
+  color: #334155;
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.whistle-preview-status {
+  font-size: 11px;
+  font-weight: 650;
+  color: #b45309;
+}
+
+.whistle-preview-status.status-1 { color: #2563eb; }
+.whistle-preview-status.status-2 { color: #059669; }
+.whistle-preview-status.status-3 { color: #94a3b8; }
+
+.whistle-preview-tip {
+  margin-top: auto;
+  padding: 4px 2px 0;
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 600;
+  text-align: center;
 }
 
 .wall-barrage-stage {

@@ -283,6 +283,88 @@
         </div>
       </div>
 
+      <!-- ========== 吹哨站 ========== -->
+      <div v-if="currentTab === 'whistle'" class="whistle-section">
+        <div class="whistle-hero">
+          <div class="whistle-hero-icon" aria-hidden="true">📣</div>
+          <div class="whistle-hero-content">
+            <h2>吹哨站</h2>
+            <p>发现质量、安全等隐患，请及时反馈。支持匿名提交，也可选择留下姓名。</p>
+            <span class="whistle-policy-note">经核实的有效线索，将按相关规定予以激励。</span>
+          </div>
+        </div>
+
+        <div class="whistle-grid">
+          <div class="card submit-card whistle-submit-card">
+            <h3>上报隐患</h3>
+            <div class="form-group">
+              <label>隐患类别</label>
+              <select v-model="whistleForm.category">
+                <option v-for="category in whistleCategories" :key="category" :value="category">{{ category }}</option>
+              </select>
+            </div>
+            <div class="form-group">
+              <label>隐患描述</label>
+              <textarea v-model="whistleForm.content" maxlength="1000" rows="6" class="textarea"
+                placeholder="请描述隐患位置、现象、可能后果等，信息越具体越便于快速核实处置"></textarea>
+              <p class="char-count">{{ whistleForm.content.length }}/1000</p>
+            </div>
+            <label class="whistle-name-switch">
+              <input v-model="whistleForm.leaveName" type="checkbox" />
+              <span>留下姓名（便于核实情况及发放奖励）</span>
+            </label>
+            <div v-if="whistleForm.leaveName" class="whistle-identity">
+              <span>{{ userName || '未获取姓名' }}</span>
+              <span>{{ userDept || '未获取部门' }}</span>
+            </div>
+            <div class="wall-image-upload">
+              <label class="upload-label">
+                <input ref="whistleFileRef" type="file" accept="image/*" hidden @change="onWhistleImagePick" />
+                <span class="upload-btn">📷 添加现场图片</span>
+              </label>
+              <div v-if="whistleImagePreview" class="upload-preview">
+                <img :src="whistleImagePreview" />
+                <button class="remove-img" @click="removeWhistleImage">×</button>
+              </div>
+            </div>
+            <div class="form-actions">
+              <button class="btn btn-primary" :disabled="whistleSubmitting" @click="doSubmitWhistle">
+                {{ whistleSubmitting ? '提交中...' : '立即吹哨' }}
+              </button>
+            </div>
+          </div>
+
+          <div class="card whistle-list-card">
+            <div class="whistle-list-head">
+              <h3>吹哨动态</h3>
+              <button class="tb-icon-btn" title="刷新" @click="loadWhistles">↻</button>
+            </div>
+            <div v-if="!whistleList.length" class="empty-hint">暂无吹哨记录</div>
+            <div v-for="item in whistleList" :key="item.id" class="whistle-item">
+              <div class="whistle-item-head">
+                <span class="whistle-category">{{ item.category }}</span>
+                <span :class="['whistle-status', `whistle-status-${item.status}`]">{{ whistleStatusLabel(item.status) }}</span>
+              </div>
+              <p>{{ item.content }}</p>
+              <img v-if="item.imageUrl" :src="whistleImageUrl(item.imageUrl)" class="suggestion-img" />
+              <div class="whistle-meta">
+                <span>{{ item.submitter || (item.named ? '已实名（身份受保护）' : '匿名吹哨') }}</span>
+                <span>{{ item.createdAt }}</span>
+              </div>
+              <div v-if="item.rewardStatus" class="whistle-reward-tag">
+                🎁 {{ item.rewardStatus === 2 ? '奖励已发放' : '奖励待发放' }}
+              </div>
+              <div v-if="item.canVerify" class="whistle-admin-actions">
+                <button class="btn-sm btn-processing" @click="doVerifyWhistle(item, 1, 0)">核实中</button>
+                <button class="btn-sm btn-approve" @click="doVerifyWhistle(item, 2, 1)">确认有效并奖励</button>
+                <button v-if="item.rewardStatus === 1" class="btn-sm btn-primary" @click="doVerifyWhistle(item, 2, 2)">奖励已发放</button>
+                <button class="btn-sm btn-reject" @click="doVerifyWhistle(item, 3, 0)">未采纳</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       <!-- ========== Tab 2: 领导匿名信箱 ========== -->
       <div v-if="currentTab === 'leader'" class="leader-section">
         <!-- 提交区 -->
@@ -427,6 +509,7 @@ import { useRoute } from 'vue-router'
 import {
   submitWall, getWallList, getWallRecords, getWallPending, reviewWall,
   likeWall, getWallDetail, replyWall, resolveWall, wallImageUrl, leaderImageUrl,
+  submitWhistle, getWhistleList, verifyWhistle, whistleImageUrl,
   getLeaderTargets, submitLeaderMsg, getLeaderInbox, markLeaderInboxRead,
   submitSystemFeedback, getSystemList, replySystemFeedback, systemImageUrl
 } from '@/api/feedback'
@@ -436,6 +519,7 @@ import { refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 const route = useRoute()
 const tabs = [
   { key: 'wall', label: '部门吐槽墙' },
+  { key: 'whistle', label: '吹哨站' },
   { key: 'leader', label: '领导匿名信箱' },
   { key: 'system', label: '系统功能建议' }
 ]
@@ -450,6 +534,79 @@ const userInfo = getUserInfo()
 const userName = userInfo.name || userInfo.userName || ''
 const userDept = userInfo.dept || userInfo.lsys || ''
 const userJb = (userInfo.jb || '').trim()
+
+// ==================== 吹哨站 ====================
+const whistleCategories = ['质量隐患', '安全隐患', '设备隐患', '管理隐患', '其他']
+const whistleForm = reactive({ category: '质量隐患', content: '', leaveName: false })
+const whistleList = ref([])
+const whistleSubmitting = ref(false)
+const whistleImageFile = ref(null)
+const whistleImagePreview = ref('')
+const whistleFileRef = ref(null)
+
+function whistleStatusLabel(status) {
+  return ['待核实', '核实中', '已核实', '未采纳'][Number(status)] || '待核实'
+}
+function onWhistleImagePick(event) {
+  const file = event.target.files?.[0]
+  if (!file) return
+  if (file.size > 5 * 1024 * 1024) { alert('图片不能超过 5MB'); event.target.value = ''; return }
+  whistleImageFile.value = file
+  if (whistleImagePreview.value) URL.revokeObjectURL(whistleImagePreview.value)
+  whistleImagePreview.value = URL.createObjectURL(file)
+}
+function removeWhistleImage() {
+  if (whistleImagePreview.value) URL.revokeObjectURL(whistleImagePreview.value)
+  whistleImageFile.value = null
+  whistleImagePreview.value = ''
+  if (whistleFileRef.value) whistleFileRef.value.value = ''
+}
+async function loadWhistles() {
+  try {
+    const res = await getWhistleList({ current_user: userName })
+    if (res?.success) whistleList.value = res.data || []
+  } catch (e) {
+    console.error('加载吹哨记录失败', e)
+  }
+}
+async function doSubmitWhistle() {
+  if (!whistleForm.content.trim()) { alert('请填写隐患描述'); return }
+  if (whistleForm.leaveName && !userName) { alert('未获取到登录人姓名，请重新登录后选择留名'); return }
+  whistleSubmitting.value = true
+  try {
+    const payload = {
+      category: whistleForm.category,
+      content: whistleForm.content.trim(),
+      submitter: whistleForm.leaveName ? userName : '',
+      department: whistleForm.leaveName ? userDept : '',
+      image: whistleImageFile.value,
+    }
+    const res = await submitWhistle(payload)
+    if (res?.success) {
+      alert(res.message || '吹哨信息已提交')
+      whistleForm.content = ''
+      whistleForm.leaveName = false
+      removeWhistleImage()
+      await loadWhistles()
+    }
+  } catch (e) {
+    alert(e.response?.data?.detail || '提交失败')
+  } finally {
+    whistleSubmitting.value = false
+  }
+}
+async function doVerifyWhistle(item, status, rewardStatus) {
+  try {
+    const res = await verifyWhistle(item.id, {
+      status,
+      reward_status: rewardStatus,
+      current_user: userName,
+    })
+    if (res?.success) await loadWhistles()
+  } catch (e) {
+    alert(e.response?.data?.detail || '操作失败')
+  }
+}
 
 /** 回复框随内容增高，超出约 14 行后出现纵向滚动条 */
 function fitTextareaHeight(el, minLines = 2) {
@@ -514,6 +671,7 @@ onMounted(async () => {
     isAdmin1.value = !!(a1 && userName === a1)
   } catch { /* ignore */ }
   await loadWall()
+  await loadWhistles()
   openRouteWallDetail()
   loadAssigneeOptions()
   loadLeaderTargets()
@@ -637,6 +795,7 @@ watch(currentTab, async (t) => {
   if (t === 'wall') { nextTick(() => startBarrageLoop()) }
   else { stopBarrageLoop() }
   if (t === 'leader' && isLeader.value) await syncLeaderInboxRead()
+  if (t === 'whistle') await loadWhistles()
 })
 
 // -- 发布吐槽 --
@@ -1930,6 +2089,51 @@ async function doReplySystem(item) {
 
 /* --- 系统建议 --- */
 .system-section { display: flex; flex-direction: column; gap: 0; }
+
+/* --- 吹哨站 --- */
+.whistle-section { display: flex; flex-direction: column; gap: 18px; }
+.whistle-hero {
+  display: flex; align-items: flex-start; gap: 14px;
+  padding: 20px 22px; color: #1f2937; border: 1px solid #e5e7eb; border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, .04);
+}
+.whistle-hero-icon {
+  display: flex; align-items: center; justify-content: center; flex: 0 0 40px;
+  width: 40px; height: 40px; border-radius: 9px;
+  background: #fff7ed; color: #c2410c; font-size: 20px;
+}
+.whistle-hero-content { min-width: 0; }
+.whistle-hero h2 { margin: 1px 0 6px; color: #1a1a2e; font-size: 19px; line-height: 1.4; }
+.whistle-hero p { margin: 0; color: #64748b; font-size: 14px; line-height: 1.65; }
+.whistle-policy-note {
+  display: block; margin-top: 5px; color: #94a3b8; font-size: 12px; line-height: 1.5;
+}
+.whistle-grid { display: grid; grid-template-columns: minmax(300px, .85fr) minmax(420px, 1.4fr); gap: 18px; }
+.whistle-submit-card, .whistle-list-card { margin: 0; }
+.whistle-name-switch { display: flex; align-items: center; gap: 9px; margin: 12px 0; color: #374151; cursor: pointer; }
+.whistle-name-switch input { width: 17px; height: 17px; accent-color: #d97706; }
+.whistle-identity {
+  display: flex; gap: 8px; margin: -2px 0 14px; padding: 10px 12px;
+  background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; color: #92400e; font-size: 13px;
+}
+.whistle-list-head, .whistle-item-head, .whistle-meta {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+}
+.whistle-item { padding: 16px 0; border-bottom: 1px solid #f1f5f9; }
+.whistle-item:last-child { border-bottom: 0; }
+.whistle-item p { margin: 10px 0; color: #334155; line-height: 1.65; white-space: pre-wrap; }
+.whistle-category, .whistle-status, .whistle-reward-tag {
+  display: inline-flex; padding: 3px 9px; border-radius: 999px; font-size: 12px; font-weight: 650;
+}
+.whistle-category { color: #9a3412; background: #ffedd5; }
+.whistle-status-0 { color: #b45309; background: #fef3c7; }
+.whistle-status-1 { color: #1d4ed8; background: #dbeafe; }
+.whistle-status-2 { color: #047857; background: #d1fae5; }
+.whistle-status-3 { color: #64748b; background: #f1f5f9; }
+.whistle-meta { margin-top: 8px; color: #94a3b8; font-size: 12px; }
+.whistle-reward-tag { margin-top: 10px; color: #7c3aed; background: #ede9fe; }
+.whistle-admin-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; padding-top: 12px; border-top: 1px dashed #e2e8f0; }
 .suggestion-item {
   padding: 14px 0;
   border-bottom: 1px solid #f0f0f0;
@@ -1977,11 +2181,13 @@ async function doReplySystem(item) {
   .ws-cards { grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
   .wall-toolbar { flex-direction: column; align-items: stretch; }
   .tb-right { flex-wrap: wrap; }
+  .whistle-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .fb-stats { grid-template-columns: 1fr 1fr; gap: 8px; }
   .ws-cards { grid-template-columns: 1fr; }
   .wall-bottom { flex-direction: column; align-items: stretch; }
   .wb-btn { justify-content: center; }
+  .whistle-hero { padding: 16px; }
 }
 </style>

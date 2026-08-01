@@ -40,6 +40,26 @@ export function wallImageUrl(filename) {
   return `/api${P}/wall/image?filename=${encodeURIComponent(filename)}`
 }
 
+// ========== 吹哨站 ==========
+export function submitWhistle(data) {
+  const fd = new FormData()
+  fd.append('category', data.category)
+  fd.append('content', data.content)
+  fd.append('submitter', data.submitter || '')
+  fd.append('department', data.department || '')
+  if (data.image) fd.append('image', data.image)
+  return request({ url: `${P}/whistle/submit`, method: 'post', data: fd })
+}
+export function getWhistleList(params) {
+  return request({ url: `${P}/whistle/list`, method: 'get', params })
+}
+export function verifyWhistle(id, data) {
+  return request({ url: `${P}/whistle/${id}/verify`, method: 'post', data })
+}
+export function whistleImageUrl(filename) {
+  return `/api${P}/whistle/image?filename=${encodeURIComponent(filename)}`
+}
+
 // ========== 领导匿名信箱 ==========
 export function getLeaderTargets() {
   return request({ url: `${P}/leader/targets`, method: 'get' })

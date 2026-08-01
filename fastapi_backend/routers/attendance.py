@@ -662,7 +662,10 @@ async def fetch_and_upload(
                 pass
 
 
-async def run_fetch_and_upload_report(suggestion_cutoff: Optional[str] = None):
+async def run_fetch_and_upload_report(
+    suggestion_cutoff: Optional[str] = None,
+    report_month: Optional[str] = None,
+):
     """供定时任务调用：拉取报表并导入；每条任务的 suggestion_cutoff 决定智能建议截止日。失败时最多重试 3 次。"""
     import asyncio
     import httpx
@@ -670,6 +673,22 @@ async def run_fetch_and_upload_report(suggestion_cutoff: Optional[str] = None):
     if not fetch_url:
         logger.warning("[定时] 拉取跳过: 未配置 ATTENDANCE_REPORT_FETCH_URL")
         return
+    fetch_params = None
+    if report_month == "previous":
+        previous_month_day = datetime.now().replace(day=1) - timedelta(days=1)
+        fetch_params = {
+            "year": previous_month_day.year,
+            "month": previous_month_day.month,
+        }
+        logger.info(
+            "[定时] 月初补拉上月考勤报表: %04d-%02d",
+            previous_month_day.year,
+            previous_month_day.month,
+        )
+    request_url = fetch_url
+    if fetch_params:
+        import httpx
+        request_url = str(httpx.URL(fetch_url).copy_merge_params(fetch_params))
     dakaman = _get_dakaman()
     admin1 = _get_admin1()
     if not dakaman and not admin1:
@@ -683,7 +702,7 @@ async def run_fetch_and_upload_report(suggestion_cutoff: Optional[str] = None):
         try:
             logger.info("[定时] 拉取打卡报表 第 %d/%d 次: %s", attempt, max_attempts, fetch_url[:80] + "..." if len(fetch_url) > 80 else fetch_url)
             async with httpx.AsyncClient(timeout=_attendance_report_httpx_timeout()) as client:
-                resp = await client.get(fetch_url)
+                resp = await client.get(request_url)
                 resp.raise_for_status()
                 content = resp.content
             if not content:

@@ -27,6 +27,7 @@ router = APIRouter(prefix="/feedback", tags=["意见与建议"])
 
 _BASE = Path(__file__).resolve().parent.parent
 WALL_UPLOAD_DIR = _BASE / settings.UPLOAD_DIR / "feedback_wall_images"
+WHISTLE_UPLOAD_DIR = _BASE / settings.UPLOAD_DIR / "feedback_whistle_images"
 ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024
 
@@ -64,6 +65,22 @@ async def _save_wall_image(f: UploadFile) -> str:
         raise HTTPException(status_code=400, detail="图片不能超过 5MB")
     safe_name = f"wall_{uuid.uuid4().hex[:12]}{ext}"
     with open(WALL_UPLOAD_DIR / safe_name, "wb") as fp:
+        fp.write(content)
+    return safe_name
+
+
+async def _save_whistle_image(f: UploadFile) -> str:
+    WHISTLE_UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    if not f or not f.filename:
+        return ""
+    ext = Path(f.filename).suffix.lower()
+    if ext not in ALLOWED_IMAGE_EXT:
+        raise HTTPException(status_code=400, detail=f"不支持的图片格式: {ext}")
+    content = await f.read()
+    if len(content) > MAX_IMAGE_SIZE:
+        raise HTTPException(status_code=400, detail="图片不能超过 5MB")
+    safe_name = f"whistle_{uuid.uuid4().hex[:12]}{ext}"
+    with open(WHISTLE_UPLOAD_DIR / safe_name, "wb") as fp:
         fp.write(content)
     return safe_name
 
@@ -119,6 +136,21 @@ def _ensure_tables():
             ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
         """)
         db.execute_update("""
+            CREATE TABLE IF NOT EXISTS feedback_whistle (
+                id VARCHAR(36) PRIMARY KEY,
+                category VARCHAR(30) NOT NULL,
+                content TEXT NOT NULL,
+                submitter VARCHAR(50) NULL COMMENT '留空表示匿名',
+                department VARCHAR(100) NULL,
+                image_url VARCHAR(200) NULL,
+                status TINYINT DEFAULT 0 COMMENT '0=待核实 1=核实中 2=已核实 3=未采纳',
+                reward_status TINYINT DEFAULT 0 COMMENT '0=无 1=待发放 2=已发放',
+                verified_by VARCHAR(50) NULL,
+                verified_at DATETIME NULL,
+                created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+        """)
+        db.execute_update("""
             CREATE TABLE IF NOT EXISTS feedback_leader_inbox (
                 id VARCHAR(36) PRIMARY KEY,
                 target_leader VARCHAR(50) NOT NULL COMMENT '目标领导姓名',
@@ -162,6 +194,108 @@ def _require_admin1(current_user: str):
     admin1 = _get_admin1()
     if not admin1 or (current_user or "").strip() != admin1:
         raise HTTPException(status_code=403, detail="仅系统管理员可操作")
+
+
+# ==================== 吹哨站 ====================
+
+class WhistleVerify(BaseModel):
+    status: int
+    current_user: str
+    reward_status: int = 0
+
+
+@router.post("/whistle/submit")
+async def whistle_submit(
+    category: str = Form(...),
+    content: str = Form(...),
+    submitter: str = Form(""),
+    department: str = Form(""),
+    image: UploadFile = File(default=None),
+):
+    """上报质量、安全等隐患；submitter 留空即匿名。"""
+    _ensure_tables()
+    category = (category or "").strip()
+    content = (content or "").strip()
+    if category not in ("质量隐患", "安全隐患", "设备隐患", "管理隐患", "其他"):
+        raise HTTPException(status_code=400, detail="请选择有效的隐患类别")
+    if not content:
+        raise HTTPException(status_code=400, detail="隐患内容不能为空")
+    if len(content) > 1000:
+        raise HTTPException(status_code=400, detail="隐患内容不能超过1000字")
+    image_url = await _save_whistle_image(image) if image else ""
+    item_id = str(uuid.uuid4())
+    db.execute_update(
+        "INSERT INTO feedback_whistle "
+        "(id, category, content, submitter, department, image_url, status, reward_status) "
+        "VALUES (%s, %s, %s, %s, %s, %s, 0, 0)",
+        (item_id, category, content, (submitter or "").strip() or None,
+         (department or "").strip() or None, image_url or None),
+    )
+    return {"success": True, "message": "吹哨信息已提交，工作人员将尽快核实", "id": item_id}
+
+
+@router.get("/whistle/list")
+async def whistle_list(current_user: str = Query("")):
+    """实名信息仅管理员和领导可见，公开列表始终保护吹哨人身份。"""
+    _ensure_tables()
+    privileged = _is_wall_privileged_user(current_user)
+    rows = db.execute_query(
+        "SELECT id, category, content, submitter, department, image_url, status, "
+        "reward_status, verified_by, verified_at, created_at "
+        "FROM feedback_whistle ORDER BY created_at DESC"
+    )
+    data = []
+    for row in rows:
+        data.append({
+            "id": row.get("id"),
+            "category": row.get("category"),
+            "content": row.get("content"),
+            "submitter": (row.get("submitter") or "") if privileged else "",
+            "department": (row.get("department") or "") if privileged else "",
+            "named": bool(row.get("submitter")),
+            "imageUrl": row.get("image_url") or "",
+            "status": int(row.get("status") or 0),
+            "rewardStatus": int(row.get("reward_status") or 0),
+            "verifiedBy": row.get("verified_by") or "",
+            "verifiedAt": str(row.get("verified_at") or ""),
+            "createdAt": str(row.get("created_at") or ""),
+            "canVerify": privileged,
+        })
+    return {"success": True, "data": data}
+
+
+@router.post("/whistle/{item_id}/verify")
+async def whistle_verify(item_id: str, req: WhistleVerify):
+    _ensure_tables()
+    if not _is_wall_privileged_user(req.current_user):
+        raise HTTPException(status_code=403, detail="仅管理员或领导可核实吹哨信息")
+    if req.status not in (0, 1, 2, 3):
+        raise HTTPException(status_code=400, detail="无效的核实状态")
+    if req.reward_status not in (0, 1, 2):
+        raise HTTPException(status_code=400, detail="无效的奖励状态")
+    now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    verified_at = now if req.status in (2, 3) else None
+    count = db.execute_update(
+        "UPDATE feedback_whistle SET status=%s, reward_status=%s, verified_by=%s, verified_at=%s "
+        "WHERE id=%s",
+        (req.status, req.reward_status, req.current_user.strip(), verified_at, item_id),
+    )
+    if not count:
+        raise HTTPException(status_code=404, detail="吹哨记录不存在")
+    return {"success": True, "message": "处理状态已更新"}
+
+
+@router.get("/whistle/image")
+async def whistle_image(filename: str = Query(...)):
+    safe = Path(filename).name
+    fpath = WHISTLE_UPLOAD_DIR / safe
+    if not fpath.exists():
+        raise HTTPException(status_code=404, detail="图片不存在")
+    media_types = {
+        ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+        ".gif": "image/gif", ".bmp": "image/bmp", ".webp": "image/webp",
+    }
+    return FileResponse(fpath, media_type=media_types.get(fpath.suffix.lower(), "application/octet-stream"))
 
 
 def _is_wall_privileged_user(current_user: str) -> bool:

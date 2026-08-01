@@ -219,6 +219,12 @@ const routes = [
     meta: { title: '系统管理员' }
   },
   {
+    path: '/admin/access-dashboard',
+    name: 'AccessDashboard',
+    component: () => import('../views/admin/AccessDashboard.vue'),
+    meta: { title: '系统访问情况看板', fullscreen: true }
+  },
+  {
     path: '/admin/yggl-fill',
     name: 'YgglFill',
     component: () => import('../views/admin/YgglFill.vue'),
@@ -683,7 +689,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/access-dashboard' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

@@ -6,8 +6,9 @@
   2. jb(组长) -> lsys(同隶属于室) jb(主任)
   3. jb(责任工艺师) -> lsys(同隶属于室) jb(主任)
   4. jb(主任/副主任) -> jb(部长/副部长) + 同室 jb(主任/副主任)，同室列表排除本人（支持同级审批）
-  5. lsys(隶属于室) 所有人员 -> jb(部长)
-  6. 二级审批 -> jb(部长/副部长)
+  5. jb(部长/经理) -> jb(部长/副部长)（含副经理/经理助理），排除本人（支持交由副职审批）
+  6. lsys(部办) 其他人员 -> jb(部长)
+  7. 二级审批 -> jb(部长/副部长)
 """
 from fastapi import APIRouter, HTTPException, Query
 from typing import Optional, List, Dict, Any
@@ -195,7 +196,16 @@ def _get_approvers_first(name: str) -> List[dict]:
 
     tail = " AND name IS NOT NULL AND name != '' AND (COALESCE(zaizhi,0)=0) ORDER BY jb, name"
 
-    # 规则5: lsys(部办) 所有人员 -> jb(部长)
+    # 规则5: jb(部长/经理) -> 全部部领导（部长/副部长/经理/副经理/经理助理），排除本人
+    # 注意：经理助理会误匹配 _jb_match(..., "部长")，需用副部长条件排除
+    if _jb_match(jb, "部长") and not _jb_match(jb, "副部长"):
+        rows = db.execute_query(
+            f"SELECT name, jb, lsys FROM yggl WHERE {bz_fbz_cond} AND name != %s{tail}",
+            bz_fbz_p + (name,),
+        )
+        return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
+
+    # 规则6: lsys(部办) 其他人员 -> jb(部长)
     if "部办" in lsys or lsys == "部办":
         rows = db.execute_query(f"SELECT name, jb, lsys FROM yggl WHERE {bz_cond}{tail}", bz_p)
         return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]

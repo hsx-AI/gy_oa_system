@@ -954,12 +954,34 @@ async def update_inbox_config(req: InboxConfigRequest):
     """更新共用邮箱配置"""
     _require_inbox_access(req.current_user)
     _ensure_yggl_email_columns()
+    current_user = req.current_user.strip()
+    email_address = req.email_address.strip()
+    email_auth_code = req.email_auth_code.strip()
+
+    rows = db.execute_query(
+        "SELECT enterprise_email, email_auth_code FROM yggl WHERE name = %s LIMIT 1",
+        (current_user,),
+    )
+    if not rows:
+        raise HTTPException(status_code=404, detail="未找到当前管理员的员工记录")
+
+    current_address = (rows[0].get("enterprise_email") or "").strip()
+    current_auth_code = (rows[0].get("email_auth_code") or "").strip()
+    if current_address == email_address and current_auth_code == email_auth_code:
+        return {
+            "success": True,
+            "unchanged": True,
+            "message": "邮箱地址和授权码与当前配置相同，无需重复保存",
+        }
+
     affected = db.execute_update(
         "UPDATE yggl SET enterprise_email = %s, email_auth_code = %s WHERE name = %s",
-        (req.email_address.strip(), req.email_auth_code.strip(), req.current_user.strip()),
+        (email_address, email_auth_code, current_user),
     )
-    if affected is not None and affected <= 0:
-        raise HTTPException(status_code=404, detail="未找到当前管理员的员工记录")
+    if affected is None or affected < 0:
+        raise HTTPException(status_code=500, detail="邮箱配置保存失败，请检查服务器数据库日志")
+    if affected == 0:
+        raise HTTPException(status_code=409, detail="邮箱配置未发生变化，请刷新页面后重试")
     return {"success": True, "message": "共用邮箱配置已更新"}
 
 

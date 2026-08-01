@@ -350,7 +350,10 @@ async function fetchApprovers() {
   loadingApprovers.value = true
   try {
     const res = await getApprovers({ name: form.name, level: 'first' })
-    approvers.value = (res.success && res.approvers) ? res.approvers.map(a => a.name) : []
+    const selfName = (form.name || '').trim()
+    approvers.value = (res.success && res.approvers)
+      ? res.approvers.map(a => a.name).filter(n => (n || '').trim() !== selfName)
+      : []
   } catch {
     approvers.value = []
   } finally {
