@@ -2038,6 +2038,15 @@ const rawFeatureGroups = [
         iconPath: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'
       },
       {
+        id: 'print3d',
+        title: '3D 打印委托',
+        description: '在线提交模型文件，完成审核、排期、打印进度跟踪与领取闭环',
+        path: '/print3d',
+        color: 'linear-gradient(135deg, #0891b2 0%, #4f46e5 100%)',
+        tag: '新功能',
+        iconPath: 'M12 2l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5'
+      },
+      {
         id: 'low-value-reimbursement',
         title: '低值易耗报销',
         description: '提交低值易耗报销申请，审批流转并导出台账',
