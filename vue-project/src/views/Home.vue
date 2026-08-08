@@ -510,10 +510,96 @@
       </div>
     </div>
 
-    <!-- AI 待办任务看板瓦片 -->
+    <!-- 原个人红旗邮箱 AI 待办任务看板（保留） -->
+    <section
+      v-if="isHomeModuleVisible('personalInboxBoard') && canAccessPersonalInboxBoard"
+      class="home-tile home-tile--inbox home-ai-task-section"
+      data-home-module-id="personalInboxBoard"
+      :style="homeModuleStyle('personalInboxBoard')"
+    >
+      <button
+        type="button"
+        class="home-tile-drag-handle"
+        :class="{ 'is-active': homeLayoutDrag.activeId === 'personalInboxBoard' }"
+        title="拖动调整位置"
+        aria-label="拖动调整AI红旗邮箱看板位置"
+        @pointerdown="startHomeTileDrag($event, 'personalInboxBoard')"
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true">
+          <circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/>
+          <circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/>
+          <circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/>
+        </svg>
+      </button>
+      <article class="dashboard-card ai-task-card">
+        <header class="dashboard-card__header ai-task-card__header">
+          <h2 class="dashboard-card__title">
+            <span class="dashboard-card__icon dashboard-card__icon--warning" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M5 21V4"/><path d="M5 4h11l-2 4 2 4H5"/>
+              </svg>
+            </span>
+            <span class="dashboard-card__title-text">AI 红旗邮箱看板</span>
+            <span class="dashboard-card__badge">{{ personalInboxTasks.length }}</span>
+          </h2>
+          <div class="ai-task-actions">
+            <span class="ai-task-stat">红旗邮件</span>
+            <button type="button" class="ai-task-icon-btn" :disabled="personalInboxSyncing" :title="personalInboxSyncing ? '同步中…' : '同步红旗邮件并刷新'" @click="syncPersonalInboxBoard">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" :class="{ spinning: personalInboxSyncing }">
+                <polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M20.49 9A9 9 0 0 0 5.64 5.64L1 10m22 4-4.64 4.36A9 9 0 0 1 3.51 15"/>
+              </svg>
+            </button>
+            <router-link to="/personal-inbox-emails" class="ai-task-viewall-btn">查看全部</router-link>
+          </div>
+        </header>
+        <div class="ai-task-body">
+          <div v-if="personalInboxLoading" class="dashboard-empty"><p>加载中...</p></div>
+          <div v-else-if="!personalInboxConfigured" class="dashboard-empty"><p>个人邮箱尚未配置，请在待办邮箱页面配置</p></div>
+          <div v-else-if="!personalInboxTasks.length" class="dashboard-empty"><p>暂无红旗邮件待办任务</p></div>
+          <div
+            v-else
+            class="ai-task-marquee"
+            @mouseenter="personalInboxPaused = true"
+            @mouseleave="personalInboxPaused = false"
+          >
+            <div class="ai-task-track" :class="{ paused: personalInboxPaused, 'no-anim': personalInboxTasks.length <= 2 }">
+              <div v-for="(task, idx) in personalInboxDisplayTasks" :key="`${task.id}-${idx}`" class="ai-mail-task" role="button" tabindex="0" @click="openPersonalInboxTask(task.id)" @keydown.enter.prevent="openPersonalInboxTask(task.id)">
+                <span class="ai-mail-task__top">
+                  <span v-if="personalDeadlineEditingId !== task.id" class="ai-mail-task__deadline" :class="deadlineClass(task.taskDeadline)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+                    {{ task.taskDeadline || '未指定截止时间' }}
+                    <span v-if="task.taskDeadline && deadlineCountdown(task.taskDeadline)" class="ai-mail-task__countdown">{{ deadlineCountdown(task.taskDeadline) }}</span>
+                    <button type="button" class="ai-mail-task__edit" title="指定完成时间" @click.stop="startEditPersonalDeadline(task)">
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z"/></svg>
+                    </button>
+                  </span>
+                  <span v-else class="ai-mail-task__deadline-editor" @click.stop>
+                    <input v-model="personalDeadlineDraft" type="datetime-local" class="ai-mail-task__deadline-input" @keydown.enter.prevent="savePersonalDeadline(task.id)" @keydown.esc.prevent="cancelEditPersonalDeadline">
+                    <button class="ai-mail-task__deadline-save" :disabled="personalDeadlineSavingId === task.id" @click.stop="savePersonalDeadline(task.id)">保存</button>
+                    <button class="ai-mail-task__deadline-cancel" @click.stop="cancelEditPersonalDeadline">取消</button>
+                  </span>
+                  <span class="ai-mail-task__from" :title="task.from">{{ shortFrom(task.from) }}</span>
+                  <span class="ai-mail-task__complete" role="button" title="标记已完成（去除红旗并删除记录）" @click.stop="finishPersonalInboxTask(task.id)">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
+                    待完成
+                  </span>
+                </span>
+                <span class="ai-mail-task__summary" :title="task.taskSummary">{{ task.taskSummary }}</span>
+                <span class="ai-mail-task__sub">
+                  <span :title="task.subject">{{ task.subject || '（无主题）' }}</span>
+                  <span>{{ task.emailDate || task.receivedAt }}</span>
+                </span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+    </section>
+
+    <!-- 经理层公用邮箱 AI 重要信息看板瓦片 -->
     <section
       v-if="isHomeModuleVisible('inboxBoard') && canAccessInboxBoard"
-      class="home-tile home-tile--inbox home-ai-task-section"
+      class="home-tile home-tile--inbox home-ai-task-section home-important-info-section"
       data-home-module-id="inboxBoard"
       :style="homeModuleStyle('inboxBoard')"
     >
@@ -540,7 +626,7 @@
                 <circle cx="12" cy="12" r="4"/>
               </svg>
             </span>
-            <span class="dashboard-card__title-text">AI 待办任务看板</span>
+            <span class="dashboard-card__title-text">经理层 AI 重要信息看板</span>
             <span class="dashboard-card__badge">{{ inboxTaskStats.taskCount }}</span>
           </h2>
           <div class="ai-task-actions">
@@ -1051,7 +1137,7 @@ import { getWallList, getWhistleList, likeWall } from '@/api/feedback'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
-import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline } from '@/api/inboxEmail'
+import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline, getPersonalInboxConfig, listPersonalInboxTasks, syncPersonalInbox, completePersonalInboxTask, updatePersonalInboxTaskDeadline, getPersonalInboxEmailDetail } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch } from '@/utils/roleMatch'
@@ -1092,6 +1178,94 @@ const canAccessDbManager = ref(false)
 const canAccessInboxBoard = computed(() => {
   return isManagerLevel(userJb.value)
 })
+const canAccessPersonalInboxBoard = computed(() => canAccessDbManager.value || isMinisterOrDeptLeader(userJb.value))
+const personalInboxTasks = ref([])
+const personalInboxLoading = ref(false)
+const personalInboxSyncing = ref(false)
+const personalInboxConfigured = ref(true)
+const personalInboxPaused = ref(false)
+const personalDeadlineEditingId = ref(null)
+const personalDeadlineDraft = ref('')
+const personalDeadlineSavingId = ref(null)
+const personalInboxDisplayTasks = computed(() => {
+  const rows = personalInboxTasks.value || []
+  return rows.length > 2 ? [...rows, ...rows] : rows
+})
+
+async function loadPersonalInboxBoard() {
+  const name = userName.value?.trim()
+  if (!name || !canAccessPersonalInboxBoard.value) return
+  personalInboxLoading.value = true
+  try {
+    const [cfg, tasks] = await Promise.all([
+      getPersonalInboxConfig(name),
+      listPersonalInboxTasks({ current_user: name, limit: 20 }),
+    ])
+    personalInboxConfigured.value = !!cfg?.configured
+    personalInboxTasks.value = tasks?.items || []
+  } catch {
+    personalInboxTasks.value = []
+  } finally {
+    personalInboxLoading.value = false
+  }
+}
+
+async function syncPersonalInboxBoard() {
+  const name = userName.value?.trim()
+  if (!name || personalInboxSyncing.value) return
+  personalInboxSyncing.value = true
+  try {
+    await syncPersonalInbox(name)
+    await loadPersonalInboxBoard()
+  } finally {
+    personalInboxSyncing.value = false
+  }
+}
+
+async function finishPersonalInboxTask(id) {
+  const name = userName.value?.trim()
+  if (!name) return
+  await completePersonalInboxTask({ current_user: name, id })
+  await loadPersonalInboxBoard()
+}
+
+function startEditPersonalDeadline(task) {
+  personalInboxPaused.value = true
+  personalDeadlineEditingId.value = task.id
+  personalDeadlineDraft.value = deadlineToInputValue(task.taskDeadline)
+}
+function cancelEditPersonalDeadline() {
+  personalDeadlineEditingId.value = null
+  personalDeadlineDraft.value = ''
+}
+async function savePersonalDeadline(id) {
+  const name = userName.value?.trim()
+  if (!name || personalDeadlineSavingId.value) return
+  personalDeadlineSavingId.value = id
+  try {
+    await updatePersonalInboxTaskDeadline({ current_user: name, id, task_deadline: inputValueToDeadline(personalDeadlineDraft.value) })
+    cancelEditPersonalDeadline()
+    await loadPersonalInboxBoard()
+  } finally { personalDeadlineSavingId.value = null }
+}
+
+async function openPersonalInboxTask(id) {
+  const name = userName.value?.trim()
+  if (!name || !id) return
+  inboxDetailOpen.value = true
+  inboxDetailItem.value = null
+  inboxDetailBodyMode.value = 'html'
+  try {
+    const res = await getPersonalInboxEmailDetail({ current_user: name, id })
+    if (res?.item) {
+      inboxDetailItem.value = res.item
+      inboxDetailBodyMode.value = res.item.bodyHtml ? 'html' : 'text'
+    }
+  } catch {
+    inboxDetailItem.value = { subject: '', from: '', to: '', cc: '', emailDate: '', bodyText: '邮件详情加载失败', bodyHtml: '' }
+    inboxDetailBodyMode.value = 'text'
+  }
+}
 
 const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
@@ -1531,6 +1705,10 @@ function canShowFeature(permission) {
       return canAccessDbManager.value
     case 'healthMonitor':
       return isAdmin1
+    case 'performance':
+      return isDirectorLevel(jb) || jb.includes('组长')
+    case 'accessDashboard':
+      return canAccessDbManager.value || isManagerLevel(jb)
     default:
       return true
   }
@@ -1639,7 +1817,6 @@ const rawFeatureGroups = [
         description: '以办公室工位动画查看本科室在岗、公出和打卡状态',
         path: '/attendance/personnel-visualization',
         color: 'linear-gradient(135deg, #0ea5e9 0%, #22c55e 100%)',
-        tag: '新功能',
         iconPath: 'M3 4h18v14H3V4zm4 14v2m10-2v2M8 8a2 2 0 100 4 2 2 0 000-4zm8 0a2 2 0 100 4 2 2 0 000-4z'
       },
       {
@@ -1664,8 +1841,16 @@ const rawFeatureGroups = [
         description: '集中导出考勤、绩效、排班和台账报表',
         path: '/reports-hub',
         color: 'linear-gradient(135deg, #0f766e 0%, #84cc16 100%)',
-        tag: '新功能',
         iconPath: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M8 13h8M8 17h6'
+      },
+      {
+        id: 'shift-schedule',
+        title: '假期排班管理',
+        description: '支持简化排班填写、当日不排班设置、排班表导出与邮件发送',
+        path: '/attendance/shift-schedule',
+        color: 'linear-gradient(135deg, #f59e0b 0%, #ef4444 100%)',
+        tag: '新功能',
+        iconPath: 'M8 2v4m8-4v4M3 10h18M5 4h14a2 2 0 012 2v14H3V6a2 2 0 012-2zm3 10h3m2 0h3m-8 4h3m2 0h3'
       },
       {
         id: 'hxp-records',
@@ -1744,12 +1929,31 @@ const rawFeatureGroups = [
         permission: 'employeeAdmin',
         color: 'linear-gradient(135deg, #4facfe 0%, #00f2fe 100%)',
         iconPath: 'M17 21v-2a4 4 0 00-4-4H5a4 4 0 00-4 4v2M9 7a4 4 0 104 0 4 4 0 00-4 0zm8 4a4 4 0 11-8 0 4 4 0 018 0z'
+      },
+      {
+        id: 'performance',
+        title: '绩效统计',
+        description: '季度绩效集中填报、历史记录查询与统计汇总',
+        path: '/performance',
+        permission: 'performance',
+        color: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)',
+        tag: '新功能',
+        iconPath: 'M4 19V5m0 14h16M7 15l3-4 3 2 4-6'
       }
     ]
   },
   {
     title: '智能协作与系统',
     items: [
+      {
+        id: 'action-items',
+        title: 'AI 行动项督办',
+        description: '从会议纪要智能提取行动项，统一跟踪、审批和消息提醒',
+        path: '/action-items/dashboard',
+        color: 'linear-gradient(135deg, #2563eb 0%, #7c3aed 100%)',
+        tag: '新功能',
+        iconPath: 'M9 11l3 3L22 4M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11M7 7h5'
+      },
       {
         id: 'personnel-archive',
         title: '人事档案管理系统',
@@ -1797,7 +2001,6 @@ const rawFeatureGroups = [
         description: '维护投标模板最新版本，记录更新要点并支持历史版本下载',
         path: '/file/bid-templates',
         color: 'linear-gradient(135deg, #0ea5e9 0%, #14b8a6 100%)',
-        tag: '新功能',
         iconPath: 'M4 4h16v16H4V4zm4 4h8M8 12h8M8 16h5'
       },
       {
@@ -1816,7 +2019,6 @@ const rawFeatureGroups = [
         path: '/weldoa/ypp_main',
         permission: 'rotorBladeBalance',
         color: 'linear-gradient(135deg, #06b6d4 0%, #2563eb 100%)',
-        tag: '新功能',
         iconPath: 'M12 3v18M3 12h18M5.64 5.64l12.72 12.72M18.36 5.64L5.64 18.36M12 21a9 9 0 100-18 9 9 0 000 18z'
       },
       {
@@ -1833,7 +2035,6 @@ const rawFeatureGroups = [
         description: '提交用印申请、审批用印、查看用印记录',
         path: '/seal/apply',
         color: 'linear-gradient(135deg, #dc2626 0%, #b91c1c 100%)',
-        tag: '新功能',
         iconPath: 'M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z'
       },
       {
@@ -1851,7 +2052,6 @@ const rawFeatureGroups = [
         description: '部门健康角按 15 分钟时段预约，每人每日最多 30 分钟',
         path: '/massage-chair',
         color: 'linear-gradient(135deg, #14b8a6 0%, #6366f1 100%)',
-        tag: '新功能',
         iconPath: 'M4 10h16v8a2 2 0 01-2 2H6a2 2 0 01-2-2v-8zm4-5h8v5H8V5zm2 8h4'
       },
       {
@@ -1860,7 +2060,6 @@ const rawFeatureGroups = [
         description: '部门吐槽墙、领导匿名信箱、系统功能建议',
         path: '/feedback',
         color: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
-        tag: '新功能',
         iconPath: 'M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z'
       },
       {
@@ -1882,6 +2081,16 @@ const rawFeatureGroups = [
         tag: '系统',
         color: 'linear-gradient(135deg, #0f766e 0%, #14b8a6 100%)',
         iconPath: 'M22 12h-4l-3 9L9 3l-3 9H2'
+      },
+      {
+        id: 'access-dashboard',
+        title: '系统访问看板',
+        description: '可视化查看系统访问趋势、使用情况与关键运行数据',
+        path: '/admin/access-dashboard',
+        permission: 'accessDashboard',
+        tag: '新功能',
+        color: 'linear-gradient(135deg, #0f766e 0%, #06b6d4 100%)',
+        iconPath: 'M3 3v18h18M7 15l4-4 3 3 5-7'
       },
       {
         id: 'yggl-fill',
@@ -2024,11 +2233,12 @@ const userName = ref(userInfo.name || userInfo.userName || '')
 // ==================== 首页布局 ====================
 // 拆分原 dashboard / focusCards 为更细的 5 个瓦片，便于"恒定大小三栏"以及后续个性化排班
 const HOME_LAYOUT_MODULES = [
+  { id: 'inboxBoard', label: '经理层 AI 重要信息看板', description: '从经理层公用邮箱全部邮件中提炼重要信息' },
   { id: 'todo', label: '待办事项', description: '需要我处理的待办与审批' },
   { id: 'request', label: '我的申请流程', description: '我提交的待审批 / 审批中申请' },
   { id: 'contactsCard', label: '部门通讯录', description: '科室人员手机、座机等快捷查看' },
   { id: 'briefing', label: '重要信息审阅', description: '部长/副经理级别可见的重要换休、公出信息滚动审阅' },
-  { id: 'inboxBoard', label: 'AI 待办任务看板', description: '由企业邮箱标记自动识别出的待办任务' },
+  { id: 'personalInboxBoard', label: 'AI 红旗邮箱看板', description: '由个人企业邮箱红旗邮件识别出的待办任务' },
   { id: 'infoFeed', label: '天气新闻', description: '哈电实时天气、预报与国际新闻摘要' },
   { id: 'wall', label: '吐槽墙', description: '匿名吐槽与互动' },
   { id: 'personnelVisual', label: '人员出勤可视化', description: '本科室在岗、公出、请假状态办公室缩略预览' },
@@ -2050,6 +2260,24 @@ function defaultHomeLayout() {
 function homeLayoutStorageKey() {
   const name = (userName.value || '').trim()
   return name ? `home_layout_modules_${name}` : 'home_layout_modules'
+}
+
+function homeLayoutVersionKey() {
+  return `${homeLayoutStorageKey()}_version`
+}
+
+function migrateManagerImportantBoardFirst(layout) {
+  if (!isManagerLevel(userInfo.jb)) return layout
+  const currentVersion = Number(localStorage.getItem(homeLayoutVersionKey()) || 0)
+  if (currentVersion >= 2) return layout
+  const next = [...layout]
+  const index = next.findIndex(item => item.id === 'inboxBoard')
+  if (index > 0) next.unshift(next.splice(index, 1)[0])
+  try {
+    localStorage.setItem(homeLayoutStorageKey(), JSON.stringify(next))
+    localStorage.setItem(homeLayoutVersionKey(), '2')
+  } catch { /* ignore */ }
+  return next
 }
 
 function normalizeHomeLayout(value) {
@@ -2081,9 +2309,13 @@ function normalizeHomeLayout(value) {
 function loadHomeLayout() {
   try {
     const raw = localStorage.getItem(homeLayoutStorageKey())
-    if (raw) return normalizeHomeLayout(JSON.parse(raw))
+    if (raw) return migrateManagerImportantBoardFirst(normalizeHomeLayout(JSON.parse(raw)))
   } catch { /* ignore */ }
-  return defaultHomeLayout()
+  const initial = defaultHomeLayout()
+  if (isManagerLevel(userInfo.jb)) {
+    try { localStorage.setItem(homeLayoutVersionKey(), '2') } catch { /* ignore */ }
+  }
+  return initial
 }
 
 const homeLayout = ref(loadHomeLayout())
@@ -2200,6 +2432,7 @@ function isHomeModuleRuntimeAvailable(id) {
   if (id === 'briefing') return canSeeBriefing.value && briefingItems.value.length > 0
   if (id === 'newFeatures') return newFeatureItems.value.length > 0
   if (id === 'inboxBoard') return canAccessInboxBoard.value
+  if (id === 'personalInboxBoard') return canAccessPersonalInboxBoard.value
   return true
 }
 
@@ -2750,6 +2983,7 @@ onMounted(() => {
   if (name) {
     getDbManagerPermission({ current_user: name }).then(res => {
       canAccessDbManager.value = !!(res && res.canAccess)
+      if (canAccessPersonalInboxBoard.value) loadPersonalInboxBoard()
       if (canAccessInboxBoard.value) {
         syncInboxEmails(name).then(() => loadInboxTasks()).catch(() => loadInboxTasks())
         inboxTaskRefreshTimer = setInterval(loadInboxTasks, 15000)
@@ -4412,6 +4646,43 @@ async function navigateTo(feature) {
   white-space: nowrap;
 }
 
+/* 经理层重要信息看板：保持单列宽度，纵向跨两格，并压缩单条信息高度。 */
+.home-important-info-section {
+  grid-row: span 2;
+  height: calc(var(--home-tile-h) * 2 + var(--spacing-xl));
+}
+
+.home-important-info-section .ai-task-body {
+  padding-top: 8px;
+  padding-bottom: 10px;
+}
+
+.home-important-info-section .ai-task-track {
+  gap: 4px;
+}
+
+.home-important-info-section .ai-mail-task {
+  padding: 5px 11px;
+  border-radius: 7px;
+}
+
+.home-important-info-section .ai-mail-task__summary {
+  margin: 3px 0 2px;
+  font-size: 0.88rem;
+  line-height: 1.3;
+  -webkit-line-clamp: 1;
+  line-clamp: 1;
+}
+
+.home-important-info-section .ai-mail-task__deadline {
+  padding: 1px 7px;
+  font-size: 11px;
+}
+
+.home-important-info-section .ai-mail-task__sub {
+  font-size: 11px;
+}
+
 .ai-mail-task__sub span:last-child {
   flex-shrink: 0;
   font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -5686,6 +5957,11 @@ async function navigateTo(feature) {
   .home-page {
     grid-template-columns: 1fr;
     --home-tile-h: clamp(280px, 60vh, 420px);
+  }
+
+  .home-important-info-section {
+    grid-row: span 1;
+    height: var(--home-tile-h);
   }
 
   .dashboard-card__header,

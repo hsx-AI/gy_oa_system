@@ -249,6 +249,12 @@ const routes = [
     meta: { title: '经理层重要邮箱' }
   },
   {
+    path: '/personal-inbox-emails',
+    name: 'PersonalInboxEmails',
+    component: () => import('../views/PersonalInboxEmails.vue'),
+    meta: { title: 'AI 红旗邮箱看板' }
+  },
+  {
     path: '/attendance/shift-schedule',
     name: 'ShiftSchedule',
     component: () => import('../views/attendance/ShiftSchedule.vue'),
@@ -366,6 +372,12 @@ const routes = [
     name: 'SealApply',
     component: () => import('@/views/seal/SealApply.vue'),
     meta: { title: '部门用印申请' }
+  },
+  {
+    path: '/print3d',
+    name: 'Print3DManagement',
+    component: () => import('@/views/print3d/Print3DManagement.vue'),
+    meta: { title: '3D打印委托' }
   },
   {
     path: '/low-value-reimbursement',
@@ -671,7 +683,7 @@ router.beforeEach(async (to, _from, next) => {
     } catch { next('/') }
     return
   }
-  if (to.path === '/admin/inbox-emails') {
+  if (to.path === '/admin/inbox-emails' || to.path === '/personal-inbox-emails') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) { next('/login'); return }
@@ -681,7 +693,7 @@ router.beforeEach(async (to, _from, next) => {
       if (!name) { next('/'); return }
       const res = await getDbManagerPermission({ current_user: name })
       const canDbAdmin = !!(res && res.canAccess)
-      const canLeader = isManagerLevel(jb)
+      const canLeader = to.path === '/personal-inbox-emails' ? isMinisterOrDeptLeader(jb) : isManagerLevel(jb)
       if (canDbAdmin || canLeader) next()
       else next('/')
     } catch {

@@ -4,6 +4,13 @@
 """
 import math
 import logging
+import re
+import secrets
+import smtplib
+import threading
+import time
+from email.header import Header
+from email.mime.text import MIMEText
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 from database import db, db_demo
@@ -11,6 +18,52 @@ from database import db, db_demo
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["认证"])
+
+PASSWORD_RULE_MESSAGE = "密码至少6位，且须包含数字、字母、特殊符号中的至少两类"
+_verification_codes = {}
+_verification_lock = threading.Lock()
+
+
+def _password_is_strong(password: str) -> bool:
+    if len(password or "") < 6:
+        return False
+    categories = sum((
+        bool(re.search(r"[A-Za-z]", password)),
+        bool(re.search(r"\d", password)),
+        bool(re.search(r"[^A-Za-z0-9]", password)),
+    ))
+    return categories >= 2
+
+
+def _masked_email(address: str) -> str:
+    local, sep, domain = address.partition("@")
+    if not sep:
+        return "***"
+    visible = local[:2] if len(local) > 2 else local[:1]
+    return f"{visible}***@{domain}"
+
+
+def _get_login_user(name: str):
+    rows = db.execute_query(
+        "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt, enterprise_email "
+        "FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1", (name,)
+    )
+    return rows[0] if rows else None
+
+
+def _user_info(user_data: dict) -> dict:
+    denglu_zt = user_data.get("denglu_zt")
+    show_intro = denglu_zt is None or (isinstance(denglu_zt, str) and not denglu_zt.strip())
+    return {
+        "name": (user_data.get("name") or "").strip(),
+        "dept": (user_data.get("lsys") or "").strip(),
+        "jb": (user_data.get("jb") or "").strip(),
+        "gh": (user_data.get("gh") or "").strip(),
+        "xbie": (user_data.get("xbie") or "").strip(),
+        "showIntro": show_intro,
+        "unreadNotifications": [],
+        "mustChangePassword": not _password_is_strong((user_data.get("pass") or "").strip()),
+    }
 
 
 def _format_entry_date(value) -> str:
@@ -168,6 +221,7 @@ async def login(request: LoginRequest):
             "xbie": (user_data.get("xbie") or "").strip(),
             "showIntro": show_intro,
             "unreadNotifications": unread_notifications,
+            "mustChangePassword": not _password_is_strong(db_pass),
         }
         return LoginResponse(
             success=True,
@@ -432,8 +486,8 @@ class ChangePasswordRequest(BaseModel):
 async def change_password(req: ChangePasswordRequest):
     """修改密码"""
     try:
-        if not req.newPassword or len(req.newPassword) < 4:
-            return {"success": False, "message": "新密码至少4位"}
+        if not _password_is_strong(req.newPassword):
+            return {"success": False, "message": PASSWORD_RULE_MESSAGE}
         check = db.execute_query(
             "SELECT 1 FROM yggl WHERE name=%s AND `pass`=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
             (req.name, req.oldPassword)
@@ -448,6 +502,115 @@ async def change_password(req: ChangePasswordRequest):
     except Exception as e:
         logger.error(f"修改密码失败: {str(e)}")
         return {"success": False, "message": str(e)}
+
+
+class VerificationCodeRequest(BaseModel):
+    name: str
+    purpose: str  # login / reset
+
+
+class CodeLoginRequest(BaseModel):
+    name: str
+    code: str
+
+
+class ResetPasswordByCodeRequest(BaseModel):
+    name: str
+    code: str
+    newPassword: str
+
+
+def _consume_code(name: str, purpose: str, code: str) -> bool:
+    key = (name, purpose)
+    now = time.time()
+    with _verification_lock:
+        item = _verification_codes.get(key)
+        if not item or item["expires"] < now or item["attempts"] >= 5:
+            _verification_codes.pop(key, None)
+            return False
+        item["attempts"] += 1
+        if not secrets.compare_digest(item["code"], (code or "").strip()):
+            return False
+        _verification_codes.pop(key, None)
+        return True
+
+
+@router.post("/send-verification-code")
+async def send_verification_code(req: VerificationCodeRequest):
+    name = (req.name or "").strip()
+    purpose = (req.purpose or "").strip().lower()
+    if purpose not in ("login", "reset"):
+        return {"success": False, "message": "验证码用途无效"}
+    try:
+        user = _get_login_user(name)
+        if not user:
+            return {"success": False, "message": "没有该用户"}
+        recipient = (user.get("enterprise_email") or "").strip()
+        if not recipient:
+            return {"success": False, "message": "该用户尚未配置企业邮箱，请联系管理员"}
+        from routers.email_sender import _get_email_config, SMTP_SERVER, SMTP_PORT_SSL
+        cfg = _get_email_config()
+        if not cfg["address"] or not cfg["auth_code"]:
+            return {"success": False, "message": "系统发信邮箱尚未配置，请联系管理员"}
+        key = (name, purpose)
+        now = time.time()
+        with _verification_lock:
+            previous = _verification_codes.get(key)
+            if previous and now - previous["sent_at"] < 60:
+                return {"success": False, "message": "验证码发送过于频繁，请60秒后再试"}
+        code = f"{secrets.randbelow(1000000):06d}"
+        action = "登录" if purpose == "login" else "修改密码"
+        message = MIMEText(f"您好，{name}：\n\n您正在通过邮箱验证码{action}，验证码为：{code}\n\n验证码5分钟内有效，请勿转发给他人。", "plain", "utf-8")
+        message["From"] = cfg["address"]
+        message["To"] = recipient
+        message["Subject"] = Header(f"集成办公平台{action}验证码", "utf-8")
+        with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=15) as smtp:
+            smtp.login(cfg["address"], cfg["auth_code"])
+            smtp.sendmail(cfg["address"], [recipient], message.as_string())
+        with _verification_lock:
+            _verification_codes[key] = {"code": code, "expires": now + 300, "sent_at": now, "attempts": 0}
+        return {"success": True, "message": f"验证码已发送至 {_masked_email(recipient)}"}
+    except Exception as e:
+        logger.error("发送登录验证码失败: %s", e)
+        return {"success": False, "message": "验证码发送失败，请稍后重试或联系管理员"}
+
+
+@router.post("/login-by-code", response_model=LoginResponse)
+async def login_by_code(req: CodeLoginRequest):
+    name = (req.name or "").strip()
+    if not _consume_code(name, "login", req.code):
+        return LoginResponse(success=False, message="验证码错误、已过期或尝试次数过多")
+    try:
+        user = _get_login_user(name)
+        if not user:
+            return LoginResponse(success=False, message="用户不存在或已离职")
+        data = _user_info(user)
+        # 邮箱验证码已完成身份校验，不因历史弱密码阻断该登录方式。
+        data["mustChangePassword"] = False
+        return LoginResponse(success=True, message="登录成功", data=data)
+    except Exception as e:
+        logger.error("验证码登录失败: %s", e)
+        return LoginResponse(success=False, message="登录失败，请稍后重试")
+
+
+@router.post("/reset-password-by-code")
+async def reset_password_by_code(req: ResetPasswordByCodeRequest):
+    name = (req.name or "").strip()
+    if not _password_is_strong(req.newPassword):
+        return {"success": False, "message": PASSWORD_RULE_MESSAGE}
+    if not _consume_code(name, "reset", req.code):
+        return {"success": False, "message": "验证码错误、已过期或尝试次数过多"}
+    try:
+        updated = db.execute_update(
+            "UPDATE yggl SET `pass`=%s WHERE name=%s AND COALESCE(zaizhi,0)=0",
+            (req.newPassword, name),
+        )
+        if not updated:
+            return {"success": False, "message": "用户不存在或已离职"}
+        return {"success": True, "message": "密码修改成功，请使用新密码登录"}
+    except Exception as e:
+        logger.error("验证码修改密码失败: %s", e)
+        return {"success": False, "message": "密码修改失败，请稍后重试"}
 
 
 # ==================== 用户配色风格 ====================

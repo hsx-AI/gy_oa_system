@@ -22,6 +22,7 @@ import { getPendingLowValueReimbursements } from '@/api/lowValueReimbursement'
 import { getShiftCoverageGap } from '@/api/shift'
 import { getAutoReminderNotices, markAutoReminderNoticeRead } from '@/api/email'
 import { getActions, getMyActionReminders, readActionReminder } from '@/api/actionItems'
+import request from '@/utils/request'
 import {
   getPendingKqyc,
   getKqycDakamanPending,
@@ -95,6 +96,7 @@ const kqycDakamanList = ref([])
 const autoReminderNoticeList = ref([])
 /** 行动项督办未读提醒 */
 const actionReminderList = ref([])
+const print3dTodoList = ref([])
 
 const readableNoticeCount = computed(
   () => hxpUnreadList.value.length + autoReminderNoticeList.value.length
@@ -314,6 +316,18 @@ const displayTodoList = computed(() => {
       btnLabel: item.is_pending_action ? '查看并接收' : '去处理',
     })
   }
+  for (const item of print3dTodoList.value) {
+    list.push({
+      uniqueId: `print3d-${item.id}`,
+      type: '3D打印委托',
+      description: `${item.requestNo} · ${item.subject}`,
+      applicant: item.applicant,
+      time: formatRelativeTime(item.createdAt),
+      isPrint3d: true,
+      print3dId: item.id,
+      btnLabel: '去处理',
+    })
+  }
   return list
 })
 
@@ -336,6 +350,7 @@ const totalBadgeCount = computed(() => {
   count += kqycDakamanList.value.length
   count += autoReminderNoticeList.value.length
   count += actionReminderList.value.length
+  count += print3dTodoList.value.length
   return count
 })
 
@@ -721,6 +736,9 @@ export async function refreshWorkplaceTodos() {
     fetchKqycDakaman(),
     fetchAutoReminderNotices(),
     fetchActionReminders(),
+    request.get('/print3d/todos', { params: { current_user: readUserName() } })
+      .then(res => { print3dTodoList.value = res?.data || [] })
+      .catch(() => { print3dTodoList.value = [] }),
   ])
 }
 
@@ -810,6 +828,10 @@ export function useWorkplaceTodos() {
   }
 
   async function handleTodoAction(task) {
+    if (task.isPrint3d) {
+      router.push({ path: '/print3d', query: { id: task.print3dId } })
+      return
+    }
     if (task.isHxpNotice) {
       handleHxpRead(task)
       return

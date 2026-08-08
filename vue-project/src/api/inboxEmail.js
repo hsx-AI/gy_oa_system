@@ -44,3 +44,26 @@ export function updateInboxTaskDeadline(data) {
 export function completeInboxTask(params) {
   return request({ url: '/inbox-email/complete', method: 'post', params })
 }
+
+/** 原个人红旗邮箱待办链路（与经理层公用邮箱独立）。 */
+export function getPersonalInboxConfig(currentUser) {
+  return request({ url: '/inbox-email/personal/config', method: 'get', params: { current_user: currentUser } })
+}
+export function syncPersonalInbox(currentUser) {
+  return request({ url: '/inbox-email/personal/sync', method: 'post', params: { current_user: currentUser } })
+}
+export function listPersonalInboxTasks(params) {
+  return request({ url: '/inbox-email/personal/tasks', method: 'get', params })
+}
+export function analyzePersonalInbox(params) {
+  return request({ url: '/inbox-email/personal/analyze', method: 'post', params })
+}
+export function completePersonalInboxTask(params) {
+  return request({ url: '/inbox-email/personal/complete', method: 'post', params })
+}
+export function updatePersonalInboxTaskDeadline(data) {
+  return request({ url: '/inbox-email/personal/task-deadline', method: 'post', data })
+}
+export function getPersonalInboxEmailDetail(params) {
+  return request({ url: '/inbox-email/personal/detail', method: 'get', params })
+}

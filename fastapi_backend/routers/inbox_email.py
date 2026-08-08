@@ -232,6 +232,18 @@ def _require_inbox_access(current_user: str):
         raise HTTPException(status_code=403, detail="仅系统管理员和经理层可操作")
 
 
+def _require_personal_inbox_access(current_user: str):
+    name = (current_user or "").strip()
+    if not name:
+        raise HTTPException(status_code=403, detail="请先登录")
+    if name == _get_admin1():
+        return
+    rows = db.execute_query("SELECT jb FROM yggl WHERE TRIM(name)=%s LIMIT 1", (name,)) or []
+    jb = (rows[0].get("jb") or "").strip() if rows else ""
+    if not any(jb.startswith(p) for p in ("经理", "副经理", "主任", "副主任", "组长")):
+        raise HTTPException(status_code=403, detail="无个人邮箱待办看板权限")
+
+
 def _get_inbox_config(current_user: str = "") -> dict:
     """读取由系统管理员统一维护的经理层公用邮箱。"""
     _ensure_inbox_columns()
@@ -248,6 +260,24 @@ def _get_inbox_config(current_user: str = "") -> dict:
     except Exception as e:
         logger.debug(f"读取公用邮箱配置失败: {e}")
     return {"address": "", "auth_code": ""}
+
+
+def _get_personal_inbox_config(current_user: str) -> dict:
+    """读取原个人红旗待办邮箱配置。"""
+    _ensure_yggl_email_columns()
+    name = (current_user or "").strip()
+    if not name:
+        return {"address": "", "auth_code": ""}
+    rows = db.execute_query(
+        "SELECT enterprise_email, email_auth_code FROM yggl WHERE name = %s LIMIT 1",
+        (name,),
+    ) or []
+    if not rows:
+        return {"address": "", "auth_code": ""}
+    return {
+        "address": (rows[0].get("enterprise_email") or "").strip(),
+        "auth_code": (rows[0].get("email_auth_code") or "").strip(),
+    }
 
 
 def _decode_mime_header(value: Optional[str]) -> str:
@@ -398,20 +428,24 @@ def _insert_email_row(row: dict, owner: str = "") -> bool:
 
 # ==================== IMAP 拉取 ====================
 
-def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = "") -> dict:
+def _sync_inbox_once(
+    max_fetch: int = MAX_FETCH_PER_POLL,
+    current_user: str = "",
+    shared: bool = True,
+) -> dict:
     """
     连接 IMAP 拉取收件箱全部邮件（按最新邮件限制单次处理量）。
     单次遍历：逐封取 header 判重，新邮件才下载全文。
     已入库邮件按 Message-ID 去重，不因邮箱标记变化而删除。
     """
-    cfg = _get_inbox_config(current_user)
+    cfg = _get_inbox_config(current_user) if shared else _get_personal_inbox_config(current_user)
     address = cfg["address"]
     auth_code = cfg["auth_code"]
     if not address or not auth_code:
         return {"new": 0, "skipped": 0, "total": 0, "removed": 0, "error": "邮箱未配置"}
 
     result = {"new": 0, "skipped": 0, "total": 0, "removed": 0, "error": None}
-    owner_name = SHARED_INBOX_OWNER
+    owner_name = SHARED_INBOX_OWNER if shared else (current_user or "").strip()
     imap_obj = None
     try:
         imap_obj = imaplib.IMAP4_SSL(IMAP_SERVER, IMAP_PORT_SSL, timeout=60)
@@ -424,7 +458,7 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
         except Exception:
             pass
         imap_obj.select("INBOX", readonly=True)
-        typ, data = imap_obj.search(None, "ALL")
+        typ, data = imap_obj.search(None, "ALL" if shared else "FLAGGED")
 
         if typ != "OK":
             logger.warning(f"[InboxEmail] [{owner_name}] IMAP SEARCH 异常 typ={typ}，跳过本轮")
@@ -539,7 +573,7 @@ def _sync_inbox_once(max_fetch: int = MAX_FETCH_PER_POLL, current_user: str = ""
 
 # ==================== LLM 任务抽取 ====================
 
-def _build_task_prompts(row: dict) -> tuple:
+def _build_task_prompts(row: dict, important_mode: bool = False) -> tuple:
     """基于邮件内容构建任务抽取的 system/user prompt（已关闭 Qwen3 思考模式）。"""
     subject = (row.get("subject") or "").strip() or "（无主题）"
     from_addr = (row.get("from_addr") or "").strip() or "（未知发件人）"
@@ -551,6 +585,23 @@ def _build_task_prompts(row: dict) -> tuple:
         body = _html_to_text(row.get("body_html") or "")
     if len(body) > ANALYZE_BODY_MAX_CHARS:
         body = body[:ANALYZE_BODY_MAX_CHARS] + "\n……（正文过长已截断）"
+
+    if important_mode:
+        system_prompt = (
+            "你是企业重要信息识别助手。复用会议行动项提取的严谨原则：只依据原文、不得虚构、"
+            "原文未明确的信息必须留空，并保留可核对的原文依据。\n"
+            "请判断邮件是否值得经理层重点关注。重大决策、经营指标、项目风险、质量安全、客户事项、"
+            "明确行动要求、关键会议、人事或合规事项属于重要信息；广告、订阅、验证码、普通寒暄不属于。\n"
+            "摘要必须高度精炼，核心信息不超过45个汉字，格式为【分类/重要级别】核心信息；"
+            "依据只摘取原文中最能支撑判断的短句，删除客套、背景铺垫和重复表述。\n"
+            "只返回严格 JSON，不要解释、Markdown 或思考过程。/no_think"
+        )
+        user_prompt = (
+            f"邮件信息：\n- 发件人：{from_addr}\n- 发件时间：{date_str}\n- 主题：{subject}\n- 正文：\n{body}\n\n"
+            "返回 JSON：{\"has_task\":true或false,\"task\":\"【分类/重要级别】摘要；依据：原文句子\","
+            "\"deadline\":\"YYYY-MM-DD 或 YYYY-MM-DD HH:mm；未明确则为空\"}。/no_think"
+        )
+        return system_prompt, user_prompt
 
     system_prompt = (
         "你是一名企业助理，负责从一封邮件中判断是否存在需要收件人处理的任务或待办事项，"
@@ -624,14 +675,14 @@ def _parse_llm_task_content(content: str) -> dict:
     raise ValueError("无法解析为 JSON")
 
 
-def _analyze_email_with_llm(row: dict) -> dict:
+def _analyze_email_with_llm(row: dict, important_mode: bool = False) -> dict:
     """调用本地大模型抽取单封邮件的任务信息。返回 dict 或抛异常。"""
     try:
         from openai import OpenAI
     except ImportError as e:
         raise RuntimeError("服务端未安装 openai SDK") from e
 
-    system_prompt, user_prompt = _build_task_prompts(row)
+    system_prompt, user_prompt = _build_task_prompts(row, important_mode=important_mode)
     config = _get_inbox_llm_config()
 
     data = None
@@ -832,7 +883,7 @@ def _analyze_pending_emails(limit: int = ANALYZE_BATCH_SIZE, owner: str = "") ->
 
     for r in rows:
         try:
-            result = _analyze_email_with_llm(r)
+            result = _analyze_email_with_llm(r, important_mode=owner_filter == SHARED_INBOX_OWNER)
             if result.get("has_task"):
                 _update_email_analysis(
                     r["id"], 1, result["task_summary"], result["task_deadline"],
@@ -1179,7 +1230,7 @@ async def analyze_inbox_emails(
                 return {"error": "邮件不存在"}
             r = rows[0]
             try:
-                result = _analyze_email_with_llm(r)
+                result = _analyze_email_with_llm(r, important_mode=owner == SHARED_INBOX_OWNER)
             except Exception as e:
                 msg = str(e)[:500]
                 _update_email_analysis(r["id"], 0, "", "", ANALYSIS_STATUS_FAILED, msg)
@@ -1331,7 +1382,130 @@ def _unflag_email_imap(address: str, auth_code: str, message_id: str) -> Optiona
                 pass
 
 
+# ==================== 原个人红旗邮箱待办（兼容保留） ====================
+
+@router.get("/personal/config")
+async def get_personal_inbox_config(current_user: str = Query(...)):
+    _require_personal_inbox_access(current_user)
+    cfg = _get_personal_inbox_config(current_user)
+    code = cfg["auth_code"]
+    return {
+        "success": True, "emailAddress": cfg["address"],
+        "authCodeMasked": ("*" * max(0, len(code) - 4) + code[-4:]) if code else "",
+        "configured": bool(cfg["address"] and code), "imapServer": IMAP_SERVER,
+        "imapPort": IMAP_PORT_SSL, "pollIntervalSeconds": POLL_INTERVAL_SECONDS,
+    }
+
+
+@router.post("/personal/config")
+async def save_personal_inbox_config(req: InboxConfigRequest):
+    _require_personal_inbox_access(req.current_user)
+    _ensure_yggl_email_columns()
+    affected = db.execute_update(
+        "UPDATE yggl SET enterprise_email=%s, email_auth_code=%s WHERE name=%s",
+        (req.email_address.strip(), req.email_auth_code.strip(), req.current_user.strip()),
+    )
+    if not affected:
+        raise HTTPException(status_code=404, detail="未找到当前用户")
+    return {"success": True, "message": "个人邮箱配置已保存"}
+
+
+@router.post("/personal/sync")
+async def sync_personal_inbox(current_user: str = Query(...)):
+    _require_personal_inbox_access(current_user)
+    loop = asyncio.get_event_loop()
+    result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, current_user, False)
+    if not result.get("error") and result.get("new"):
+        await loop.run_in_executor(None, _analyze_pending_emails, result["new"], current_user.strip())
+    return {"success": not bool(result.get("error")), "message": result.get("error") or f"同步完成，新增 {result['new']} 封", **result}
+
+
+@router.get("/personal/tasks")
+async def list_personal_inbox_tasks(current_user: str = Query(...), limit: int = Query(50, ge=1, le=200)):
+    _require_personal_inbox_access(current_user)
+    owner = current_user.strip()
+    rows = db.execute_query(
+        """SELECT id, subject, from_addr, email_date, received_at, task_summary, task_deadline
+             FROM inbox_emails WHERE owner=%s AND has_task=1
+            ORDER BY COALESCE(email_date,received_at) DESC,id DESC LIMIT %s""",
+        (owner, int(limit)),
+    ) or []
+    items = [{
+        "id": r["id"], "subject": r.get("subject") or "", "from": r.get("from_addr") or "",
+        "emailDate": r["email_date"].strftime("%Y-%m-%d %H:%M:%S") if r.get("email_date") else "",
+        "receivedAt": r["received_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("received_at") else "",
+        "taskSummary": r.get("task_summary") or "", "taskDeadline": r.get("task_deadline") or "",
+    } for r in rows]
+    return {"success": True, "items": items, "stats": {"taskCount": len(items), "pending": 0, "failed": 0, "total": len(items)}}
+
+
+@router.get("/personal/detail")
+async def get_personal_inbox_detail(current_user: str = Query(...), id: int = Query(..., ge=1)):
+    _require_personal_inbox_access(current_user)
+    rows = db.execute_query(
+        """SELECT id,message_id,subject,from_addr,to_addrs,cc_addrs,email_date,received_at,body_text,body_html
+             FROM inbox_emails WHERE id=%s AND owner=%s LIMIT 1""",
+        (int(id), current_user.strip()),
+    ) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="邮件不存在")
+    r = rows[0]
+    return {"success": True, "item": {
+        "id": r["id"], "messageId": r.get("message_id") or "", "subject": r.get("subject") or "",
+        "from": r.get("from_addr") or "", "to": r.get("to_addrs") or "", "cc": r.get("cc_addrs") or "",
+        "emailDate": r["email_date"].strftime("%Y-%m-%d %H:%M:%S") if r.get("email_date") else "",
+        "receivedAt": r["received_at"].strftime("%Y-%m-%d %H:%M:%S") if r.get("received_at") else "",
+        "bodyText": r.get("body_text") or "", "bodyHtml": r.get("body_html") or "",
+    }}
+
+
+@router.post("/personal/analyze")
+async def analyze_personal_inbox(current_user: str = Query(...), limit: int = Query(ANALYZE_BATCH_SIZE, ge=1, le=50)):
+    _require_personal_inbox_access(current_user)
+    loop = asyncio.get_event_loop()
+    summary = await loop.run_in_executor(None, _analyze_pending_emails, int(limit), current_user.strip())
+    return {"success": True, "message": f"分析完成，识别出 {summary['has_task']} 个任务", **summary}
+
+
+@router.post("/personal/task-deadline")
+async def update_personal_inbox_task_deadline(req: InboxTaskDeadlineRequest):
+    _require_personal_inbox_access(req.current_user)
+    owner = req.current_user.strip()
+    deadline = _normalize_task_deadline(req.task_deadline)
+    affected = db.execute_update(
+        "UPDATE inbox_emails SET task_deadline=%s WHERE id=%s AND owner=%s AND has_task=1",
+        (deadline, int(req.id), owner),
+    )
+    if not affected:
+        raise HTTPException(status_code=404, detail="任务不存在或无权修改")
+    return {"success": True, "message": "完成时间已更新", "taskDeadline": deadline}
+
+
+@router.post("/personal/complete")
+async def complete_personal_inbox_task(current_user: str = Query(...), id: int = Query(..., ge=1)):
+    _require_personal_inbox_access(current_user)
+    owner = current_user.strip()
+    rows = db.execute_query("SELECT message_id FROM inbox_emails WHERE id=%s AND owner=%s LIMIT 1", (id, owner)) or []
+    if not rows:
+        raise HTTPException(status_code=404, detail="任务不存在")
+    cfg = _get_personal_inbox_config(current_user)
+    message_id = (rows[0].get("message_id") or "").strip()
+    if cfg["address"] and cfg["auth_code"] and message_id:
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, _unflag_email_imap, cfg["address"], cfg["auth_code"], message_id)
+    db.execute_update("DELETE FROM inbox_emails WHERE id=%s AND owner=%s", (id, owner))
+    return {"success": True, "message": "个人待办已完成"}
+
+
 # ==================== 后台定时拉取 ====================
+
+def _get_personal_configured_users() -> list:
+    try:
+        return db.execute_query(
+            "SELECT name FROM yggl WHERE enterprise_email<>'' AND email_auth_code<>''", ()
+        ) or []
+    except Exception:
+        return []
 
 async def inbox_email_background_loop():
     """后台循环：定期拉取经理层公用邮箱，有新邮件则立即分析。"""
@@ -1340,14 +1514,27 @@ async def inbox_email_background_loop():
     while True:
         try:
             await asyncio.sleep(POLL_INTERVAL_SECONDS)
-            cfg = _get_inbox_config()
-            if not cfg["address"] or not cfg["auth_code"]:
-                continue
             loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, "")
-            total_new = result.get("new", 0) if not result.get("error") else 0
-            if result.get("error"):
-                logger.warning(f"[InboxEmail] 公用邮箱自动同步失败: {result['error']}")
+            cfg = _get_inbox_config()
+            total_new = 0
+            if cfg["address"] and cfg["auth_code"]:
+                result = await loop.run_in_executor(None, _sync_inbox_once, MAX_FETCH_PER_POLL, "")
+                total_new = result.get("new", 0) if not result.get("error") else 0
+                if result.get("error"):
+                    logger.warning(f"[InboxEmail] 公用邮箱自动同步失败: {result['error']}")
+
+            # 原个人红旗邮箱继续独立同步、独立分析。
+            for personal in _get_personal_configured_users():
+                uname = (personal.get("name") or "").strip()
+                if not uname:
+                    continue
+                personal_result = await loop.run_in_executor(
+                    None, _sync_inbox_once, MAX_FETCH_PER_POLL, uname, False
+                )
+                if not personal_result.get("error") and personal_result.get("new"):
+                    await loop.run_in_executor(
+                        None, _analyze_pending_emails, personal_result["new"], uname
+                    )
 
             # 有新邮件入库则立即触发分析，无需等待下一轮
             if total_new > 0:

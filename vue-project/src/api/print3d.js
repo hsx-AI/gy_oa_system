@@ -1,0 +1,16 @@
+import request from '@/utils/request'
+export const bootstrap = current_user => request.get('/print3d/bootstrap', { params: { current_user } })
+export const listRequests = params => request.get('/print3d/requests', { params })
+export const getRequest = (id, current_user) => request.get(`/print3d/requests/${id}`, { params: { current_user } })
+export const saveRequest = data => request.post('/print3d/requests', data)
+export const uploadFiles = (id, data) => request.post(`/print3d/requests/${id}/files`, data)
+export const submitRequest = (id, data) => request.post(`/print3d/requests/${id}/submit`, data)
+export const reviewRequest = (id, stage, data) => request.post(`/print3d/requests/${id}/review/${stage}`, data)
+export const scheduleRequest = (id, data) => request.post(`/print3d/requests/${id}/schedule`, data)
+export const printCommand = (id, command, data) => request.post(`/print3d/requests/${id}/print/${command}`, data)
+export const reprint = (id, data) => request.post(`/print3d/requests/${id}/reprint`, data)
+export const pickup = (id, data) => request.post(`/print3d/requests/${id}/pickup`, data)
+export const attachmentUrl = (id, user) => `/api/print3d/attachments/${id}?current_user=${encodeURIComponent(user)}`
+export const getAdminConfig = current_user => request.get('/print3d/admin/config', { params: { current_user } })
+export const saveAdminConfig = data => request.post('/print3d/admin/config', data)
+export const updatePrinter = (id, data) => request.post(`/print3d/printers/${id}`, data)

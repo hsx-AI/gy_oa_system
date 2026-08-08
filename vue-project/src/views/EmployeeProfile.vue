@@ -94,7 +94,7 @@
           </div>
           <div class="form-group">
             <label>新密码</label>
-            <input type="password" v-model="passwordForm.newPassword" name="newPassword" autocomplete="new-password" required minlength="4" placeholder="至少4位">
+            <input type="password" v-model="passwordForm.newPassword" name="newPassword" autocomplete="new-password" required minlength="6" placeholder="至少6位，数字/字母/特殊符号至少两类">
           </div>
           <div class="form-group">
             <label>确认新密码</label>
@@ -152,8 +152,10 @@ const handleChangePassword = async () => {
     passwordError.value = '两次输入的新密码不一致'
     return
   }
-  if (passwordForm.value.newPassword.length < 4) {
-    passwordError.value = '新密码至少4位'
+  const p = passwordForm.value.newPassword
+  const categories = [/[A-Za-z]/.test(p), /\d/.test(p), /[^A-Za-z0-9]/.test(p)].filter(Boolean).length
+  if (p.length < 6 || categories < 2) {
+    passwordError.value = '密码至少6位，且须包含数字、字母、特殊符号中的至少两类'
     return
   }
   try {

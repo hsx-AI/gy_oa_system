@@ -237,6 +237,12 @@
               </svg>
             </button>
             <div v-show="isSidebarGroupOpen('files')" class="sidebar-group-panel">
+          <router-link to="/print3d" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>
+            </svg>
+            <span>3D打印委托</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />

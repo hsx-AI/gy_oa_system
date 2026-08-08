@@ -20,6 +20,18 @@ export function login(data) {
   })
 }
 
+export function sendVerificationCode(data) {
+  return request({ url: '/auth/send-verification-code', method: 'post', data })
+}
+
+export function loginByCode(data) {
+  return request({ url: '/auth/login-by-code', method: 'post', data })
+}
+
+export function resetPasswordByCode(data) {
+  return request({ url: '/auth/reset-password-by-code', method: 'post', data })
+}
+
 /** 标记已看过首次登录介绍（更新 yggl.denglu_zt） */
 export function setLoginStatus(data) {
   return request({ url: '/auth/set-login-status', method: 'post', data })

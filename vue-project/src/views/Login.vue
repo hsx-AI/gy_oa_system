@@ -63,6 +63,11 @@
             <p class="login-desc">登录您的账户以继续工作</p>
           </div>
 
+          <div class="login-tabs">
+            <button type="button" :class="{ active: loginMode === 'password' }" @click="loginMode = 'password'">密码登录</button>
+            <button type="button" :class="{ active: loginMode === 'code' }" @click="loginMode = 'code'">邮箱验证码登录</button>
+          </div>
+
           <form class="login-form" @submit.prevent="handleLogin" autocomplete="on">
             <div class="field-group" :class="{ focused: focusField === 'user', filled: form.username }">
               <div class="field-icon">
@@ -74,7 +79,7 @@
               <div class="field-line"></div>
             </div>
 
-            <div class="field-group" :class="{ focused: focusField === 'pass', filled: form.password }">
+            <div v-if="loginMode === 'password'" class="field-group" :class="{ focused: focusField === 'pass', filled: form.password }">
               <div class="field-icon">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0110 0v4"/></svg>
               </div>
@@ -88,13 +93,26 @@
               <div class="field-line"></div>
             </div>
 
+            <div v-else class="code-row">
+              <div class="field-group" :class="{ focused: focusField === 'code', filled: form.code }">
+                <input v-model="form.code" inputmode="numeric" maxlength="6" autocomplete="one-time-code"
+                       placeholder="请输入6位邮箱验证码" required @focus="focusField = 'code'" @blur="focusField = ''" />
+              </div>
+              <button type="button" class="code-btn" :disabled="codeSending || countdown > 0" @click="requestCode('login')">
+                {{ countdown > 0 ? `${countdown}秒` : (codeSending ? '发送中' : '获取验证码') }}
+              </button>
+            </div>
+
             <div class="form-options">
               <label class="remember-check">
                 <input type="checkbox" v-model="form.remember" />
                 <span class="check-box"><svg viewBox="0 0 12 12"><polyline points="2 6 5 9 10 3" fill="none" stroke="currentColor" stroke-width="1.5"/></svg></span>
                 <span>记住我</span>
               </label>
+              <button type="button" class="text-link" @click="openReset">忘记密码？邮箱验证码修改</button>
             </div>
+
+            <p class="security-tip">密码须至少6位，并包含数字、字母、特殊符号中的至少两类；简单密码登录后将强制修改。</p>
 
             <button type="submit" class="login-btn" :disabled="loading" :class="{ loading: loading }">
               <span class="btn-bg"></span>
@@ -118,6 +136,26 @@
       </div>
     </div>
 
+    <div v-if="passwordDialog" class="modal-overlay">
+      <div class="password-dialog">
+        <h3>{{ forcedChange ? '密码安全升级' : '邮箱验证码修改密码' }}</h3>
+        <p>{{ forcedChange ? '当前密码过于简单，修改后才能进入系统。' : '验证码将发送到您已登记的企业邮箱。' }}</p>
+        <input v-if="!forcedChange" v-model="resetForm.name" placeholder="请输入用户名（汉字姓名）" />
+        <div v-if="!forcedChange" class="reset-code-row">
+          <input v-model="resetForm.code" maxlength="6" inputmode="numeric" placeholder="6位验证码" />
+          <button type="button" :disabled="codeSending || resetCountdown > 0" @click="requestCode('reset')">
+            {{ resetCountdown > 0 ? `${resetCountdown}秒` : '获取验证码' }}
+          </button>
+        </div>
+        <input v-model="resetForm.newPassword" type="password" autocomplete="new-password" placeholder="新密码" />
+        <input v-model="resetForm.confirmPassword" type="password" autocomplete="new-password" placeholder="确认新密码" />
+        <div class="dialog-actions">
+          <button v-if="!forcedChange" type="button" @click="closePasswordDialog">取消</button>
+          <button type="button" class="primary" :disabled="loading" @click="submitPasswordChange">确认修改</button>
+        </div>
+      </div>
+    </div>
+
     <!-- 底部版权 -->
     <div class="footer-bar">
       <span>© {{ new Date().getFullYear() }} 智能制造工艺部 · 集成办公平台</span>
@@ -129,7 +167,7 @@
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
 import { useRouter } from 'vue-router'
-import { login } from '@/api/attendance'
+import { login, loginByCode, sendVerificationCode, changePassword, resetPasswordByCode } from '@/api/attendance'
 import logoUrl from '@/assets/changbiao.png'
 
 const router = useRouter()
@@ -137,12 +175,75 @@ const loading = ref(false)
 const showPwd = ref(false)
 const focusField = ref('')
 const particleCanvas = ref(null)
+const loginMode = ref('password')
+const codeSending = ref(false)
+const countdown = ref(0)
+const resetCountdown = ref(0)
+const passwordDialog = ref(false)
+const forcedChange = ref(false)
+let pendingUserInfo = null
 
 const form = reactive({
   username: '',
   password: '',
+  code: '',
   remember: false
 })
+const resetForm = reactive({ name: '', code: '', newPassword: '', confirmPassword: '' })
+
+const passwordStrong = value => value.length >= 6 && [/[A-Za-z]/.test(value), /\d/.test(value), /[^A-Za-z0-9]/.test(value)].filter(Boolean).length >= 2
+
+function startCountdown(target) {
+  target.value = 60
+  const timer = setInterval(() => {
+    target.value--
+    if (target.value <= 0) clearInterval(timer)
+  }, 1000)
+}
+
+async function requestCode(purpose) {
+  const name = purpose === 'login' ? form.username.trim() : resetForm.name.trim()
+  if (!name) return alert('请先输入用户名（汉字姓名）')
+  codeSending.value = true
+  try {
+    const res = await sendVerificationCode({ name, purpose })
+    alert(res.message)
+    startCountdown(purpose === 'login' ? countdown : resetCountdown)
+  } catch (e) { alert(e.message || '验证码发送失败') }
+  finally { codeSending.value = false }
+}
+
+function openReset() {
+  forcedChange.value = false
+  resetForm.name = form.username
+  passwordDialog.value = true
+}
+function closePasswordDialog() { passwordDialog.value = false }
+
+async function submitPasswordChange() {
+  if (!passwordStrong(resetForm.newPassword)) return alert('密码至少6位，且须包含数字、字母、特殊符号中的至少两类')
+  if (resetForm.newPassword !== resetForm.confirmPassword) return alert('两次输入的新密码不一致')
+  loading.value = true
+  try {
+    if (forcedChange.value) {
+      await changePassword({ name: form.username, oldPassword: form.password, newPassword: resetForm.newPassword })
+      pendingUserInfo.mustChangePassword = false
+      finishLogin(pendingUserInfo)
+    } else {
+      const res = await resetPasswordByCode({ name: resetForm.name, code: resetForm.code, newPassword: resetForm.newPassword })
+      alert(res.message)
+      closePasswordDialog()
+      loginMode.value = 'password'
+      form.username = resetForm.name
+    }
+  } catch (e) { alert(e.message || '密码修改失败') }
+  finally { loading.value = false }
+}
+
+function finishLogin(userInfo) {
+  localStorage.setItem('userInfo', JSON.stringify(userInfo))
+  router.push('/')
+}
 
 const titleLines = ['智能制造工艺部', '集成办公平台']
 const slogan = '数字赋能 · 智慧工艺 · 高效协同'
@@ -403,7 +504,9 @@ onBeforeUnmount(() => {
 const handleLogin = async () => {
   loading.value = true
   try {
-    const response = await login({ admin: form.username, password: form.password })
+    const response = loginMode.value === 'password'
+      ? await login({ admin: form.username, password: form.password })
+      : await loginByCode({ name: form.username, code: form.code })
     const userInfo = {
       name: response.data.name || form.username,
       dept: response.data.dept || '未分配部门',
@@ -411,8 +514,15 @@ const handleLogin = async () => {
       ...response.data,
       showIntro: response.data.showIntro === true
     }
-    localStorage.setItem('userInfo', JSON.stringify(userInfo))
-    router.push('/')
+    if (response.data.mustChangePassword) {
+      pendingUserInfo = userInfo
+      forcedChange.value = true
+      resetForm.newPassword = ''
+      resetForm.confirmPassword = ''
+      passwordDialog.value = true
+      return
+    }
+    finishLogin(userInfo)
   } catch (error) {
     console.error('登录错误:', error)
     if (error.response) {
@@ -729,6 +839,24 @@ const handleLogin = async () => {
   font-size: 13px;
   color: rgba(255,255,255,0.4);
 }
+
+.login-tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-bottom: 20px; padding: 4px; border-radius: 10px; background: rgba(255,255,255,.04); }
+.login-tabs button, .text-link { border: 0; background: transparent; color: rgba(255,255,255,.5); cursor: pointer; padding: 8px; }
+.login-tabs button.active { color: #fff; background: rgba(24,144,255,.25); border-radius: 8px; }
+.text-link { padding: 0; font-size: 12px; color: #69c0ff; }
+.security-tip { margin: -6px 0 0; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.42); }
+.code-row, .reset-code-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
+.code-btn, .reset-code-row button { border: 1px solid rgba(24,144,255,.35); border-radius: 10px; background: rgba(24,144,255,.12); color: #69c0ff; padding: 0 12px; cursor: pointer; }
+.modal-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(2,8,20,.72); backdrop-filter: blur(6px); }
+.password-dialog { width: min(420px, calc(100vw - 32px)); padding: 28px; border-radius: 16px; color: #fff; background: #10243e; border: 1px solid rgba(105,192,255,.25); box-shadow: 0 20px 60px rgba(0,0,0,.45); }
+.password-dialog h3 { margin: 0 0 8px; }
+.password-dialog p { color: rgba(255,255,255,.6); font-size: 13px; }
+.password-dialog > input, .reset-code-row input { box-sizing: border-box; width: 100%; margin-top: 12px; padding: 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: #fff; outline: none; }
+.reset-code-row { margin-top: 12px; }
+.reset-code-row input { margin-top: 0; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 10px; margin-top: 20px; }
+.dialog-actions button { padding: 9px 18px; border-radius: 8px; border: 1px solid rgba(255,255,255,.15); background: transparent; color: #fff; cursor: pointer; }
+.dialog-actions .primary { border-color: #1890ff; background: #1890ff; }
 
 /* 输入框 */
 .login-form {
