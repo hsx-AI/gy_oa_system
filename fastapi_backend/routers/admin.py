@@ -134,7 +134,7 @@ def _assert_can_manage_employee(scope: Dict[str, Any], employee_name: str) -> No
 
 
 @router.get("/employees")
-async def list_employees(
+def list_employees(
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
     zaizhi: Optional[str] = Query("0", description="在职状态：0=在职 1=离职 all=全部"),
     lsys: Optional[str] = Query(None, description="按科室筛选"),
@@ -217,7 +217,7 @@ class AddEmployeeRequest(BaseModel):
 
 
 @router.post("/employee")
-async def add_employee(req: AddEmployeeRequest):
+def add_employee(req: AddEmployeeRequest):
     """
     添丁：在 yggl 主表新增员工。部长/副部长可添加任意科室；主任仅可添加本室。
     必填：姓名、初始密码（至少4位）。
@@ -291,7 +291,7 @@ class UpdateEmployeeEmailRequest(BaseModel):
 
 
 @router.post("/employee-update-dept-level")
-async def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
+def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
     """
     更新员工科室、级别。仅部长/副部长可操作；主任不可改科室与级别。
     """
@@ -331,7 +331,7 @@ async def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
 
 
 @router.post("/employee-update-email")
-async def update_employee_email(req: UpdateEmployeeEmailRequest):
+def update_employee_email(req: UpdateEmployeeEmailRequest):
     """更新员工企业邮箱和 IMAP 授权码；授权码未传时保留原值。"""
     scope = _get_admin_scope(req.current_user)
     if not scope:
@@ -376,7 +376,7 @@ async def update_employee_email(req: UpdateEmployeeEmailRequest):
 
 
 @router.post("/employee-status")
-async def set_employee_status(req: SetEmployeeStatusRequest):
+def set_employee_status(req: SetEmployeeStatusRequest):
     """设置员工在职状态（0=在职 1=离职）。部长/副部长可操作全部；主任仅可操作本室员工。"""
     scope = _get_admin_scope(req.current_user)
     if not scope:
@@ -415,7 +415,7 @@ async def set_employee_status(req: SetEmployeeStatusRequest):
 
 
 @router.get("/dept-list")
-async def admin_dept_list(
+def admin_dept_list(
     current_user: str = Query(..., description="当前登录用户，用于权限校验")
 ):
     """管理员页获取科室列表。部长/副部长获全部；主任仅获本室。"""
@@ -440,7 +440,7 @@ async def admin_dept_list(
 
 
 @router.get("/export-employees")
-async def export_employees_excel(
+def export_employees_excel(
     current_user: str = Query(..., description="当前登录用户，用于权限校验")
 ):
     """
@@ -505,7 +505,7 @@ class HxpBatchRequest(BaseModel):
 
 
 @router.post("/hxp/batch")
-async def hxp_batch(req: HxpBatchRequest):
+def hxp_batch(req: HxpBatchRequest):
     """
     批量增减换休票。系统管理员、人事管理员或 yggl 部长/副部长可操作。
     add：为每人新增一条 hxp 记录，sj=当前时间。
@@ -607,7 +607,7 @@ async def hxp_batch(req: HxpBatchRequest):
 
 
 @router.get("/hxp/summary")
-async def hxp_summary(
+def hxp_summary(
     current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
     keyword: Optional[str] = Query(None, description="姓名关键字"),
     lsys: Optional[str] = Query(None, description="隶属室筛选"),
@@ -663,7 +663,7 @@ async def hxp_summary(
 
 
 @router.get("/hxp/detail")
-async def hxp_detail(
+def hxp_detail(
     current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
     name: str = Query(..., description="员工姓名"),
 ):
@@ -739,7 +739,7 @@ class HxpApplyRequest(BaseModel):
 
 
 @router.post("/hxp/apply")
-async def hxp_apply(req: HxpApplyRequest):
+def hxp_apply(req: HxpApplyRequest):
     """提交换休票增减审批申请。系统管理员、人事管理员、yggl 部长/副部长或综合技术室主任/副主任可操作。"""
     name = (req.current_user or "").strip()
     if not name:
@@ -782,7 +782,7 @@ async def hxp_apply(req: HxpApplyRequest):
 
 
 @router.get("/hxp/pending-approvals")
-async def hxp_pending_approvals(approver: str = Query(..., description="审批人姓名")):
+def hxp_pending_approvals(approver: str = Query(..., description="审批人姓名")):
     """查询待审批的换休票申请（status=0 且 approver 匹配）。"""
     rows = db.execute_query(
         "SELECT id, applicant, action, amount, ly, names_json, approver, status, apply_time "
@@ -821,7 +821,7 @@ class HxpApprovalActionRequest(BaseModel):
 
 
 @router.post("/hxp/approval/{approval_id}/action")
-async def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
+def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
     """审批换休票申请：通过 / 驳回。"""
     approver = (req.approver or "").strip()
     if not approver:
@@ -939,7 +939,7 @@ async def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
 
 
 @router.post("/hxp/approval/{approval_id}/resubmit")
-async def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
+def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
     """修改并重新提交已驳回的换休票管理申请（status 22→0，更新字段）"""
     rows = db.execute_query(
         "SELECT id, applicant, status FROM hxp_approval WHERE id = %s LIMIT 1",
@@ -981,7 +981,7 @@ async def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
 
 
 @router.get("/hxp/my-requests")
-async def hxp_my_requests(applicant: str = Query(..., description="申请人姓名")):
+def hxp_my_requests(applicant: str = Query(..., description="申请人姓名")):
     """查询自己提交的换休票审批申请。"""
     rows = db.execute_query(
         "SELECT id, applicant, action, amount, ly, names_json, approver, status, reject_reason, apply_time, approve_time "
@@ -1027,7 +1027,7 @@ async def hxp_my_requests(applicant: str = Query(..., description="申请人姓�
 
 
 @router.get("/leader-briefing")
-async def get_leader_briefing(
+def get_leader_briefing(
     name: str = Query(..., description="当前用户姓名"),
     days: int = Query(7, ge=1, le=30, description="最近 N 天"),
 ):

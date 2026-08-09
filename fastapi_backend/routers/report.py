@@ -59,7 +59,7 @@ router = APIRouter(prefix="/report", tags=["报表统计"])
 
 
 @router.get("/statistics-permission")
-async def get_statistics_permission(name: str = Query(..., description="当前用户姓名")):
+def get_statistics_permission(name: str = Query(..., description="当前用户姓名")):
     """
     统计汇总页权限：1=仅自己 2=科室下拉 3=全部输入查询
     管理驾驶舱 level 3：部长/副部长、综合技术室主任/副主任、admin1、admin2。
@@ -96,7 +96,7 @@ async def get_statistics_permission(name: str = Query(..., description="当前�
 
 
 @router.get("/overtime-pay-permission")
-async def get_overtime_pay_permission(name: str = Query(..., description="当前用户姓名")):
+def get_overtime_pay_permission(name: str = Query(..., description="当前用户姓名")):
     """
     其他绩效激励统计页权限：全员可访问，按 yggl.jb 与 webconfig.admin2 返回可见范围。
     返回 { success, canView: true, scope, lsys? }
@@ -136,7 +136,7 @@ async def get_overtime_pay_permission(name: str = Query(..., description="当前
 
 
 @router.get("/statistics-employees")
-async def get_statistics_employees(
+def get_statistics_employees(
     current_user: str = Query(..., description="当前登录用户姓名"),
     lsys: Optional[str] = Query(None, description="隶属科室，2级下拉用"),
     q: Optional[str] = Query(None, description="搜索关键词，3级输入查询用"),
@@ -234,7 +234,7 @@ class UserStatisticsResponse(BaseModel):
 # ==================== API 路由 ====================
 
 @router.get("/overtime", response_model=dict)
-async def get_overtime_records(
+def get_overtime_records(
     name: str = Query(..., description="员工姓名"),
     year: Optional[int] = Query(None, description="年份"),
     month: Optional[int] = Query(None, description="月份 (1-12)")
@@ -324,7 +324,7 @@ async def get_overtime_records(
 
 
 @router.get("/leave", response_model=dict)
-async def get_leave_records(
+def get_leave_records(
     name: str = Query(..., description="员工姓名"),
     year: Optional[int] = Query(None, description="年份"),
     month: Optional[int] = Query(None, description="月份 (1-12)")
@@ -418,7 +418,7 @@ async def get_leave_records(
 
 
 @router.get("/business-trip", response_model=dict)
-async def get_business_trip_records(
+def get_business_trip_records(
     name: str = Query(..., description="员工姓名"),
     year: Optional[int] = Query(None, description="年份"),
     month: Optional[int] = Query(None, description="月份 (1-12)")
@@ -499,7 +499,7 @@ async def get_business_trip_records(
 
 
 @router.get("/monthly-summary", response_model=dict)
-async def get_monthly_summary(
+def get_monthly_summary(
     name: Optional[str] = Query(None, description="员工姓名，不传或空且传 lsys 时为科室全员汇总"),
     lsys: Optional[str] = Query(None, description="隶属科室，全员汇总时必传"),
     year: Optional[int] = Query(None, description="年份"),
@@ -717,7 +717,7 @@ async def get_monthly_summary(
 
 
 @router.get("/leave-types", response_model=dict)
-async def get_leave_types():
+def get_leave_types():
     """
     获取所有请假类型
     """
@@ -736,7 +736,7 @@ async def get_leave_types():
 
 
 @router.get("/overtime-types", response_model=dict)
-async def get_overtime_types():
+def get_overtime_types():
     """
     获取所有加班类型
     """

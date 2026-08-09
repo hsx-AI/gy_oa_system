@@ -886,7 +886,7 @@ class SetDayLocksRequest(BaseModel):
 
 
 @router.post("/day-locks")
-async def set_day_locks(req: SetDayLocksRequest):
+def set_day_locks(req: SetDayLocksRequest):
     """管理人员设置日期开放/锁定"""
     _ensure_tables()
     if not _is_manager_of_dept(req.current_user, req.department):
@@ -924,7 +924,7 @@ class SetDayNoDutyRequest(BaseModel):
 
 
 @router.post("/day-noduty")
-async def set_day_noduty(req: SetDayNoDutyRequest):
+def set_day_noduty(req: SetDayNoDutyRequest):
     """管理人员标记/取消「当日不设置值班」（该日不参与缺排检测与排班邮件拦截）。"""
     _ensure_tables()
     if not _is_manager_of_dept(req.current_user, req.department):
@@ -1028,7 +1028,7 @@ def _parse_shift_email_recipients(raw) -> List[dict]:
 
 
 @router.get("/config")
-async def get_shift_config(department: str = Query(...)):
+def get_shift_config(department: str = Query(...)):
     """获取科室排班配置"""
     _ensure_tables()
     rows = db.execute_query(
@@ -1065,7 +1065,7 @@ async def get_shift_config(department: str = Query(...)):
 
 
 @router.get("/coverage-gap")
-async def get_shift_coverage_gap(current_user: str = Query(..., description="当前登录人姓名")):
+def get_shift_coverage_gap(current_user: str = Query(..., description="当前登录人姓名")):
     """首页待办：检查当前用户所在科室在「本周六—下周五」是否存在日常排班人数缺口。
 
     只检测普通上班日与公休日；命中系统节假日配置的日期不纳入检测。
@@ -1177,7 +1177,7 @@ async def get_shift_coverage_gap(current_user: str = Query(..., description="当
 
 
 @router.post("/config")
-async def save_shift_config(req: ShiftConfigRequest):
+def save_shift_config(req: ShiftConfigRequest):
     """保存科室排班人数规则与排班表收件人；自动发送时间仍由系统管理员配置。"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1206,7 +1206,7 @@ async def save_shift_config(req: ShiftConfigRequest):
 # ==================== 排班数据 ====================
 
 @router.get("/schedule")
-async def get_schedule(
+def get_schedule(
     department: str = Query(...),
     start_date: Optional[str] = Query(None, description="起始日 YYYY-MM-DD，与 end_date 成对使用"),
     end_date: Optional[str] = Query(None, description="结束日 YYYY-MM-DD，含当日"),
@@ -1340,7 +1340,7 @@ class SaveScheduleRequest(BaseModel):
 
 
 @router.post("/schedule")
-async def save_schedule(req: SaveScheduleRequest):
+def save_schedule(req: SaveScheduleRequest):
     """保存排班数据（每条记录的 year/month 按 shift_date 解析，支持跨月区间）"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1413,7 +1413,7 @@ class SaveDayPlansRequest(BaseModel):
 
 
 @router.post("/day-plans")
-async def save_day_plans(req: SaveDayPlansRequest):
+def save_day_plans(req: SaveDayPlansRequest):
     """按科室、按日保存值班工作计划（协同编辑，与排班表头下计划行对应）"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1486,7 +1486,7 @@ class AutoScheduleRequest(BaseModel):
 
 
 @router.post("/auto-schedule")
-async def auto_schedule(req: AutoScheduleRequest):
+def auto_schedule(req: AutoScheduleRequest):
     """
     自动排班：严格按配置人数安排，配置几人就排几人，其余留空。
     工作日：workday_day 人白班，workday_night 人夜班。
@@ -1634,7 +1634,7 @@ class CopyScheduleRequest(BaseModel):
 
 
 @router.post("/copy-last-month")
-async def copy_last_month(req: CopyScheduleRequest):
+def copy_last_month(req: CopyScheduleRequest):
     """复制上月对应日期的排班：按日期区间（当前屏）或整月。"""
     _ensure_tables()
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -1748,7 +1748,7 @@ class ClearScheduleRequest(BaseModel):
 
 
 @router.post("/clear-schedule")
-async def clear_schedule(req: ClearScheduleRequest):
+def clear_schedule(req: ClearScheduleRequest):
     """清空该科室排班：按日期区间或整月"""
     _ensure_tables()
     d0 = _parse_iso_date(req.start_date) if req.start_date else None
@@ -1775,7 +1775,7 @@ async def clear_schedule(req: ClearScheduleRequest):
 # ==================== 科室列表 ====================
 
 @router.get("/departments")
-async def get_departments():
+def get_departments():
     """获取所有科室列表"""
     return {"success": True, "departments": _get_shift_departments()}
 
@@ -1808,7 +1808,7 @@ def _holiday_options_for_year(year: int) -> List[dict]:
 
 
 @router.get("/holiday-options")
-async def get_shift_holiday_options(year: int = Query(...)):
+def get_shift_holiday_options(year: int = Query(...)):
     """返回某年可导出的假期选项，按 holiday.festival 分组。"""
     return {"success": True, "year": year, "options": _holiday_options_for_year(year)}
 
@@ -2039,7 +2039,7 @@ def build_week_schedule_report(department: str, anchor: Optional[date] = None) -
 # ==================== 导出排班 Excel ====================
 
 @router.get("/export-excel")
-async def export_schedule_excel(
+def export_schedule_excel(
     department: str = Query(...),
     year: int = Query(...),
     month: Optional[int] = Query(None, ge=1, le=12),

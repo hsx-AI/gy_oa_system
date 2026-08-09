@@ -48,7 +48,7 @@ def _validate_identifier(name: str, kind: str = "表名") -> None:
 
 
 @router.get("/permission")
-async def db_manager_permission(
+def db_manager_permission(
     current_user: str = Query(..., description="当前登录用户姓名"),
 ):
     """
@@ -61,7 +61,7 @@ async def db_manager_permission(
 
 
 @router.get("/tables")
-async def list_tables(
+def list_tables(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
     """列出当前数据库下所有表名。仅系统管理员可访问。"""
@@ -79,7 +79,7 @@ async def list_tables(
 
 
 @router.get("/table/{table_name}/columns")
-async def get_table_columns(
+def get_table_columns(
     table_name: str,
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
@@ -123,7 +123,7 @@ async def get_table_columns(
 
 
 @router.get("/table/{table_name}/rows")
-async def get_table_rows(
+def get_table_rows(
     table_name: str,
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
     page: int = Query(1, ge=1),
@@ -198,7 +198,7 @@ class InsertRowRequest(BaseModel):
 
 
 @router.post("/table/{table_name}/rows")
-async def insert_table_row(
+def insert_table_row(
     table_name: str,
     req: InsertRowRequest,
 ):
@@ -241,7 +241,7 @@ class UpdateRowRequest(BaseModel):
 
 
 @router.put("/table/{table_name}/rows")
-async def update_table_row(
+def update_table_row(
     table_name: str,
     req: UpdateRowRequest,
 ):
@@ -299,7 +299,7 @@ class DeleteRowRequest(BaseModel):
 
 
 @router.delete("/table/{table_name}/rows")
-async def delete_table_row(
+def delete_table_row(
     table_name: str,
     req: DeleteRowRequest,
 ):
@@ -384,7 +384,7 @@ def _read_excel_ab(path: str) -> List[tuple]:
 
 
 @router.get("/yggl-fill-fields")
-async def get_yggl_fill_fields(
+def get_yggl_fill_fields(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
     """返回可批量填充的 yggl 字段列表（仅系统管理员）。"""

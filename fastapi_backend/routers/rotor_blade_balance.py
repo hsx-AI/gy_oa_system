@@ -126,7 +126,7 @@ def _format_record(row: Dict[str, Any], include_payload: bool = False) -> Dict[s
 
 
 @router.post("/records")
-async def save_record(req: RotorBladeBalanceSaveRequest):
+def save_record(req: RotorBladeBalanceSaveRequest):
     lsys = _assert_allowed_user(req.current_user)
     result = req.result or {}
     mode = (result.get("mode") or req.inputData.get("mode") or "").strip()
@@ -185,7 +185,7 @@ async def save_record(req: RotorBladeBalanceSaveRequest):
 
 
 @router.get("/records")
-async def list_records(
+def list_records(
     current_user: str = Query(..., description="当前用户姓名"),
     keyword: Optional[str] = Query(None, description="电站/水轮机号/工作号/保存人/标题"),
     page: int = Query(1, ge=1),
@@ -226,7 +226,7 @@ async def list_records(
 
 
 @router.get("/records/{record_id}")
-async def get_record(record_id: str, current_user: str = Query(..., description="当前用户姓名")):
+def get_record(record_id: str, current_user: str = Query(..., description="当前用户姓名")):
     _assert_allowed_user(current_user)
     rows = db.execute_query(
         """

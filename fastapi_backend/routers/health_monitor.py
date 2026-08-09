@@ -103,7 +103,7 @@ def _require_admin1(current_user: str) -> None:
 
 
 @router.get("/permission")
-async def health_monitor_permission(
+def health_monitor_permission(
     current_user: str = Query(..., description="当前登录用户姓名"),
 ):
     """检查当前用户是否有健康监控权限（admin1）。返回 { canAccess: true/false }"""
@@ -394,7 +394,7 @@ async def get_health_overview(
 
 
 @router.get("/shift-email-config")
-async def get_shift_email_feature_config(
+def get_shift_email_feature_config(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
     """获取各科室排班邮件配置（功能开关、发送时间、收件人）。仅 admin1 可访问。"""
@@ -405,7 +405,7 @@ async def get_shift_email_feature_config(
 
 
 @router.post("/shift-email-config")
-async def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
+def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
     """保存各科室排班邮件配置（功能开关、发送时间、收件人）。仅 admin1 可访问。"""
     _require_admin1(req.current_user)
     from routers.shift_schedule import _save_shift_email_feature_config
@@ -418,7 +418,7 @@ async def save_shift_email_feature_config(req: ShiftEmailFeatureConfigRequest):
 
 
 @router.get("/attendance-fetch-config")
-async def get_attendance_fetch_config(
+def get_attendance_fetch_config(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
     """获取打卡自动拉取与智能建议截止日配置。仅 admin1 可访问。"""
@@ -429,7 +429,7 @@ async def get_attendance_fetch_config(
 
 
 @router.post("/attendance-fetch-config")
-async def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
+def save_attendance_fetch_config_api(req: AttendanceFetchConfigRequest):
     """保存打卡自动拉取配置（支持多条每日执行时间）。仅 admin1 可访问。"""
     _require_admin1(req.current_user)
     from routers.attendance_scheduler_config import save_attendance_fetch_config
@@ -496,7 +496,7 @@ def _action_supervision_payload() -> dict:
 
 
 @router.get("/action-supervision-config")
-async def get_action_supervision_config(
+def get_action_supervision_config(
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
     """获取行动项科室分管领导及工作分工配置。仅 admin1。"""
@@ -505,7 +505,7 @@ async def get_action_supervision_config(
 
 
 @router.post("/action-supervision-config")
-async def save_action_supervision_config(req: ActionSupervisionConfigRequest):
+def save_action_supervision_config(req: ActionSupervisionConfigRequest):
     """批量保存行动项科室分管领导及工作分工配置。仅 admin1。"""
     _require_admin1(req.current_user)
     from routers.action_items import (
@@ -728,7 +728,7 @@ def _mask_key(key: str) -> str:
 
 
 @router.get("/llm-config")
-async def get_llm_config_api(current_user: str = Query(..., description="当前登录用户，用于权限校验")):
+def get_llm_config_api(current_user: str = Query(..., description="当前登录用户，用于权限校验")):
     """获取大模型配置：DeepSeek 开关状态 + 本地候选模型列表 + 当前生效模型。仅 admin1。"""
     _require_admin1(current_user)
     _ensure_llm_models_table()
@@ -776,7 +776,7 @@ async def get_llm_config_api(current_user: str = Query(..., description="当前�
 
 
 @router.post("/llm-config")
-async def save_llm_config_api(req: DeepseekKeyRequest):
+def save_llm_config_api(req: DeepseekKeyRequest):
     """保存/清空 DeepSeek API Key（webconfig.deepseek_api_key）。为空时系统使用本地模型。仅 admin1。"""
     _require_admin1(req.current_user)
     key = (req.deepseek_api_key or "").strip()
@@ -792,7 +792,7 @@ async def save_llm_config_api(req: DeepseekKeyRequest):
 
 
 @router.post("/llm-models")
-async def add_llm_model_api(req: LlmModelRequest):
+def add_llm_model_api(req: LlmModelRequest):
     """新增一个本地大模型候选。仅 admin1。"""
     _require_admin1(req.current_user)
     _ensure_llm_models_table()
@@ -812,7 +812,7 @@ async def add_llm_model_api(req: LlmModelRequest):
 
 
 @router.delete("/llm-models/{model_id}")
-async def delete_llm_model_api(
+def delete_llm_model_api(
     model_id: int,
     current_user: str = Query(..., description="当前登录用户，用于权限校验"),
 ):
@@ -824,7 +824,7 @@ async def delete_llm_model_api(
 
 
 @router.post("/llm-models/{model_id}/activate")
-async def activate_llm_model_api(model_id: int, req: ActivateRequest):
+def activate_llm_model_api(model_id: int, req: ActivateRequest):
     """将某个本地模型设为当前生效模型（写入 webconfig.llm_base_url / llm_model）。仅 admin1。
     注意：仅当 DeepSeek 密钥为空时，本地模型才会实际生效。"""
     _require_admin1(req.current_user)
@@ -855,7 +855,7 @@ async def activate_llm_model_api(model_id: int, req: ActivateRequest):
 
 
 @router.post("/llm-scenes/{scene}/model")
-async def save_llm_scene_model_api(scene: str, req: LlmSceneModelRequest):
+def save_llm_scene_model_api(scene: str, req: LlmSceneModelRequest):
     """为指定功能场景绑定模型；0 跟随全局，-1 为联网 DeepSeek，正数为候选模型。"""
     _require_admin1(req.current_user)
     _ensure_llm_scene_config_table()

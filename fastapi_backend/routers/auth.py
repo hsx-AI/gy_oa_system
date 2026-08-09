@@ -153,7 +153,7 @@ class SetLoginStatusRequest(BaseModel):
 
 
 @router.post("/login", response_model=LoginResponse)
-async def login(request: LoginRequest):
+def login(request: LoginRequest):
     """
     用户登录接口
     
@@ -238,7 +238,7 @@ async def login(request: LoginRequest):
 
 
 @router.post("/set-login-status")
-async def set_login_status(req: SetLoginStatusRequest):
+def set_login_status(req: SetLoginStatusRequest):
     """标记用户已看过首次登录介绍，更新 yggl.denglu_zt"""
     name = (req.name or "").strip()
     if not name:
@@ -267,7 +267,7 @@ class DismissNotificationRequest(BaseModel):
 
 
 @router.post("/notification/publish")
-async def publish_notification(req: PublishNotificationRequest):
+def publish_notification(req: PublishNotificationRequest):
     """管理员(admin1)发布更新通知：向 notifications 表插入一条新记录"""
     from routers.db_manager import _get_admin1
     from datetime import datetime
@@ -291,7 +291,7 @@ async def publish_notification(req: PublishNotificationRequest):
 
 
 @router.post("/notification/dismiss")
-async def dismiss_notification(req: DismissNotificationRequest):
+def dismiss_notification(req: DismissNotificationRequest):
     """用户关闭通知弹窗后，将 gx_gt 更新为已读的最大通知 ID"""
     name = (req.name or "").strip()
     if not name:
@@ -308,7 +308,7 @@ async def dismiss_notification(req: DismissNotificationRequest):
 
 
 @router.get("/notification/list")
-async def list_notifications():
+def list_notifications():
     """获取所有历史通知（供管理页面展示），按时间倒序"""
     try:
         rows = db.execute_query(
@@ -328,7 +328,7 @@ async def list_notifications():
 
 
 @router.post("/notification/delete")
-async def delete_notification(req: dict):
+def delete_notification(req: dict):
     """管理员删除一条通知"""
     from routers.db_manager import _get_admin1
     name = (req.get("current_user") or "").strip()
@@ -346,7 +346,7 @@ async def delete_notification(req: dict):
 
 
 @router.get("/profile")
-async def get_profile(name: str = Query(..., description="员工姓名")):
+def get_profile(name: str = Query(..., description="员工姓名")):
     """获取员工信息：用户名、工号、科室、级别、身份证号、参加工作时间、换休票总数及明细（按过期日分组）"""
     try:
         from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
@@ -483,7 +483,7 @@ class ChangePasswordRequest(BaseModel):
 
 
 @router.post("/change-password")
-async def change_password(req: ChangePasswordRequest):
+def change_password(req: ChangePasswordRequest):
     """修改密码"""
     try:
         if not _password_is_strong(req.newPassword):
@@ -536,7 +536,7 @@ def _consume_code(name: str, purpose: str, code: str) -> bool:
 
 
 @router.post("/send-verification-code")
-async def send_verification_code(req: VerificationCodeRequest):
+def send_verification_code(req: VerificationCodeRequest):
     name = (req.name or "").strip()
     purpose = (req.purpose or "").strip().lower()
     if purpose not in ("login", "reset"):
@@ -576,7 +576,7 @@ async def send_verification_code(req: VerificationCodeRequest):
 
 
 @router.post("/login-by-code", response_model=LoginResponse)
-async def login_by_code(req: CodeLoginRequest):
+def login_by_code(req: CodeLoginRequest):
     name = (req.name or "").strip()
     if not _consume_code(name, "login", req.code):
         return LoginResponse(success=False, message="验证码错误、已过期或尝试次数过多")
@@ -594,7 +594,7 @@ async def login_by_code(req: CodeLoginRequest):
 
 
 @router.post("/reset-password-by-code")
-async def reset_password_by_code(req: ResetPasswordByCodeRequest):
+def reset_password_by_code(req: ResetPasswordByCodeRequest):
     name = (req.name or "").strip()
     if not _password_is_strong(req.newPassword):
         return {"success": False, "message": PASSWORD_RULE_MESSAGE}
@@ -627,7 +627,7 @@ _ensure_skin_style_column()
 
 
 @router.get("/user-style")
-async def get_user_style(name: str = Query(..., description="用户姓名")):
+def get_user_style(name: str = Query(..., description="用户姓名")):
     """获取用户保存的配色风格。"""
     try:
         rows = db.execute_query(
@@ -647,7 +647,7 @@ class UserStyleRequest(BaseModel):
 
 
 @router.post("/user-style")
-async def save_user_style(req: UserStyleRequest):
+def save_user_style(req: UserStyleRequest):
     """保存用户配色风格到 yggl.skin_style。"""
     try:
         style = (req.skinStyle or "").strip()

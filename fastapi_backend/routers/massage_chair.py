@@ -131,7 +131,7 @@ class CancelRequest(BaseModel):
 
 
 @router.get("/config")
-async def get_config():
+def get_config():
     """返回预约规则与时段配置（前端展示用）"""
     _ensure_table()
     return {
@@ -151,7 +151,7 @@ async def get_config():
 
 
 @router.get("/slots")
-async def get_slots(
+def get_slots(
     booking_date: str = Query(..., description="预约日期 YYYY-MM-DD"),
     current_user: str = Query(..., description="当前登录用户"),
 ):
@@ -261,7 +261,7 @@ async def get_slots(
 
 
 @router.post("/book")
-async def book_slot(body: BookRequest):
+def book_slot(body: BookRequest):
     """预约一个 15 分钟时段"""
     _ensure_table()
     user = _assert_active_user(body.current_user)
@@ -316,7 +316,7 @@ async def book_slot(body: BookRequest):
 
 
 @router.post("/cancel")
-async def cancel_booking(body: CancelRequest):
+def cancel_booking(body: CancelRequest):
     """取消本人预约"""
     _ensure_table()
     booker = (body.current_user or "").strip()

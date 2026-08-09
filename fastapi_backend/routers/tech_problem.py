@@ -103,7 +103,7 @@ async def _save_uploaded_images(files: List[UploadFile]) -> List[str]:
 
 
 @router.get("/list")
-async def list_problems(
+def list_problems(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: Optional[str] = Query(None),
@@ -160,7 +160,7 @@ async def list_problems(
 
 
 @router.get("/detail")
-async def get_detail(id: int = Query(...)):
+def get_detail(id: int = Query(...)):
     """获取单条问题详情"""
     rows = db.execute_query(
         "SELECT * FROM tech_problem_manual WHERE id = %s", (id,)
@@ -286,7 +286,7 @@ async def update_problem(
 
 
 @router.delete("/delete")
-async def delete_problem(id: int = Query(...)):
+def delete_problem(id: int = Query(...)):
     """删除问题记录"""
     rows = db.execute_query("SELECT problem_images, cause_images, measures_images FROM tech_problem_manual WHERE id = %s", (id,))
     if not rows:
@@ -306,7 +306,7 @@ async def delete_problem(id: int = Query(...)):
 
 
 @router.get("/categories")
-async def get_categories():
+def get_categories():
     """获取所有已使用的分类"""
     rows = db.execute_query(
         "SELECT DISTINCT category FROM tech_problem_manual WHERE category IS NOT NULL AND category != '' ORDER BY category"
@@ -315,7 +315,7 @@ async def get_categories():
 
 
 @router.get("/departments")
-async def get_departments():
+def get_departments():
     """获取 yggl 表中的所属专业（lsys）列表，供下拉选择"""
     rows = db.execute_query(
         "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
@@ -328,7 +328,7 @@ async def get_departments():
 
 
 @router.get("/image")
-async def get_image(filename: str = Query(...)):
+def get_image(filename: str = Query(...)):
     """获取图片文件"""
     safe = Path(filename).name
     fpath = UPLOAD_DIR / safe

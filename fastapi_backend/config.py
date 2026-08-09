@@ -23,7 +23,7 @@ class Settings(BaseSettings):
     MYSQL_DB_DEMO: str = "demo"
     # 每个后端进程、每个数据库实例的 MySQL 连接池大小。
     # 如果使用多 uvicorn worker，总连接数约等于 MYSQL_POOL_SIZE * 数据库实例数 * worker 数。
-    MYSQL_POOL_SIZE: int = 10
+    MYSQL_POOL_SIZE: int = 30
     # 高峰期获取数据库连接的最长等待秒数；超过后快速失败，避免请求无限堆积。
     MYSQL_POOL_ACQUIRE_TIMEOUT: float = 3.0
     # SQL 执行超过该毫秒数会记录 warning，便于定位慢查询。0 表示关闭。

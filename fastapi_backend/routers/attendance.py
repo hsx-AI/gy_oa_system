@@ -324,7 +324,7 @@ class UploadResponse(BaseModel):
 
 
 @router.get("/upload/config")
-async def get_upload_config():
+def get_upload_config():
     """
     获取打卡/人事相关配置。返回 dakaman（打卡管理员）、admin2（人事管理员），前端用于权限展示。
     """
@@ -761,7 +761,7 @@ async def run_fetch_and_upload_report(
 
 
 @router.get("/exceptions", response_model=AttendanceQueryResponse)
-async def get_attendance_exceptions(
+def get_attendance_exceptions(
     year: int = Query(..., description="年份"),
     month: int = Query(..., ge=1, le=12, description="月份 1-12"),
     current_user: Optional[str] = Query(None, description="当前登录用户姓名，用于权限校验"),
@@ -797,7 +797,7 @@ async def get_attendance_exceptions(
 
 
 @router.get("/exceptions/export")
-async def export_attendance_exceptions(
+def export_attendance_exceptions(
     year: int = Query(..., description="年份"),
     month: int = Query(..., ge=1, le=12, description="月份 1-12"),
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
@@ -1078,7 +1078,7 @@ def _payload_first_time(payload: dict) -> str:
 
 
 @router.get("/suggestion-attendance-report/export")
-async def export_suggestion_attendance_report(
+def export_suggestion_attendance_report(
     start_date: str = Query(..., description="开始日期 YYYY-MM-DD"),
     end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
@@ -1361,7 +1361,7 @@ def _parse_datetime_for_excel(val) -> Optional[datetime]:
 
 
 @router.get("/leave-handler-export")
-async def export_leave_handler_table(
+def export_leave_handler_table(
     year: int = Query(..., description="年份"),
     month: int = Query(..., ge=1, le=12, description="月份 1-12"),
     current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
@@ -1543,7 +1543,7 @@ async def export_leave_handler_table(
 
 
 @router.get("/query", response_model=AttendanceQueryResponse)
-async def query_attendance(
+def query_attendance(
     name: Optional[str] = Query(None, description="员工姓名"),
     dept: Optional[str] = Query(None, description="部门"),
     start_date: Optional[str] = Query(None, description="开始日期 (YYYY-MM-DD)"),
@@ -1593,7 +1593,7 @@ async def query_attendance(
 
 
 @router.get("/dates", response_model=dict)
-async def get_attendance_dates(
+def get_attendance_dates(
     name: str = Query(..., description="员工姓名"),
     dept: str = Query(..., description="部门")
 ):
@@ -1620,7 +1620,7 @@ async def get_attendance_dates(
 
 
 @router.delete("/clear")
-async def clear_all_data(confirm: str = Query(..., description="确认码，输入'CONFIRM'以确认删除")):
+def clear_all_data(confirm: str = Query(..., description="确认码，输入'CONFIRM'以确认删除")):
     """
     清空所有考勤数据（危险操作）
     
@@ -1666,7 +1666,7 @@ class DakamanProcessRequest(BaseModel):
 
 
 @router.post("/dakaman-process")
-async def dakaman_process_exception(req: DakamanProcessRequest):
+def dakaman_process_exception(req: DakamanProcessRequest):
     """
     打卡管理员(dakaman)代替员工处理考勤异常。
     根据 attendance_suggestions 中该员工当日 status=1 的建议时间段，

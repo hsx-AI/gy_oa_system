@@ -86,7 +86,7 @@ class SendEmailRequest(BaseModel):
 
 
 @router.get("/config")
-async def get_email_config(current_user: str = Query(...)):
+def get_email_config(current_user: str = Query(...)):
     """获取当前邮箱配置（脱敏）及员工通讯录（含企业邮箱）"""
     _require_admin(current_user)
     cfg = _get_email_config()
@@ -123,7 +123,7 @@ class UpdateEmailConfigRequest(BaseModel):
 
 
 @router.post("/config")
-async def update_email_config(req: UpdateEmailConfigRequest):
+def update_email_config(req: UpdateEmailConfigRequest):
     """更新邮箱发送配置（写入 webconfig 表）"""
     _require_admin(req.current_user)
     try:
@@ -226,7 +226,7 @@ def _smtp_send(sender: str, password: str, all_recipients: List[str], message: M
 
 
 @router.post("/send")
-async def send_email(req: SendEmailRequest):
+def send_email(req: SendEmailRequest):
     """发送邮件（支持抄送和附件）"""
     _require_admin(req.current_user)
 
@@ -568,7 +568,7 @@ def _prepare_reminder_data(year: int, month: int):
 
 
 @router.post("/send-attendance-reminder")
-async def send_attendance_reminder(req: AttendanceReminderRequest):
+def send_attendance_reminder(req: AttendanceReminderRequest):
     """
     一键发送考勤异常提醒邮件（新模式）：
     1) 对每位异常人员**单独**发送个人提醒邮件。
@@ -701,7 +701,7 @@ async def send_attendance_reminder(req: AttendanceReminderRequest):
 
 
 @router.post("/preview-attendance-reminder")
-async def preview_attendance_reminder(req: AttendanceReminderRequest):
+def preview_attendance_reminder(req: AttendanceReminderRequest):
     """预览考勤异常提醒邮件内容（不实际发送）"""
     _require_admin(req.current_user)
 
@@ -1021,14 +1021,14 @@ def _create_mail_result_notifications(
 
 
 @router.get("/auto-reminder-config")
-async def get_auto_reminder_config_api(current_user: str = Query(...)):
+def get_auto_reminder_config_api(current_user: str = Query(...)):
     _require_admin(current_user)
     cfg = _get_auto_reminder_config()
     return {"success": True, **cfg}
 
 
 @router.post("/auto-reminder-config")
-async def save_auto_reminder_config_api(req: AutoReminderConfigRequest):
+def save_auto_reminder_config_api(req: AutoReminderConfigRequest):
     _require_admin(req.current_user)
     valid = []
     for s in req.schedules:
@@ -1045,14 +1045,14 @@ async def save_auto_reminder_config_api(req: AutoReminderConfigRequest):
 
 
 @router.get("/auto-reminder-log")
-async def get_auto_reminder_log_api(current_user: str = Query(...)):
+def get_auto_reminder_log_api(current_user: str = Query(...)):
     _require_admin(current_user)
     cfg = _get_auto_reminder_config()
     return {"success": True, "log": cfg.get("log", [])}
 
 
 @router.get("/auto-reminder-notices")
-async def get_auto_reminder_notices(name: str = Query(...)):
+def get_auto_reminder_notices(name: str = Query(...)):
     current_user = (name or "").strip()
     if not current_user:
         return {"success": True, "data": []}
@@ -1083,7 +1083,7 @@ async def get_auto_reminder_notices(name: str = Query(...)):
 
 
 @router.post("/auto-reminder-notices/read")
-async def mark_auto_reminder_notice_read(req: AutoReminderNoticeReadRequest):
+def mark_auto_reminder_notice_read(req: AutoReminderNoticeReadRequest):
     current_user = (req.current_user or "").strip()
     if not current_user or not req.id:
         return {"success": False, "message": "参数不完整"}
@@ -2087,7 +2087,7 @@ async def run_shift_schedule_email_api(
 
 
 @router.get("/shift-schedule-email-blocked-plans")
-async def get_shift_schedule_email_blocked_plans_api(
+def get_shift_schedule_email_blocked_plans_api(
     current_user: str = Query(...),
     limit: int = Query(20, ge=1, le=100),
 ):
@@ -2166,7 +2166,7 @@ async def get_shift_schedule_email_blocked_plans_api(
 
 
 @router.get("/shift-schedule-email-sent-weeks")
-async def get_shift_schedule_email_sent_weeks_api(
+def get_shift_schedule_email_sent_weeks_api(
     current_user: str = Query(...),
     department: str = Query(...),
     start_date: str = Query(..., description="修改日期范围起始 YYYY-MM-DD"),

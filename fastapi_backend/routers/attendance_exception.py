@@ -248,7 +248,7 @@ def _can_skip_first_approval(user: dict, applicant_name: str = "") -> bool:
 # ==================== 审批人列表 ====================
 
 @router.get("/approvers")
-async def get_kqyc_approvers(
+def get_kqyc_approvers(
     name: str = Query(..., description="申请人姓名"),
     level: str = Query("first", description="first=一级(同室主任/副主任/班组长) second=二级(经理/副经理)"),
 ):
@@ -436,7 +436,7 @@ async def submit_kqyc_apply(
 # ==================== 待审批列表 ====================
 
 @router.get("/pending")
-async def get_pending_kqyc(approver: str = Query(..., description="审批人姓名")):
+def get_pending_kqyc(approver: str = Query(..., description="审批人姓名")):
     """获取审批人的待审批列表（自动区分一级/二级）"""
     _ensure_table()
     approver = (approver or "").strip()
@@ -464,7 +464,7 @@ async def get_pending_kqyc(approver: str = Query(..., description="审批人姓�
 # ==================== 审批操作 ====================
 
 @router.post("/approve")
-async def approve_kqyc(
+def approve_kqyc(
     id: int = Form(...),
     approver: str = Form(...),
     action: str = Form(...),
@@ -601,7 +601,7 @@ async def approve_kqyc(
 # ==================== 打卡管理员"已读确认"待办 ====================
 
 @router.get("/pending-dakaman")
-async def list_dakaman_pending(name: str = Query(..., description="当前用户姓名（应为 dakaman）")):
+def list_dakaman_pending(name: str = Query(..., description="当前用户姓名（应为 dakaman）")):
     """打卡管理员待"已读确认"列表（仅 dakaman 可见有数据，其余返回空）"""
     _ensure_table()
     n = (name or "").strip()
@@ -622,7 +622,7 @@ async def list_dakaman_pending(name: str = Query(..., description="当前用户�
 
 
 @router.post("/dakaman-confirm")
-async def dakaman_confirm(
+def dakaman_confirm(
     id: int = Form(...),
     current_user: str = Form(...),
 ):
@@ -656,7 +656,7 @@ async def dakaman_confirm(
 # ==================== 查询记录 ====================
 
 @router.get("/records")
-async def list_kqyc_records(
+def list_kqyc_records(
     current_user: str = Query(..., description="当前用户姓名（用于权限判断）"),
     year: Optional[int] = Query(None, description="年份过滤"),
     month: Optional[int] = Query(None, description="月份过滤"),
@@ -752,7 +752,7 @@ async def list_kqyc_records(
 # ==================== 我的申请 ====================
 
 @router.get("/my-applications")
-async def my_kqyc_applications(name: str = Query(..., description="申请人姓名")):
+def my_kqyc_applications(name: str = Query(..., description="申请人姓名")):
     """获取指定用户的全部打卡异常申请"""
     _ensure_table()
     rows = db.execute_query(
@@ -767,7 +767,7 @@ async def my_kqyc_applications(name: str = Query(..., description="申请人姓�
 # ==================== 附件下载 ====================
 
 @router.get("/attachment")
-async def download_kqyc_attachment(filename: str = Query(..., description="存储文件名")):
+def download_kqyc_attachment(filename: str = Query(..., description="存储文件名")):
     """下载打卡异常申请附件"""
     _ensure_upload_dir()
     file_path = UPLOAD_KQYC_DIR / filename

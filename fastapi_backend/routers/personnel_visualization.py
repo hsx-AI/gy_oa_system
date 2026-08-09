@@ -146,7 +146,7 @@ def _load_departments(can_view_all: bool, own_dept: str) -> list[str]:
 
 
 @router.get("/scene")
-async def get_personnel_scene(
+def get_personnel_scene(
     current_user: str = Query(..., description="当前登录用户姓名"),
     department: Optional[str] = Query(None, description="要查看的科室；无全员权限时只能查看本科室"),
     target_date: Optional[str] = Query(None, description="日期 YYYY-MM-DD，默认今天"),

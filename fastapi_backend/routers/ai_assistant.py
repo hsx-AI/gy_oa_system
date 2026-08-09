@@ -3490,7 +3490,7 @@ def _sse(payload: dict) -> str:
 
 
 @router.get("/model-info")
-async def model_info(current_user: str = Query("", description="当前登录用户（可选）")):
+def model_info(current_user: str = Query("", description="当前登录用户（可选）")):
     """返回当前生效的大模型展示信息（仅模型名/类型，不含 base_url、api_key 等敏感信息），供前端只读展示。"""
     try:
         cfg = _resolve_llm()
@@ -3812,7 +3812,7 @@ def _list_members(target_lsys: Optional[str]) -> List[Tuple[str, str]]:
 
 
 @router.get("/export")
-async def export_report(
+def export_report(
     report_type: str = Query(..., description="overtime|leave|business_trip"),
     name: Optional[str] = Query(None, description="员工姓名（单人报表）"),
     lsys: Optional[str] = Query(None, description="科室名称（科室全员汇总）"),
@@ -3945,7 +3945,7 @@ async def export_report(
 
 
 @router.get("/download")
-async def download_document(
+def download_document(
     token: str = Query(..., description="文档标识"),
     filename: Optional[str] = Query(None, description="下载文件名"),
 ):

@@ -30,7 +30,7 @@ def ensure_access_log_table():
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4""")
 
 @router.post("/track")
-async def track_visit(event: VisitEvent, request: Request):
+def track_visit(event: VisitEvent, request: Request):
     name, path = event.user_name.strip()[:80], event.path.strip()[:255]
     if not name or not path or path == "/login": return {"success": True}
     ensure_access_log_table()

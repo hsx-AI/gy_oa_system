@@ -502,7 +502,7 @@ def _list_people(where_sql: str):
 
 
 @router.get("/approvers")
-async def get_reimbursement_approvers():
+def get_reimbursement_approvers():
     """获取二级/三级审批人以及报销完成人候选。"""
     _ensure_table()
     second = _list_people("(jb = '副经理' OR jb LIKE '副经理%')")
@@ -613,7 +613,7 @@ async def parse_invoice(invoice: UploadFile = File(...)):
 
 
 @router.get("/pending")
-async def get_pending_reimbursements(approver: str = Query(...)):
+def get_pending_reimbursements(approver: str = Query(...)):
     _ensure_table()
     name = approver.strip()
     params: list = [name, name]
@@ -689,7 +689,7 @@ def _do_action(row: dict, name: str, action: str, reject_reason: str = "") -> st
 
 
 @router.post("/action")
-async def reimbursement_action(
+def reimbursement_action(
     id: int = Form(...),
     operator: str = Form(...),
     action: str = Form(...),
@@ -707,7 +707,7 @@ async def reimbursement_action(
 
 
 @router.post("/action-batch")
-async def reimbursement_action_batch(
+def reimbursement_action_batch(
     ids: str = Form(...),
     operator: str = Form(...),
     action: str = Form(...),
@@ -753,7 +753,7 @@ async def reimbursement_action_batch(
 
 
 @router.post("/invoice/check")
-async def check_reimbursement_invoices(
+def check_reimbursement_invoices(
     operator: str = Form(""),
 ):
     """智能校验近一年内未驳回发票：重复发票号、同供应商同开票日期拆分风险。"""
@@ -875,7 +875,7 @@ def _remove_attachment_file(filename: str) -> None:
 
 
 @router.post("/delete")
-async def delete_rejected_reimbursement(
+def delete_rejected_reimbursement(
     id: int = Form(...),
     operator: str = Form(...),
 ):
@@ -903,7 +903,7 @@ async def delete_rejected_reimbursement(
 
 
 @router.get("/budget/summary")
-async def get_budget_summary(
+def get_budget_summary(
     year: int = Query(0, ge=0),
     current_user: str = Query(""),
 ):
@@ -915,7 +915,7 @@ async def get_budget_summary(
 
 
 @router.get("/budget/list")
-async def list_budget_years(current_user: str = Query("")):
+def list_budget_years(current_user: str = Query("")):
     """列出已配置的年度额度。"""
     _ensure_table()
     _require_ledger_permission(current_user)
@@ -939,7 +939,7 @@ async def list_budget_years(current_user: str = Query("")):
 
 
 @router.post("/budget")
-async def upsert_budget(
+def upsert_budget(
     budget_year: int = Form(...),
     total_amount: float = Form(...),
     remark: str = Form(""),
@@ -980,7 +980,7 @@ async def upsert_budget(
 
 
 @router.get("/records")
-async def get_reimbursement_records(
+def get_reimbursement_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query(""),
@@ -1010,7 +1010,7 @@ async def get_reimbursement_records(
 
 
 @router.get("/my-applications")
-async def get_my_reimbursements(name: str = Query(...)):
+def get_my_reimbursements(name: str = Query(...)):
     _ensure_table()
     rows = db.execute_query(
         "SELECT * FROM low_value_reimbursement WHERE applicant = %s ORDER BY apply_time DESC",
@@ -1034,7 +1034,7 @@ _CONTENT_TYPE_MAP = {
 
 
 @router.get("/attachment")
-async def download_reimbursement_attachment(
+def download_reimbursement_attachment(
     kind: str = Query(..., pattern="^(photo|invoice)$"),
     filename: str = Query(...),
     disposition: str = Query("attachment", pattern="^(attachment|inline)$"),
@@ -1066,7 +1066,7 @@ async def download_reimbursement_attachment(
 
 
 @router.get("/export")
-async def export_reimbursement_ledger(
+def export_reimbursement_ledger(
     keyword: str = Query(""),
     status: str = Query(""),
     date_from: str = Query(""),
@@ -1167,7 +1167,7 @@ async def export_reimbursement_ledger(
 
 
 @router.get("/invoices/export-zip")
-async def export_invoice_zip(
+def export_invoice_zip(
     keyword: str = Query(""),
     status: str = Query(""),
     date_from: str = Query(""),

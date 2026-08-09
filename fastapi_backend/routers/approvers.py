@@ -303,7 +303,7 @@ def _get_room_directors(name: str) -> List[dict]:
 
 
 @router.get("", response_model=dict)
-async def get_approvers(
+def get_approvers(
     name: str = Query(..., description="申请人姓名"),
     level: str = Query("first", description="first=第一审批人, second=第二审批人, dept_leader=部领导, room_director=室主任")
 ):

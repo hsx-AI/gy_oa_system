@@ -214,7 +214,7 @@ def build_tree(src):
 # ── API ────────────────────────────────────────────
 
 @router.get("/business-trip-map")
-async def business_trip_map():
+def business_trip_map():
     today = date.today()
 
     sql = """

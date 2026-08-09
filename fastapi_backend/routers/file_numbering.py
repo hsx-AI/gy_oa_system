@@ -111,7 +111,7 @@ def _file_path_by_code(ftype: str, code: str) -> str:
 # ==================== 工作号 gzh ====================
 
 @router.get("/gzh/list")
-async def get_gzh_list(ssks: str = Query(..., description="所属科室"), year: Optional[int] = Query(None, description="筛选基准年，不传则当年；返回 year0>=该年 及 NULL")):
+def get_gzh_list(ssks: str = Query(..., description="所属科室"), year: Optional[int] = Query(None, description="筛选基准年，不传则当年；返回 year0>=该年 及 NULL")):
     """工作号列表，按科室过滤；筛选今年及之后的工作号（year0 >= 当前年 或 year0 IS NULL）"""
     try:
         y = year or datetime.now().year
@@ -134,7 +134,7 @@ class GzhAddRequest(BaseModel):
 
 
 @router.post("/gzh/add")
-async def add_gzh(req: GzhAddRequest):
+def add_gzh(req: GzhAddRequest):
     """添加工作号"""
     try:
         year0 = req.jznf or datetime.now().year
@@ -151,7 +151,7 @@ async def add_gzh(req: GzhAddRequest):
 # ==================== 技术文件分类 bianhao_fl ====================
 
 @router.get("/bianhao-fl/list")
-async def get_bianhao_fl_list(ssks: str = Query(..., description="所属科室")):
+def get_bianhao_fl_list(ssks: str = Query(..., description="所属科室")):
     """技术文件分类列表"""
     try:
         rows = db.execute_query(
@@ -173,7 +173,7 @@ class BianhaoFlAddRequest(BaseModel):
 
 
 @router.post("/bianhao-fl/add")
-async def add_bianhao_fl(req: BianhaoFlAddRequest):
+def add_bianhao_fl(req: BianhaoFlAddRequest):
     """添加技术文件分类"""
     try:
         year0 = req.year0 or datetime.now().year
@@ -198,7 +198,7 @@ class BianhaoTechRequest(BaseModel):
 
 
 @router.post("/bianhao/tech/add")
-async def add_bianhao_tech(req: BianhaoTechRequest):
+def add_bianhao_tech(req: BianhaoTechRequest):
     """
     技术文件编号 - 写入 bianhao 表
     编号规则: bianhao1=flbianma取5位, bianhao2=同(bianhao1,bz)顺序号, bianhao3=4位
@@ -238,7 +238,7 @@ async def add_bianhao_tech(req: BianhaoTechRequest):
 
 
 @router.get("/bianhao/tech/list")
-async def get_bianhao_tech_list(
+def get_bianhao_tech_list(
     bz: Optional[str] = Query(None),
     px: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None, description="编号/内容/项目等关键词"),
@@ -368,7 +368,7 @@ class BianhaoJsglRequest(BaseModel):
 
 
 @router.get("/bianhao-jsgl/fenlei")
-async def get_jsgl_fenlei(ssks: str = Query(..., description="所属科室")):
+def get_jsgl_fenlei(ssks: str = Query(..., description="所属科室")):
     """技术管理固定分类选项（前缀随科室变化）"""
     ssks = (ssks or "").strip()
     if not ssks:
@@ -378,7 +378,7 @@ async def get_jsgl_fenlei(ssks: str = Query(..., description="所属科室")):
 
 
 @router.post("/bianhaogljs/add")
-async def add_bianhaogljs(req: BianhaoJsglRequest):
+def add_bianhaogljs(req: BianhaoJsglRequest):
     """技术管理编号 - 写入 bianhaogljs"""
     try:
         if not req.neirong.strip():
@@ -413,7 +413,7 @@ async def add_bianhaogljs(req: BianhaoJsglRequest):
 
 
 @router.get("/bianhaogljs/list")
-async def get_bianhaogljs_list(
+def get_bianhaogljs_list(
     bz: Optional[str] = Query(None, description="所属科室，不传则不过滤"),
     px: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None, description="关键词"),
@@ -485,12 +485,12 @@ class BianhaoglRequest(BaseModel):
 
 
 @router.get("/bianhaogl/fenlei")
-async def get_gl_fenlei():
+def get_gl_fenlei():
     return {"success": True, "list": FENLEI_GL}
 
 
 @router.post("/bianhaogl/add")
-async def add_bianhaogl(req: BianhaoglRequest):
+def add_bianhaogl(req: BianhaoglRequest):
     """管理文件编号 - 写入 bianhaogl"""
     try:
         if not req.neirong.strip():
@@ -530,7 +530,7 @@ def _fmt_gl_gl(r):
 
 
 @router.get("/bianhaogl/list")
-async def get_bianhaogl_list(
+def get_bianhaogl_list(
     bz: Optional[str] = Query(None, description="所属科室"),
     px: Optional[str] = Query(None),
     keyword: Optional[str] = Query(None, description="关键词"),
@@ -606,7 +606,7 @@ class BianhaoGygchRequest(BaseModel):
 
 
 @router.post("/gygch/add")
-async def add_bianhao_gygch(req: BianhaoGygchRequest):
+def add_bianhao_gygch(req: BianhaoGygchRequest):
     """工艺过程策划表编号 - room_code 由 bz(科室) 自动推导"""
     try:
         bz = (req.bz or "").strip()
@@ -648,7 +648,7 @@ def _fmt_gygch(r):
 
 
 @router.get("/gygch/list")
-async def get_bianhao_gygch_list(
+def get_bianhao_gygch_list(
     bz: Optional[str] = Query(None, description="所属科室"),
     keyword: Optional[str] = Query(None, description="关键词"),
     page: int = Query(1, ge=1),
@@ -761,7 +761,7 @@ _ensure_scszh_table()
 
 
 @router.get("/scszh/fenlei")
-async def get_scszh_fenlei():
+def get_scszh_fenlei():
     return {"success": True, "list": FENLEI_SCSZH}
 
 
@@ -774,7 +774,7 @@ class BianhaoScszhRequest(BaseModel):
 
 
 @router.post("/scszh/add")
-async def add_bianhao_scszh(req: BianhaoScszhRequest):
+def add_bianhao_scszh(req: BianhaoScszhRequest):
     """生产数字化编号 - 写入 bianhao_scszh"""
     try:
         if not req.neirong.strip():
@@ -817,7 +817,7 @@ def _fmt_scszh(r):
 
 
 @router.get("/scszh/list")
-async def get_bianhao_scszh_list(
+def get_bianhao_scszh_list(
     bz: Optional[str] = Query(None, description="所属科室"),
     px: Optional[str] = Query(None, description="按项目缩写筛选"),
     keyword: Optional[str] = Query(None, description="关键词"),
@@ -881,7 +881,7 @@ def _can_export_bianhao_excel(name: str) -> bool:
 
 
 @router.get("/export/excel")
-async def export_bianhao_excel(
+def export_bianhao_excel(
     table: str = Query(..., description="tech|jsgl|manage|gygch|scszh"),
     name: str = Query(..., description="当前用户姓名"),
 ):
@@ -963,7 +963,7 @@ async def export_bianhao_excel(
 
 
 @router.delete("/file")
-async def delete_numbering_pdf(
+def delete_numbering_pdf(
     type: str = Query(..., description="tech|jsgl|manage"),
     code: str = Query(..., description="编号代码"),
 ):
@@ -979,7 +979,7 @@ async def delete_numbering_pdf(
 
 
 @router.get("/file")
-async def get_numbering_pdf(
+def get_numbering_pdf(
     type: str = Query(..., description="tech|jsgl|manage"),
     code: str = Query(..., description="编号代码"),
     download: Optional[int] = Query(0, description="1=下载，0=预览"),

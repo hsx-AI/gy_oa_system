@@ -62,7 +62,7 @@ def _fmt_dt(d):
 # ==================== 权限检查 ====================
 
 @router.get("/can-approve")
-async def can_approve(name: str = Query(...)):
+def can_approve(name: str = Query(...)):
     """检查当前用户是否有审批权限（员工无权限；部长/主任等及 dakaman 有审批权限；admin1 等同部长但不含打卡管理员最终审批）"""
     name_stripped = (name or "").strip()
     admin1 = _get_admin1()
@@ -84,7 +84,7 @@ async def can_approve(name: str = Query(...)):
 # ==================== 请假审批 ====================
 
 @router.get("/pending/leave")
-async def get_pending_leave(approver: str = Query(..., description="当前审批人姓名")):
+def get_pending_leave(approver: str = Query(..., description="当前审批人姓名")):
     """获取待当前用户审批的请假列表"""
     try:
         # qjzt=1: spr 审批; qjzt=3: spr2 审批
@@ -125,7 +125,7 @@ async def get_pending_leave(approver: str = Query(..., description="当前审批
 
 
 @router.get("/leave/{item_id}")
-async def get_leave_detail(item_id: str):
+def get_leave_detail(item_id: str):
     """请假详情"""
     rows = db.execute_query(
         "SELECT * FROM qj WHERE id = %s",
@@ -247,7 +247,7 @@ def _deduct_exchange_tickets(name: str, consume: float):
 
 
 @router.post("/leave/{item_id}/action")
-async def leave_approve_action(item_id: str, req: ApproveRequest):
+def leave_approve_action(item_id: str, req: ApproveRequest):
     """请假单条审批"""
     rows = db.execute_query("SELECT id, qjzt, `2j`, spr, spr2, xm, qjfs, hxpxh, tian FROM qj WHERE id = %s", (item_id,))
     if not rows:
@@ -401,7 +401,7 @@ async def leave_batch_approve(req: BatchApproveRequest):
 # ==================== 加班审批 ====================
 
 @router.get("/pending/overtime")
-async def get_pending_overtime(approver: str = Query(...)):
+def get_pending_overtime(approver: str = Query(...)):
     """获取待当前用户审批的加班列表（含打卡管理员：jiabanzt=5 时仅 webconfig.dakaman 可见）"""
     try:
         # jiabanzt=0 或 1: spr 审批; jiabanzt=3: spr2 审批; jiabanzt=5: 打卡管理员审批
@@ -572,7 +572,7 @@ def _after_supervisor_approve(row: dict, item_id: str) -> tuple:
 
 
 @router.get("/overtime/{item_id}")
-async def get_overtime_detail(item_id: str):
+def get_overtime_detail(item_id: str):
     """加班详情（item_id 为 jiaban 表 id，支持 UUID 字符串）"""
     item_id = str(item_id).strip()
     rows = db.execute_query("SELECT * FROM jiaban WHERE id = %s", (item_id,))
@@ -604,7 +604,7 @@ async def get_overtime_detail(item_id: str):
 
 
 @router.post("/overtime/{item_id}/action")
-async def overtime_approve_action(item_id: str, req: ApproveRequest):
+def overtime_approve_action(item_id: str, req: ApproveRequest):
     """加班单条审批。item_id 为 jiaban 表 id（UUID 字符串）。"""
     item_id = str(item_id).strip()
     rows = db.execute_query(
@@ -989,7 +989,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
 
 
 @router.post("/overtime/validate")
-async def overtime_validate(req: OvertimeValidateRequest):
+def overtime_validate(req: OvertimeValidateRequest):
     """加班审批智能校验（手动批量校验接口，与上级审批后自动校验逻辑一致）。"""
     items = req.items or []
     return {"success": True, "results": _run_overtime_validation_core(items)}
@@ -1007,7 +1007,7 @@ async def overtime_validate(req: OvertimeValidateRequest):
 #
 
 @router.get("/pending/business-trip")
-async def get_pending_business_trip(approver: str = Query(...)):
+def get_pending_business_trip(approver: str = Query(...)):
     """
     获取待当前用户审批的公出列表（按登记时选择的 szr/室主任、bld/部领导 匹配当前用户）
     - 室主任待办: bldzt=1, szrzt=1, szr=当前用户
@@ -1087,7 +1087,7 @@ async def get_pending_business_trip(approver: str = Query(...)):
 
 
 @router.get("/business-trip/{item_id}")
-async def get_business_trip_detail(item_id: str):
+def get_business_trip_detail(item_id: str):
     """公出详情"""
     rows = db.execute_query("SELECT * FROM gcsqb WHERE id = %s", (item_id,))
     if not rows:
@@ -1119,7 +1119,7 @@ async def get_business_trip_detail(item_id: str):
 
 
 @router.post("/business-trip/{item_id}/action")
-async def business_trip_approve_action(item_id: str, req: ApproveRequest):
+def business_trip_approve_action(item_id: str, req: ApproveRequest):
     """
     公出单条审批。使用 bldzt/szrzt 状态与 szrpztime/bldpztime 时间。
     - 室主任通过: szrzt=2, szrpztime=now；驳回: szrzt=22, szrpztime=now
@@ -1283,7 +1283,7 @@ _ensure_hxp_sl_precision()
 
 
 @router.get("/hxp/unread")
-async def get_unread_hxp(name: str = Query(..., description="员工姓名")):
+def get_unread_hxp(name: str = Query(..., description="员工姓名")):
     """获取指定员工的未读换休票记录（新增的换休票通知）"""
     rows = db.execute_query(
         "SELECT id, name, sl, sj, ly FROM hxp "
@@ -1308,7 +1308,7 @@ class HxpMarkReadRequest(BaseModel):
 
 
 @router.post("/hxp/mark-read")
-async def mark_hxp_read(req: HxpMarkReadRequest):
+def mark_hxp_read(req: HxpMarkReadRequest):
     """将指定换休票记录标记为已读"""
     if not req.ids:
         return {"success": True, "updated": 0}

@@ -161,7 +161,7 @@ def _jb_sort_key(jb: str) -> int:
 
 
 @router.get("/list")
-async def get_contacts(
+def get_contacts(
     department: Optional[str] = Query(None, description="筛选科室"),
     keyword: Optional[str] = Query(None, description="搜索关键字（姓名/工号/手机/座机）"),
     source: str = Query("department", description="department=部门通讯录，company=公司通讯录"),
@@ -332,7 +332,7 @@ def _get_company_contacts(organization: Optional[str], keyword: Optional[str]) -
 
 
 @router.get("/can-manage-company")
-async def can_manage_company_contacts(name: str = Query("", description="当前用户名")):
+def can_manage_company_contacts(name: str = Query("", description="当前用户名")):
     return {"success": True, "canManage": _can_manage_company_contacts((name or "").strip())}
 
 

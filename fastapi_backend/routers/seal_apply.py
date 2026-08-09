@@ -112,7 +112,7 @@ def _ensure_table():
 # ==================== 获取可选审批人（经理/副经理）====================
 
 @router.get("/approvers")
-async def get_seal_approvers():
+def get_seal_approvers():
     """获取可选的用印审批人列表（yggl 表 jb 为经理/副经理的在职人员）"""
     sql = """
         SELECT name, jb, lsys
@@ -207,7 +207,7 @@ async def submit_seal_apply(
 # ==================== 审批：获取待审批列表 ====================
 
 @router.get("/pending")
-async def get_pending_seal(approver: str = Query(..., description="审批人姓名")):
+def get_pending_seal(approver: str = Query(..., description="审批人姓名")):
     """获取指定审批人的待审批用印申请列表"""
     _ensure_table()
     sql = """
@@ -229,7 +229,7 @@ async def get_pending_seal(approver: str = Query(..., description="审批人姓�
 # ==================== 待用印：已通过且申请人未点「已用印」====================
 
 @router.get("/pending-use")
-async def get_pending_seal_use(applicant: str = Query(..., description="申请人姓名")):
+def get_pending_seal_use(applicant: str = Query(..., description="申请人姓名")):
     """当前用户已通过审批、尚未标记已用印的申请（首页待用印待办）"""
     _ensure_table()
     sql = """
@@ -251,7 +251,7 @@ async def get_pending_seal_use(applicant: str = Query(..., description="申请�
 
 
 @router.post("/mark-used")
-async def mark_seal_used(
+def mark_seal_used(
     id: int = Form(...),
     applicant: str = Form(...),
 ):
@@ -287,7 +287,7 @@ async def mark_seal_used(
 # ==================== 审批操作（通过/驳回）====================
 
 @router.post("/approve")
-async def approve_seal(
+def approve_seal(
     id: int = Form(...),
     approver: str = Form(...),
     action: str = Form(...),
@@ -336,7 +336,7 @@ async def approve_seal(
 # ==================== 查看全部记录（不做鉴权）====================
 
 @router.get("/records")
-async def get_seal_records(
+def get_seal_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
     keyword: str = Query("", description="关键词搜索（申请人/事由/类型）"),
@@ -403,7 +403,7 @@ async def get_seal_records(
 # ==================== 附件下载 ====================
 
 @router.get("/attachment")
-async def download_seal_attachment(filename: str = Query(..., description="存储文件名")):
+def download_seal_attachment(filename: str = Query(..., description="存储文件名")):
     """下载用印附件"""
     _ensure_upload_dir()
     file_path = UPLOAD_SEAL_DIR / filename
@@ -424,7 +424,7 @@ async def download_seal_attachment(filename: str = Query(..., description="存�
 # ==================== 我的用印申请 ====================
 
 @router.get("/my-applications")
-async def get_my_seal_applications(name: str = Query(..., description="申请人姓名")):
+def get_my_seal_applications(name: str = Query(..., description="申请人姓名")):
     """获取指定用户的全部用印申请"""
     _ensure_table()
     sql = """

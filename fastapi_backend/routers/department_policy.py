@@ -140,7 +140,7 @@ def _can_upload_policy(name: str) -> bool:
 
 
 @router.get("/can-upload")
-async def get_can_upload(name: str = Query(..., description="当前用户名")):
+def get_can_upload(name: str = Query(..., description="当前用户名")):
     """检查当前用户是否有制度上传权限（仅综合技术室主任/副主任）"""
     return {"success": True, "canUpload": _can_upload_policy(name)}
 
@@ -247,7 +247,7 @@ async def upload_policy(
 
 
 @router.get("/list")
-async def get_policy_list(
+def get_policy_list(
     keyword: Optional[str] = Query(None, description="关键词搜索"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -418,7 +418,7 @@ async def get_policy_file(
 
 
 @router.get("/attachment")
-async def get_policy_attachment(
+def get_policy_attachment(
     name: str = Query(..., description="附件存储文件名"),
 ):
     """下载制度附件"""
@@ -434,7 +434,7 @@ async def get_policy_attachment(
 
 
 @router.delete("/delete")
-async def delete_policy(
+def delete_policy(
     id: str = Query(..., description="记录ID"),
     current_user: Optional[str] = Query("", description="当前用户名，用于权限校验"),
 ):

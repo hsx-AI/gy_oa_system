@@ -1634,7 +1634,7 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
 
 
 @router.get("", response_model=SuggestionResponse)
-async def get_suggestions(
+def get_suggestions(
     name: Optional[str] = Query(None, description="用户姓名"),
     dept: Optional[str] = Query(None, description="用户部门"),
     year: Optional[int] = Query(None, description="年份，与 month 一起传入时从表读取"),

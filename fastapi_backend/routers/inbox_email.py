@@ -952,7 +952,7 @@ def _normalize_task_deadline(value: str) -> str:
 
 
 @router.get("/config")
-async def get_inbox_config(current_user: str = Query(...)):
+def get_inbox_config(current_user: str = Query(...)):
     """获取共用邮箱配置（脱敏）"""
     _require_inbox_access(current_user)
     cfg = _get_inbox_config(current_user)
@@ -971,7 +971,7 @@ async def get_inbox_config(current_user: str = Query(...)):
 
 
 @router.post("/config")
-async def update_inbox_config(req: InboxConfigRequest):
+def update_inbox_config(req: InboxConfigRequest):
     """由系统管理员更新经理层公用邮箱配置。"""
     _require_admin(req.current_user)
     _ensure_inbox_columns()
@@ -1006,7 +1006,7 @@ async def update_inbox_config(req: InboxConfigRequest):
 
 
 @router.get("/list")
-async def list_inbox_emails(
+def list_inbox_emails(
     current_user: str = Query(...),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=200),
@@ -1074,7 +1074,7 @@ async def list_inbox_emails(
 
 
 @router.get("/detail")
-async def inbox_email_detail(
+def inbox_email_detail(
     current_user: str = Query(...),
     id: int = Query(..., ge=1),
 ):
@@ -1110,7 +1110,7 @@ async def inbox_email_detail(
 
 
 @router.get("/tasks")
-async def list_inbox_tasks(
+def list_inbox_tasks(
     current_user: str = Query(...),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -1179,7 +1179,7 @@ async def list_inbox_tasks(
 
 
 @router.post("/task-deadline")
-async def update_inbox_task_deadline(req: InboxTaskDeadlineRequest):
+def update_inbox_task_deadline(req: InboxTaskDeadlineRequest):
     """手动修正 AI 邮件待办任务的截止时间。"""
     _require_inbox_access(req.current_user)
     _ensure_inbox_task_columns()
@@ -1319,7 +1319,7 @@ async def manual_sync(current_user: str = Query(...)):
 
 
 @router.post("/complete")
-async def complete_inbox_task(
+def complete_inbox_task(
     current_user: str = Query(...),
     id: int = Query(..., ge=1, description="inbox_emails 表的 id"),
 ):
@@ -1385,7 +1385,7 @@ def _unflag_email_imap(address: str, auth_code: str, message_id: str) -> Optiona
 # ==================== 原个人红旗邮箱待办（兼容保留） ====================
 
 @router.get("/personal/config")
-async def get_personal_inbox_config(current_user: str = Query(...)):
+def get_personal_inbox_config(current_user: str = Query(...)):
     _require_personal_inbox_access(current_user)
     cfg = _get_personal_inbox_config(current_user)
     code = cfg["auth_code"]
@@ -1398,7 +1398,7 @@ async def get_personal_inbox_config(current_user: str = Query(...)):
 
 
 @router.post("/personal/config")
-async def save_personal_inbox_config(req: InboxConfigRequest):
+def save_personal_inbox_config(req: InboxConfigRequest):
     _require_personal_inbox_access(req.current_user)
     _ensure_yggl_email_columns()
     affected = db.execute_update(
@@ -1421,7 +1421,7 @@ async def sync_personal_inbox(current_user: str = Query(...)):
 
 
 @router.get("/personal/tasks")
-async def list_personal_inbox_tasks(current_user: str = Query(...), limit: int = Query(50, ge=1, le=200)):
+def list_personal_inbox_tasks(current_user: str = Query(...), limit: int = Query(50, ge=1, le=200)):
     _require_personal_inbox_access(current_user)
     owner = current_user.strip()
     rows = db.execute_query(
@@ -1440,7 +1440,7 @@ async def list_personal_inbox_tasks(current_user: str = Query(...), limit: int =
 
 
 @router.get("/personal/detail")
-async def get_personal_inbox_detail(current_user: str = Query(...), id: int = Query(..., ge=1)):
+def get_personal_inbox_detail(current_user: str = Query(...), id: int = Query(..., ge=1)):
     _require_personal_inbox_access(current_user)
     rows = db.execute_query(
         """SELECT id,message_id,subject,from_addr,to_addrs,cc_addrs,email_date,received_at,body_text,body_html
@@ -1468,7 +1468,7 @@ async def analyze_personal_inbox(current_user: str = Query(...), limit: int = Qu
 
 
 @router.post("/personal/task-deadline")
-async def update_personal_inbox_task_deadline(req: InboxTaskDeadlineRequest):
+def update_personal_inbox_task_deadline(req: InboxTaskDeadlineRequest):
     _require_personal_inbox_access(req.current_user)
     owner = req.current_user.strip()
     deadline = _normalize_task_deadline(req.task_deadline)

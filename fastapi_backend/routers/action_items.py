@@ -1819,14 +1819,14 @@ def _risk_tags(row: dict) -> list[str]:
 
 
 @router.get("/permissions")
-async def get_permissions(current_user: str = Query(...)):
+def get_permissions(current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     return {"success": True, "user": ctx, "permissions": _permissions(ctx)}
 
 
 @router.get("/directory")
-async def get_directory(current_user: str = Query(...)):
+def get_directory(current_user: str = Query(...)):
     ensure_tables()
     _user(current_user)
     rows = db.execute_query(
@@ -1927,7 +1927,7 @@ async def create_minutes(
 
 
 @router.get("/minutes")
-async def list_minutes(
+def list_minutes(
     current_user: str = Query(...), keyword: str = Query(""),
     meeting_type: str = Query(""), page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
@@ -1969,7 +1969,7 @@ async def list_minutes(
 
 
 @router.delete("/minutes/{minutes_id}")
-async def delete_draft_minutes(
+def delete_draft_minutes(
     minutes_id: int, current_user: str = Query(...),
 ):
     """删除尚未发布的会议纪要及其草稿行动项、附件和过程记录。"""
@@ -2069,7 +2069,7 @@ async def delete_draft_minutes(
 
 
 @router.get("/minutes/{minutes_id}")
-async def get_minutes(minutes_id: int, current_user: str = Query(...)):
+def get_minutes(minutes_id: int, current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     rows = db.execute_query("SELECT * FROM meeting_minutes WHERE id=%s LIMIT 1", (minutes_id,))
@@ -2100,7 +2100,7 @@ async def get_minutes(minutes_id: int, current_user: str = Query(...)):
 
 
 @router.post("/minutes/{minutes_id}/extract")
-async def extract_minutes(minutes_id: int, current_user: str = Query(...)):
+def extract_minutes(minutes_id: int, current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     if not ctx["minutes_admin"]:
@@ -2467,7 +2467,7 @@ def _create_responsible_reminders(
 
 
 @router.post("/drafts")
-async def create_draft(req: DraftCreateRequest):
+def create_draft(req: DraftCreateRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     if not ctx["action_creator"]:
@@ -2529,7 +2529,7 @@ async def create_draft(req: DraftCreateRequest):
 
 
 @router.put("/{action_id}")
-async def edit_action(action_id: int, req: ActionEditRequest):
+def edit_action(action_id: int, req: ActionEditRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     action = _action_row(action_id)
@@ -2671,7 +2671,7 @@ async def edit_action(action_id: int, req: ActionEditRequest):
 
 
 @router.post("/merge")
-async def merge_actions(req: MergeRequest):
+def merge_actions(req: MergeRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     if not ctx["minutes_admin"]:
@@ -2722,7 +2722,7 @@ async def merge_actions(req: MergeRequest):
 
 
 @router.post("/{action_id}/split")
-async def split_action(action_id: int, req: SplitRequest):
+def split_action(action_id: int, req: SplitRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     if not ctx["minutes_admin"]:
@@ -2761,7 +2761,7 @@ async def split_action(action_id: int, req: SplitRequest):
 
 
 @router.post("/{action_id}/cancel-draft")
-async def cancel_action_draft(action_id: int, req: ReceiveRequest):
+def cancel_action_draft(action_id: int, req: ReceiveRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     if not ctx["minutes_admin"]:
@@ -2781,7 +2781,7 @@ class CancelPublishedRequest(BaseModel):
 
 
 @router.post("/{action_id}/cancel")
-async def cancel_published_action(action_id: int, req: CancelPublishedRequest):
+def cancel_published_action(action_id: int, req: CancelPublishedRequest):
     """综合室/系统管理员在台账中取消已发布行动项（软删除，保留审计）。"""
     ensure_tables()
     ctx = _role_context(req.current_user)
@@ -2807,7 +2807,7 @@ async def cancel_published_action(action_id: int, req: CancelPublishedRequest):
 
 
 @router.post("/publish")
-async def publish_actions(req: PublishRequest):
+def publish_actions(req: PublishRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     if not ctx["minutes_admin"]:
@@ -3062,7 +3062,7 @@ def _build_action_list(
 
 
 @router.get("")
-async def list_actions(
+def list_actions(
     current_user: str = Query(...), keyword: str = Query(""),
     meeting_id: Optional[int] = Query(None), minutes_number: str = Query(""),
     department: str = Query(""), responsible_person: str = Query(""),
@@ -3093,7 +3093,7 @@ async def list_actions(
 
 
 @router.get("/dashboard")
-async def dashboard(current_user: str = Query(...)):
+def dashboard(current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     visible, params = _visible_action_sql(ctx, "a")
@@ -3141,7 +3141,7 @@ async def dashboard(current_user: str = Query(...)):
 
 
 @router.get("/export")
-async def export_actions(
+def export_actions(
     current_user: str = Query(...), keyword: str = Query(""),
     department: str = Query(""), status: str = Query(""),
 ):
@@ -3177,7 +3177,7 @@ async def export_actions(
 
 
 @router.post("/{action_id}/receive")
-async def receive_action(action_id: int, req: ReceiveRequest):
+def receive_action(action_id: int, req: ReceiveRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     action = _action_row(action_id)
@@ -3239,7 +3239,7 @@ async def receive_action(action_id: int, req: ReceiveRequest):
 
 
 @router.post("/{action_id}/assign")
-async def assign_responsible_person(action_id: int, req: AssignRequest):
+def assign_responsible_person(action_id: int, req: AssignRequest):
     """责任科室负责人在任务接收前完成初次分配，并保留完整变更和审批记录。"""
     ensure_tables()
     ctx = _role_context(req.current_user)
@@ -3509,7 +3509,7 @@ async def apply_completion(
 
 
 @router.post("/completions/{application_id}/approve")
-async def approve_completion(application_id: int, req: ApprovalRequest):
+def approve_completion(application_id: int, req: ApprovalRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     rows = db.execute_query(
@@ -3596,7 +3596,7 @@ async def approve_completion(application_id: int, req: ApprovalRequest):
 
 
 @router.post("/{action_id}/changes")
-async def apply_change(action_id: int, req: ChangeRequest):
+def apply_change(action_id: int, req: ChangeRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     action = _action_row(action_id)
@@ -3639,7 +3639,7 @@ async def apply_change(action_id: int, req: ChangeRequest):
 
 
 @router.post("/changes/{change_id}/approve")
-async def approve_change(change_id: int, req: ApprovalRequest):
+def approve_change(change_id: int, req: ApprovalRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     rows = db.execute_query(
@@ -3789,7 +3789,7 @@ async def approve_change(change_id: int, req: ApprovalRequest):
 
 
 @router.get("/approvals/pending")
-async def pending_approvals(current_user: str = Query(...)):
+def pending_approvals(current_user: str = Query(...)):
     """返回当前用户有权审批的完工申请和行动项变更。"""
     ensure_tables()
     ctx = _role_context(current_user)
@@ -3828,7 +3828,7 @@ async def pending_approvals(current_user: str = Query(...)):
 
 
 @router.post("/{action_id}/remind")
-async def manual_remind(
+def manual_remind(
     action_id: int, current_user: str = Form(...), note: str = Form("请及时更新行动项进展"),
 ):
     ensure_tables()
@@ -3874,7 +3874,7 @@ async def manual_remind(
 
 
 @router.get("/reminders/my")
-async def my_reminders(
+def my_reminders(
     current_user: str = Query(...), unread_only: bool = Query(True),
     limit: int = Query(50, ge=1, le=200),
 ):
@@ -3899,7 +3899,7 @@ async def my_reminders(
 
 
 @router.post("/reminders/{reminder_id}/read")
-async def read_reminder(reminder_id: int, req: ReceiveRequest):
+def read_reminder(reminder_id: int, req: ReceiveRequest):
     ensure_tables()
     ctx = _role_context(req.current_user)
     affected = db.execute_update(
@@ -3971,7 +3971,7 @@ def run_action_reminder_scan() -> dict:
 
 
 @router.post("/reminders/scan")
-async def scan_reminders(current_user: str = Query(...)):
+def scan_reminders(current_user: str = Query(...)):
     ctx = _role_context(current_user)
     if not ctx["admin"]:
         raise HTTPException(status_code=403, detail="仅系统管理员可手工触发提醒扫描")
@@ -3989,7 +3989,7 @@ async def action_reminder_background_loop() -> None:
 
 
 @router.get("/attachments/{attachment_id}")
-async def download_attachment(attachment_id: int, current_user: str = Query(...)):
+def download_attachment(attachment_id: int, current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     rows = db.execute_query("SELECT * FROM action_attachment WHERE id=%s LIMIT 1", (attachment_id,))
@@ -4011,7 +4011,7 @@ async def download_attachment(attachment_id: int, current_user: str = Query(...)
 
 
 @router.get("/{action_id}")
-async def get_action_detail(action_id: int, current_user: str = Query(...)):
+def get_action_detail(action_id: int, current_user: str = Query(...)):
     ensure_tables()
     ctx = _role_context(current_user)
     action = _action_row(action_id)

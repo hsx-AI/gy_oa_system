@@ -744,7 +744,7 @@ def _leader_overtime_for_record(record: Dict, holidays: Dict[str, str], holiday_
 
 
 @router.get("/dept/leader-overtime")
-async def get_leader_overtime_from_attendance(
+def get_leader_overtime_from_attendance(
     year: int = Query(..., description="年份"),
     month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD，与 date_to 同时传入时按日期区间统计"),
@@ -879,7 +879,7 @@ async def get_leader_overtime_from_attendance(
 
 
 @router.get("/dept/leader-overtime-baseline")
-async def get_leader_overtime_rank_baseline(
+def get_leader_overtime_rank_baseline(
     year: Optional[int] = Query(None, description="基准年份，不传默认上一年"),
     current_user: Optional[str] = Query(None, description="当前用户，用于权限校验"),
 ):
@@ -909,7 +909,7 @@ async def get_leader_overtime_rank_baseline(
 
 
 @router.post("/dept/leader-overtime-baseline")
-async def save_leader_overtime_rank_baseline(payload: Dict[str, Any] = Body(...)):
+def save_leader_overtime_rank_baseline(payload: Dict[str, Any] = Body(...)):
     """保存中层领导干部月均加班天数排名基准，一次覆盖指定年份。"""
     try:
         current_user = (payload.get("current_user") or "").strip()
@@ -958,7 +958,7 @@ async def save_leader_overtime_rank_baseline(payload: Dict[str, Any] = Body(...)
 # ==================== 科室列表（部长/副部长可选任意科室） ====================
 
 @router.get("/dept/lsys-list")
-async def get_dept_lsys_list():
+def get_dept_lsys_list():
     """
     获取全部隶属科室列表（用于领导人看板：部长/副部长可下拉选择任意科室）
     返回: { success, list: ["部办", "科室A", ...] }
@@ -980,7 +980,7 @@ async def get_dept_lsys_list():
 # ==================== 请假科室统计 ====================
 
 @router.get("/dept/leave")
-async def get_dept_leave_stats(
+def get_dept_leave_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = None,
@@ -1213,7 +1213,7 @@ def _calc_auto_overtime_hours_from_attendance(
 
 
 @router.get("/dept/overtime")
-async def get_dept_overtime_stats(
+def get_dept_overtime_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = None,
@@ -1453,7 +1453,7 @@ def _month_key_in_period(month_key: str, range_start: date, range_end: date) -> 
 
 
 @router.get("/dept/overtime-pay-by-month")
-async def get_dept_overtime_pay_by_month(
+def get_dept_overtime_pay_by_month(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年；与 date_from/date_to 互斥"),
@@ -1549,7 +1549,7 @@ async def get_dept_overtime_pay_by_month(
 
 
 @router.get("/dept/overtime-pay-by-employee")
-async def get_dept_overtime_pay_by_employee(
+def get_dept_overtime_pay_by_employee(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空返回空列表（传 name 时可为空）"),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="筛选月份，不传为全年；与 date_from/date_to 互斥"),
@@ -1626,7 +1626,7 @@ async def get_dept_overtime_pay_by_employee(
 
 
 @router.get("/dept/overtime-pay-export")
-async def get_overtime_pay_export(
+def get_overtime_pay_export(
     year: Optional[int] = Query(None, description="年份（与 month 配合；自定义区间时可省略）"),
     month: Optional[int] = Query(None, ge=1, le=12, description="月份；与 date_from/date_to 互斥"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
@@ -1727,7 +1727,7 @@ async def get_overtime_pay_export(
 
 
 @router.get("/dept/overtime-hours-export")
-async def get_overtime_hours_export(
+def get_overtime_hours_export(
     year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
     month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
@@ -1837,7 +1837,7 @@ async def get_overtime_hours_export(
 
 
 @router.get("/dept/leave-hours-export")
-async def get_leave_hours_export(
+def get_leave_hours_export(
     year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
     month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
@@ -1945,7 +1945,7 @@ async def get_leave_hours_export(
 
 
 @router.get("/dept/business-trip-hours-export")
-async def get_business_trip_hours_export(
+def get_business_trip_hours_export(
     year: Optional[int] = Query(None, description="年份；自定义区间时可仅依赖 date_from"),
     month: Optional[int] = Query(None, ge=1, le=12, description="月份，不传为全年；与 date_from/date_to 互斥"),
     date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
@@ -2043,7 +2043,7 @@ async def get_business_trip_hours_export(
 # ==================== 公出科室统计 ====================
 
 @router.get("/dept/business-trip")
-async def get_dept_business_trip_stats(
+def get_dept_business_trip_stats(
     lsys: Optional[str] = Query(None, description="隶属于室，不传或空为全员"),
     year: Optional[int] = None,
     month: Optional[int] = None,
@@ -2304,7 +2304,7 @@ def _compute_abnormal_set(names: List[str], year: int, month: Optional[int] = No
 # ==================== 个人满勤查询 ====================
 
 @router.get("/person/full-attendance")
-async def get_person_full_attendance(
+def get_person_full_attendance(
     name: str = Query(..., description="员工姓名"),
     year: int = Query(..., description="年份"),
     month: int = Query(..., ge=1, le=12, description="月份"),
@@ -2328,7 +2328,7 @@ async def get_person_full_attendance(
 # ==================== 领导人看板扩展 API ====================
 
 @router.get("/leader/full-attendance")
-async def get_leader_full_attendance(
+def get_leader_full_attendance(
     year: int = Query(..., description="年份"),
     month: int = Query(..., description="月份"),
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
@@ -2414,7 +2414,7 @@ async def get_leader_full_attendance(
 
 
 @router.get("/leader/full-attendance-export")
-async def get_leader_full_attendance_export(
+def get_leader_full_attendance_export(
     year: int = Query(..., description="年份"),
     month: Optional[int] = Query(None, description="月份，不传则全年"),
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
@@ -2505,7 +2505,7 @@ async def get_leader_full_attendance_export(
 
 
 @router.get("/leader/full-attendance-year")
-async def get_leader_full_attendance_year(
+def get_leader_full_attendance_year(
     year: int = Query(..., description="年份"),
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
 ):
@@ -2585,7 +2585,7 @@ async def get_leader_full_attendance_year(
 
 
 @router.get("/leader/full-attendance-by-month")
-async def get_leader_full_attendance_by_month(
+def get_leader_full_attendance_by_month(
     year: int = Query(..., description="年份"),
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
 ):
@@ -2638,7 +2638,7 @@ async def get_leader_full_attendance_by_month(
 
 
 @router.get("/leader/dept-comparison")
-async def get_leader_dept_comparison(
+def get_leader_dept_comparison(
     year: int = Query(..., description="年份"),
     month: Optional[int] = Query(None, description="月份，不传则全年")
 ):
@@ -2810,7 +2810,7 @@ async def get_leader_dept_comparison(
 
 
 @router.get("/leader/rankings")
-async def get_leader_rankings(
+def get_leader_rankings(
     year: int = Query(..., description="年份"),
     month: Optional[int] = Query(None, description="月份，不传则全年"),
     type_: str = Query("overtime", alias="type", description="overtime|leave|trip")
@@ -3063,7 +3063,7 @@ def _normalize_discipline_minutes(v, default: int = 2) -> int:
 
 
 @router.get("/discipline/clock-in-stats")
-async def get_clock_in_discipline_stats(
+def get_clock_in_discipline_stats(
     year: int = Query(...),
     month: Optional[int] = Query(None),
     lsys: Optional[str] = Query(None),
@@ -3186,7 +3186,7 @@ async def get_clock_in_discipline_stats(
 
 
 @router.get("/discipline/person-scatter")
-async def get_person_scatter(
+def get_person_scatter(
     name: str = Query(..., description="员工姓名"),
     start_date: str = Query(..., description="起始日期 YYYY-MM-DD"),
     end_date: str = Query(..., description="结束日期 YYYY-MM-DD"),
@@ -3250,7 +3250,7 @@ async def get_person_scatter(
 # ============================================================
 
 @router.get("/discipline/holiday-duty-attendance")
-async def get_holiday_duty_attendance(
+def get_holiday_duty_attendance(
     name: str = Query(..., description="当前登录用户姓名，用于鉴权"),
     start_date: str = Query(..., description="Start date, YYYY-MM-DD"),
     end_date: str = Query(..., description="End date, YYYY-MM-DD"),
@@ -4047,7 +4047,7 @@ def _leader_style_overtime_hours_from_attendance(names: List[str], start: date, 
 
 
 @router.get("/leader/work-intensity")
-async def get_work_intensity(
+def get_work_intensity(
     year: int = Query(..., description="年份（日期区间模式仍需传入以保持兼容）"),
     month: Optional[int] = Query(None, description="月份，不传则全年；与 date_from/date_to 互斥"),
     lsys: Optional[str] = Query(None, description="科室，不传则全员"),
@@ -4352,7 +4352,7 @@ def _fmt_days(val: float) -> str:
 
 
 @router.get("/leader/attendance-report-export")
-async def attendance_report_export(
+def attendance_report_export(
     year: int = Query(...),
     month: int = Query(..., ge=1, le=12),
     lsys: Optional[str] = Query(None, description="科室，不传则按全部科室分别生成"),

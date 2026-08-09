@@ -235,7 +235,7 @@ async def whistle_submit(
 
 
 @router.get("/whistle/list")
-async def whistle_list(current_user: str = Query("")):
+def whistle_list(current_user: str = Query("")):
     """实名信息仅管理员和领导可见，公开列表始终保护吹哨人身份。"""
     _ensure_tables()
     privileged = _is_wall_privileged_user(current_user)
@@ -265,7 +265,7 @@ async def whistle_list(current_user: str = Query("")):
 
 
 @router.post("/whistle/{item_id}/verify")
-async def whistle_verify(item_id: str, req: WhistleVerify):
+def whistle_verify(item_id: str, req: WhistleVerify):
     _ensure_tables()
     if not _is_wall_privileged_user(req.current_user):
         raise HTTPException(status_code=403, detail="仅管理员或领导可核实吹哨信息")
@@ -286,7 +286,7 @@ async def whistle_verify(item_id: str, req: WhistleVerify):
 
 
 @router.get("/whistle/image")
-async def whistle_image(filename: str = Query(...)):
+def whistle_image(filename: str = Query(...)):
     safe = Path(filename).name
     fpath = WHISTLE_UPLOAD_DIR / safe
     if not fpath.exists():
@@ -526,7 +526,7 @@ def _build_wall_items(rows):
 
 
 @router.get("/wall/list")
-async def wall_list(include_all: bool = Query(False), current_user: str = Query("")):
+def wall_list(include_all: bool = Query(False), current_user: str = Query("")):
     """获取吐槽墙列表。
 
     默认返回已通过：未解决始终展示；已解决自 resolved_at 起保留 WALL_RESOLVED_PUBLIC_VISIBLE_DAYS 天，超时不再出现在公开列表。
@@ -549,7 +549,7 @@ async def wall_list(include_all: bool = Query(False), current_user: str = Query(
 
 
 @router.get("/wall/records")
-async def wall_records(current_user: str = Query("")):
+def wall_records(current_user: str = Query("")):
     """获取吐槽墙记录。管理员/领导可看全部，普通用户与公开列表一致（已解决仅保留 resolved_at 起算若干天内）。"""
     _ensure_tables()
     select_sql = (
@@ -565,7 +565,7 @@ async def wall_records(current_user: str = Query("")):
 
 
 @router.get("/wall/assigned")
-async def wall_assigned(current_user: str = Query(...)):
+def wall_assigned(current_user: str = Query(...)):
     """当前用户被指派处理、且尚未解决的吐槽问题（首页待办使用）"""
     _ensure_tables()
     name = (current_user or "").strip()
@@ -582,7 +582,7 @@ async def wall_assigned(current_user: str = Query(...)):
 
 
 @router.get("/wall/pending")
-async def wall_pending(current_user: str = Query(...)):
+def wall_pending(current_user: str = Query(...)):
     """待审核列表（admin1 或经理层）"""
     _ensure_tables()
     _require_wall_reviewer(current_user)
@@ -604,7 +604,7 @@ async def wall_pending(current_user: str = Query(...)):
 
 
 @router.post("/wall/{item_id}/review")
-async def wall_review(item_id: str, req: WallReview):
+def wall_review(item_id: str, req: WallReview):
     """审核吐槽（approve/reject，admin1 或经理层）"""
     _ensure_tables()
     _require_wall_reviewer(req.current_user)
@@ -636,7 +636,7 @@ class WallLike(BaseModel):
 
 
 @router.post("/wall/{item_id}/like")
-async def wall_like(item_id: str, req: WallLike):
+def wall_like(item_id: str, req: WallLike):
     """点赞/取消点赞"""
     _ensure_tables()
     name = (req.current_user or "").strip()
@@ -680,7 +680,7 @@ async def wall_like(item_id: str, req: WallLike):
 
 
 @router.get("/wall/{item_id}/detail")
-async def wall_detail(item_id: str, current_user: str = Query("")):
+def wall_detail(item_id: str, current_user: str = Query("")):
     """获取单条吐槽的详情（含全部领导回复和当前用户是否已点赞）"""
     _ensure_tables()
     rows = db.execute_query(
@@ -747,7 +747,7 @@ class WallReplyReq(BaseModel):
 
 
 @router.post("/wall/{item_id}/reply")
-async def wall_reply(item_id: str, req: WallReplyReq):
+def wall_reply(item_id: str, req: WallReplyReq):
     """领导回复吐槽"""
     _ensure_tables()
     name = (req.current_user or "").strip()
@@ -801,7 +801,7 @@ class WallResolve(BaseModel):
 
 
 @router.post("/wall/{item_id}/resolve")
-async def wall_resolve(item_id: str, req: WallResolve):
+def wall_resolve(item_id: str, req: WallResolve):
     """领导标记吐槽处理状态"""
     _ensure_tables()
     name = (req.current_user or "").strip()
@@ -833,7 +833,7 @@ async def wall_resolve(item_id: str, req: WallResolve):
 
 
 @router.get("/wall/image")
-async def wall_image(filename: str = Query(...)):
+def wall_image(filename: str = Query(...)):
     """获取吐槽墙图片"""
     safe = Path(filename).name
     fpath = WALL_UPLOAD_DIR / safe
@@ -883,7 +883,7 @@ class LeaderMarkRead(BaseModel):
 
 
 @router.get("/leader/targets")
-async def leader_targets():
+def leader_targets():
     """获取可选领导列表（yggl.jb 含经理/副经理）"""
     _ensure_tables()
     rows = db.execute_query(
@@ -926,7 +926,7 @@ async def leader_submit(
 
 
 @router.get("/leader/inbox")
-async def leader_inbox(current_user: str = Query(...)):
+def leader_inbox(current_user: str = Query(...)):
     """领导查看收到的匿名意见。status：0=未读，1=已读（历史数据中曾回复过的同为 1）。"""
     _ensure_tables()
     name = (current_user or "").strip()
@@ -955,7 +955,7 @@ async def leader_inbox(current_user: str = Query(...)):
 
 
 @router.post("/leader/mark-read")
-async def leader_mark_read(req: LeaderMarkRead):
+def leader_mark_read(req: LeaderMarkRead):
     """将全部匿名意见标记为已读（不再要求回复）。"""
     _ensure_tables()
     name = (req.current_user or "").strip()
@@ -969,19 +969,19 @@ async def leader_mark_read(req: LeaderMarkRead):
 
 
 @router.post("/leader/{item_id}/reply")
-async def leader_reply(item_id: str, req: LeaderReply):
+def leader_reply(item_id: str, req: LeaderReply):
     """领导匿名信箱禁用回复。"""
     raise HTTPException(status_code=403, detail="领导匿名信箱已禁用回复")
 
 
 @router.get("/leader/public")
-async def leader_public():
+def leader_public():
     """领导匿名信箱不再公示，固定返回空列表。"""
     return {"success": True, "data": []}
 
 
 @router.get("/leader/image")
-async def leader_image(filename: str = Query(...)):
+def leader_image(filename: str = Query(...)):
     """获取领导信箱附图"""
     safe = Path(filename).name
     fpath = LEADER_UPLOAD_DIR / safe
@@ -1054,7 +1054,7 @@ async def system_submit(
 
 
 @router.get("/system/list")
-async def system_list():
+def system_list():
     """全部建议列表（含回复）"""
     _ensure_tables()
     rows = db.execute_query(
@@ -1082,7 +1082,7 @@ async def system_list():
 
 
 @router.get("/system/image")
-async def system_image(filename: str = Query(...)):
+def system_image(filename: str = Query(...)):
     """获取系统建议附图"""
     safe = Path(filename).name
     fpath = SYSTEM_UPLOAD_DIR / safe
@@ -1098,7 +1098,7 @@ async def system_image(filename: str = Query(...)):
 
 
 @router.post("/system/{item_id}/reply")
-async def system_reply(item_id: str, req: SystemReply):
+def system_reply(item_id: str, req: SystemReply):
     """admin1 回复系统功能建议"""
     _ensure_tables()
     _require_admin1(req.current_user)

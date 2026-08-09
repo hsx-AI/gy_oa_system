@@ -102,7 +102,7 @@ def _build_where(keyword: str = ""):
 
 
 @router.get("/records")
-async def list_records(
+def list_records(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=500),
     keyword: str = Query(""),
@@ -127,7 +127,7 @@ async def list_records(
 
 
 @router.post("/records")
-async def create_record(
+def create_record(
     applicant: str = Form(""),
     paper_title: str = Form(""),
     apply_time: str = Form(""),
@@ -165,7 +165,7 @@ async def create_record(
 
 
 @router.put("/records/{record_id}")
-async def update_record(
+def update_record(
     record_id: int,
     applicant: str = Form(""),
     paper_title: str = Form(""),
@@ -203,7 +203,7 @@ async def update_record(
 
 
 @router.delete("/records/{record_id}")
-async def delete_record(record_id: int):
+def delete_record(record_id: int):
     """删除台账记录。"""
     _ensure_table()
     affected = db.execute_update("DELETE FROM confidentiality_ledger WHERE id = %s", (record_id,))
@@ -261,7 +261,7 @@ def _build_workbook(rows):
 
 
 @router.get("/export")
-async def export_records(keyword: Optional[str] = Query("")):
+def export_records(keyword: Optional[str] = Query("")):
     """导出论文保密审批台账 Excel。"""
     _ensure_table()
     where_clause, params = _build_where(keyword or "")

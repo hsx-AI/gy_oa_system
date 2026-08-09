@@ -93,7 +93,7 @@ def _get_llm_config() -> dict:
 
 
 @router.get("", response_model=HolidayResponse)
-async def get_holidays(
+def get_holidays(
     year: Optional[str] = Query(None, description="年份，例如：2025")
 ):
     """
@@ -119,7 +119,7 @@ async def get_holidays(
 
 
 @router.post("/save", response_model=HolidayResponse)
-async def save_holidays(
+def save_holidays(
     year: str = Query(..., description="年份，例如：2025"),
     current_user: str = Query(..., description="当前操作人（需为打卡管理员）"),
     holidays: List[Holiday] = None,
@@ -176,7 +176,7 @@ async def save_holidays(
 
 
 @router.get("/template")
-async def download_holiday_template(
+def download_holiday_template(
     year: str = Query(..., description="年份，例如：2025"),
     current_user: str = Query(..., description="当前操作人（需为打卡管理员）"),
 ):
@@ -551,7 +551,7 @@ def _validate_parse_request(req: HolidayParseRequest) -> int:
 
 
 @router.post("/parse-text", response_model=HolidayResponse)
-async def parse_holiday_text(req: HolidayParseRequest):
+def parse_holiday_text(req: HolidayParseRequest):
     """
     使用本地大模型解析一段放假通知文本，自动生成并保存某年的假期与调休设置。
     仅打卡管理员或系统管理员可操作。

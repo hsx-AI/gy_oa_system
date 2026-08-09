@@ -544,7 +544,7 @@ async def submit_holiday_exchange(
 
 
 @router.get("/holiday-exchange/list")
-async def get_holiday_exchange_list(
+def get_holiday_exchange_list(
     name: str = Query(...),
     year: Optional[int] = None,
     month: Optional[int] = None,
@@ -780,7 +780,7 @@ async def resubmit_holiday_exchange(
 
 
 @router.delete("/holiday-exchange/{item_id}")
-async def delete_holiday_exchange(item_id: str, name: str = Query(...)):
+def delete_holiday_exchange(item_id: str, name: str = Query(...)):
     """删除已驳回的记录"""
     try:
         rows = db.execute_query(
@@ -803,7 +803,7 @@ async def delete_holiday_exchange(item_id: str, name: str = Query(...)):
 
 
 @router.get("/holiday-exchange/download/{filename}")
-async def download_material(filename: str):
+def download_material(filename: str):
     """下载佐证材料"""
     file_path = UPLOAD_HE_MATERIALS / filename
     if not file_path.exists():
@@ -815,7 +815,7 @@ async def download_material(filename: str):
 
 
 @router.get("/approval/pending/holiday-exchange")
-async def get_pending_holiday_exchange(approver: str = Query(...)):
+def get_pending_holiday_exchange(approver: str = Query(...)):
     """获取待审批列表"""
     try:
         query = """
@@ -864,7 +864,7 @@ async def get_pending_holiday_exchange(approver: str = Query(...)):
 
 
 @router.get("/approval/holiday-exchange/{item_id}")
-async def get_holiday_exchange_detail(item_id: str):
+def get_holiday_exchange_detail(item_id: str):
     """获取详情"""
     rows = db.execute_query(
         "SELECT * FROM holiday_exchange WHERE id = %s", (item_id,)
@@ -916,7 +916,7 @@ class _ApproveReq(BaseModel):
 
 
 @router.post("/approval/holiday-exchange/{item_id}/action")
-async def holiday_exchange_approve(item_id: str, req: _ApproveReq):
+def holiday_exchange_approve(item_id: str, req: _ApproveReq):
     """单条审批"""
     rows = db.execute_query(
         "SELECT id, status, xm, hxp_count, date_from, date_to FROM holiday_exchange WHERE id = %s",
@@ -988,7 +988,7 @@ async def holiday_exchange_batch(req: _BatchReq):
 # ==================== 换休票汇总明细（公出 + 值班） ====================
 
 @router.get("/holiday-exchange/summary")
-async def get_holiday_exchange_summary(
+def get_holiday_exchange_summary(
     name: str = Query(...),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, description="月份筛选 1-12，不传则全年"),

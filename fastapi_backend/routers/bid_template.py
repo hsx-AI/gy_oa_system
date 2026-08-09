@@ -179,7 +179,7 @@ def _format_template(row: Dict[str, Any]) -> Dict[str, Any]:
 
 
 @router.get("/options")
-async def get_options():
+def get_options():
     """获取下拉选项，包含固定选项和历史已用值。"""
     _ensure_tables()
 
@@ -213,7 +213,7 @@ async def get_options():
 
 
 @router.get("/list")
-async def list_templates(
+def list_templates(
     keyword: Optional[str] = Query(None),
     machine_type: Optional[str] = Query(None),
     file_scope: Optional[str] = Query(None),
@@ -426,7 +426,7 @@ async def upload_template(
 
 
 @router.get("/history")
-async def get_history(template_id: str = Query(...)):
+def get_history(template_id: str = Query(...)):
     """获取某个模板的历史版本。"""
     _ensure_tables()
     tid = _text(template_id)
@@ -466,7 +466,7 @@ async def get_history(template_id: str = Query(...)):
 
 
 @router.get("/file")
-async def get_file(
+def get_file(
     template_id: Optional[str] = Query(None),
     version_id: Optional[str] = Query(None),
 ):

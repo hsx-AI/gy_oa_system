@@ -167,7 +167,7 @@ async def apply_leave(
 
 
 @router.get("/leave/download-material/{filename}")
-async def download_leave_material(filename: str):
+def download_leave_material(filename: str):
     """下载请假说明材料文件"""
     if not filename or ".." in filename or "/" in filename or "\\" in filename:
         raise HTTPException(status_code=400, detail="无效文件名")
@@ -178,7 +178,7 @@ async def download_leave_material(filename: str):
 
 
 @router.post("/leave/apply-json")
-async def apply_leave_json(req: LeaveApplyRequest):
+def apply_leave_json(req: LeaveApplyRequest):
     """
     申请请假（JSON 方式，兼容无文件上传的客户端）
     """
@@ -317,7 +317,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
 
 
 @router.get("/leave/list")
-async def get_leave_list(
+def get_leave_list(
     name: str,
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按请假开始时间所在年月筛选"),
@@ -417,7 +417,7 @@ async def get_leave_list(
 
 
 @router.get("/leave/all-records")
-async def get_leave_all_records(
+def get_leave_all_records(
     name: str = Query(..., description="当前用户姓名"),
     year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
     month: Optional[int] = Query(None, description="按月份筛选，不传则全年"),
@@ -594,7 +594,7 @@ async def resubmit_leave(
 
 
 @router.delete("/leave/{item_id}")
-async def delete_leave_rejected(item_id: str, name: str):
+def delete_leave_rejected(item_id: str, name: str):
     """删除本人已驳回的请假记录（仅 qjzt=22 可删），数据库物理删除"""
     try:
         rows = db.execute_query("SELECT id, qjzt, xm FROM qj WHERE id = %s", (item_id,))
@@ -750,7 +750,7 @@ def round_overtime_hours_down(hours: float) -> float:
 
 
 @router.post("/overtime/register")
-async def register_overtime(req: OvertimeRegisterRequest):
+def register_overtime(req: OvertimeRegisterRequest):
     """
     加班登记 - 插入 jiaban 表
     jiabanzt: 0=待审批, 4=已通过
@@ -829,7 +829,7 @@ async def register_overtime(req: OvertimeRegisterRequest):
 
 
 @router.get("/overtime/list")
-async def get_overtime_list(
+def get_overtime_list(
     name: str,
     year: Optional[int] = None,
     month: Optional[int] = None,
@@ -954,7 +954,7 @@ async def get_overtime_list(
 
 
 @router.post("/overtime/{item_id}/resubmit")
-async def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
+def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
     """修改并重新提交已驳回的加班记录（jiabanzt 22→0，更新字段）"""
     try:
         rows = db.execute_query("SELECT id, jiabanzt, xm FROM jiaban WHERE id = %s", (item_id,))
@@ -1016,7 +1016,7 @@ async def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
 
 
 @router.delete("/overtime/{item_id}")
-async def delete_overtime_rejected(item_id: str, name: str):
+def delete_overtime_rejected(item_id: str, name: str):
     """删除本人已驳回的加班记录（仅 jiabanzt=22 可删），数据库物理删除"""
     try:
         rows = db.execute_query("SELECT id, jiabanzt, xm FROM jiaban WHERE id = %s", (item_id,))
@@ -1039,7 +1039,7 @@ async def delete_overtime_rejected(item_id: str, name: str):
 
 
 @router.get("/overtime/webconfig")
-async def get_overtime_webconfig():
+def get_overtime_webconfig():
     """
     获取加班相关配置（用于“否”换休票时计算其他绩效激励）。
     返回 webconfig 表中的 zhibanfei（每小时其他绩效激励，元），若表不存在或无记录则返回默认 15。

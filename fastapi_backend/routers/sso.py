@@ -117,7 +117,7 @@ async def get_personnel_pending_count(
 
 
 @router.get("/link")
-async def get_sso_link(
+def get_sso_link(
     target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),
     name: str = Query(..., description="当前登录用户姓名，用于校验并生成 ticket"),
 ):

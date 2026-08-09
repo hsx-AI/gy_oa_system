@@ -64,7 +64,7 @@ def _get_cached(cache_key: str) -> Any:
 
 
 @router.post("/push/data")
-async def push_data(req: PushDataRequest):
+def push_data(req: PushDataRequest):
     cache_key = f"{req.type}:{req.key}"
     store = _load_store()
     store[cache_key] = {
@@ -91,7 +91,7 @@ async def push_media(name: str = Form(...), file: UploadFile = File(...)):
 
 
 @router.post("/push/clear")
-async def clear_cache(req: ClearCacheRequest):
+def clear_cache(req: ClearCacheRequest):
     store = _load_store()
     if req.scope == "all":
         removed_keys = len(store)
@@ -129,32 +129,32 @@ async def clear_cache(req: ClearCacheRequest):
 
 
 @router.get("/weather/now")
-async def weather_now(location: str = Query(...)):
+def weather_now(location: str = Query(...)):
     return _get_cached(f"weather:now:{location}")
 
 
 @router.get("/weather/hourly/{hours}")
-async def weather_hourly(hours: str, location: str = Query(...)):
+def weather_hourly(hours: str, location: str = Query(...)):
     return _get_cached(f"weather:hourly:{hours}:{location}")
 
 
 @router.get("/weather/daily/{days}")
-async def weather_daily(days: str, location: str = Query(...)):
+def weather_daily(days: str, location: str = Query(...)):
     return _get_cached(f"weather:daily:{days}:{location}")
 
 
 @router.get("/news/list")
-async def news_list(type: str = Query("scroll"), page: str = Query("1")):
+def news_list(type: str = Query("scroll"), page: str = Query("1")):
     return _get_cached(f"news:list:{type}:{page}")
 
 
 @router.get("/news/detail")
-async def news_detail(uniquekey: str = Query(...)):
+def news_detail(uniquekey: str = Query(...)):
     return _get_cached(f"news:detail:{uniquekey}")
 
 
 @router.get("/summary")
-async def summary():
+def summary():
     store = _load_store()
     keys = sorted(store.keys())
     latest = ""
@@ -166,7 +166,7 @@ async def summary():
 
 
 @router.get("/uploads/{filename}")
-async def uploaded_media(filename: str):
+def uploaded_media(filename: str):
     safe_name = Path(filename).name
     path = MEDIA_DIR / safe_name
     if not path.exists():

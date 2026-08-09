@@ -121,7 +121,7 @@ def _recalculate_ranks(month: date, department: str) -> None:
 
 
 @router.get("/permission")
-async def permission(current_user: str = Query(...)):
+def permission(current_user: str = Query(...)):
     scope, department, can_edit = _view_scope(current_user)
     user = _get_user_info((current_user or "").strip()) or {}
     job = (user.get("jb") or "").strip()
@@ -130,7 +130,7 @@ async def permission(current_user: str = Query(...)):
 
 
 @router.get("/roster")
-async def roster(
+def roster(
     current_user: str = Query(...), month: str = Query(...), department: Optional[str] = Query(None)
 ):
     perf_month = _month(month)
@@ -174,7 +174,7 @@ async def roster(
 
 
 @router.post("/save")
-async def save(request: PerformanceSaveRequest):
+def save(request: PerformanceSaveRequest):
     perf_month = _month(request.month)
     dept = _assert_department(request.current_user, request.department, writing=True)
     allowed = db.execute_query(
@@ -219,7 +219,7 @@ async def save(request: PerformanceSaveRequest):
 
 
 @router.get("/records")
-async def records(
+def records(
     current_user: str = Query(...), month: str = Query(...), department: Optional[str] = Query(None)
 ):
     perf_month = _month(month)
@@ -234,7 +234,7 @@ async def records(
 
 
 @router.get("/history")
-async def history(
+def history(
     current_user: str = Query(...), year: Optional[int] = Query(None, ge=2000, le=2100),
     month: Optional[int] = Query(None, ge=1, le=12), department: Optional[str] = Query(None),
     employee_name: Optional[str] = Query(None),
@@ -265,7 +265,7 @@ async def history(
 
 
 @router.get("/departments")
-async def departments(current_user: str = Query(...)):
+def departments(current_user: str = Query(...)):
     scope, user_dept, _ = _view_scope(current_user)
     if scope != "all":
         return {"success": True, "list": [user_dept] if user_dept else []}
@@ -366,7 +366,7 @@ def _recalculate_quarterly(start: date, department: str) -> None:
 
 
 @router.get("/quarterly/roster")
-async def quarterly_roster(current_user: str = Query(...), quarter: str = Query(...)):
+def quarterly_roster(current_user: str = Query(...), quarter: str = Query(...)):
     start, department = _quarter_start(quarter), _quarterly_department(current_user)
     people = db.execute_query(
         """SELECT TRIM(name) AS employee_name FROM yggl WHERE TRIM(lsys)=%s
@@ -393,7 +393,7 @@ async def quarterly_roster(current_user: str = Query(...), quarter: str = Query(
 
 
 @router.post("/quarterly/save")
-async def save_quarterly(request: QuarterlyPerformanceSaveRequest):
+def save_quarterly(request: QuarterlyPerformanceSaveRequest):
     start, department = _quarter_start(request.quarter), _quarterly_department(request.current_user)
     allowed_rows = db.execute_query("SELECT TRIM(name) AS name FROM yggl WHERE TRIM(lsys)=%s AND name IS NOT NULL AND TRIM(name) != '' AND RIGHT(TRIM(name),1) != '1' AND COALESCE(zaizhi,0)=0", (department,))
     allowed = {row["name"] for row in allowed_rows}

@@ -147,7 +147,7 @@ def _raise_if_overlap(gcr: str, start_dt, end_dt, exclude_id: str = None):
 
 
 @router.post("/apply")
-async def apply_business_trip(req: BusinessTripApplyRequest):
+def apply_business_trip(req: BusinessTripApplyRequest):
     """公出登记 - 插入 gcsqb 表"""
     try:
         rid = _next_id()
@@ -385,7 +385,7 @@ def _business_trip_list_gcr_clause(
 
 
 @router.get("/list")
-async def get_business_trip_list(
+def get_business_trip_list(
     name: str,
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按自然月过滤"),
@@ -620,7 +620,7 @@ def _all_records_visibility_clause(viewer_name: str) -> tuple:
 
 
 @router.get("/{item_id}/detail")
-async def get_business_trip_detail(
+def get_business_trip_detail(
     item_id: str,
     name: str = Query(..., description="当前用户姓名"),
     scope: str = Query(
@@ -674,7 +674,7 @@ async def get_business_trip_detail(
 
 
 @router.get("/all-records")
-async def get_business_trip_all_records(
+def get_business_trip_all_records(
     name: str = Query(..., description="当前用户姓名"),
     year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
     month: Optional[int] = Query(None, ge=1, le=12, description="按月份筛选，须与 year 同时传入"),
@@ -758,7 +758,7 @@ class ReturnTimeBody(BaseModel):
 
 
 @router.post("/{item_id}/return-time")
-async def set_business_trip_return_time(item_id: str, body: ReturnTimeBody):
+def set_business_trip_return_time(item_id: str, body: ReturnTimeBody):
     """公出返回登记：更新 gcsj(实际公出时间)、sjfhtime(实际返回时间) 及 fhdj_status=1"""
     try:
         start_raw = (body.actualStartTime or "").replace("T", " ").strip()[:19]
@@ -796,7 +796,7 @@ class ExtendTripRequest(BaseModel):
 
 
 @router.post("/{item_id}/extend")
-async def extend_business_trip(item_id: str, req: ExtendTripRequest):
+def extend_business_trip(item_id: str, req: ExtendTripRequest):
     """
     公出延长：班组长/主任/副主任可为本科室已通过且未返回登记的公出修改预计返回时间，
     同时重置审批状态为二级审批（仅需部领导审批），附带备注。
@@ -907,7 +907,7 @@ def _extendable_scope_where(is_admin: bool, viewer_lsys: str, year: Optional[int
 
 
 @router.get("/extendable-list")
-async def get_extendable_business_trips(
+def get_extendable_business_trips(
     name: str = Query(..., description="当前用户姓名"),
     year: Optional[int] = Query(None, description="公历年度：列出与该年有交集的公出；不传则近15年"),
     person: Optional[str] = Query(None, description="公出人姓名（精确匹配，可选）"),
@@ -973,7 +973,7 @@ async def get_extendable_business_trips(
 
 
 @router.post("/{item_id}/resubmit")
-async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
+def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
     """修改并重新提交已驳回的公出记录（szrzt/bldzt重置，更新字段）"""
     try:
         rows = db.execute_query("SELECT id, bldzt, szrzt, gcr FROM gcsqb WHERE id = %s", (item_id,))
@@ -1039,7 +1039,7 @@ async def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
 
 
 @router.delete("/{item_id}")
-async def delete_business_trip_rejected(item_id: str, name: str):
+def delete_business_trip_rejected(item_id: str, name: str):
     """删除本人已驳回的公出记录（仅 bldzt=22 或 szrzt=22 可删），数据库物理删除"""
     try:
         rows = db.execute_query("SELECT id, bldzt, szrzt, gcr FROM gcsqb WHERE id = %s", (item_id,))
