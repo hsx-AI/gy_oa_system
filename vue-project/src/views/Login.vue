@@ -140,6 +140,11 @@
       <div class="password-dialog">
         <h3>{{ forcedChange ? '密码安全升级' : '邮箱验证码修改密码' }}</h3>
         <p>{{ forcedChange ? '当前密码过于简单，修改后才能进入系统。' : '验证码将发送到您已登记的企业邮箱。' }}</p>
+        <div class="password-rule-tip">
+          <strong>密码设置规则</strong>
+          <span>• 密码长度至少6位</span>
+          <span>• 数字、字母、特殊符号至少包含两类</span>
+        </div>
         <input v-if="!forcedChange" v-model="resetForm.name" placeholder="请输入用户名（汉字姓名）" />
         <div v-if="!forcedChange" class="reset-code-row">
           <input v-model="resetForm.code" maxlength="6" inputmode="numeric" placeholder="6位验证码" />
@@ -494,6 +499,12 @@ onMounted(() => {
   if (particleCanvas.value) initCanvas(particleCanvas.value)
   setTimeout(typeSlogan, 600)
   setTimeout(animateStats, 800)
+  const upgradeName = sessionStorage.getItem('forcePasswordChangeName') || ''
+  if (upgradeName) {
+    form.username = upgradeName
+    sessionStorage.removeItem('forcePasswordChangeName')
+    setTimeout(() => alert('当前账号密码过于简单，为保证账号安全，请使用原密码登录后按提示修改密码，或通过邮箱验证码修改。'), 100)
+  }
 })
 
 onBeforeUnmount(() => {
@@ -851,6 +862,8 @@ const handleLogin = async () => {
 .password-dialog { width: min(420px, calc(100vw - 32px)); padding: 28px; border-radius: 16px; color: #fff; background: #10243e; border: 1px solid rgba(105,192,255,.25); box-shadow: 0 20px 60px rgba(0,0,0,.45); }
 .password-dialog h3 { margin: 0 0 8px; }
 .password-dialog p { color: rgba(255,255,255,.6); font-size: 13px; }
+.password-rule-tip { display: flex; flex-direction: column; gap: 2px; margin: 12px 0 2px; padding: 10px 12px; border-radius: 8px; border: 1px solid rgba(105,192,255,.22); background: rgba(24,144,255,.09); color: #b7dcff; font-size: 12px; line-height: 1.6; }
+.password-rule-tip strong { color: #e6f4ff; }
 .password-dialog > input, .reset-code-row input { box-sizing: border-box; width: 100%; margin-top: 12px; padding: 12px; border-radius: 9px; border: 1px solid rgba(255,255,255,.15); background: rgba(255,255,255,.06); color: #fff; outline: none; }
 .reset-code-row { margin-top: 12px; }
 .reset-code-row input { margin-top: 0; }

@@ -49,6 +49,9 @@ export function completeInboxTask(params) {
 export function getPersonalInboxConfig(currentUser) {
   return request({ url: '/inbox-email/personal/config', method: 'get', params: { current_user: currentUser } })
 }
+export function updatePersonalInboxConfig(data) {
+  return request({ url: '/inbox-email/personal/config', method: 'post', data })
+}
 export function syncPersonalInbox(currentUser) {
   return request({ url: '/inbox-email/personal/sync', method: 'post', params: { current_user: currentUser } })
 }

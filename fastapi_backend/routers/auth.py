@@ -152,6 +152,28 @@ class SetLoginStatusRequest(BaseModel):
     name: str  # 员工姓名
 
 
+@router.get("/password-status")
+async def password_status(name: str = Query(..., description="员工姓名")):
+    """供已登录浏览器启动时复核密码安全状态，拦截升级前遗留的本地登录状态。"""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        return {"success": False, "message": "用户名为空"}
+    try:
+        rows = db.execute_query(
+            "SELECT `pass` FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1",
+            (clean_name,),
+        )
+        if not rows:
+            return {"success": False, "message": "用户不存在或已离职"}
+        return {
+            "success": True,
+            "mustChangePassword": not _password_is_strong((rows[0].get("pass") or "").strip()),
+        }
+    except Exception as e:
+        logger.error("检查密码安全状态失败: %s", e)
+        return {"success": False, "message": "无法检查登录安全状态"}
+
+
 @router.post("/login", response_model=LoginResponse)
 def login(request: LoginRequest):
     """

@@ -87,6 +87,11 @@
     <div v-if="showPasswordModal" class="modal-overlay" @click.self="showPasswordModal = false">
       <div class="modal-content">
         <h2>修改密码</h2>
+        <div class="password-rule-tip">
+          <strong>密码设置规则</strong>
+          <span>• 密码长度至少6位</span>
+          <span>• 数字、字母、特殊符号至少包含两类</span>
+        </div>
         <form @submit.prevent="handleChangePassword" class="password-form" autocomplete="on">
           <div class="form-group">
             <label>原密码</label>
@@ -304,6 +309,20 @@ onMounted(fetchProfile)
   margin: 0 0 var(--spacing-lg);
   font-size: var(--font-size-lg);
 }
+.password-rule-tip {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin: calc(var(--spacing-sm) * -1) 0 var(--spacing-md);
+  padding: 10px 12px;
+  border: 1px solid #bfdbfe;
+  border-radius: var(--radius-sm);
+  background: #eff6ff;
+  color: #1d4ed8;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
+}
+.password-rule-tip strong { color: #1e40af; }
 .password-form .form-group {
   margin-bottom: var(--spacing-md);
 }

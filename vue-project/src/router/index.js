@@ -7,7 +7,7 @@ import Statistics from '../views/Statistics.vue'
 import LeaderDashboard from '../views/LeaderDashboard.vue'
 import OvertimePay from '../views/OvertimePay.vue'
 import Performance from '../views/Performance.vue'
-import { getUploadConfig } from '@/api/attendance'
+import { getUploadConfig, getPasswordStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
 
@@ -434,6 +434,25 @@ router.beforeEach(async (to, _from, next) => {
   }
   const raw = localStorage.getItem('userInfo')
   if (!raw) {
+    next('/login')
+    return
+  }
+  // localStorage 会跨浏览器重启保留。每次进入受保护页面都向后端复核，
+  // 使密码安全升级前已登录的弱密码账号也不能绕过新规则。
+  try {
+    const cachedUser = JSON.parse(raw)
+    const cachedName = (cachedUser.name || cachedUser.userName || '').trim()
+    if (!cachedName) throw new Error('登录用户无效')
+    const passwordState = await getPasswordStatus({ name: cachedName })
+    if (passwordState.mustChangePassword) {
+      localStorage.removeItem('userInfo')
+      sessionStorage.setItem('forcePasswordChangeName', cachedName)
+      next({ path: '/login', query: { passwordUpgrade: '1' } })
+      return
+    }
+  } catch (error) {
+    console.error('登录安全状态检查失败:', error)
+    localStorage.removeItem('userInfo')
     next('/login')
     return
   }

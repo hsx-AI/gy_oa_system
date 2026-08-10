@@ -27,6 +27,32 @@
       </header>
 
       <div v-if="message" class="notice">{{ message }}</div>
+      <section class="card config-card">
+        <button type="button" class="config-head" @click="configOpen = !configOpen">
+          <span>
+            <strong>个人红旗邮箱配置</strong>
+            <small>配置您自己的企业邮箱账号和 IMAP 授权码，仅用于本人的红旗邮件待办</small>
+          </span>
+          <span class="config-head-right">
+            <em :class="configured ? 'configured' : 'unconfigured'">{{ configured ? '已配置' : '未配置' }}</em>
+            <b>{{ configOpen ? '收起' : '展开' }}</b>
+          </span>
+        </button>
+        <div v-if="configOpen" class="config-body">
+          <div class="config-hint">IMAP：{{ imapServer }}:{{ imapPort }}（SSL）；只同步本人邮箱中已标红旗的邮件。授权码不是邮箱登录密码。</div>
+          <label class="config-field">
+            <span>企业邮箱地址</span>
+            <input v-model.trim="configForm.email_address" type="email" autocomplete="email" placeholder="例如 name@hec-china.com">
+          </label>
+          <label class="config-field">
+            <span>IMAP 授权码</span>
+            <input v-model.trim="configForm.email_auth_code" type="password" autocomplete="new-password" :placeholder="configured ? `已配置 ${authCodeMasked}；不修改可留空` : '请输入 IMAP 授权码'">
+          </label>
+          <div class="config-buttons">
+            <button class="btn primary" :disabled="configSaving" @click="saveConfig">{{ configSaving ? '保存中…' : '保存个人邮箱配置' }}</button>
+          </div>
+        </div>
+      </section>
       <section v-if="!configured && !loading" class="empty card">
         <h2>个人邮箱尚未配置</h2>
         <p>请先配置个人企业邮箱地址和 IMAP 授权码。</p>
@@ -102,7 +128,7 @@
 <script setup>
 import { onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import { getPersonalInboxConfig, listPersonalInboxTasks, syncPersonalInbox, analyzePersonalInbox, completePersonalInboxTask, updatePersonalInboxTaskDeadline, getPersonalInboxEmailDetail } from '@/api/inboxEmail'
+import { getPersonalInboxConfig, updatePersonalInboxConfig, listPersonalInboxTasks, syncPersonalInbox, analyzePersonalInbox, completePersonalInboxTask, updatePersonalInboxTaskDeadline, getPersonalInboxEmailDetail } from '@/api/inboxEmail'
 
 const router = useRouter()
 const name = ref('')
@@ -122,6 +148,12 @@ const deadlineSavingId = ref(null)
 const detailOpen = ref(false)
 const detailItem = ref(null)
 const bodyMode = ref('html')
+const configOpen = ref(false)
+const configSaving = ref(false)
+const authCodeMasked = ref('')
+const imapServer = ref('imap.qiye.163.com')
+const imapPort = ref(993)
+const configForm = ref({ email_address: '', email_auth_code: '' })
 
 function shortFrom(value) {
   const text = (value || '').trim()
@@ -136,10 +168,40 @@ async function load() {
       listPersonalInboxTasks({ current_user: name.value, limit: 200 }),
     ])
     configured.value = !!cfg?.configured
+    configForm.value.email_address = cfg?.emailAddress || ''
+    configForm.value.email_auth_code = ''
+    authCodeMasked.value = cfg?.authCodeMasked || ''
+    imapServer.value = cfg?.imapServer || 'imap.qiye.163.com'
+    imapPort.value = cfg?.imapPort || 993
+    if (!configured.value) configOpen.value = true
     tasks.value = result?.items || []
   } catch (e) {
     message.value = e?.response?.data?.detail || e?.message || '加载失败'
   } finally { loading.value = false }
+}
+
+async function saveConfig() {
+  if (!configForm.value.email_address) {
+    message.value = '请填写个人企业邮箱地址'
+    return
+  }
+  if (!configured.value && !configForm.value.email_auth_code) {
+    message.value = '请填写 IMAP 授权码'
+    return
+  }
+  configSaving.value = true
+  try {
+    const res = await updatePersonalInboxConfig({
+      current_user: name.value,
+      email_address: configForm.value.email_address,
+      email_auth_code: configForm.value.email_auth_code,
+    })
+    message.value = res?.message || '个人邮箱配置已保存'
+    configured.value = true
+    await load()
+  } catch (e) {
+    message.value = e?.response?.data?.detail || e?.message || '个人邮箱配置保存失败'
+  } finally { configSaving.value = false }
 }
 
 async function sync() {
@@ -233,4 +295,5 @@ onMounted(() => {
 <style scoped>
 .personal-inbox-page{min-height:100vh;background:var(--color-bg-layout,#f5f7fb);padding:24px}.container{max-width:1200px;margin:auto}.page-head,.board-head,.title-wrap,.actions,.task-top,footer{display:flex;align-items:center}.page-head{justify-content:space-between;gap:20px;margin-bottom:20px}.page-head h1{margin:0;font-size:24px}.page-head p{margin:6px 0 0;color:#64748b}.actions{gap:10px}.btn{border:1px solid #dbe3ef;border-radius:8px;padding:9px 15px;cursor:pointer}.btn.primary{background:#2563eb;color:#fff;border-color:#2563eb}.btn.secondary{background:#fff;color:#334155}.btn:disabled{opacity:.55;cursor:not-allowed}.card{background:#fff;border:1px solid #e5eaf2;border-radius:14px;box-shadow:0 8px 24px rgba(15,23,42,.06)}.board{padding:20px}.board-head{justify-content:space-between;padding-bottom:16px;border-bottom:1px solid #eef2f7}.title-wrap{gap:10px}.title-wrap h2{margin:0;font-size:18px}.ai-icon{display:grid;place-items:center;width:34px;height:34px;border-radius:10px;color:#fff;background:linear-gradient(135deg,#6366f1,#06b6d4)}.ai-icon svg{width:20px}.count{min-width:24px;padding:2px 7px;border-radius:999px;background:#eef2ff;color:#4338ca;text-align:center;font-weight:700}.task-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(330px,1fr));gap:14px;margin-top:18px}.task-card{border:1px solid #e4e9f2;border-radius:12px;padding:15px;background:linear-gradient(145deg,#fff,#f8fafc);transition:.18s}.task-card:hover{transform:translateY(-2px);box-shadow:0 10px 22px rgba(15,23,42,.08);border-color:#c7d2fe}.task-top,footer{justify-content:space-between;gap:12px}.deadline{color:#b45309;font-size:13px;font-weight:600}.from,footer{color:#64748b;font-size:12px}.task-card h3{margin:15px 0 8px;font-size:16px;color:#172033}.task-card p{margin:0 0 16px;color:#64748b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.task-card footer button{border:0;border-radius:999px;padding:6px 12px;background:#eef2ff;color:#4338ca;cursor:pointer}.empty{text-align:center;padding:55px;color:#64748b}.notice{margin-bottom:14px;padding:10px 14px;border-radius:8px;background:#eff6ff;color:#1d4ed8}@media(max-width:700px){.personal-inbox-page{padding:12px}.page-head{align-items:flex-start;flex-direction:column}.actions{flex-wrap:wrap}.task-grid{grid-template-columns:1fr}}
 .btn.danger{background:#dc2626;color:#fff;border-color:#dc2626}.actions{flex-wrap:wrap}.flag-icon{background:linear-gradient(135deg,#f97316,#dc2626)}.task-card{position:relative;cursor:pointer}.task-card.selected{border-color:#6366f1;background:#eef2ff}.task-check{display:flex;align-items:center;gap:6px;margin-bottom:10px;color:#4338ca;font-size:13px;font-weight:600;cursor:pointer}.deadline-edit{margin-left:6px;border:0;background:transparent;color:#2563eb;cursor:pointer}.deadline-editor{display:flex;align-items:center;gap:5px}.deadline-editor input{max-width:165px;border:1px solid #dbe3ef;border-radius:6px;padding:5px}.deadline-editor button{border:0;border-radius:5px;padding:5px 7px;cursor:pointer}.modal-overlay{position:fixed;inset:0;z-index:1000;display:grid;place-items:center;padding:24px;background:rgba(15,23,42,.58)}.detail-modal{width:min(1000px,96vw);height:min(760px,92vh);display:flex;flex-direction:column;background:#fff;border-radius:14px;overflow:hidden;box-shadow:0 24px 70px rgba(0,0,0,.3)}.detail-modal>header{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid #e5e7eb}.detail-modal>header h2{margin:0;font-size:18px}.detail-modal>header button{border:0;background:transparent;font-size:28px;cursor:pointer}.detail-content{min-height:0;display:flex;flex:1;flex-direction:column;padding:16px 20px}.detail-meta{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px}.detail-meta p{display:flex;gap:10px;margin:2px 0;font-size:13px}.detail-meta strong{min-width:58px;color:#64748b}.detail-meta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.body-tabs{display:flex;gap:8px;margin:14px 0 8px}.body-tabs button{border:1px solid #dbe3ef;border-radius:6px;padding:6px 12px;background:#fff;cursor:pointer}.body-tabs button.active{background:#2563eb;color:#fff;border-color:#2563eb}.mail-frame,.mail-text{flex:1;min-height:0;width:100%;border:1px solid #e5e7eb;border-radius:8px;background:#fff}.mail-text{box-sizing:border-box;margin:0;padding:16px;overflow:auto;white-space:pre-wrap;font:14px/1.7 system-ui;color:#334155}@media(max-width:700px){.detail-meta{grid-template-columns:1fr}.modal-overlay{padding:8px}}
+.config-card{margin-bottom:16px;overflow:hidden}.config-head{width:100%;display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px 20px;border:0;background:#fff;text-align:left;cursor:pointer}.config-head>span:first-child{display:flex;flex-direction:column;gap:4px}.config-head strong{font-size:16px;color:#172033}.config-head small{font-size:13px;color:#64748b}.config-head-right{display:flex;align-items:center;gap:12px;white-space:nowrap}.config-head em{padding:3px 9px;border-radius:999px;font-size:12px;font-style:normal}.config-head em.configured{background:#dcfce7;color:#166534}.config-head em.unconfigured{background:#fef3c7;color:#92400e}.config-head b{font-size:12px;color:#2563eb}.config-body{padding:0 20px 18px;border-top:1px solid #eef2f7}.config-hint{margin:14px 0;padding:10px 12px;border-radius:8px;background:#f8fafc;color:#64748b;font-size:13px}.config-field{display:flex;align-items:center;gap:14px;margin:12px 0}.config-field>span{width:110px;flex-shrink:0;color:#475569;font-size:14px}.config-field input{width:min(520px,100%);padding:9px 11px;border:1px solid #dbe3ef;border-radius:8px;font-size:14px}.config-buttons{padding-left:124px;margin-top:14px}@media(max-width:700px){.config-head{align-items:flex-start}.config-head small{display:none}.config-field{align-items:stretch;flex-direction:column;gap:5px}.config-field>span{width:auto}.config-buttons{padding-left:0}}
 </style>

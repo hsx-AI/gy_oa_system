@@ -20,6 +20,10 @@ export function login(data) {
   })
 }
 
+export function getPasswordStatus(params) {
+  return request({ url: '/auth/password-status', method: 'get', params })
+}
+
 export function sendVerificationCode(data) {
   return request({ url: '/auth/send-verification-code', method: 'post', data })
 }

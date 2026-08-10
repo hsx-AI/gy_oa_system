@@ -1401,9 +1401,18 @@ def get_personal_inbox_config(current_user: str = Query(...)):
 def save_personal_inbox_config(req: InboxConfigRequest):
     _require_personal_inbox_access(req.current_user)
     _ensure_yggl_email_columns()
+    current = _get_personal_inbox_config(req.current_user)
+    address = req.email_address.strip()
+    auth_code = req.email_auth_code.strip() or current["auth_code"]
+    if not address:
+        raise HTTPException(status_code=400, detail="请填写个人企业邮箱地址")
+    if not auth_code:
+        raise HTTPException(status_code=400, detail="请填写 IMAP 授权码")
+    if address == current["address"] and auth_code == current["auth_code"]:
+        return {"success": True, "unchanged": True, "message": "个人邮箱配置未发生变化"}
     affected = db.execute_update(
         "UPDATE yggl SET enterprise_email=%s, email_auth_code=%s WHERE name=%s",
-        (req.email_address.strip(), req.email_auth_code.strip(), req.current_user.strip()),
+        (address, auth_code, req.current_user.strip()),
     )
     if not affected:
         raise HTTPException(status_code=404, detail="未找到当前用户")

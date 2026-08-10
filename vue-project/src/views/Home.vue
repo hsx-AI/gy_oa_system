@@ -2275,16 +2275,28 @@ function homeLayoutVersionKey() {
   return `${homeLayoutStorageKey()}_version`
 }
 
-function migrateManagerImportantBoardFirst(layout) {
-  if (!isManagerLevel(userInfo.jb)) return layout
+function migrateHomeLayout(layout) {
   const currentVersion = Number(localStorage.getItem(homeLayoutVersionKey()) || 0)
-  if (currentVersion >= 2) return layout
+  if (currentVersion >= 3) return layout
   const next = [...layout]
-  const index = next.findIndex(item => item.id === 'inboxBoard')
-  if (index > 0) next.unshift(next.splice(index, 1)[0])
+
+  // v2：经理层重要信息看板默认置顶。
+  if (currentVersion < 2 && isManagerLevel(userInfo.jb)) {
+    const index = next.findIndex(item => item.id === 'inboxBoard')
+    if (index > 0) next.unshift(next.splice(index, 1)[0])
+  }
+
+  // v3：三个功能集合统一放到整个首页底部，保留各自可见状态。
+  const bottomIds = ['favorites', 'newFeatures', 'shortcuts']
+  const bottomItems = []
+  for (const id of bottomIds) {
+    const index = next.findIndex(item => item.id === id)
+    if (index >= 0) bottomItems.push(next.splice(index, 1)[0])
+  }
+  next.push(...bottomItems)
   try {
     localStorage.setItem(homeLayoutStorageKey(), JSON.stringify(next))
-    localStorage.setItem(homeLayoutVersionKey(), '2')
+    localStorage.setItem(homeLayoutVersionKey(), '3')
   } catch { /* ignore */ }
   return next
 }
@@ -2318,12 +2330,10 @@ function normalizeHomeLayout(value) {
 function loadHomeLayout() {
   try {
     const raw = localStorage.getItem(homeLayoutStorageKey())
-    if (raw) return migrateManagerImportantBoardFirst(normalizeHomeLayout(JSON.parse(raw)))
+    if (raw) return migrateHomeLayout(normalizeHomeLayout(JSON.parse(raw)))
   } catch { /* ignore */ }
   const initial = defaultHomeLayout()
-  if (isManagerLevel(userInfo.jb)) {
-    try { localStorage.setItem(homeLayoutVersionKey(), '2') } catch { /* ignore */ }
-  }
+  try { localStorage.setItem(homeLayoutVersionKey(), '3') } catch { /* ignore */ }
   return initial
 }
 
