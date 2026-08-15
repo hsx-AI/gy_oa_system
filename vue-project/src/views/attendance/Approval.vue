@@ -158,8 +158,10 @@
                 <tr>
                   <th width="40"><input type="checkbox" :checked="businessTripSelectedAll" @change="toggleBusinessTripSelectAll"></th>
                   <th>申请人</th>
+                  <th>类型</th>
                   <th>委派单位</th>
                   <th>公出地点</th>
+                  <th class="col-task">公出任务</th>
                   <th>出发-返回时间</th>
                   <th>当前审批</th>
                   <th>申请时间</th>
@@ -170,9 +172,19 @@
                 <tr v-for="item in businessTripList" :key="item.id">
                   <td><input type="checkbox" :value="item.id" v-model="selectedBusinessTripIds"></td>
                   <td>{{ item.applicant }}</td>
+                  <td>{{ item.approvalType || (item.isExtend ? '公出延长审批' : '公出审批') }}</td>
                   <td>{{ item.targetUnit }}</td>
                   <td>{{ item.location }}</td>
-                  <td>{{ item.startTime }} 至 {{ item.endTime }}</td>
+                  <td class="col-task">
+                    <span class="task-ellipsis" :title="item.task || ''">{{ item.task || '—' }}</span>
+                  </td>
+                  <td>
+                    <template v-if="item.isExtend">
+                      {{ item.startTime }} 至 {{ item.currentEndTime || item.endTime }}
+                      <br><small>申请延长至 {{ item.pendingEndTime || item.endTime }}</small>
+                    </template>
+                    <template v-else>{{ item.startTime }} 至 {{ item.endTime }}</template>
+                  </td>
                   <td>{{ item.approvalLevel }}</td>
                   <td>{{ item.applyTime }}</td>
                   <td class="approval-actions">
@@ -470,6 +482,7 @@
               </div>
             </template>
             <template v-else-if="detailType === 'business-trip'">
+              <p><strong>审批类型：</strong>{{ detailData.approvalType || (detailData.isExtend ? '公出延长审批' : '公出审批') }}</p>
               <p><strong>申请人：</strong>{{ detailData.applicant }}</p>
               <p><strong>委派单位：</strong>{{ detailData.targetUnit }}</p>
               <p><strong>填报单位：</strong>{{ detailData.department }}</p>
@@ -477,7 +490,11 @@
               <p><strong>通知单编号：</strong>{{ detailData.noticeNo }}</p>
               <p><strong>项目名称：</strong>{{ detailData.projectName || '-' }}</p>
               <p><strong>出发时间：</strong>{{ detailData.startTime }}</p>
-              <p><strong>预计返回时间：</strong>{{ detailData.endTime }}</p>
+              <template v-if="detailData.isExtend">
+                <p><strong>原预计返回时间：</strong>{{ detailData.currentEndTime || detailData.endTime }}</p>
+                <p><strong>申请延长至：</strong>{{ detailData.pendingEndTime || detailData.endTime }}</p>
+              </template>
+              <p v-else><strong>预计返回时间：</strong>{{ detailData.endTime }}</p>
               <p><strong>公出任务：</strong>{{ detailData.task }}</p>
               <p><strong>联系电话：</strong>{{ detailData.phone }}</p>
               <p><strong>申请时间：</strong>{{ detailData.applyTime }}</p>
@@ -651,7 +668,9 @@ const holidayExchangeSelectedAll = computed(() =>
 const detailTitle = computed(() => {
   if (detailType.value === 'leave') return '请假详情'
   if (detailType.value === 'overtime') return '加班详情'
-  if (detailType.value === 'business-trip') return '公出详情'
+  if (detailType.value === 'business-trip') {
+    return detailData.value?.isExtend ? '公出延长详情' : '公出详情'
+  }
   if (detailType.value === 'holiday-exchange') return '公出节假日换休票详情'
   return '详情'
 })
@@ -1034,7 +1053,15 @@ async function batchApprove(type) {
   const ids = type === 'leave' ? selectedLeaveIds.value : type === 'overtime' ? selectedOvertimeIds.value : type === 'holiday-exchange' ? selectedHolidayExchangeIds.value : selectedBusinessTripIds.value
   if (!ids.length) return
   const typeName = type === 'leave' ? '请假' : type === 'overtime' ? '加班' : type === 'holiday-exchange' ? '节假日换休票' : '公出'
-  if (!confirm(`确认批量通过选中的 ${ids.length} 条${typeName}申请？`)) return
+  const extendCount = type === 'business-trip'
+    ? businessTripList.value.filter((r) => ids.includes(r.id) && r.isExtend).length
+    : 0
+  const confirmLabel = extendCount > 0 && extendCount === ids.length
+    ? '公出延长'
+    : extendCount > 0
+      ? `公出（含 ${extendCount} 条延长）`
+      : typeName
+  if (!confirm(`确认批量通过选中的 ${ids.length} 条${confirmLabel}申请？`)) return
   try {
     let fn, payload
     if (type === 'leave') { fn = leaveBatchApprove; payload = { ids, action: 'approve' } }
@@ -1199,6 +1226,19 @@ async function batchApprove(type) {
 
 .approval-table tbody tr:hover {
   background: var(--color-bg-spotlight);
+}
+
+.approval-table .col-task {
+  width: 180px;
+  max-width: 180px;
+}
+
+.approval-table .task-ellipsis {
+  display: block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .approval-actions {

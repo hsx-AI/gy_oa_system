@@ -253,12 +253,15 @@ async function fetchData() {
     const trips = btRes.data || []
     trips.forEach(r => {
       const loc = r.location ? `去${r.location}的` : ''
+      const isExtend = !!r.isExtend
       items.push({
         uniqueId: `bt-${r.id}`,
         tabType: 'business-trip',
-        type: '公出审批',
+        type: isExtend ? '公出延长审批' : '公出审批',
         typeClass: 'type-trip',
-        description: `${r.applicant}${loc}公出申请`,
+        description: isExtend
+          ? `${r.applicant}${loc}公出延长申请（原 ${r.currentEndTime || r.endTime || ''} → ${r.pendingEndTime || r.endTime || ''}）`
+          : `${r.applicant}${loc}公出申请`,
         applicant: r.applicant,
         applyTime: r.applyTime || ''
       })

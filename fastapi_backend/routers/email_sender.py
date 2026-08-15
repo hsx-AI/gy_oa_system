@@ -3040,25 +3040,44 @@ def _query_manager_todos(name: str) -> List[Dict]:
             r.get("jiabantime"),
         )
 
-    # 公出审批
+    # 公出审批（含公出延长）
     rows = db.execute_query(
         """
-        SELECT gcr, gclx, gcdd, yjcfsj, yjfhsj, szrzt, bldzt
+        SELECT gcr, gclx, gcdd, yjcfsj, yjfhsj, pending_yjfhsj, szrzt, bldzt, gcrw
         FROM gcsqb
         WHERE (szrzt = 1 AND szr = %s) OR (szrzt = 2 AND bldzt = 1 AND bld = %s)
         ORDER BY yjcfsj DESC
         """,
         (n, n),
     ) or []
+    if not rows:
+        rows = db.execute_query(
+            """
+            SELECT gcr, gclx, gcdd, yjcfsj, yjfhsj, szrzt, bldzt, gcrw
+            FROM gcsqb
+            WHERE (szrzt = 1 AND szr = %s) OR (szrzt = 2 AND bldzt = 1 AND bld = %s)
+            ORDER BY yjcfsj DESC
+            """,
+            (n, n),
+        ) or []
     for r in rows:
         level = "室主任审批" if int(r.get("szrzt") or 0) == 1 else "部领导审批"
-        _append_todo(
-            items,
-            "公出审批",
-            r.get("gcr"),
-            f"{r.get('gclx') or '公出'}，{r.get('gcdd') or ''}，{_fmt_todo_dt(r.get('yjcfsj'))} 至 {_fmt_todo_dt(r.get('yjfhsj'))}，{level}",
-            r.get("yjcfsj"),
-        )
+        backup = r.get("pending_yjfhsj")
+        is_extend = backup is not None and str(backup).strip() not in ("", "None")
+        if not is_extend and "[公出延长" in (r.get("gcrw") or ""):
+            is_extend = True
+        kind = "公出延长审批" if is_extend else "公出审批"
+        if is_extend and backup is not None:
+            desc = (
+                f"申请延长至 {_fmt_todo_dt(r.get('yjfhsj'))}（原 {_fmt_todo_dt(backup)}），"
+                f"{r.get('gcdd') or ''}，{level}"
+            )
+        else:
+            desc = (
+                f"{r.get('gclx') or '公出'}，{r.get('gcdd') or ''}，"
+                f"{_fmt_todo_dt(r.get('yjcfsj'))} 至 {_fmt_todo_dt(r.get('yjfhsj'))}，{level}"
+            )
+        _append_todo(items, kind, r.get("gcr"), desc, r.get("yjcfsj"))
 
     # 公出节假日换休票审批
     rows = db.execute_query(

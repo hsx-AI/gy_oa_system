@@ -405,11 +405,14 @@ async function fetchTodoList() {
     const trips = btRes.data || []
     trips.forEach((r) => {
       const loc = r.location ? `去${r.location}的` : ''
+      const isExtend = !!r.isExtend
       items.push({
         uniqueId: `bt-${r.id}`,
         tabType: 'business-trip',
-        type: '公出审批',
-        description: `${r.applicant}${loc}公出申请`,
+        type: isExtend ? '公出延长审批' : '公出审批',
+        description: isExtend
+          ? `${r.applicant}${loc}公出延长申请（原 ${r.currentEndTime || r.endTime || ''} → ${r.pendingEndTime || r.endTime || ''}）`
+          : `${r.applicant}${loc}公出申请`,
         applicant: r.applicant,
         time: formatRelativeTime(r.applyTime),
         applyTime: r.applyTime || '',

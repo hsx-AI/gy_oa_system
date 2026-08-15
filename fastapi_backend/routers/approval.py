@@ -1012,72 +1012,75 @@ def get_pending_business_trip(approver: str = Query(...)):
     获取待当前用户审批的公出列表（按登记时选择的 szr/室主任、bld/部领导 匹配当前用户）
     - 室主任待办: bldzt=1, szrzt=1, szr=当前用户
     - 部领导待办: bldzt=1, szrzt=2, bld=当前用户
+    含公出延长：pending_yjfhsj 有值时标记 isExtend，展示为「公出延长审批」。
     """
     try:
+        from routers.business_trip import ensure_gcsqb_extend_columns
+        ensure_gcsqb_extend_columns()
+
         # 一级：室主任待审批（szr=当前用户 即登记时选择的室主任）
         # yjcfsj=预计出发（登记即有）；gcsj=实际出发（返回登记后才有）
         q1 = """
-            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, pending_yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 1 AND szr = %s
         """
         # 二级：部领导待审批（bld=当前用户 即登记时选择的部领导）
         q2 = """
-            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, pending_yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 2 AND bld = %s
         """
         q1_legacy = """
-            SELECT id, wpdw, gcdw, gcdd, gcsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 1 AND szr = %s
         """
         q2_legacy = """
-            SELECT id, wpdw, gcdw, gcdd, gcsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
+            SELECT id, wpdw, gcdw, gcdd, gcsj, yjcfsj, yjfhsj, tzdbh, gcrw, bld, szr, gcr
             FROM gcsqb WHERE bldzt = 1 AND szrzt = 2 AND bld = %s
         """
-        try:
-            rows1 = db.execute_query(q1, (approver,))
-            rows2 = db.execute_query(q2, (approver,))
-        except Exception as e:
-            err = str(e).lower()
-            if "unknown column" in err and "yjcfsj" in err:
-                rows1 = db.execute_query(q1_legacy, (approver,))
-                rows2 = db.execute_query(q2_legacy, (approver,))
-            elif "unknown column" in err and ("bldzt" in err or "szrzt" in err):
-                return {"success": True, "data": []}
-            else:
-                raise
-        items = []
-        for r in rows1:
-            items.append({
+        rows1 = db.execute_query(q1, (approver,)) or []
+        rows2 = db.execute_query(q2, (approver,)) or []
+        # pending 列不可用时 execute_query 可能返回 []；若确有待办则回退无该列查询
+        if not rows1 and not rows2:
+            has_any = db.execute_query(
+                "SELECT id FROM gcsqb WHERE (bldzt=1 AND szrzt=1 AND szr=%s) "
+                "OR (bldzt=1 AND szrzt=2 AND bld=%s) LIMIT 1",
+                (approver, approver),
+            )
+            if has_any:
+                rows1 = db.execute_query(q1_legacy, (approver,)) or []
+                rows2 = db.execute_query(q2_legacy, (approver,)) or []
+
+        def _item(r, level: str):
+            # pending_yjfhsj = 延长前备份；yjfhsj = 已写入的新预计返回
+            backup = r.get("pending_yjfhsj")
+            is_extend = backup is not None and str(backup).strip() not in ("", "None")
+            if not is_extend and level == "部领导":
+                gcrw = r.get("gcrw") or ""
+                if "[公出延长" in gcrw:
+                    is_extend = True
+            end_new = _fmt_dt(r.get("yjfhsj"))
+            end_old = _fmt_dt(backup) if is_extend and backup is not None else ""
+            return {
                 "id": str(r["id"]) if r.get("id") is not None else "",
                 "applicant": (r.get("gcryxm") or r.get("gcr") or "").strip(),
                 "targetUnit": r.get("wpdw") or "",
                 "department": r.get("gcdw") or "",
                 "location": r.get("gcdd") or "",
                 "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
-                "endTime": _fmt_dt(r.get("yjfhsj")),
+                "endTime": end_new,
+                "currentEndTime": end_old or end_new,
+                "pendingEndTime": end_new if is_extend else "",
                 "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else "",
                 "noticeNo": r.get("tzdbh") or "",
                 "task": r.get("gcrw") or "",
                 "deptLeader": r.get("bld") or "",
                 "roomDirector": r.get("szr") or "",
-                "approvalLevel": "室主任",
-            })
-        for r in rows2:
-            items.append({
-                "id": str(r["id"]) if r.get("id") is not None else "",
-                "applicant": (r.get("gcryxm") or r.get("gcr") or "").strip(),
-                "targetUnit": r.get("wpdw") or "",
-                "department": r.get("gcdw") or "",
-                "location": r.get("gcdd") or "",
-                "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
-                "endTime": _fmt_dt(r.get("yjfhsj")),
-                "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else "",
-                "noticeNo": r.get("tzdbh") or "",
-                "task": r.get("gcrw") or "",
-                "deptLeader": r.get("bld") or "",
-                "roomDirector": r.get("szr") or "",
-                "approvalLevel": "部领导",
-            })
+                "approvalLevel": level,
+                "isExtend": is_extend,
+                "approvalType": "公出延长审批" if is_extend else "公出审批",
+            }
+
+        items = [_item(r, "室主任") for r in rows1] + [_item(r, "部领导") for r in rows2]
         # 按出发时间倒序（无 sqsj 时用 startTime）
         items.sort(key=lambda x: x["applyTime"] or x.get("startTime") or "", reverse=True)
         return {"success": True, "data": items}
@@ -1089,10 +1092,18 @@ def get_pending_business_trip(approver: str = Query(...)):
 @router.get("/business-trip/{item_id}")
 def get_business_trip_detail(item_id: str):
     """公出详情"""
+    from routers.business_trip import ensure_gcsqb_extend_columns
+    ensure_gcsqb_extend_columns()
     rows = db.execute_query("SELECT * FROM gcsqb WHERE id = %s", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     r = rows[0]
+    pending = r.get("pending_yjfhsj")  # 延长前备份
+    is_extend = pending is not None and str(pending).strip() not in ("", "None")
+    if not is_extend and "[公出延长" in (r.get("gcrw") or ""):
+        is_extend = True
+    end_new = _fmt_dt(r.get("yjfhsj"))
+    end_old = _fmt_dt(pending) if pending is not None else ""
     return {
         "success": True,
         "data": {
@@ -1104,7 +1115,11 @@ def get_business_trip_detail(item_id: str):
             "noticeNo": r.get("tzdbh"),
             "projectName": r.get("xmmc"),
             "startTime": _fmt_dt(r.get("gcsj")) or _fmt_dt(r.get("yjcfsj")),
-            "endTime": _fmt_dt(r.get("yjfhsj")),
+            "endTime": end_new,
+            "currentEndTime": end_old or end_new,
+            "pendingEndTime": end_new if is_extend else "",
+            "isExtend": is_extend,
+            "approvalType": "公出延长审批" if is_extend else "公出审批",
             "applyTime": _fmt_dt(r.get("sqsj")) if r.get("sqsj") else _fmt_dt(r.get("gcsj")),
             "assignTime": _fmt_dt(r.get("wpsj")),
             "task": r.get("gcrw"),
@@ -1123,17 +1138,31 @@ def business_trip_approve_action(item_id: str, req: ApproveRequest):
     """
     公出单条审批。使用 bldzt/szrzt 状态与 szrpztime/bldpztime 时间。
     - 室主任通过: szrzt=2, szrpztime=now；驳回: szrzt=22, szrpztime=now
-    - 部领导通过: bldzt=2, bldpztime=now；驳回: bldzt=22, szrzt=0, bldpztime=now
+    - 部领导通过: bldzt=2, bldpztime=now；公出延长则清除 pending_yjfhsj（yjfhsj 已是新值）
+    - 部领导驳回普通公出: bldzt=22, szrzt=0
+    - 部领导驳回公出延长: yjfhsj 回滚为 pending_yjfhsj，恢复 bldzt=2/szrzt=2
     """
+    from routers.business_trip import ensure_gcsqb_extend_columns
+    ensure_gcsqb_extend_columns()
+
     rows = db.execute_query(
-        "SELECT id, szrzt, bldzt, szr, bld FROM gcsqb WHERE id = %s",
+        "SELECT id, szrzt, bldzt, szr, bld, pending_yjfhsj, yjfhsj, gcrw FROM gcsqb WHERE id = %s",
         (item_id,)
     )
+    if not rows:
+        rows = db.execute_query(
+            "SELECT id, szrzt, bldzt, szr, bld, yjfhsj, gcrw FROM gcsqb WHERE id = %s",
+            (item_id,)
+        )
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     row = rows[0]
     szrzt = int(row.get("szrzt") or 0)
     bldzt = int(row.get("bldzt") or 0)
+    # pending_yjfhsj = 延长前备份的原返回时间
+    backup = row.get("pending_yjfhsj")
+    has_backup = backup is not None and str(backup).strip() not in ("", "None")
+    is_extend = has_backup or "[公出延长" in (row.get("gcrw") or "")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     if req.action == "reject":
@@ -1151,6 +1180,20 @@ def business_trip_approve_action(item_id: str, req: ApproveRequest):
                     (now, item_id)
                 )
         elif szrzt == 2 and bldzt == 1:
+            if is_extend:
+                if has_backup:
+                    # 驳回延长：yjfhsj 回滚到延长前，公出单恢复已通过
+                    db.execute_update(
+                        "UPDATE gcsqb SET yjfhsj = pending_yjfhsj, pending_yjfhsj = NULL, "
+                        "bldzt = 2, szrzt = 2, bldpztime = %s, bhyy = %s WHERE id = %s",
+                        (now, reason_val, item_id),
+                    )
+                else:
+                    db.execute_update(
+                        "UPDATE gcsqb SET bldzt = 2, szrzt = 2, bldpztime = %s, bhyy = %s WHERE id = %s",
+                        (now, reason_val, item_id),
+                    )
+                return {"success": True, "message": "已驳回公出延长，预计返回时间已恢复为延长前"}
             try:
                 db.execute_update(
                     "UPDATE gcsqb SET bldzt = 22, szrzt = 0, bldpztime = %s, bhyy = %s WHERE id = %s",
@@ -1174,10 +1217,19 @@ def business_trip_approve_action(item_id: str, req: ApproveRequest):
             (now, item_id)
         )
     elif szrzt == 2 and bldzt == 1:
+        if has_backup:
+            # 通过延长：保留已写入的新 yjfhsj，仅清除备份
+            db.execute_update(
+                "UPDATE gcsqb SET pending_yjfhsj = NULL, bldzt = 2, bldpztime = %s, bhyy = NULL WHERE id = %s",
+                (now, item_id),
+            )
+            return {"success": True, "message": "已通过公出延长"}
         db.execute_update(
             "UPDATE gcsqb SET bldzt = 2, bldpztime = %s WHERE id = %s",
             (now, item_id)
         )
+        if is_extend:
+            return {"success": True, "message": "已通过公出延长"}
     else:
         raise HTTPException(status_code=400, detail="当前状态无法审批")
 
@@ -1208,15 +1260,18 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
         return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}
 
     ph = ",".join(["%s"] * len(ids))
+    from routers.business_trip import ensure_gcsqb_extend_columns
+    ensure_gcsqb_extend_columns()
     rows = db.execute_query(
-        f"SELECT id, szrzt, bldzt FROM gcsqb WHERE id IN ({ph})",
+        f"SELECT id, szrzt, bldzt, pending_yjfhsj FROM gcsqb WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
     ids_szr_approve = []
-    ids_bld_approve = []
+    ids_bld_approve_normal = []
+    ids_bld_approve_extend = []
     ok, fail = 0, 0
 
     for iid in ids:
@@ -1226,11 +1281,16 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
             continue
         szrzt = int(r.get("szrzt") or 0)
         bldzt = int(r.get("bldzt") or 0)
+        pending = r.get("pending_yjfhsj")
+        is_extend = pending is not None and str(pending).strip() not in ("", "None")
         if szrzt == 1 and bldzt == 1:
             ids_szr_approve.append(iid)
             ok += 1
         elif szrzt == 2 and bldzt == 1:
-            ids_bld_approve.append(iid)
+            if is_extend:
+                ids_bld_approve_extend.append(iid)
+            else:
+                ids_bld_approve_normal.append(iid)
             ok += 1
         else:
             fail += 1
@@ -1241,11 +1301,19 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
             f"UPDATE gcsqb SET szrzt = 2, szrpztime = %s WHERE id IN ({p})",
             (now,) + tuple(ids_szr_approve),
         )
-    if ids_bld_approve:
-        p = ",".join(["%s"] * len(ids_bld_approve))
+    if ids_bld_approve_normal:
+        p = ",".join(["%s"] * len(ids_bld_approve_normal))
         db.execute_update(
             f"UPDATE gcsqb SET bldzt = 2, bldpztime = %s WHERE id IN ({p})",
-            (now,) + tuple(ids_bld_approve),
+            (now,) + tuple(ids_bld_approve_normal),
+        )
+    if ids_bld_approve_extend:
+        p = ",".join(["%s"] * len(ids_bld_approve_extend))
+        # 延长通过：yjfhsj 提交时已是新值，仅清备份并置通过
+        db.execute_update(
+            f"UPDATE gcsqb SET pending_yjfhsj = NULL, bldzt = 2, bldpztime = %s, bhyy = NULL "
+            f"WHERE id IN ({p})",
+            (now,) + tuple(ids_bld_approve_extend),
         )
 
     return {"success": True, "passed": ok, "failed": fail, "message": f"成功{ok}条，失败{fail}条"}

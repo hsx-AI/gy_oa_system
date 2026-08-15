@@ -10,7 +10,7 @@
   lsysjm=隶属于室简称
 """
 from fastapi import APIRouter, HTTPException, Query
-from typing import Optional, List
+from typing import Optional, List, Any
 from pydantic import BaseModel
 from datetime import datetime
 from database import db
@@ -244,7 +244,7 @@ def _fmt_dt_sec(d) -> str:
     return s[:19]
 
 
-def _trip_status(bldzt, szrzt) -> tuple:
+def _trip_status(bldzt, szrzt, extend_pending: bool = False) -> tuple:
     """根据 bldzt/szrzt 返回 (状态文案, statusClass)。1=待审批 2=通过 22=驳回"""
     bldzt = bldzt if bldzt is not None else 0
     szrzt = szrzt if szrzt is not None else 0
@@ -252,6 +252,8 @@ def _trip_status(bldzt, szrzt) -> tuple:
         return "已驳回", "status-rejected"
     if bldzt == 2 and szrzt == 2:
         return "已通过", "status-approved"
+    if extend_pending and bldzt == 1:
+        return "延长待审批", "status-processing"
     return "审批中", "status-processing"
 
 
@@ -259,7 +261,7 @@ def _trip_flow_person(bldzt, szrzt, szr, bld, status: str) -> str:
     """审批中返回当前待审批人；已驳回返回执行驳回的审批人。"""
     bldzt = bldzt if bldzt is not None else 0
     szrzt = szrzt if szrzt is not None else 0
-    if status == "审批中":
+    if status in ("审批中", "延长待审批"):
         if szrzt == 1:
             return (szr or "").strip()
         if bldzt == 1:
@@ -276,7 +278,9 @@ def _row_to_record(row) -> dict:
     """将 gcsqb 一行转为前端所需记录结构"""
     bldzt = 0 if row.get("bldzt") is None else int(row.get("bldzt"))
     szrzt = 0 if row.get("szrzt") is None else int(row.get("szrzt"))
-    status, status_class = _trip_status(bldzt, szrzt)
+    pending_raw = _pending_return_raw(row)
+    extend_pending = bool(pending_raw) and bldzt == 1 and szrzt == 2
+    status, status_class = _trip_status(bldzt, szrzt, extend_pending=extend_pending)
     current_approver = _trip_flow_person(
         bldzt, szrzt, row.get("szr"), row.get("bld"), status
     )
@@ -296,6 +300,8 @@ def _row_to_record(row) -> dict:
         "actualReturnTime": actual_ret,
         "expectedStartTime": _fmt_dt_sec(row.get("yjcfsj")),
         "expectedReturnTime": _fmt_dt_sec(row.get("yjfhsj")),
+        "pendingReturnTime": _fmt_dt_sec(pending_raw) if pending_raw else "",
+        "isExtendPending": extend_pending,
         "fhdjStatus": int(row.get("fhdj_status") or 0),
         "status": status,
         "statusClass": status_class,
@@ -401,6 +407,7 @@ def get_business_trip_list(
 ):
     """获取公出记录列表。部长/副部长或综合技术室主任等可选 all，并可 filter_lsys 指定科室。"""
     try:
+        ensure_gcsqb_extend_columns()
         if year is None and not all_years:
             year = datetime.now().year
 
@@ -424,7 +431,7 @@ def get_business_trip_list(
 
         try:
             query = (
-                "SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.fhdj_status, "
+                "SELECT g.id, g.gclx, g.wpdw, g.gcr, g.wpsj, g.yjcfsj, g.yjfhsj, g.pending_yjfhsj, g.xmmc, g.gcdd, g.gcsj, g.sjfhtime, g.fhdj_status, "
                 "g.bldzt, g.szrzt, g.szrpztime, g.bldpztime, g.bhyy, g.bld, g.szr FROM gcsqb g" + where_sql + order_by
             )
             rows = db.execute_query(query, params)
@@ -796,6 +803,49 @@ class ExtendTripRequest(BaseModel):
 
 
 _gcrw_capacity_ready = False
+_pending_yjfhsj_ready = False
+
+
+def ensure_gcsqb_extend_columns() -> None:
+    """确保公出延长所需列存在：pending_yjfhsj 备份延长前的预计返回时间，驳回时用于回滚。"""
+    global _pending_yjfhsj_ready
+    if _pending_yjfhsj_ready:
+        return
+    try:
+        cols = db.execute_query("SHOW COLUMNS FROM gcsqb LIKE 'pending_yjfhsj'")
+        if not cols:
+            n = db.execute_update(
+                "ALTER TABLE gcsqb ADD COLUMN pending_yjfhsj DATETIME NULL "
+                "COMMENT '公出延长前备份的预计返回时间（驳回时回滚）' AFTER yjfhsj"
+            )
+            if n < 0:
+                logger.warning("添加 gcsqb.pending_yjfhsj 失败")
+            else:
+                logger.info("已添加 gcsqb.pending_yjfhsj，用于延长驳回时回滚 yjfhsj")
+        _pending_yjfhsj_ready = True
+    except Exception as e:
+        logger.warning("检查/添加 gcsqb.pending_yjfhsj 异常: %s", e)
+
+
+def _pending_return_raw(row) -> Optional[Any]:
+    """读取延长前备份的预计返回时间；无该列时返回 None。"""
+    if not row:
+        return None
+    if "pending_yjfhsj" in row:
+        return row.get("pending_yjfhsj")
+    return None
+
+
+def _is_extend_pending_row(row) -> bool:
+    """是否处于「公出延长待部领导审批」：存在延长前备份且 bldzt=1、szrzt=2。"""
+    if not row:
+        return False
+    pending = _pending_return_raw(row)
+    if pending is None or str(pending).strip() in ("", "None"):
+        return False
+    bldzt = int(row.get("bldzt") or 0)
+    szrzt = int(row.get("szrzt") or 0)
+    return bldzt == 1 and szrzt == 2
 
 
 def _ensure_gcrw_capacity() -> None:
@@ -872,7 +922,7 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
     """
     公出延长：本人可延长自己已通过且未返回登记的公出；
     班组长/主任/副主任可延长本科室人员；系统管理员不限科室。
-    提交后重置为仅需部领导审批，并写入备注。
+    提交时立即更新 yjfhsj，并用 pending_yjfhsj 备份原值；部领导驳回时回滚。
     """
     viewer = (req.current_user or "").strip()
     if not viewer:
@@ -887,11 +937,19 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
     is_manager = _is_extend_manager(jb, is_admin=False)
 
     _ensure_gcrw_capacity()
+    ensure_gcsqb_extend_columns()
 
     rows = db.execute_query(
-        "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, yjcfsj, gcsj, gcrw FROM gcsqb WHERE id = %s",
+        "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, yjcfsj, gcsj, gcrw, pending_yjfhsj "
+        "FROM gcsqb WHERE id = %s",
         (item_id,),
     )
+    if not rows:
+        # 兼容尚未加列时的旧库：再查一次不含 pending
+        rows = db.execute_query(
+            "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, yjcfsj, gcsj, gcrw FROM gcsqb WHERE id = %s",
+            (item_id,),
+        )
     if not rows:
         raise HTTPException(status_code=404, detail="公出记录不存在")
     r = rows[0]
@@ -902,6 +960,8 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
         raise HTTPException(status_code=400, detail="仅可延长已通过审批的公出记录")
     if fhdj == 1:
         raise HTTPException(status_code=400, detail="已完成返回登记的公出无法延长，请重新登记")
+    if _pending_return_raw(r):
+        raise HTTPException(status_code=400, detail="该公出已有延长申请正在审批中，请等待部领导审批完成")
 
     gcr = (r.get("gcr") or "").strip()
     is_self = bool(gcr and gcr == viewer)
@@ -933,19 +993,24 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
         raise HTTPException(status_code=400, detail="请选择部领导")
 
     remark = (req.remark or "").strip()
+    old_yjfhsj = r.get("yjfhsj")
     old_task = (r.get("gcrw") or "").strip()
-    extend_note = f"[公出延长 {datetime.now().strftime('%Y-%m-%d %H:%M')} by {viewer}] 原预计返回: {_fmt_dt(r.get('yjfhsj'))}，延长至: {new_dt}"
+    extend_note = (
+        f"[公出延长申请 {datetime.now().strftime('%Y-%m-%d %H:%M')} by {viewer}] "
+        f"原预计返回: {_fmt_dt(old_yjfhsj)}，申请延长至: {new_dt}"
+    )
     if remark:
         extend_note += f"，备注: {remark}"
     new_task = _compose_extend_gcrw(old_task, extend_note)
 
+    # 立即写入新的 yjfhsj；pending_yjfhsj 备份原值，驳回时回滚
     sql = """
         UPDATE gcsqb
-        SET yjfhsj = %s, bld = %s, bldzt = 1, szrzt = 2,
+        SET pending_yjfhsj = %s, yjfhsj = %s, bld = %s, bldzt = 1, szrzt = 2,
             bldpztime = NULL, bhyy = NULL, gcrw = %s
         WHERE id = %s
     """
-    n = db.execute_update(sql, (new_dt, dept_leader, new_task, item_id))
+    n = db.execute_update(sql, (old_yjfhsj, new_dt, dept_leader, new_task, item_id))
     if n < 0:
         raise HTTPException(
             status_code=500,
@@ -954,7 +1019,10 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
     if n == 0:
         raise HTTPException(status_code=404, detail="公出记录不存在或未被更新")
 
-    return {"success": True, "message": f"已延长公出并提交部领导({dept_leader})审批"}
+    return {
+        "success": True,
+        "message": f"已提交公出延长并更新预计返回时间，等待部领导({dept_leader})审批；若驳回将恢复原返回时间",
+    }
 
 
 def _extendable_scope_where(
