@@ -50,8 +50,9 @@ async def access_overview(current_user: str = Query(default="")):
       COUNT(DISTINCT CASE WHEN visited_at >= NOW()-INTERVAL 15 MINUTE THEN user_name END) active_users
       FROM system_access_log WHERE visited_at >= CURDATE()""") or [{}])[0]
     summary["total_users"] = (rows("SELECT COUNT(*) total FROM yggl WHERE COALESCE(zaizhi,0)=0") or [{}])[0].get("total",0)
+    # GROUP BY 必须与 SELECT 中对 visited_at 的表达式一致，否则 ONLY_FULL_GROUP_BY 会报错
     raw = rows("""SELECT DATE_FORMAT(visited_at,'%%Y-%%m-%%d') day, COUNT(*) visits, COUNT(DISTINCT user_name) users
-      FROM system_access_log WHERE visited_at >= %s GROUP BY DATE(visited_at) ORDER BY day""", (start_day,))
+      FROM system_access_log WHERE visited_at >= %s GROUP BY DATE_FORMAT(visited_at,'%%Y-%%m-%%d') ORDER BY day""", (start_day,))
     by_day = {str(r['day']):r for r in raw}; daily=[]
     for i in range(7):
         d=(now-timedelta(days=6-i)).strftime('%Y-%m-%d'); v=by_day.get(d,{})

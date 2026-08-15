@@ -795,11 +795,84 @@ class ExtendTripRequest(BaseModel):
     remark: str = ""
 
 
+_gcrw_capacity_ready = False
+
+
+def _ensure_gcrw_capacity() -> None:
+    """
+    公出延长会在 gcrw 追加审计说明；原列为 VARCHAR(255) 且 sql_mode 含 STRICT_TRANS_TABLES 时，
+    超长会直接 UPDATE 失败并表现为「更新失败」。扩为 TEXT，不影响公出登记写入逻辑。
+    """
+    global _gcrw_capacity_ready
+    if _gcrw_capacity_ready:
+        return
+    try:
+        meta = db.execute_query(
+            "SELECT DATA_TYPE AS data_type, CHARACTER_MAXIMUM_LENGTH AS maxlen "
+            "FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcsqb' AND COLUMN_NAME = 'gcrw' "
+            "LIMIT 1"
+        ) or []
+        if meta:
+            dtype = str(meta[0].get("data_type") or "").lower()
+            maxlen = meta[0].get("maxlen")
+            need_widen = dtype in ("varchar", "char") and (
+                maxlen is None or int(maxlen) < 2000
+            )
+            if need_widen:
+                n = db.execute_update("ALTER TABLE gcsqb MODIFY COLUMN gcrw TEXT NULL")
+                if n < 0:
+                    logger.warning("扩容 gcsqb.gcrw 失败，延长写入仍可能因字段过短失败")
+                else:
+                    logger.info("已扩容 gcsqb.gcrw 为 TEXT，避免公出延长追加说明超长失败")
+        _gcrw_capacity_ready = True
+    except Exception as e:
+        logger.warning("检查/扩容 gcsqb.gcrw 异常: %s", e)
+
+
+def _compose_extend_gcrw(old_task: str, extend_note: str) -> str:
+    """拼接延长说明；若仍受短字段限制，优先保留原任务并截断追加段，避免整单更新失败。"""
+    old_task = (old_task or "").strip()
+    extend_note = (extend_note or "").strip()
+    new_task = f"{old_task}\n{extend_note}" if old_task else extend_note
+    meta = db.execute_query(
+        "SELECT DATA_TYPE AS data_type, CHARACTER_MAXIMUM_LENGTH AS maxlen "
+        "FROM information_schema.COLUMNS "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'gcsqb' AND COLUMN_NAME = 'gcrw' "
+        "LIMIT 1"
+    ) or []
+    if not meta:
+        return new_task
+    dtype = str(meta[0].get("data_type") or "").lower()
+    maxlen = meta[0].get("maxlen")
+    if dtype not in ("varchar", "char") or not maxlen:
+        return new_task
+    limit = int(maxlen)
+    if len(new_task) <= limit:
+        return new_task
+    # 保留原任务，尽量写入最新一条延长说明
+    if old_task and len(old_task) < limit:
+        room = limit - len(old_task) - 1
+        if room >= 20:
+            return f"{old_task}\n{extend_note[:room]}"
+    return extend_note[:limit] if extend_note else old_task[:limit]
+
+
+def _is_extend_manager(jb: str, is_admin: bool = False) -> bool:
+    """班组长/主任/副主任或系统管理员：可延长本科室（管理员不限科室）人员公出。"""
+    if is_admin:
+        return True
+    return bool(
+        _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任")
+    )
+
+
 @router.post("/{item_id}/extend")
 def extend_business_trip(item_id: str, req: ExtendTripRequest):
     """
-    公出延长：班组长/主任/副主任可为本科室已通过且未返回登记的公出修改预计返回时间，
-    同时重置审批状态为二级审批（仅需部领导审批），附带备注。
+    公出延长：本人可延长自己已通过且未返回登记的公出；
+    班组长/主任/副主任可延长本科室人员；系统管理员不限科室。
+    提交后重置为仅需部领导审批，并写入备注。
     """
     viewer = (req.current_user or "").strip()
     if not viewer:
@@ -811,11 +884,9 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
     viewer_lsys = (user.get("lsys") or "").strip()
     admin1 = (_get_admin1() or "").strip()
     is_admin = bool(admin1 and viewer == admin1)
-    can_extend = (
-        _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任") or is_admin
-    )
-    if not can_extend:
-        raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可操作公出延长")
+    is_manager = _is_extend_manager(jb, is_admin=False)
+
+    _ensure_gcrw_capacity()
 
     rows = db.execute_query(
         "SELECT id, gcr, bldzt, szrzt, fhdj_status, yjfhsj, yjcfsj, gcsj, gcrw FROM gcsqb WHERE id = %s",
@@ -833,11 +904,21 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
         raise HTTPException(status_code=400, detail="已完成返回登记的公出无法延长，请重新登记")
 
     gcr = (r.get("gcr") or "").strip()
-    if not is_admin:
+    is_self = bool(gcr and gcr == viewer)
+    if is_admin:
+        pass
+    elif is_self:
+        pass
+    elif is_manager:
         emp = _get_user_info(gcr)
         emp_lsys = (emp.get("lsys") or "").strip() if emp else ""
         if emp_lsys != viewer_lsys:
             raise HTTPException(status_code=403, detail="只能延长本科室人员的公出记录")
+    else:
+        raise HTTPException(
+            status_code=403,
+            detail="只能延长本人的公出；延长他人公出需班组长、主任、副主任或系统管理员权限",
+        )
 
     new_dt = _to_dt(req.new_return_time)
     if not new_dt:
@@ -856,7 +937,7 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
     extend_note = f"[公出延长 {datetime.now().strftime('%Y-%m-%d %H:%M')} by {viewer}] 原预计返回: {_fmt_dt(r.get('yjfhsj'))}，延长至: {new_dt}"
     if remark:
         extend_note += f"，备注: {remark}"
-    new_task = f"{old_task}\n{extend_note}" if old_task else extend_note
+    new_task = _compose_extend_gcrw(old_task, extend_note)
 
     sql = """
         UPDATE gcsqb
@@ -865,17 +946,31 @@ def extend_business_trip(item_id: str, req: ExtendTripRequest):
         WHERE id = %s
     """
     n = db.execute_update(sql, (new_dt, dept_leader, new_task, item_id))
-    if n <= 0:
-        raise HTTPException(status_code=500, detail="更新失败")
+    if n < 0:
+        raise HTTPException(
+            status_code=500,
+            detail="公出延长更新失败（常见原因：公出任务字段过长或数据库异常），请稍后重试或联系管理员",
+        )
+    if n == 0:
+        raise HTTPException(status_code=404, detail="公出记录不存在或未被更新")
 
     return {"success": True, "message": f"已延长公出并提交部领导({dept_leader})审批"}
 
 
-def _extendable_scope_where(is_admin: bool, viewer_lsys: str, year: Optional[int]) -> tuple:
+def _extendable_scope_where(
+    is_admin: bool,
+    is_manager: bool,
+    viewer_name: str,
+    viewer_lsys: str,
+    year: Optional[int],
+) -> tuple:
     """
-    可延长公出：时间/年度条件 + 本科室范围（非管理员）。
+    可延长公出：时间/年度条件 + 可见范围。
+    - 管理员：全部
+    - 班组长/主任/副主任：本科室在职人员
+    - 普通员工：仅本人
     与某公历年度有交集：预计出发～预计返回（缺省字段用 COALESCE 补齐，支持跨年长公出）。
-    未指定 year 时：列出近 15 年内有预计时间的记录（替代原先「仅约一年」限制）。
+    未指定 year 时：列出近 15 年内有预计时间的记录。
     """
     trip_start = "COALESCE(g.yjcfsj, g.wpsj, g.gcsj, g.yjfhsj)"
     trip_end = "COALESCE(g.yjfhsj, g.yjcfsj, g.wpsj, g.gcsj)"
@@ -899,10 +994,15 @@ def _extendable_scope_where(is_admin: bool, viewer_lsys: str, year: Optional[int
     inner = " AND ".join(parts)
     if is_admin:
         return inner, tuple(params)
+    if is_manager:
+        return (
+            inner
+            + " AND g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0)",
+            tuple(params + [viewer_lsys]),
+        )
     return (
-        inner
-        + " AND g.gcr IN (SELECT y.name FROM yggl y WHERE y.lsys = %s AND COALESCE(y.zaizhi,0)=0)",
-        tuple(params + [viewer_lsys]),
+        inner + " AND TRIM(g.gcr) = %s",
+        tuple(params + [viewer_name]),
     )
 
 
@@ -912,7 +1012,10 @@ def get_extendable_business_trips(
     year: Optional[int] = Query(None, description="公历年度：列出与该年有交集的公出；不传则近15年"),
     person: Optional[str] = Query(None, description="公出人姓名（精确匹配，可选）"),
 ):
-    """获取当前用户科室内可延长的公出记录（已通过且未返回登记）；支持按年度、公出人筛选（含跨年长公出）"""
+    """
+    可延长公出列表（已通过且未返回登记）。
+    本人可见自己的记录；班组长/主任/副主任可见本科室；管理员可见全部。
+    """
     viewer = (name or "").strip()
     if not viewer:
         raise HTTPException(status_code=400, detail="姓名不能为空")
@@ -923,18 +1026,20 @@ def get_extendable_business_trips(
     viewer_lsys = (user.get("lsys") or "").strip()
     admin1 = (_get_admin1() or "").strip()
     is_admin = bool(admin1 and viewer == admin1)
-    can_extend = (
-        _jb_match(jb, "组长") or _jb_match(jb, "主任") or _jb_match(jb, "副主任") or is_admin
-    )
-    if not can_extend:
-        raise HTTPException(status_code=403, detail="仅班组长、主任、副主任或系统管理员可查看")
+    is_manager = _is_extend_manager(jb, is_admin=False)
+    can_manage_others = bool(is_admin or is_manager)
 
     y = int(year) if year is not None else None
     if y is not None and (y < 1990 or y > 2100):
         raise HTTPException(status_code=400, detail="年度参数不合法")
 
-    scope_where, scope_params = _extendable_scope_where(is_admin, viewer_lsys, y)
+    scope_where, scope_params = _extendable_scope_where(
+        is_admin, is_manager, viewer, viewer_lsys, y
+    )
     person_clean = (person or "").strip()
+    # 普通员工不可借 person 参数扩大到他人
+    if not can_manage_others:
+        person_clean = viewer
 
     # 公出人下拉：与列表相同时间/科室条件，不按 person 再缩窄
     sql_people = f"""
@@ -969,7 +1074,12 @@ def get_extendable_business_trips(
             "expectedReturnTime": _fmt_dt(row.get("yjfhsj")),
             "deptLeader": (row.get("bld") or "").strip(),
         })
-    return {"success": True, "list": result, "people": people_list}
+    return {
+        "success": True,
+        "list": result,
+        "people": people_list,
+        "canManageOthers": can_manage_others,
+    }
 
 
 @router.post("/{item_id}/resubmit")

@@ -15,7 +15,7 @@
             审批
           </button>
           <button class="btn btn-outline" @click="$router.push('/attendance/business-trip/map')">公出地图</button>
-          <button v-if="canExtend" class="btn btn-outline" @click="openExtendModal">公出延长</button>
+          <button class="btn btn-outline" @click="openExtendModal">公出延长</button>
           <button class="btn btn-primary" @click="showApplyModal = true">公出登记</button>
           <button class="btn btn-primary" @click="openReturnModal">返回登记</button>
         </div>
@@ -397,17 +397,21 @@
       <div class="modal-content">
         <button type="button" class="modal-close-btn" @click="showExtendModal = false">&times;</button>
         <h2>公出延长</h2>
-        <p class="modal-hint">修改预计返回时间，将重新提交部领导审批</p>
+        <p class="modal-hint">
+          {{ canExtendOthers
+            ? '可为本科室已通过且未返回登记的公出修改预计返回时间，将重新提交部领导审批'
+            : '可延长本人已通过且未返回登记的公出，修改预计返回时间后将重新提交部领导审批' }}
+        </p>
         <form @submit.prevent="submitExtend" class="application-form">
           <div class="form-row extend-filters">
-            <div class="form-group half">
+            <div class="form-group" :class="canExtendOthers ? 'half' : ''">
               <label>年度</label>
               <select v-model="extendFilterYear" :disabled="extendListLoading" @change="onExtendYearChange">
                 <option value="">全部（近15年）</option>
                 <option v-for="y in extendYearOptions" :key="'ex-y-' + y" :value="String(y)">{{ y }} 年</option>
               </select>
             </div>
-            <div class="form-group half">
+            <div v-if="canExtendOthers" class="form-group half">
               <label>公出人</label>
               <select v-model="extendFilterPerson" :disabled="extendListLoading" @change="onExtendPersonChange">
                 <option value="">全部</option>
@@ -417,7 +421,9 @@
           </div>
           <p v-if="extendListLoading" class="modal-hint">加载可延长列表…</p>
           <p v-else-if="!extendableList.length" class="modal-hint extend-empty-hint">
-            当前筛选下暂无可延长记录（需已通过审批且未返回登记）。可切换「全部（近15年）」、其他年度或公出人后查看。
+            {{ canExtendOthers
+              ? '当前筛选下暂无可延长记录（需已通过审批且未返回登记）。可切换「全部（近15年）」、其他年度或公出人后查看。'
+              : '暂无本人可延长的公出记录（需已通过审批且未返回登记）。可切换年度后查看。' }}
           </p>
           <div class="form-group">
             <label>选择公出记录</label>
@@ -696,7 +702,8 @@ function initUserInfo() {
 
 const userInfo = initUserInfo()
 const canApprove = ref(false)
-const canExtend = ref(false)
+const canExtend = ref(true)
+const canExtendOthers = ref(false)
 const showExtendModal = ref(false)
 const extendableList = ref([])
 const extendListLoading = ref(false)
@@ -1010,7 +1017,8 @@ onMounted(async () => {
       canApprove.value = false
     }
     const jb = (userInfo.jb || '').trim()
-    canExtend.value = isDeptLeader(jb) || canApprove.value
+    canExtend.value = true
+    canExtendOthers.value = isDeptLeader(jb)
   }
   await refreshTripListMeta()
 
@@ -1266,6 +1274,9 @@ async function fetchExtendableList() {
     const res = await getExtendableBusinessTrips(params)
     extendableList.value = (res && res.list) || []
     extendPeopleOptions.value = (res && res.people) || []
+    if (typeof res?.canManageOthers === 'boolean') {
+      canExtendOthers.value = res.canManageOthers
+    }
   } catch (e) {
     const detail = e.response?.data?.detail || e.message
     alert(detail || '获取可延长列表失败')
