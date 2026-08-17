@@ -355,7 +355,7 @@
             </div>
           </section>
 
-          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canShowAccessDashboard || canAccessInboxEmails" class="sidebar-group">
+          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canShowAccessDashboard || canAccessInboxEmails || canSeeMashangban" class="sidebar-group">
             <button
               type="button"
               class="sidebar-group-toggle"
@@ -423,6 +423,15 @@
               <path d="M13.73 21a2 2 0 0 1-3.46 0" />
             </svg>
             <span>消息推送</span>
+          </router-link>
+          <router-link v-if="canSeeMashangban" to="/admin/mashangban" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="8" y1="13" x2="16" y2="13" />
+              <line x1="8" y1="17" x2="16" y2="17" />
+            </svg>
+            <span>码上办月报</span>
           </router-link>
           <router-link v-if="canAccessInboxEmails" to="/admin/inbox-emails" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -671,7 +680,7 @@ import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant, canAccessMashangban } from '@/utils/roleMatch'
 import AiAssistantFab from '@/components/ai/AiAssistantFab.vue'
 
 const route = useRoute()
@@ -1169,6 +1178,16 @@ const canSeeLeaderDashboard = computed(() => {
 const canManagePerformance = computed(() => {
   const jb = (currentUser.value?.jb || '').trim()
   return isDirectorLevel(jb) || jb.includes('组长')
+})
+
+// 工艺码上办月报：admin1、经理/副经理/经理助理、综合技术室主任/副主任
+const canSeeMashangban = computed(() => {
+  return canAccessMashangban({
+    name: (currentUser.value?.name || currentUser.value?.userName || '').trim(),
+    jb: (currentUser.value?.jb || '').trim(),
+    lsys: (currentUser.value?.dept || currentUser.value?.lsys || '').trim(),
+    admin1: admin1.value,
+  })
 })
 
 // 其他绩效激励统计：全员可访问，页面内按权限显示本人/本室/全部门

@@ -1849,7 +1849,8 @@ def get_leave_hours_export(
     """
     导出全部请假时长（qjzt=4），按统计区间重叠比例分摊天数/小时。
     以 yggl 名单为准，无记录者各项为 0。
-    返回: { success, all: [{ name, totalDays, totalHours, times }], byDept: [...] }
+    另附 records：与统计区间有重叠的已通过请假表单明细（对齐请假管理页字段）。
+    返回: { success, all: [...], byDept: [...], records: [...] }
     """
     try:
         if not year and not (date_from and date_to):
@@ -1860,12 +1861,21 @@ def get_leave_hours_export(
         ov = _leave_overlap_sql_bounds()
 
         query = f"""
-            SELECT qj.xm AS emp_name,
+            SELECT qj.id,
+                   qj.xm AS emp_name,
+                   yggl.lsys AS emp_lsys,
+                   qj.qjfs,
                    qj.timefrom,
                    qj.timeto,
                    qj.timefromdate,
+                   qj.qjtime,
                    CAST(COALESCE(qj.tian, 0) AS DECIMAL(10,2)) AS tian,
-                   qj.xiaoshi
+                   qj.xiaoshi,
+                   qj.content,
+                   qj.qjzt,
+                   qj.spr,
+                   qj.spr2,
+                   qj.bhyy
             FROM qj
             INNER JOIN yggl ON qj.xm = yggl.name
             WHERE qj.qjzt = 4
@@ -1875,12 +1885,21 @@ def get_leave_hours_export(
               AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
               AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
               AND (COALESCE(yggl.zaizhi,0)=0)
+            ORDER BY qj.timefrom DESC, qj.xm ASC
         """
-        rows = db.execute_query(query, (pe_str, ps_str))
+        try:
+            rows = db.execute_query(query, (pe_str, ps_str))
+        except Exception:
+            # 兼容无 bhyy 列
+            query_no_bhyy = query.replace(",\n                   qj.bhyy", "")
+            rows = db.execute_query(query_no_bhyy, (pe_str, ps_str))
+
+        status_map = {0: "待审批", 1: "审批中", 3: "审批中", 4: "已通过", 22: "已驳回"}
 
         per_employee: Dict[str, Dict[str, float]] = defaultdict(
             lambda: {"totalDays": 0.0, "totalHours": 0.0, "times": 0}
         )
+        records: List[Dict[str, Any]] = []
         for r in rows or []:
             emp_name = (r.get("emp_name") or "").strip()
             if not emp_name:
@@ -1901,6 +1920,39 @@ def get_leave_hours_export(
             agg["totalDays"] += days
             agg["totalHours"] += hours
             agg["times"] += 1
+
+            qjzt = r.get("qjzt")
+            try:
+                qjzt_i = int(qjzt) if qjzt is not None else None
+            except (TypeError, ValueError):
+                qjzt_i = None
+            if qjzt_i == 1:
+                current_approver = (r.get("spr") or "").strip()
+            elif qjzt_i == 3:
+                current_approver = (r.get("spr2") or "").strip()
+            else:
+                current_approver = ""
+            try:
+                hours_raw = float(r.get("xiaoshi") or 0)
+            except (TypeError, ValueError):
+                hours_raw = 0.0
+            records.append({
+                "id": r.get("id"),
+                "name": emp_name,
+                "department": (r.get("emp_lsys") or "").strip(),
+                "type": (r.get("qjfs") or "请假").strip() or "请假",
+                "startTime": (_to_comparable_dt(r.get("timefrom")) or "")[:19],
+                "endTime": (_to_comparable_dt(r.get("timeto")) or "")[:19],
+                "days": round(tian_f, 2),
+                "hours": round(hours_raw, 2) if hours_raw > 0 else 0,
+                "reason": (r.get("content") or "").strip(),
+                "applyTime": (_to_comparable_dt(r.get("qjtime")) or "")[:19],
+                "status": status_map.get(qjzt_i, "已通过"),
+                "currentApprover": current_approver,
+                "rejectReason": (r.get("bhyy") or "").strip() if qjzt_i == 22 else "",
+                "allocatedDays": round(days, 2),
+                "allocatedHours": round(hours, 2),
+            })
 
         yggl_rows = db.execute_query(
             "SELECT name, lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' AND RIGHT(TRIM(lsys), 1) != '1' "
@@ -1930,15 +1982,18 @@ def get_leave_hours_export(
             by_dept.append({"lsys": lsys, "list": dept_list})
 
         if current_user and scope == "self":
-            list_all = [x for x in list_all if (x.get("name") or "").strip() == (current_user or "").strip()]
+            cu = (current_user or "").strip()
+            list_all = [x for x in list_all if (x.get("name") or "").strip() == cu]
             by_dept = []
+            records = [x for x in records if (x.get("name") or "").strip() == cu]
         elif scope == "lsys" and scope_lsys:
             lsys_val = (scope_lsys or "").strip()
             by_dept = [x for x in by_dept if (x.get("lsys") or "").strip() == lsys_val]
             dept_names = {n.get("name") for d in by_dept for n in (d.get("list") or [])}
             list_all = [x for x in list_all if (x.get("name") or "") in dept_names]
+            records = [x for x in records if (x.get("name") or "") in dept_names]
 
-        return {"success": True, "all": list_all, "byDept": by_dept}
+        return {"success": True, "all": list_all, "byDept": by_dept, "records": records}
     except Exception as e:
         logger.error(f"全部请假时长导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))

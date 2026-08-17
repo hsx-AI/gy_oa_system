@@ -9,7 +9,7 @@ import OvertimePay from '../views/OvertimePay.vue'
 import Performance from '../views/Performance.vue'
 import { getUploadConfig, getPasswordStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, canAccessLeaderDashboard, canManageHxpBatch, canUseAiAssistant, canAccessMashangban } from '@/utils/roleMatch'
 
 const routes = [
   {
@@ -241,6 +241,12 @@ const routes = [
     name: 'NotificationManage',
     component: () => import('../views/admin/NotificationManage.vue'),
     meta: { title: '消息推送管理' }
+  },
+  {
+    path: '/admin/mashangban',
+    name: 'MashangbanAdmin',
+    component: () => import('../views/admin/Mashangban.vue'),
+    meta: { title: '工艺码上办月报' }
   },
   {
     path: '/admin/inbox-emails',
@@ -714,6 +720,33 @@ router.beforeEach(async (to, _from, next) => {
       const canDbAdmin = !!(res && res.canAccess)
       const canLeader = to.path === '/personal-inbox-emails' ? isMinisterOrDeptLeader(jb) : isManagerLevel(jb)
       if (canDbAdmin || canLeader) next()
+      else next('/')
+    } catch {
+      next('/')
+    }
+    return
+  }
+  if (to.path === '/admin/mashangban') {
+    try {
+      const raw = localStorage.getItem('userInfo')
+      if (!raw) {
+        next('/login')
+        return
+      }
+      const user = JSON.parse(raw)
+      const name = (user.name || user.userName || '').trim()
+      const jb = (user.jb || '').trim()
+      const lsys = (user.dept || user.lsys || '').trim()
+      if (!name) {
+        next('/')
+        return
+      }
+      let admin1Name = ''
+      try {
+        const cfg = await getUploadConfig()
+        admin1Name = (cfg?.admin1 || '').trim()
+      } catch { /* ignore */ }
+      if (canAccessMashangban({ name, jb, lsys, admin1: admin1Name })) next()
       else next('/')
     } catch {
       next('/')

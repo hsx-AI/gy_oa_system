@@ -1140,7 +1140,7 @@ import { getNewsList, getWeatherDaily, getWeatherNow } from '@/api/infoFeed'
 import { analyzeInboxEmails, listInboxTasks, getInboxConfig, completeInboxTask, syncInboxEmails, getInboxEmailDetail, updateInboxTaskDeadline, getPersonalInboxConfig, listPersonalInboxTasks, syncPersonalInbox, completePersonalInboxTask, updatePersonalInboxTaskDeadline, getPersonalInboxEmailDetail } from '@/api/inboxEmail'
 import { getSSOLink } from '@/api/sso'
 import { useWorkplaceTodos, refreshWorkplaceTodos } from '@/composables/useWorkplaceTodos'
-import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch } from '@/utils/roleMatch'
+import { isMinisterLevel, isMinisterOrDeptLeader, isDirectorLevel, isManagerLevel, jbMatch, canAccessLeaderDashboard, canManageHxpBatch, canAccessMashangban } from '@/utils/roleMatch'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, shortWeatherDate, weatherIcon } from '@/utils/infoFeedDisplay'
 const route = useRoute()
 const router = useRouter()
@@ -1707,6 +1707,8 @@ function canShowFeature(permission) {
       return isAdmin1
     case 'performance':
       return isDirectorLevel(jb) || jb.includes('组长')
+    case 'mashangban':
+      return canAccessMashangban({ name, jb, lsys, admin1: a1 })
     case 'accessDashboard':
       return canAccessDbManager.value || isManagerLevel(jb)
     default:
@@ -1939,6 +1941,16 @@ const rawFeatureGroups = [
         color: 'linear-gradient(135deg, #8b5cf6 0%, #ec4899 100%)',
         tag: '新功能',
         iconPath: 'M4 19V5m0 14h16M7 15l3-4 3 2 4-6'
+      },
+      {
+        id: 'mashangban',
+        title: '工艺码上办月报',
+        description: '查看码上办科室统计、人员服务绩效与工单明细，支持单月/区间/全年汇总',
+        path: '/admin/mashangban',
+        permission: 'mashangban',
+        color: 'linear-gradient(135deg, #0ea5e9 0%, #6366f1 100%)',
+        tag: '新功能',
+        iconPath: 'M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8zM14 2v6h6M8 13h8M8 17h6'
       }
     ]
   },

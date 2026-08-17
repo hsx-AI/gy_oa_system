@@ -92,7 +92,7 @@ const PAGE_NAMES={
   '/profile':'个人资料','/admin/employees':'员工在职管理','/admin/db-manager':'数据库表管理',
   '/admin/health-monitor':'系统配置与健康监控','/admin/yggl-fill':'员工主表批量填充','/admin/email':'邮件发送管理',
   '/admin/notification':'系统消息推送','/admin/inbox-emails':'公共邮箱收件管理','/admin/hxp-manage':'换休票管理',
-  '/admin/hxp-records':'换休票明细查询','/feedback':'意见与建议','/contacts':'部门通讯录',
+  '/admin/mashangban':'工艺码上办月报','/admin/hxp-records':'换休票明细查询','/feedback':'意见与建议','/contacts':'部门通讯录',
   '/info-feed':'天气新闻资讯','/ai-assistant':'智能制造工艺部 AI 助手','/seal/apply':'部门用印申请',
   '/low-value-reimbursement':'低值易耗品报销','/massage-chair':'健康角预约','/confidentiality-ledger':'论文保密审批台账',
   '/action-items/dashboard':'行动项驾驶舱','/action-items/minutes':'会议纪要','/action-items/ledger':'行动项台账',

@@ -740,6 +740,57 @@ function sheetFromLeaveHoursList(list) {
   return XLSX.utils.aoa_to_sheet([['姓名', '请假天数(天)', '请假时长(小时)', '请假次数'], ...rows])
 }
 
+function formatLeaveDuration(item) {
+  const days = Number(item?.days || 0)
+  const hours = Number(item?.hours || 0)
+  if (days > 0) return `${days} 天`
+  if (hours > 0) return `${hours} 小时`
+  return '—'
+}
+
+function sheetFromLeaveRecordsList(list) {
+  const header = [
+    '序号',
+    '姓名',
+    '科室',
+    '请假类型',
+    '开始时间',
+    '结束时间',
+    '时长',
+    '事由',
+    '登记时间',
+    '审批状态',
+    '当前审批人',
+    '驳回原因',
+    '计入统计天数',
+    '计入统计小时',
+  ]
+  const rows = (list || []).map((item, i) => [
+    i + 1,
+    item.name || '',
+    item.department || '',
+    item.type || '',
+    item.startTime || '',
+    item.endTime || '',
+    formatLeaveDuration(item),
+    item.reason || '',
+    item.applyTime || '',
+    item.status || '',
+    item.currentApprover || '',
+    item.rejectReason || '',
+    item.allocatedDays ?? 0,
+    item.allocatedHours ?? 0,
+  ])
+  const sheet = XLSX.utils.aoa_to_sheet([header, ...rows])
+  sheet['!cols'] = [
+    { wch: 6 }, { wch: 12 }, { wch: 16 }, { wch: 12 },
+    { wch: 20 }, { wch: 20 }, { wch: 12 }, { wch: 36 },
+    { wch: 20 }, { wch: 10 }, { wch: 12 }, { wch: 16 },
+    { wch: 12 }, { wch: 12 },
+  ]
+  return sheet
+}
+
 function sheetFromBusinessTripHoursList(list) {
   const rows = (list || []).map((item) => [
     item.name || '',
@@ -944,6 +995,7 @@ async function exportLeaveHours() {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheetFromLeaveHoursList(res.all || []), overtimePermission.value.scope === 'self' ? '本人' : '全员')
   appendDeptSheets(wb, res.byDept, sheetFromLeaveHoursList)
+  XLSX.utils.book_append_sheet(wb, sheetFromLeaveRecordsList(res.records || []), '请假明细')
   XLSX.writeFile(wb, `全部请假时长_${periodLabel()}.xlsx`)
 }
 
