@@ -9,7 +9,12 @@
             <p class="header-subtitle">设置员工在职/离职状态，离职人员将不参与统计且无法登录系统</p>
           </div>
           <div class="header-actions">
-            <button type="button" class="btn btn-secondary" @click="openAddModal">
+            <button
+              v-if="canAddEmployee"
+              type="button"
+              class="btn btn-secondary"
+              @click="openAddModal"
+            >
               添丁
             </button>
             <button
@@ -209,9 +214,9 @@
       </section>
     </div>
 
-    <!-- 添丁弹窗（与 container 平级，避免被裁剪） -->
+    <!-- 添丁弹窗（与 container 平级，避免被裁剪；仅部长/人事/系统管理员可见入口） -->
     <Teleport to="body">
-      <div v-if="showAddModal" class="modal-overlay" @click.self="closeAddModal">
+      <div v-if="canAddEmployee && showAddModal" class="modal-overlay" @click.self="closeAddModal">
         <div class="modal-card">
           <div class="modal-header">
             <h3 class="modal-title">添丁（新增员工）</h3>
@@ -325,6 +330,7 @@
 <script setup>
 import { ref, reactive, onMounted } from 'vue'
 import { getAdminEmployees, setEmployeeStatus, getAdminDeptList, exportEmployeesExcel, addEmployee, updateEmployeeDeptLevel, updateEmployeeEmail } from '@/api/attendance'
+import { isMinisterLevel, isDirectorLevel, jbMatch } from '@/utils/roleMatch'
 
 const currentUserName = ref('')
 const deptList = ref([])
@@ -334,6 +340,7 @@ const loading = ref(false)
 const actionLoading = ref('')
 const exporting = ref(false)
 const isDeptOnly = ref(false)
+const canAddEmployee = ref(false)
 const showAddModal = ref(false)
 const addSubmitting = ref(false)
 const addForm = reactive({
@@ -371,6 +378,27 @@ function getCurrentUser() {
   return ''
 }
 
+function getCurrentUserJb() {
+  try {
+    const raw = localStorage.getItem('userInfo')
+    if (raw) {
+      const u = JSON.parse(raw)
+      return (u.jb || '').trim()
+    }
+  } catch (e) {}
+  return ''
+}
+
+/** 科室主任/副主任/组长不可添丁，仅全量管理权限（部长/人事/admin1）可添丁 */
+function resolveCanAddEmployee(scopeRole, canAddFromApi) {
+  const jb = getCurrentUserJb()
+  if (isDirectorLevel(jb) || jbMatch(jb, '组长')) return false
+  if (typeof canAddFromApi === 'boolean') return !!canAddFromApi
+  if (scopeRole === 'dept') return false
+  if (scopeRole === 'full') return true
+  return isMinisterLevel(jb)
+}
+
 async function loadDeptList() {
   const name = getCurrentUser()
   if (!name) return
@@ -384,9 +412,13 @@ async function loadDeptList() {
       } else {
         isDeptOnly.value = false
       }
+      canAddEmployee.value = resolveCanAddEmployee(res.scope?.role, res.can_add)
+    } else {
+      canAddEmployee.value = false
     }
   } catch (e) {
     console.error('科室列表加载失败', e)
+    canAddEmployee.value = false
   }
 }
 
@@ -603,6 +635,10 @@ async function handleExport() {
 }
 
 function openAddModal() {
+  if (!canAddEmployee.value) {
+    alert('科室主任/副主任/组长不可添丁，请联系部长或人事管理员')
+    return
+  }
   addForm.name = ''
   addForm.gh = ''
   addForm.lsys = isDeptOnly.value && deptList.value.length === 1 ? deptList.value[0] : ''

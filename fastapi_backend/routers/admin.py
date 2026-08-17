@@ -219,12 +219,15 @@ class AddEmployeeRequest(BaseModel):
 @router.post("/employee")
 def add_employee(req: AddEmployeeRequest):
     """
-    添丁：在 yggl 主表新增员工。部长/副部长可添加任意科室；主任仅可添加本室。
+    添丁：在 yggl 主表新增员工。仅部长/副部长/人事管理员(admin2)/系统管理员(admin1)可添加。
+    科室主任/副主任/组长不可添丁。
     必填：姓名、初始密码（至少4位）。
     """
     scope = _get_admin_scope(req.current_user)
     if not scope:
-        raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可添加员工")
+        raise HTTPException(status_code=403, detail="仅部长/副部长/人事管理员可添加员工")
+    if scope.get("role") != "full":
+        raise HTTPException(status_code=403, detail="科室主任/副主任不可添丁，请联系部长或人事管理员")
     _ensure_yggl_email_columns()
     name = (req.name or "").strip()
     if not name:
@@ -232,14 +235,7 @@ def add_employee(req: AddEmployeeRequest):
     pwd = (req.password or "").strip()
     if len(pwd) < 4:
         raise HTTPException(status_code=400, detail="初始密码至少4位")
-    # 主任只能添加本室
-    if scope["role"] == "dept":
-        allowed_lsys = (scope.get("lsys") or "").strip()
-        if (req.lsys or "").strip() != allowed_lsys:
-            raise HTTPException(status_code=403, detail="仅可添加本室员工，请选择本室")
-        lsys_val = allowed_lsys
-    else:
-        lsys_val = (req.lsys or "").strip()
+    lsys_val = (req.lsys or "").strip()
     # 姓名不可重复
     exist = db.execute_query("SELECT 1 FROM yggl WHERE name = %s LIMIT 1", (name,))
     if exist:
@@ -424,7 +420,12 @@ def admin_dept_list(
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可访问")
     try:
         if scope["role"] == "dept" and scope.get("lsys"):
-            return {"success": True, "list": [scope["lsys"]], "scope": {"role": "dept", "lsys": scope["lsys"]}}
+            return {
+                "success": True,
+                "list": [scope["lsys"]],
+                "scope": {"role": "dept", "lsys": scope["lsys"]},
+                "can_add": False,
+            }
         # 排除末尾为「1」的科室（视为已撤销/历史），与统计等逻辑一致
         rows = db.execute_query(
             "SELECT DISTINCT lsys FROM yggl WHERE lsys IS NOT NULL AND lsys != '' "
@@ -433,7 +434,12 @@ def admin_dept_list(
             "ORDER BY lsys"
         )
         list_data = [r["lsys"].strip() for r in rows if r.get("lsys")]
-        return {"success": True, "list": list_data}
+        return {
+            "success": True,
+            "list": list_data,
+            "scope": {"role": "full", "lsys": None},
+            "can_add": True,
+        }
     except Exception as e:
         logger.error(f"科室列表查询失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
