@@ -20,6 +20,15 @@
             </svg>
             考勤纪律审查
           </router-link>
+          <router-link v-if="canAccessMashangbanEntry" to="/admin/mashangban" class="btn btn-mashangban">
+            <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/>
+              <polyline points="14 2 14 8 20 8"/>
+              <line x1="8" y1="13" x2="16" y2="13"/>
+              <line x1="8" y1="17" x2="13" y2="17"/>
+            </svg>
+            码上办月报
+          </router-link>
           <button type="button" class="btn btn-public-dashboard" @click="openPublicDashboard">
             <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <rect x="3" y="3" width="7" height="7" rx="1"/>
@@ -589,15 +598,15 @@ import {
   getLeaderFullAttendanceByMonth,
   getLeaderDeptComparison,
   getLeaderWorkIntensity,
+  getUploadConfig,
 } from '@/api/attendance'
-import { canAccessLeaderOvertimeStats, isMinisterLevel } from '@/utils/roleMatch'
+import { canAccessLeaderOvertimeStats, canAccessMashangban, isMinisterLevel } from '@/utils/roleMatch'
 import PerformanceHistoryPanel from '@/components/PerformanceHistoryPanel.vue'
 
 const router = useRouter()
-const PUBLIC_DASHBOARD_URL = 'http://10.42.60.230:8088/public-dashboard'
 
 function openPublicDashboard() {
-  window.open(PUBLIC_DASHBOARD_URL, '_blank', 'noopener,noreferrer')
+  router.push('/employee-structure-dashboard')
 }
 
 const canAccessLeaderOvertimeEntry = computed(() => {
@@ -608,6 +617,7 @@ const canAccessLeaderOvertimeEntry = computed(() => {
     return false
   }
 })
+const canAccessMashangbanEntry = ref(false)
 const lsys = ref('')
 const currentUserName = ref('')
 const permLevel = ref(1)
@@ -1529,6 +1539,17 @@ const loadPermission = async () => {
     const name = user.name || user.userName
     if (!name) return
     currentUserName.value = name
+    let admin1Name = ''
+    try {
+      const cfg = await getUploadConfig()
+      admin1Name = (cfg?.admin1 || '').trim()
+    } catch { /* ignore */ }
+    canAccessMashangbanEntry.value = canAccessMashangban({
+      name: String(name).trim(),
+      jb: (user.jb || '').trim(),
+      lsys: (user.dept || user.lsys || '').trim(),
+      admin1: admin1Name,
+    })
     const res = await getStatisticsPermission({ name })
     if (res.success) {
       permLevel.value = res.level ?? 1
@@ -1686,6 +1707,7 @@ onMounted(async () => {
 
 .btn-discipline,
 .btn-leader-ot,
+.btn-mashangban,
 .btn-public-dashboard {
   display: inline-flex;
   align-items: center;
@@ -1708,11 +1730,16 @@ onMounted(async () => {
 .btn-public-dashboard {
   background: linear-gradient(135deg, #7c3aed 0%, #5b21b6 100%);
 }
+.btn-mashangban {
+  background: linear-gradient(135deg, #0891b2 0%, #0e7490 100%);
+}
 .btn-leader-ot:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(37, 99, 235, 0.28); }
 .btn-discipline:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(245, 158, 11, 0.3); }
+.btn-mashangban:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(8, 145, 178, 0.28); }
 .btn-public-dashboard:hover { filter: brightness(1.08); box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3); }
 .btn-discipline .btn-icon,
 .btn-leader-ot .btn-icon,
+.btn-mashangban .btn-icon,
 .btn-public-dashboard .btn-icon { width: 18px; height: 18px; }
 
 .leader-dashboard-page .container {

@@ -40,3 +40,15 @@ export function getPersonnelPendingCount(params) {
     params
   })
 }
+
+/**
+ * 获取人事档案前端页面 URL（公开页内嵌，不含 SSO ticket）
+ * @param {string} path - 前端路径，默认 /public-dashboard
+ */
+export function getPersonnelPageUrl(path = '/public-dashboard') {
+  return request({
+    url: '/sso/personnel-page-url',
+    method: 'get',
+    params: { path }
+  })
+}

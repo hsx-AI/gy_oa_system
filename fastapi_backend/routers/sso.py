@@ -116,6 +116,20 @@ async def get_personnel_pending_count(
     return {"success": True, **result}
 
 
+@router.get("/personnel-page-url")
+def get_personnel_page_url(
+    path: str = Query("/public-dashboard", description="人事档案前端路径，如 /public-dashboard"),
+):
+    """生成人事档案前端页面 URL（不含 SSO ticket，用于公开页内嵌）。"""
+    base_url = (getattr(settings, "SSO_TARGET_B_BASE_URL", None) or "").strip().rstrip("/")
+    if not base_url:
+        raise HTTPException(status_code=503, detail="未配置人事档案前端地址 SSO_TARGET_B_BASE_URL")
+    entry_path = (path or "/public-dashboard").strip()
+    if not entry_path.startswith("/"):
+        entry_path = "/" + entry_path
+    return {"success": True, "url": f"{base_url}{entry_path}"}
+
+
 @router.get("/link")
 def get_sso_link(
     target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),

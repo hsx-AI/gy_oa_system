@@ -7,10 +7,10 @@ import './assets/global.css'
 
 // 图表标准化：注册 ECharts 所需模块（柱状图等），供全项目图表复用
 import * as echarts from 'echarts/core'
-import { BarChart, ScatterChart } from 'echarts/charts'
+import { BarChart, LineChart, ScatterChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, MarkLineComponent, LegendComponent, DataZoomComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-echarts.use([BarChart, ScatterChart, GridComponent, TooltipComponent, MarkLineComponent, LegendComponent, DataZoomComponent, CanvasRenderer])
+echarts.use([BarChart, LineChart, ScatterChart, GridComponent, TooltipComponent, MarkLineComponent, LegendComponent, DataZoomComponent, CanvasRenderer])
 
 const app = createApp(App)
 

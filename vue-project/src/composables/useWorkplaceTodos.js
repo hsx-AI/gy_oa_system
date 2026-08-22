@@ -135,7 +135,7 @@ const displayTodoList = computed(() => {
       uniqueId: 'personnel-need-audit',
       type: '人事档案待审核',
       description: `您有 ${personnelNeedAudit.value} 条人事档案待您审核`,
-      applicant: '人事档案系统',
+      applicant: '人事档案',
       time: '',
       isPersonnel: true,
     })
@@ -746,18 +746,7 @@ export async function refreshWorkplaceTodos() {
 }
 
 async function goPersonnelArchiveLazy() {
-  try {
-    const res = await getUploadConfig()
-    const url =
-      res?.personnelArchiveUrl != null ? String(res.personnelArchiveUrl).trim() : ''
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } else {
-      alert('人事档案系统链接未配置，请联系管理员')
-    }
-  } catch {
-    alert('人事档案系统链接未配置，请联系管理员')
-  }
+  router.push('/personnel-archive')
 }
 
 export function useWorkplaceTodos() {

@@ -68,6 +68,30 @@
           </span>
         </div>
 
+        <section v-if="rangeMode === 'year' && activeMonths.length" class="chart-dashboard">
+          <div class="kpi-grid">
+            <div v-for="card in summaryKpiCards" :key="card.key" class="kpi-card" :class="`kpi-${card.key}`">
+              <span class="kpi-label">{{ card.label }}</span>
+              <strong class="kpi-value">{{ card.value }}</strong>
+              <span class="kpi-hint">{{ card.hint }}</span>
+            </div>
+          </div>
+          <div class="chart-grid chart-grid-2">
+            <div class="chart-card">
+              <v-chart class="chart-box" :option="yearOrderTrendOption" autoresize />
+            </div>
+            <div class="chart-card">
+              <v-chart class="chart-box" :option="yearHoursTrendOption" autoresize />
+            </div>
+            <div class="chart-card">
+              <v-chart class="chart-box" :option="yearAvgServiceTrendOption" autoresize />
+            </div>
+            <div class="chart-card">
+              <v-chart class="chart-box" :option="yearStatusTrendOption" autoresize />
+            </div>
+          </div>
+        </section>
+
         <div class="tabs">
           <button type="button" :class="{ active: activeTab === 'dept' }" @click="activeTab = 'dept'">
             科室统计
@@ -105,6 +129,18 @@
             <button type="button" class="btn btn-ghost" @click="resetDeptFilter">重置</button>
             <span class="meta">显示 {{ filteredDeptRows.length }} / {{ deptAll.length }}</span>
           </div>
+
+          <div v-if="!deptFilter.dept && deptChartRows.length" class="dept-chart-panel">
+            <div class="chart-grid chart-grid-2">
+              <div class="chart-card chart-card-inner">
+                <v-chart class="chart-box chart-box-md" :option="deptOrderBarOption" autoresize />
+              </div>
+              <div class="chart-card chart-card-inner">
+                <v-chart class="chart-box chart-box-md" :option="deptHoursBarOption" autoresize />
+              </div>
+            </div>
+          </div>
+
           <div class="table-wrap">
             <table>
               <thead>
@@ -169,10 +205,34 @@
             <button type="button" class="btn btn-ghost" @click="resetPersonFilter">重置</button>
             <span class="meta">显示 {{ filteredPersonRows.length }} / {{ personAll.length }}</span>
           </div>
+
+          <div v-if="personPodiumRows.length" class="person-visual-panel">
+            <div class="podium-grid">
+              <div
+                v-for="(row, idx) in personPodiumRows"
+                :key="`${row.deptName}-${row.employeeName}`"
+                class="podium-card"
+                :class="`podium-${idx + 1}`"
+              >
+                <div class="podium-rank">{{ podiumMedal(idx) }}</div>
+                <div class="podium-name">{{ row.employeeName }}</div>
+                <div class="podium-dept">{{ row.deptName }}</div>
+                <div class="podium-metrics">
+                  <span>服务 {{ row.serviceCount ?? 0 }} 次</span>
+                  <span>{{ fmtNum(row.totalServiceHours) }} 小时</span>
+                </div>
+              </div>
+            </div>
+            <div class="chart-card chart-card-inner">
+              <v-chart class="chart-box chart-box-lg" :option="personTopBarOption" autoresize />
+            </div>
+          </div>
+
           <div class="table-wrap">
             <table>
               <thead>
                 <tr>
+                  <th class="rank-col">排名</th>
                   <th v-for="col in personColumns" :key="col.key" class="sortable" @click="toggleSort('person', col.key)">
                     {{ col.label }}
                     <span class="sort-mark">{{ sortMark('person', col.key) }}</span>
@@ -181,13 +241,36 @@
               </thead>
               <tbody>
                 <tr v-if="!filteredPersonRows.length">
-                  <td :colspan="personColumns.length" class="empty">暂无匹配数据</td>
+                  <td :colspan="personColumns.length + 1" class="empty">暂无匹配数据</td>
                 </tr>
-                <tr v-for="row in filteredPersonRows" :key="`${row.deptName}-${row.employeeName}`">
+                <tr
+                  v-for="row in filteredPersonRows"
+                  :key="`${row.deptName}-${row.employeeName}`"
+                  :class="personRowClassByRow(row)"
+                >
+                  <td class="rank-cell">
+                    <span class="rank-badge" :class="rankBadgeClassByRow(row)">{{ personRankLabelByRow(row) }}</span>
+                  </td>
                   <td>{{ row.deptName }}</td>
-                  <td>{{ row.employeeName }}</td>
-                  <td>{{ row.serviceCount ?? '-' }}</td>
-                  <td>{{ fmtNum(row.totalServiceHours) }}</td>
+                  <td>
+                    <span class="name-with-badge">{{ row.employeeName }}</span>
+                  </td>
+                  <td>
+                    <div class="metric-cell">
+                      <span>{{ row.serviceCount ?? '-' }}</span>
+                      <div class="metric-bar-track">
+                        <div class="metric-bar-fill" :style="{ width: personMetricWidth(row, 'serviceCount') }"></div>
+                      </div>
+                    </div>
+                  </td>
+                  <td>
+                    <div class="metric-cell">
+                      <span>{{ fmtNum(row.totalServiceHours) }}</span>
+                      <div class="metric-bar-track metric-bar-hours">
+                        <div class="metric-bar-fill" :style="{ width: personMetricWidth(row, 'totalServiceHours') }"></div>
+                      </div>
+                    </div>
+                  </td>
                   <td>{{ typeCountsText(row) }}</td>
                   <td>{{ fmtNum(row.avgServiceHours) }}</td>
                   <td>{{ fmtNum(row.avgAcceptHours) }}</td>
@@ -302,8 +385,15 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import VChart from 'vue-echarts'
 import { getUploadConfig } from '@/api/attendance'
 import { canAccessMashangban } from '@/utils/roleMatch'
+import {
+  getColorBarChartOption,
+  getHorizontalBarChartOption,
+  getLineChartOption,
+  getMultiLineChartOption,
+} from '@/utils/chartConfig'
 import {
   getMashangbanDept,
   getMashangbanMonths,
@@ -324,6 +414,7 @@ const activeTab = ref('dept')
 const deptAll = ref([])
 const personAll = ref([])
 const orderAll = ref([])
+const monthlySnapshots = ref([])
 
 const monthOptions = computed(() =>
   (months.value || []).map(m => m.yearMonth).filter(Boolean).sort().reverse()
@@ -501,6 +592,194 @@ const pagedOrderRows = computed(() => {
   const start = (orderPage.value - 1) * orderPageSize
   return filteredOrderRows.value.slice(start, start + orderPageSize)
 })
+
+const yearMonthAxis = computed(() =>
+  activeMonths.value.map((ym) => `${Number(ym.slice(5, 7))}月`)
+)
+
+function sumDeptField(snapshot, field) {
+  return (snapshot?.dept || []).reduce((sum, row) => sum + (Number(row[field]) || 0), 0)
+}
+
+function avgDeptField(snapshot, field, weightField = 'orderCount') {
+  const pairs = (snapshot?.dept || []).map((row) => [row[field], row[weightField] || 1])
+  return weightedAvg(pairs)
+}
+
+const summaryKpiCards = computed(() => {
+  const totalOrders = deptAll.value.reduce((sum, row) => sum + (Number(row.orderCount) || 0), 0)
+  const totalHours = deptAll.value.reduce((sum, row) => sum + (Number(row.totalServiceHours) || 0), 0)
+  const avgAccept = weightedAvg(deptAll.value.map((row) => [row.avgAcceptHours, row.orderCount || 1]))
+  return [
+    { key: 'orders', label: '年度工单总数', value: totalOrders, hint: `${activeMonths.value.length} 个月累计` },
+    { key: 'hours', label: '总服务时长(h)', value: fmtNum(totalHours), hint: '各科室合计' },
+    { key: 'depts', label: '涉及科室', value: deptAll.value.length, hint: '参与服务科室数' },
+    { key: 'people', label: '服务人员', value: personAll.value.length, hint: avgAccept == null ? '—' : `平均接单 ${fmtNum(avgAccept)} h` },
+  ]
+})
+
+const yearOrderTrendOption = computed(() => getLineChartOption({
+  title: '月度工单总量趋势',
+  xAxisData: yearMonthAxis.value,
+  seriesData: activeMonths.value.map((ym) => {
+    const snap = monthlySnapshots.value.find((item) => item.yearMonth === ym)
+    return sumDeptField(snap, 'orderCount')
+  }),
+  yAxisName: '工单数',
+}))
+
+const yearHoursTrendOption = computed(() => getLineChartOption({
+  title: '月度总服务时长趋势',
+  xAxisData: yearMonthAxis.value,
+  seriesData: activeMonths.value.map((ym) => {
+    const snap = monthlySnapshots.value.find((item) => item.yearMonth === ym)
+    return Number(sumDeptField(snap, 'totalServiceHours').toFixed(2))
+  }),
+  yAxisName: '小时',
+}))
+
+const yearAvgServiceTrendOption = computed(() => getMultiLineChartOption({
+  title: '月度响应效率趋势',
+  xAxisData: yearMonthAxis.value,
+  series: [
+    {
+      name: '平均服务(h)',
+      data: activeMonths.value.map((ym) => {
+        const snap = monthlySnapshots.value.find((item) => item.yearMonth === ym)
+        const v = avgDeptField(snap, 'avgServiceHours')
+        return v == null ? 0 : Number(v.toFixed(3))
+      }),
+    },
+    {
+      name: '平均接单(h)',
+      data: activeMonths.value.map((ym) => {
+        const snap = monthlySnapshots.value.find((item) => item.yearMonth === ym)
+        const v = avgDeptField(snap, 'avgAcceptHours')
+        return v == null ? 0 : Number(v.toFixed(3))
+      }),
+    },
+    {
+      name: '平均到场(h)',
+      data: activeMonths.value.map((ym) => {
+        const snap = monthlySnapshots.value.find((item) => item.yearMonth === ym)
+        const v = avgDeptField(snap, 'avgArriveHours')
+        return v == null ? 0 : Number(v.toFixed(3))
+      }),
+    },
+  ],
+}))
+
+const yearStatusTrendOption = computed(() => getMultiLineChartOption({
+  title: '月度工单状态趋势',
+  xAxisData: yearMonthAxis.value,
+  series: [
+    {
+      name: '未接单',
+      data: activeMonths.value.map((ym) => sumDeptField(monthlySnapshots.value.find((item) => item.yearMonth === ym), 'pendingAccept')),
+    },
+    {
+      name: '待到场',
+      data: activeMonths.value.map((ym) => sumDeptField(monthlySnapshots.value.find((item) => item.yearMonth === ym), 'pendingArrive')),
+    },
+    {
+      name: '处理中',
+      data: activeMonths.value.map((ym) => sumDeptField(monthlySnapshots.value.find((item) => item.yearMonth === ym), 'processing')),
+    },
+    {
+      name: '待确认',
+      data: activeMonths.value.map((ym) => sumDeptField(monthlySnapshots.value.find((item) => item.yearMonth === ym), 'pendingConfirm')),
+    },
+  ],
+}))
+
+const deptChartRows = computed(() =>
+  sortRows([...filteredDeptRows.value], 'orderCount', 'desc', 'dept').slice(0, 16)
+)
+
+const deptOrderBarOption = computed(() => getColorBarChartOption({
+  title: '各科室工单总数对比',
+  xAxisData: deptChartRows.value.map((row) => row.deptName),
+  seriesData: deptChartRows.value.map((row) => Number(row.orderCount) || 0),
+  yAxisName: '工单数',
+}))
+
+const deptHoursBarOption = computed(() => getColorBarChartOption({
+  title: '各科室总服务时长对比',
+  xAxisData: deptChartRows.value.map((row) => row.deptName),
+  seriesData: deptChartRows.value.map((row) => Number(row.totalServiceHours) || 0),
+  yAxisName: '小时',
+}))
+
+const personTopRows = computed(() =>
+  sortRows([...filteredPersonRows.value], 'serviceCount', 'desc', 'person').slice(0, 10)
+)
+
+const personPodiumRows = computed(() => personTopRows.value.slice(0, 3))
+
+const personTopBarOption = computed(() => getHorizontalBarChartOption({
+  title: '服务人员绩效 TOP10',
+  labels: personTopRows.value.map((row) => `${row.employeeName}（${row.deptName}）`),
+  values: personTopRows.value.map((row) => Number(row.serviceCount) || 0),
+  yAxisName: '服务频次',
+}))
+
+const personMaxServiceCount = computed(() =>
+  Math.max(...filteredPersonRows.value.map((row) => Number(row.serviceCount) || 0), 1)
+)
+
+const personMaxHours = computed(() =>
+  Math.max(...filteredPersonRows.value.map((row) => Number(row.totalServiceHours) || 0), 1)
+)
+
+function personMetricWidth(row, field) {
+  const value = Number(row[field]) || 0
+  const max = field === 'serviceCount' ? personMaxServiceCount.value : personMaxHours.value
+  return `${Math.max(8, (value / max) * 100)}%`
+}
+
+const personServiceRankMap = computed(() => {
+  const sorted = sortRows([...filteredPersonRows.value], 'serviceCount', 'desc', 'person')
+  const map = new Map()
+  sorted.forEach((row, idx) => {
+    map.set(`${row.deptName}::${row.employeeName}`, idx)
+  })
+  return map
+})
+
+function personServiceRank(row) {
+  return personServiceRankMap.value.get(`${row.deptName}::${row.employeeName}`) ?? 999
+}
+
+function personRankLabelByRow(row) {
+  const idx = personServiceRank(row)
+  if (idx === 0) return '🥇'
+  if (idx === 1) return '🥈'
+  if (idx === 2) return '🥉'
+  if (idx < 5) return `#${idx + 1}`
+  return `#${idx + 1}`
+}
+
+function rankBadgeClassByRow(row) {
+  const idx = personServiceRank(row)
+  if (idx === 0) return 'rank-badge-gold'
+  if (idx === 1) return 'rank-badge-silver'
+  if (idx === 2) return 'rank-badge-bronze'
+  if (idx < 5) return 'rank-badge-top'
+  return ''
+}
+
+function personRowClassByRow(row) {
+  const idx = personServiceRank(row)
+  if (idx === 0) return 'row-rank-gold'
+  if (idx === 1) return 'row-rank-silver'
+  if (idx === 2) return 'row-rank-bronze'
+  if (idx < 5) return 'row-rank-top'
+  return ''
+}
+
+function podiumMedal(idx) {
+  return ['🥇 TOP1', '🥈 TOP2', '🥉 TOP3'][idx] || `#${idx + 1}`
+}
 
 watch(filteredOrderRows, () => {
   if (orderPage.value > orderTotalPages.value) orderPage.value = orderTotalPages.value
@@ -818,6 +1097,7 @@ async function loadRangeData() {
     deptAll.value = []
     personAll.value = []
     orderAll.value = []
+    monthlySnapshots.value = []
     return
   }
   ordersLoading.value = true
@@ -839,6 +1119,12 @@ async function loadRangeData() {
     const deptRows = results.flatMap(r => r.dept)
     const personRows = results.flatMap(r => r.person)
     const orderRows = results.flatMap(r => r.order)
+    monthlySnapshots.value = list.map((ym, idx) => ({
+      yearMonth: ym,
+      dept: results[idx]?.dept || [],
+      person: results[idx]?.person || [],
+      orders: results[idx]?.order || [],
+    }))
     deptAll.value = list.length === 1 ? deptRows : aggregateDeptRows(deptRows)
     personAll.value = list.length === 1 ? personRows : aggregatePersonRows(personRows)
     orderAll.value = list.length === 1 ? orderRows : mergeOrderRows(orderRows)
@@ -1079,6 +1365,216 @@ th.sortable:hover {
   color: #6b7280;
   font-size: 13px;
 }
+
+.chart-dashboard {
+  margin-bottom: 14px;
+}
+
+.kpi-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.kpi-card {
+  background: linear-gradient(135deg, #ffffff 0%, #f8fbff 100%);
+  border: 1px solid #e5edf7;
+  border-radius: 12px;
+  padding: 14px 16px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.05);
+}
+
+.kpi-label {
+  display: block;
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 6px;
+}
+
+.kpi-value {
+  display: block;
+  font-size: 24px;
+  line-height: 1.2;
+  color: #0f172a;
+  margin-bottom: 4px;
+}
+
+.kpi-hint {
+  font-size: 11px;
+  color: #94a3b8;
+}
+
+.kpi-orders { border-top: 3px solid #1677ff; }
+.kpi-hours { border-top: 3px solid #13c2c2; }
+.kpi-depts { border-top: 3px solid #722ed1; }
+.kpi-people { border-top: 3px solid #fa8c16; }
+
+.chart-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.chart-grid-2 {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.chart-card,
+.chart-card-inner {
+  background: #fff;
+  border: 1px solid #e8eef5;
+  border-radius: 12px;
+  box-shadow: 0 2px 10px rgba(15, 23, 42, 0.04);
+  overflow: hidden;
+}
+
+.chart-card-inner {
+  padding: 8px 8px 0;
+}
+
+.chart-box {
+  width: 100%;
+  height: 280px;
+}
+
+.chart-box-md {
+  height: 320px;
+}
+
+.chart-box-lg {
+  height: 360px;
+}
+
+.dept-chart-panel,
+.person-visual-panel {
+  margin-bottom: 14px;
+}
+
+.podium-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.podium-card {
+  border-radius: 12px;
+  padding: 16px;
+  color: #1f2937;
+  border: 1px solid #e5edf7;
+  background: #fff;
+  box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+}
+
+.podium-1 {
+  background: linear-gradient(180deg, #fff9e6 0%, #ffffff 100%);
+  border-color: #f6d365;
+  transform: translateY(-4px);
+}
+
+.podium-2 {
+  background: linear-gradient(180deg, #f8fafc 0%, #ffffff 100%);
+  border-color: #cbd5e1;
+}
+
+.podium-3 {
+  background: linear-gradient(180deg, #fff4eb 0%, #ffffff 100%);
+  border-color: #fdba74;
+}
+
+.podium-rank {
+  font-size: 13px;
+  font-weight: 700;
+  margin-bottom: 8px;
+}
+
+.podium-name {
+  font-size: 18px;
+  font-weight: 700;
+  margin-bottom: 4px;
+}
+
+.podium-dept {
+  font-size: 12px;
+  color: #64748b;
+  margin-bottom: 10px;
+}
+
+.podium-metrics {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: #334155;
+}
+
+.rank-col,
+.rank-cell {
+  width: 56px;
+  text-align: center;
+}
+
+.rank-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 34px;
+  height: 24px;
+  padding: 0 6px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  background: #eef2f7;
+  color: #64748b;
+}
+
+.rank-badge-gold { background: #fff1b8; color: #ad6800; }
+.rank-badge-silver { background: #f1f5f9; color: #475569; }
+.rank-badge-bronze { background: #ffe7ba; color: #d46b08; }
+.rank-badge-top { background: #e6f4ff; color: #0958d9; }
+
+.row-rank-gold td { background: #fffbe6; }
+.row-rank-silver td { background: #f8fafc; }
+.row-rank-bronze td { background: #fff7e6; }
+.row-rank-top td { background: #f0f7ff; }
+
+.metric-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 88px;
+}
+
+.metric-bar-track {
+  height: 6px;
+  border-radius: 999px;
+  background: #edf2f7;
+  overflow: hidden;
+}
+
+.metric-bar-hours .metric-bar-fill {
+  background: linear-gradient(90deg, #13c2c2, #87e8de);
+}
+
+.metric-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, #1677ff, #69c0ff);
+}
+
+.name-with-badge {
+  font-weight: 600;
+}
+
+@media (max-width: 1100px) {
+  .kpi-grid,
+  .chart-grid-2,
+  .podium-grid {
+    grid-template-columns: 1fr;
+  }
+  .podium-1 { transform: none; }
+}
+
 @media (max-width: 800px) {
   .msb-page { padding: 14px; }
   .page-header { flex-direction: column; }

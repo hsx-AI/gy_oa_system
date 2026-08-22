@@ -11,6 +11,47 @@
           <span class="sidebar-title">集成办公平台</span>
         </div>
         <nav class="sidebar-nav">
+          <div ref="sidebarSearchWrapRef" class="sidebar-search">
+            <div class="sidebar-search-input-wrap">
+              <svg class="sidebar-search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="11" cy="11" r="8" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+              <input
+                v-model="sidebarSearchQuery"
+                type="search"
+                class="sidebar-search-input"
+                placeholder="搜索功能..."
+                autocomplete="off"
+                @focus="sidebarSearchOpen = true"
+                @input="onSidebarSearchInput"
+                @keydown="onSidebarSearchKeydown"
+              />
+              <button
+                v-if="sidebarSearchQuery"
+                type="button"
+                class="sidebar-search-clear"
+                aria-label="清除搜索"
+                @click="clearSidebarSearch"
+              >
+                ×
+              </button>
+            </div>
+            <div v-if="sidebarSearchOpen && sidebarSearchQuery.trim()" class="sidebar-search-dropdown">
+              <button
+                v-for="(item, idx) in sidebarSearchResults"
+                :key="item.key"
+                type="button"
+                class="sidebar-search-result"
+                :class="{ active: idx === sidebarSearchActiveIndex }"
+                @click="goSidebarSearchItem(item)"
+              >
+                <span class="sidebar-search-result-label">{{ item.label }}</span>
+                <span class="sidebar-search-result-group">{{ item.group }}</span>
+              </button>
+              <div v-if="!sidebarSearchResults.length" class="sidebar-search-empty">未找到匹配功能</div>
+            </div>
+          </div>
           <section v-if="!isOtherDeptUser" class="sidebar-group">
             <button
               type="button"
@@ -32,6 +73,20 @@
             </svg>
             <span>首页</span>
           </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/attendance" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+            <span>考勤智能填报</span>
+          </router-link>
+          <router-link v-if="canSeeLeaderDashboard" to="/leader-dashboard" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+            <span>管理驾驶舱</span>
+          </router-link>
           <!-- AI 助手入口（公测：智能制造技术室全员 + 公司经理/副经理/经理助理） -->
           <router-link v-if="!isOtherDeptUser && canUseAi" to="/ai-assistant" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -48,59 +103,6 @@
               <circle cx="12" cy="7" r="4" />
             </svg>
             <span>员工信息</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/contacts" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
-              <circle cx="9" cy="7" r="4" />
-              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
-              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
-            </svg>
-            <span>通讯录</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/action-items/dashboard" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M9 11l3 3L22 4" />
-              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
-              <path d="M7 7h5" />
-            </svg>
-            <span>行动项督办</span>
-          </router-link>
-            </div>
-          </section>
-
-          <section v-if="!isOtherDeptUser" class="sidebar-group">
-            <button
-              type="button"
-              class="sidebar-group-toggle"
-              title="健康工作"
-              :aria-expanded="isSidebarGroupOpen('leisure') ? 'true' : 'false'"
-              @click="toggleSidebarGroup('leisure')"
-            >
-              <span>健康工作</span>
-              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('leisure') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-            <div v-show="isSidebarGroupOpen('leisure')" class="sidebar-group-panel">
-          <router-link v-if="!isOtherDeptUser" to="/info-feed" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 15a4 4 0 0 0 4 4h10a4 4 0 0 0 1.2-7.82A6 6 0 0 0 6.2 9.1 4 4 0 0 0 3 15z" />
-              <path d="M8 22v-1" />
-              <path d="M12 22v-1" />
-              <path d="M16 22v-1" />
-            </svg>
-            <span>天气新闻</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/massage-chair" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M5 12h14"/>
-              <path d="M12 5v14"/>
-              <rect x="3" y="8" width="18" height="10" rx="2"/>
-              <path d="M7 12h2"/>
-              <path d="M15 12h2"/>
-            </svg>
-            <span>健康角预约</span>
           </router-link>
             </div>
           </section>
@@ -144,23 +146,6 @@
             </svg>
             <span>公出管理</span>
           </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <line x1="18" y1="20" x2="18" y2="10" />
-              <line x1="12" y1="20" x2="12" y2="4" />
-              <line x1="6" y1="20" x2="6" y2="14" />
-            </svg>
-            <span>统计汇总</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/reports-hub" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <path d="M14 2v6h6" />
-              <path d="M8 13h8" />
-              <path d="M8 17h6" />
-            </svg>
-            <span>报表汇聚</span>
-          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/overtime-pay" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <line x1="12" y1="1" x2="12" y2="23" />
@@ -187,13 +172,6 @@
               <path d="M15 14h2v2h-2z" />
             </svg>
             <span>排班管理</span>
-          </router-link>
-          <router-link v-if="canSeeLeaderDashboard" to="/leader-dashboard" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
-              <polyline points="9 22 9 12 15 12 15 22" />
-            </svg>
-            <span>管理驾驶舱</span>
           </router-link>
           <router-link v-if="canShowUpload" to="/upload" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -223,152 +201,44 @@
             </div>
           </section>
 
-          <section class="sidebar-group">
+          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canShowAccessDashboard || canAccessInboxEmails || canSeeMashangban || canSeeLeaderDashboard || !isOtherDeptUser" class="sidebar-group">
             <button
               type="button"
               class="sidebar-group-toggle"
-              title="数字化办公"
-              :aria-expanded="isSidebarGroupOpen('files') ? 'true' : 'false'"
-              @click="toggleSidebarGroup('files')"
-            >
-              <span>数字化办公</span>
-              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('files') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-            <div v-show="isSidebarGroupOpen('files')" class="sidebar-group-panel">
-          <router-link to="/print3d" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>
-            </svg>
-            <span>3D打印委托</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-            </svg>
-            <span>部门用印申请</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/low-value-reimbursement" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
-              <path d="M7.5 4.21l4.5 2.6 4.5-2.6" />
-              <path d="M12 22V12" />
-              <path d="M3.27 6.96L12 12l8.73-5.04" />
-            </svg>
-            <span>低值易耗报销</span>
-          </router-link>
-          <router-link to="/confidentiality-ledger" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
-              <path d="M9 12l2 2 4-4" />
-            </svg>
-            <span>保密审批台账</span>
-          </router-link>
-          <router-link to="/file/numbering" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <polyline points="10 9 9 9 8 9" />
-            </svg>
-            <span>文件编号</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/file/policy-query" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <polyline points="10 9 9 9 8 9" />
-            </svg>
-            <span>制度查询</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/file/bid-templates" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M4 4h16v16H4z" />
-              <path d="M8 8h8" />
-              <path d="M8 12h8" />
-              <path d="M8 16h5" />
-            </svg>
-            <span>工艺投标文件</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
-              <rect x="9" y="3" width="6" height="4" rx="1" />
-              <path d="M9 14l2 2 4-4" />
-            </svg>
-            <span>技术问题手册</span>
-          </router-link>
-          <router-link v-if="canUseRotorBladeBalance" to="/weldoa/ypp_main" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <circle cx="12" cy="12" r="9" />
-              <path d="M12 3v18" />
-              <path d="M3 12h18" />
-              <path d="M5.64 5.64l12.72 12.72" />
-              <path d="M18.36 5.64L5.64 18.36" />
-            </svg>
-            <span>转轮叶片配重</span>
-          </router-link>
-          <router-link v-if="!isOtherDeptUser" to="/feedback" class="sidebar-item" active-class="sidebar-item-active">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-            </svg>
-            <span>意见与建议</span>
-          </router-link>
-            </div>
-          </section>
-
-          <section v-if="!isOtherDeptUser" class="sidebar-group">
-            <button
-              type="button"
-              class="sidebar-group-toggle"
-              title="外部系统"
-              :aria-expanded="isSidebarGroupOpen('external') ? 'true' : 'false'"
-              @click="toggleSidebarGroup('external')"
-            >
-              <span>外部系统</span>
-              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('external') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                <polyline points="9 18 15 12 9 6" />
-              </svg>
-            </button>
-            <div v-show="isSidebarGroupOpen('external')" class="sidebar-group-panel">
-          <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M12 14l9-5-9-5-9 5 9 5z" />
-              <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
-            </svg>
-            <span>思想汇报管理</span>
-          </a>
-          <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goPersonnelArchive">
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
-              <polyline points="14 2 14 8 20 8" />
-              <line x1="16" y1="13" x2="8" y2="13" />
-              <line x1="16" y1="17" x2="8" y2="17" />
-              <polyline points="10 9 9 9 8 9" />
-            </svg>
-            <span>人事档案系统</span>
-          </a>
-            </div>
-          </section>
-
-          <section v-if="canShowEmployeeAdmin || canManageHxp || canAccessDbManager || canShowAccessDashboard || canAccessInboxEmails || canSeeMashangban" class="sidebar-group">
-            <button
-              type="button"
-              class="sidebar-group-toggle"
-              title="系统管理"
+              title="统计与管理"
               :aria-expanded="isSidebarGroupOpen('admin') ? 'true' : 'false'"
               @click="toggleSidebarGroup('admin')"
             >
-              <span>系统管理</span>
+              <span>统计与管理</span>
               <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('admin') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <polyline points="9 18 15 12 9 6" />
               </svg>
             </button>
             <div v-show="isSidebarGroupOpen('admin')" class="sidebar-group-panel">
+          <router-link v-if="canSeeLeaderDashboard" to="/leader-dashboard" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z" />
+              <polyline points="9 22 9 12 15 12 15 22" />
+            </svg>
+            <span>管理驾驶舱</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/statistics" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <line x1="18" y1="20" x2="18" y2="10" />
+              <line x1="12" y1="20" x2="12" y2="4" />
+              <line x1="6" y1="20" x2="6" y2="14" />
+            </svg>
+            <span>统计汇总</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/reports-hub" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <path d="M14 2v6h6" />
+              <path d="M8 13h8" />
+              <path d="M8 17h6" />
+            </svg>
+            <span>报表汇聚</span>
+          </router-link>
           <router-link v-if="canShowEmployeeAdmin" to="/admin/employees" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
@@ -442,11 +312,171 @@
           </router-link>
             </div>
           </section>
+
+          <section class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="数字化办公"
+              :aria-expanded="isSidebarGroupOpen('files') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('files')"
+            >
+              <span>数字化办公</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('files') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('files')" class="sidebar-group-panel">
+          <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+            </svg>
+            <span>部门用印申请</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/low-value-reimbursement" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z" />
+              <path d="M7.5 4.21l4.5 2.6 4.5-2.6" />
+              <path d="M12 22V12" />
+              <path d="M3.27 6.96L12 12l8.73-5.04" />
+            </svg>
+            <span>低值易耗报销</span>
+          </router-link>
+          <router-link to="/confidentiality-ledger" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
+              <path d="M9 12l2 2 4-4" />
+            </svg>
+            <span>保密审批台账</span>
+          </router-link>
+          <router-link to="/file/numbering" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            <span>文件编号</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 5H7a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7a2 2 0 0 0-2-2h-2" />
+              <rect x="9" y="3" width="6" height="4" rx="1" />
+              <path d="M9 14l2 2 4-4" />
+            </svg>
+            <span>技术问题手册</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/personnel-archive" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            <span>人事档案</span>
+          </router-link>
+          <a v-if="!isOtherDeptUser" href="javascript:;" class="sidebar-item" @click.prevent="goSixianghuibao">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 14l9-5-9-5-9 5 9 5z" />
+              <path d="M12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z" />
+            </svg>
+            <span>思想汇报管理</span>
+          </a>
+            </div>
+          </section>
+
+          <section class="sidebar-group">
+            <button
+              type="button"
+              class="sidebar-group-toggle"
+              title="实用工具"
+              :aria-expanded="isSidebarGroupOpen('tools') ? 'true' : 'false'"
+              @click="toggleSidebarGroup('tools')"
+            >
+              <span>实用工具</span>
+              <svg class="sidebar-group-arrow" :class="{ open: isSidebarGroupOpen('tools') }" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <polyline points="9 18 15 12 9 6" />
+              </svg>
+            </button>
+            <div v-show="isSidebarGroupOpen('tools')" class="sidebar-group-panel">
+          <router-link v-if="!isOtherDeptUser" to="/contacts" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2" />
+              <circle cx="9" cy="7" r="4" />
+              <path d="M23 21v-2a4 4 0 0 0-3-3.87" />
+              <path d="M16 3.13a4 4 0 0 1 0 7.75" />
+            </svg>
+            <span>通讯录</span>
+          </router-link>
+          <router-link v-if="canUseRotorBladeBalance" to="/weldoa/ypp_main" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <circle cx="12" cy="12" r="9" />
+              <path d="M12 3v18" />
+              <path d="M3 12h18" />
+              <path d="M5.64 5.64l12.72 12.72" />
+              <path d="M18.36 5.64L5.64 18.36" />
+            </svg>
+            <span>转轮叶片配重</span>
+          </router-link>
+          <router-link to="/print3d" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M12 2l9 5-9 5-9-5 9-5z"/><path d="M3 12l9 5 9-5"/><path d="M3 17l9 5 9-5"/>
+            </svg>
+            <span>3D打印委托</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/file/policy-query" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+              <polyline points="10 9 9 9 8 9" />
+            </svg>
+            <span>制度查询</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/file/bid-templates" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M4 4h16v16H4z" />
+              <path d="M8 8h8" />
+              <path d="M8 12h8" />
+              <path d="M8 16h5" />
+            </svg>
+            <span>工艺投标文件</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/feedback" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+            </svg>
+            <span>意见与建议</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/info-feed" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 15a4 4 0 0 0 4 4h10a4 4 0 0 0 1.2-7.82A6 6 0 0 0 6.2 9.1 4 4 0 0 0 3 15z" />
+              <path d="M8 22v-1" />
+              <path d="M12 22v-1" />
+              <path d="M16 22v-1" />
+            </svg>
+            <span>天气新闻</span>
+          </router-link>
+          <router-link v-if="!isOtherDeptUser" to="/massage-chair" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M5 12h14"/>
+              <path d="M12 5v14"/>
+              <rect x="3" y="8" width="18" height="10" rx="2"/>
+              <path d="M7 12h2"/>
+              <path d="M15 12h2"/>
+            </svg>
+            <span>健康角预约</span>
+          </router-link>
+            </div>
+          </section>
         </nav>
       </aside>
 
       <!-- 右侧：顶栏 + 主内容 + 页脚 -->
-      <div class="app-content-wrap">
+      <div class="app-content-wrap" :class="{ 'app-content-wrap--embed': isEmbedPage }">
         <header class="app-header">
           <div class="header-container">
             <div class="header-left">
@@ -597,11 +627,11 @@
           </div>
         </header>
 
-        <main class="app-main">
+        <main class="app-main" :class="{ 'app-main--embed': isEmbedPage }">
           <router-view />
         </main>
 
-        <footer class="app-footer">
+        <footer v-if="!isEmbedPage" class="app-footer">
           <div class="footer-container">
             <div class="footer-text">
               © 2026 智能制造工艺部集成办公平台
@@ -700,10 +730,9 @@ const settingsPopoverOpen = ref(false)
 const activeSkinStyle = ref('default')
 const sidebarOpenGroups = ref({
   common: true,
-  leisure: false,
   attendance: false,
   files: false,
-  external: false,
+  tools: false,
   admin: false,
 })
 
@@ -719,25 +748,37 @@ function toggleSidebarGroup(groupKey) {
 }
 
 function getSidebarGroupByPath(path) {
-  if (path.startsWith('/admin')) return 'admin'
+  if (
+    path.startsWith('/admin') ||
+    path === '/statistics' ||
+    path === '/reports-hub' ||
+    path === '/leader-dashboard'
+  ) return 'admin'
+  if (
+    path.startsWith('/weldoa') ||
+    path === '/print3d' ||
+    path === '/file/policy-query' ||
+    path === '/file/bid-templates' ||
+    path === '/feedback' ||
+    path === '/info-feed' ||
+    path === '/massage-chair' ||
+    path === '/contacts'
+  ) {
+    return 'tools'
+  }
   if (
     path.startsWith('/file') ||
-    path.startsWith('/weldoa') ||
     path.startsWith('/seal') ||
     path.startsWith('/low-value-reimbursement') ||
     path === '/confidentiality-ledger' ||
-    path === '/feedback'
+    path === '/personnel-archive'
   ) {
     return 'files'
   }
-  if (path === '/info-feed' || path === '/massage-chair') return 'leisure'
   if (
     path.startsWith('/attendance') ||
-    path === '/statistics' ||
-    path === '/reports-hub' ||
     path === '/overtime-pay' ||
     path === '/performance' ||
-    path === '/leader-dashboard' ||
     path === '/upload'
   ) {
     return 'attendance'
@@ -746,7 +787,6 @@ function getSidebarGroupByPath(path) {
     path === '/' ||
     path === '/ai-assistant' ||
     path === '/profile' ||
-    path === '/contacts' ||
     path.startsWith('/action-items')
   ) {
     return 'common'
@@ -1243,6 +1283,167 @@ const canUseRotorBladeBalance = computed(() => {
   return lsys === '焊接工艺室' || lsys === '部办'
 })
 
+const sidebarSearchWrapRef = ref(null)
+const sidebarSearchQuery = ref('')
+const sidebarSearchOpen = ref(false)
+const sidebarSearchActiveIndex = ref(0)
+
+function fuzzyMatchScore(text, query) {
+  if (!query) return 0
+  const source = String(text || '').toLowerCase()
+  const q = query.toLowerCase().trim()
+  if (!q || !source) return 0
+  if (source === q) return 100
+  if (source.includes(q)) return 80 + (q.length / source.length) * 20
+  let sourceIndex = 0
+  for (let i = 0; i < q.length; i += 1) {
+    const found = source.indexOf(q[i], sourceIndex)
+    if (found === -1) return 0
+    sourceIndex = found + 1
+  }
+  return 50 + (q.length / source.length) * 30
+}
+
+const sidebarMenuCatalog = computed(() => {
+  const items = []
+  const seen = new Set()
+  const add = ({ label, group, to = '', action = '', visible = true, keywords = [] }) => {
+    if (!visible) return
+    const key = action || to || label
+    if (seen.has(key)) return
+    seen.add(key)
+    items.push({
+      key,
+      label,
+      group,
+      to,
+      action,
+      keywords: keywords.join(' '),
+    })
+  }
+
+  if (!isOtherDeptUser.value) {
+    add({ label: '首页', group: '常用入口', to: '/' })
+    add({ label: '考勤智能填报', group: '常用入口', to: '/attendance', keywords: ['考勤', '填报'] })
+    add({ label: '管理驾驶舱', group: '常用入口', to: '/leader-dashboard', visible: canSeeLeaderDashboard.value, keywords: ['驾驶舱', '领导'] })
+    add({ label: 'AI 助手', group: '常用入口', to: '/ai-assistant', visible: canUseAi.value, keywords: ['人工智能', '助手'] })
+    add({ label: '员工信息', group: '常用入口', to: '/profile', keywords: ['个人', '档案'] })
+  }
+
+  add({ label: '考勤智能填报', group: '考勤审批', to: '/attendance', visible: !isOtherDeptUser.value, keywords: ['考勤', '填报'] })
+  add({ label: '人员出勤可视化', group: '考勤审批', to: '/attendance/personnel-visualization', keywords: ['出勤', '可视化'] })
+  add({ label: '公出管理', group: '考勤审批', to: '/attendance/business-trip', visible: !isOtherDeptUser.value, keywords: ['出差', '公出'] })
+  add({ label: '其他绩效激励统计', group: '考勤审批', to: '/overtime-pay', visible: !isOtherDeptUser.value, keywords: ['绩效', '激励', '加班'] })
+  add({ label: '绩效统计', group: '考勤审批', to: '/performance', visible: canManagePerformance.value, keywords: ['绩效'] })
+  add({ label: '排班管理', group: '考勤审批', to: '/attendance/shift-schedule', visible: !isOtherDeptUser.value, keywords: ['排班', '班次'] })
+  add({ label: '打卡数据上传', group: '考勤审批', to: '/upload', visible: canShowUpload.value, keywords: ['打卡', '上传'] })
+  add({ label: '假期调休设置', group: '考勤审批', to: '/attendance/holiday-settings', visible: canShowUpload.value, keywords: ['假期', '调休'] })
+  add({ label: '考勤异常管理', group: '考勤审批', to: '/attendance/exceptions', visible: canShowAttendanceExceptions.value, keywords: ['异常', '考勤'] })
+
+  add({ label: '管理驾驶舱', group: '统计与管理', to: '/leader-dashboard', visible: canSeeLeaderDashboard.value, keywords: ['驾驶舱', '领导'] })
+  add({ label: '统计汇总', group: '统计与管理', to: '/statistics', visible: !isOtherDeptUser.value, keywords: ['统计', '汇总'] })
+  add({ label: '报表汇聚', group: '统计与管理', to: '/reports-hub', visible: !isOtherDeptUser.value, keywords: ['报表'] })
+  add({ label: '员工在职管理', group: '统计与管理', to: '/admin/employees', visible: canShowEmployeeAdmin.value, keywords: ['员工', '在职'] })
+  add({ label: '换休票管理', group: '统计与管理', to: '/admin/hxp-manage', visible: canManageHxp.value, keywords: ['换休', '休票'] })
+  add({ label: '数据库表管理', group: '统计与管理', to: '/admin/db-manager', visible: canAccessDbManager.value, keywords: ['数据库'] })
+  add({ label: '系统管理员', group: '统计与管理', to: '/admin/health-monitor', visible: canAccessDbManager.value, keywords: ['系统', '配置', '监控'] })
+  add({ label: '系统访问看板', group: '统计与管理', to: '/admin/access-dashboard', visible: canShowAccessDashboard.value, keywords: ['访问', '看板'] })
+  add({ label: '主表批量填充', group: '统计与管理', to: '/admin/yggl-fill', visible: canAccessDbManager.value, keywords: ['批量', '填充'] })
+  add({ label: '邮件发送', group: '统计与管理', to: '/admin/email', visible: canAccessDbManager.value, keywords: ['邮件'] })
+  add({ label: '消息推送', group: '统计与管理', to: '/admin/notification', visible: canAccessDbManager.value, keywords: ['通知', '消息'] })
+  add({ label: '码上办月报', group: '统计与管理', to: '/admin/mashangban', visible: canSeeMashangban.value, keywords: ['码上办', '月报'] })
+  add({
+    label: canAccessDbManager.value ? '公用邮箱配置' : '经理层重要邮箱',
+    group: '统计与管理',
+    to: '/admin/inbox-emails',
+    visible: canAccessInboxEmails.value,
+    keywords: ['邮箱', '邮件', 'IMAP'],
+  })
+
+  add({ label: '部门用印申请', group: '数字化办公', to: '/seal/apply', visible: !isOtherDeptUser.value, keywords: ['用印', '印章'] })
+  add({ label: '低值易耗报销', group: '数字化办公', to: '/low-value-reimbursement', visible: !isOtherDeptUser.value, keywords: ['报销', '低值'] })
+  add({ label: '保密审批台账', group: '数字化办公', to: '/confidentiality-ledger', keywords: ['保密', '台账'] })
+  add({ label: '文件编号', group: '数字化办公', to: '/file/numbering', keywords: ['文件', '编号'] })
+  add({ label: '技术问题手册', group: '数字化办公', to: '/file/tech-problem', visible: !isOtherDeptUser.value, keywords: ['技术', '问题', '手册'] })
+  add({ label: '人事档案', group: '数字化办公', to: '/personnel-archive', visible: !isOtherDeptUser.value, keywords: ['人事', '档案'] })
+  add({ label: '思想汇报管理', group: '数字化办公', action: 'sixianghuibao', visible: !isOtherDeptUser.value, keywords: ['思想', '汇报'] })
+
+  add({ label: '通讯录', group: '实用工具', to: '/contacts', visible: !isOtherDeptUser.value, keywords: ['联系', '电话'] })
+  add({ label: '转轮叶片配重', group: '实用工具', to: '/weldoa/ypp_main', visible: canUseRotorBladeBalance.value, keywords: ['转轮', '叶片', '配重'] })
+  add({ label: '3D打印委托', group: '实用工具', to: '/print3d', keywords: ['3D', '打印'] })
+  add({ label: '制度查询', group: '实用工具', to: '/file/policy-query', visible: !isOtherDeptUser.value, keywords: ['制度', '政策'] })
+  add({ label: '工艺投标文件', group: '实用工具', to: '/file/bid-templates', visible: !isOtherDeptUser.value, keywords: ['投标', '文件'] })
+  add({ label: '意见与建议', group: '实用工具', to: '/feedback', visible: !isOtherDeptUser.value, keywords: ['反馈', '建议'] })
+  add({ label: '天气新闻', group: '实用工具', to: '/info-feed', visible: !isOtherDeptUser.value, keywords: ['天气', '新闻'] })
+  add({ label: '健康角预约', group: '实用工具', to: '/massage-chair', visible: !isOtherDeptUser.value, keywords: ['健康', '按摩', '预约'] })
+
+  return items
+})
+
+const sidebarSearchResults = computed(() => {
+  const query = sidebarSearchQuery.value.trim()
+  if (!query) return []
+  return sidebarMenuCatalog.value
+    .map((item) => {
+      const score = Math.max(
+        fuzzyMatchScore(item.label, query),
+        fuzzyMatchScore(item.group, query) * 0.75,
+        fuzzyMatchScore(item.keywords, query) * 0.9,
+      )
+      return { ...item, score }
+    })
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score || a.label.localeCompare(b.label, 'zh-CN'))
+    .slice(0, 12)
+})
+
+function onSidebarSearchInput() {
+  sidebarSearchOpen.value = true
+  sidebarSearchActiveIndex.value = 0
+}
+
+function clearSidebarSearch() {
+  sidebarSearchQuery.value = ''
+  sidebarSearchOpen.value = false
+  sidebarSearchActiveIndex.value = 0
+}
+
+function goSidebarSearchItem(item) {
+  if (!item) return
+  clearSidebarSearch()
+  if (item.action === 'sixianghuibao') {
+    goSixianghuibao()
+    return
+  }
+  if (!item.to) return
+  router.push(item.to)
+  const group = getSidebarGroupByPath(item.to)
+  if (group) {
+    sidebarOpenGroups.value = {
+      ...sidebarOpenGroups.value,
+      [group]: true,
+    }
+  }
+}
+
+function onSidebarSearchKeydown(event) {
+  if (!sidebarSearchOpen.value || !sidebarSearchQuery.value.trim()) return
+  const results = sidebarSearchResults.value
+  if (event.key === 'ArrowDown') {
+    event.preventDefault()
+    if (!results.length) return
+    sidebarSearchActiveIndex.value = Math.min(sidebarSearchActiveIndex.value + 1, results.length - 1)
+  } else if (event.key === 'ArrowUp') {
+    event.preventDefault()
+    sidebarSearchActiveIndex.value = Math.max(sidebarSearchActiveIndex.value - 1, 0)
+  } else if (event.key === 'Enter') {
+    event.preventDefault()
+    goSidebarSearchItem(results[sidebarSearchActiveIndex.value])
+  } else if (event.key === 'Escape') {
+    clearSidebarSearch()
+  }
+}
+
 // 切换用户菜单
 const toggleUserMenu = () => {
   showUserMenu.value = !showUserMenu.value
@@ -1259,6 +1460,9 @@ const onDocumentClick = (e) => {
   }
   if (settingsWrapRef.value && !settingsWrapRef.value.contains(e.target)) {
     settingsPopoverOpen.value = false
+  }
+  if (sidebarSearchWrapRef.value && !sidebarSearchWrapRef.value.contains(e.target)) {
+    sidebarSearchOpen.value = false
   }
 }
 
@@ -1430,17 +1634,7 @@ onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
 })
 
-// 跳转人事档案系统（外链，需独立账号登录）
-function goPersonnelArchive() {
-  const url = (personnelArchiveUrl.value || '').trim()
-  if (url) {
-    window.open(url, '_blank', 'noopener,noreferrer')
-  } else {
-    alert('人事档案系统链接未配置，请联系管理员')
-  }
-}
-
-// 跳转思想汇报管理（单点登录）
+// 跳转思想汇报管理（单点登录，新窗口）
 async function goSixianghuibao() {
   const name = (currentUser.value?.name || currentUser.value?.userName || '').trim()
   if (!name) {
@@ -1463,6 +1657,7 @@ async function goSixianghuibao() {
 // 不显示导航的路由
 const noNavRoutes = ['/login']
 const showNav = computed(() => !noNavRoutes.includes(route.path) && !route.meta.fullscreen)
+const isEmbedPage = computed(() => !!route.meta.embed)
 
 // 显示用户名：优先 currentUser.name，其次 username（有登录态时才显示主布局，此处不应出现空）
 const displayUserName = computed(() => {
@@ -1523,6 +1718,125 @@ const displayUserName = computed(() => {
   flex: 1;
   padding: var(--spacing-md) 0;
   overflow-y: auto;
+}
+
+.sidebar-search {
+  position: relative;
+  margin: 0 8px 10px;
+  z-index: 2;
+}
+
+.sidebar-search-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
+.sidebar-search-icon {
+  position: absolute;
+  left: 10px;
+  width: 14px;
+  height: 14px;
+  color: rgba(255, 255, 255, 0.45);
+  pointer-events: none;
+}
+
+.sidebar-search-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 28px 0 32px;
+  border: 1px solid var(--color-sb-border);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--color-sb-text-hover);
+  font-size: 12px;
+  outline: none;
+  transition: all 0.2s ease;
+}
+
+.sidebar-search-input::placeholder {
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.sidebar-search-input:focus {
+  border-color: rgba(96, 165, 250, 0.65);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 2px rgba(96, 165, 250, 0.15);
+}
+
+.sidebar-search-clear {
+  position: absolute;
+  right: 6px;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.75);
+  font-size: 14px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.sidebar-search-clear:hover {
+  background: rgba(255, 255, 255, 0.2);
+  color: #fff;
+}
+
+.sidebar-search-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  max-height: 280px;
+  overflow-y: auto;
+  border: 1px solid var(--color-sb-border);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(180deg, #1f2937 0%, #111827 100%);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.sidebar-search-result {
+  width: 100%;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  border: none;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  transition: background 0.15s ease;
+}
+
+.sidebar-search-result:last-child {
+  border-bottom: none;
+}
+
+.sidebar-search-result:hover,
+.sidebar-search-result.active {
+  background: rgba(96, 165, 250, 0.15);
+}
+
+.sidebar-search-result-label {
+  font-size: 12px;
+  color: var(--color-sb-text-hover);
+  line-height: 1.3;
+}
+
+.sidebar-search-result-group {
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.45);
+  line-height: 1.2;
+}
+
+.sidebar-search-empty {
+  padding: 12px 10px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.55);
+  text-align: center;
 }
 
 .sidebar-group {
@@ -1620,6 +1934,10 @@ const displayUserName = computed(() => {
   display: flex;
   flex-direction: column;
   background: var(--color-bg-layout);
+}
+
+.app-content-wrap--embed {
+  min-height: 100vh;
 }
 
 /* 顶栏：与侧栏头部同高、同色，下边线平齐；铺满右侧至画面右边缘 */
@@ -2195,6 +2513,14 @@ a.user-menu__item {
   flex: 1;
   padding: var(--spacing-xl) 0 0 var(--page-content-gap, 20px);
   min-width: 0;
+}
+
+.app-main--embed {
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
 }
 
 .app-main.no-header {

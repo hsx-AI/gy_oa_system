@@ -1968,10 +1968,11 @@ const rawFeatureGroups = [
       },
       {
         id: 'personnel-archive',
-        title: '人事档案管理系统',
-        description: '跳转人事档案系统，需使用人事档案系统独立账号登录',
+        title: '人事档案',
+        description: '在平台内打开人事档案，集成办公账号单点登录',
+        path: '/personnel-archive',
         color: 'linear-gradient(135deg, #11998e 0%, #38ef7d 100%)',
-        tag: '外链',
+        tag: '集成',
         iconPath: 'M12 14l9-5-9-5-9 5 9 5zM12 14l6.16-3.422a12.083 12.083 0 01.665 6.479A11.952 11.952 0 0012 20.055a11.952 11.952 0 00-6.824-2.998 12.078 12.078 0 01.665-6.479L12 14z'
       },
       {
@@ -2826,12 +2827,7 @@ function goMyApplication(req) {
 }
 
 function goPersonnelArchive() {
-  const url = (personnelArchiveUrl.value || '').trim()
-  if (url) {
-    window.open(url, '_blank', 'noopener,noreferrer')
-  } else {
-    alert('人事档案系统链接未配置，请联系管理员')
-  }
+  router.push('/personnel-archive')
 }
 
 async function fetchRequestList() {
@@ -3033,15 +3029,6 @@ function folderAccent(group) {
 
 async function navigateTo(feature) {
   if (!feature) return
-  if (feature.id === 'personnel-archive') {
-    const url = (personnelArchiveUrl.value || '').trim()
-    if (url) {
-      window.open(url, '_blank', 'noopener,noreferrer')
-    } else {
-      alert('人事档案系统链接未配置，请联系管理员')
-    }
-    return
-  }
   if (feature.id === 'sixianghuibao') {
     const name = (userName.value || '').trim()
     if (!name) {

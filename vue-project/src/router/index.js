@@ -308,6 +308,18 @@ const routes = [
     meta: { title: '意见与建议' }
   },
   {
+    path: '/personnel-archive',
+    name: 'PersonnelArchiveEmbed',
+    component: () => import('@/views/PersonnelArchiveEmbed.vue'),
+    meta: { title: '人事档案', embed: true }
+  },
+  {
+    path: '/employee-structure-dashboard',
+    name: 'EmployeeStructureDashboardEmbed',
+    component: () => import('@/views/EmployeeStructureDashboardEmbed.vue'),
+    meta: { title: '员工信息驾驶舱', embed: true }
+  },
+  {
     path: '/contacts',
     name: 'Contacts',
     component: () => import('@/views/Contacts.vue'),
