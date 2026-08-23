@@ -125,11 +125,15 @@
                 :class="[
                   `desk-card--${person.status}`,
                   `desk-card--${genderClass(person)}`,
-                  { 'desk-card--extendable': canExtendPerson(person) },
+                  {
+                    'desk-card--extendable': canExtendPerson(person) && !canNavigatePerson(person),
+                    'desk-card--clickable': canNavigatePerson(person) || canExtendPerson(person),
+                    'desk-card--navigable': canNavigatePerson(person),
+                  },
                 ]"
                 :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-                :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
-                @click="canExtendPerson(person) && openExtend(person)"
+                :title="deskCardTitle(person)"
+                @click="onDeskClick(person)"
               >
                 <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
                 <div class="desk-card__top">
@@ -186,6 +190,7 @@
                     <span class="meta-main">未查询到当天打卡</span>
                     <span class="meta-sub">可能未到岗、未同步或非工作日</span>
                   </template>
+                  <span v-if="canNavigatePerson(person)" class="meta-link-hint">点击查看详情 →</span>
                 </div>
               </article>
             </div>
@@ -205,11 +210,15 @@
             :class="[
               `desk-card--${person.status}`,
               `desk-card--${genderClass(person)}`,
-              { 'desk-card--extendable': canExtendPerson(person) },
+              {
+                'desk-card--extendable': canExtendPerson(person) && !canNavigatePerson(person),
+                'desk-card--clickable': canNavigatePerson(person) || canExtendPerson(person),
+                'desk-card--navigable': canNavigatePerson(person),
+              },
             ]"
             :style="{ '--delay': `${(index % 6) * 0.12}s` }"
-            :title="canExtendPerson(person) ? `${person.name}：暂无打卡，点击为其办理公出延长` : personTitle(person)"
-            @click="canExtendPerson(person) && openExtend(person)"
+            :title="deskCardTitle(person)"
+            @click="onDeskClick(person)"
           >
             <span v-if="canExtendPerson(person)" class="extend-flag">公出延长</span>
             <div class="desk-card__top">
@@ -265,6 +274,7 @@
                 <span class="meta-main">未查询到当天打卡</span>
                 <span class="meta-sub">可能未到岗、未同步或非工作日</span>
               </template>
+              <span v-if="canNavigatePerson(person)" class="meta-link-hint">点击查看详情 →</span>
             </div>
           </article>
         </div>
@@ -350,9 +360,12 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRouter } from 'vue-router'
 import { getPersonnelAttendanceScene } from '@/api/personnelVisualization'
 import { getApprovers, getExtendableBusinessTrips, extendBusinessTrip } from '@/api/attendance'
 import { isDeptLeader, jbMatch } from '@/utils/roleMatch'
+
+const router = useRouter()
 
 const loading = ref(false)
 const errorMessage = ref('')
@@ -521,10 +534,24 @@ function canExtendPerson(person) {
   return canExtend.value && person?.status === 'no_record'
 }
 
+function hasLeaveMarker(person) {
+  return Boolean(person?.leave && (person.status === 'leave' || person.status === 'no_record'))
+}
+
+function canNavigatePerson(person) {
+  if (person?.status === 'business_trip' && person.businessTrip?.id != null) return true
+  if (hasLeaveMarker(person) && person.leave?.id != null) return true
+  return false
+}
+
 function personTitle(person) {
   if (person.status === 'business_trip') {
     const trip = person.businessTrip || {}
     return `${person.name}：${person.statusLabel}，${trip.location || '地点未填'}`
+  }
+  if (hasLeaveMarker(person)) {
+    const leave = person.leave || {}
+    return `${person.name}：${leave.statusLabel || person.statusLabel}，${leave.type || ''}`
   }
   if (person.attendance) {
     return `${person.name}：${person.statusLabel}，${person.attendance.times?.join(' / ') || ''}`
@@ -532,14 +559,67 @@ function personTitle(person) {
   return `${person.name}：${person.statusLabel}`
 }
 
+function deskCardTitle(person) {
+  if (canNavigatePerson(person)) {
+    if (person.status === 'business_trip') {
+      return `${personTitle(person)}（点击查看公出详情）`
+    }
+    return `${personTitle(person)}（点击查看请假详情）`
+  }
+  if (canExtendPerson(person)) {
+    return `${person.name}：暂无打卡，点击为其办理公出延长`
+  }
+  return personTitle(person)
+}
+
+function navigatePersonDetail(person) {
+  if (person?.status === 'business_trip' && person.businessTrip?.id != null) {
+    const trip = person.businessTrip
+    const year = String(trip.startTime || selectedDate.value || '').slice(0, 4)
+    router.push({
+      path: '/attendance/business-trip',
+      query: {
+        view: 'ledger',
+        focusId: String(trip.id),
+        focusName: person.name || '',
+        ...(year ? { year } : {}),
+        status: '已通过',
+      },
+    })
+    return
+  }
+  if (hasLeaveMarker(person) && person.leave?.id != null) {
+    const leave = person.leave
+    const year = String(leave.startTime || selectedDate.value || '').slice(0, 4)
+    router.push({
+      path: '/attendance/manual',
+      query: {
+        tab: 'leave',
+        view: 'ledger',
+        from: 'all-records',
+        focusId: String(leave.id),
+        focusName: person.name || '',
+        ...(year ? { year } : {}),
+        status: leave.approved ? 'approved' : 'processing',
+      },
+    })
+  }
+}
+
+function onDeskClick(person) {
+  if (canNavigatePerson(person)) {
+    navigatePersonDetail(person)
+    return
+  }
+  if (canExtendPerson(person)) {
+    openExtend(person)
+  }
+}
+
 function genderClass(person) {
   if (person?.gender === 'female' || String(person?.xbie || '').includes('女')) return 'female'
   if (person?.gender === 'male' || String(person?.xbie || '').includes('男')) return 'male'
   return 'unknown-gender'
-}
-
-function hasLeaveMarker(person) {
-  return Boolean(person?.leave && (person.status === 'leave' || person.status === 'no_record'))
 }
 
 async function loadScene() {
@@ -1800,6 +1880,38 @@ onMounted(loadScene)
   box-shadow: 0 16px 30px rgba(245, 158, 11, 0.26);
   border-color: #f59e0b;
 }
+
+.desk-card--clickable {
+  cursor: pointer;
+  transition: box-shadow 0.18s ease, transform 0.18s ease, border-color 0.18s ease;
+}
+
+.desk-card--navigable:hover {
+  transform: translateY(-2px);
+}
+
+.desk-card--business_trip.desk-card--navigable:hover {
+  box-shadow: 0 16px 30px rgba(217, 119, 6, 0.24);
+  border-color: #d97706;
+}
+
+.desk-card--leave.desk-card--navigable:hover,
+.desk-card--no_record.desk-card--navigable:hover {
+  box-shadow: 0 16px 30px rgba(124, 58, 237, 0.22);
+  border-color: #7c3aed;
+}
+
+.meta-link-hint {
+  display: block;
+  margin-top: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  color: #2563eb;
+}
+
+.desk-card--business_trip .meta-link-hint { color: #d97706; }
+.desk-card--leave .meta-link-hint,
+.desk-card--no_record.desk-card--navigable .meta-link-hint { color: #7c3aed; }
 
 .extend-flag {
   position: absolute;

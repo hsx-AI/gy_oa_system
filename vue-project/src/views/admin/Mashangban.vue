@@ -6,9 +6,19 @@
           <h1>工艺码上办月报</h1>
           <p>支持单月 / 区间 / 全年统计（admin1、经理层、综合技术室主任/副主任）</p>
         </div>
-        <button type="button" class="btn" :disabled="loading" @click="reloadAll">
-          {{ loading ? '加载中…' : '刷新' }}
-        </button>
+        <div class="header-actions">
+          <button
+            type="button"
+            class="btn btn-export"
+            :disabled="loading || exportLoading || !activeMonths.length"
+            @click="handleExportExcel"
+          >
+            {{ exportLoading ? '导出中…' : '导出报表' }}
+          </button>
+          <button type="button" class="btn" :disabled="loading" @click="reloadAll">
+            {{ loading ? '加载中…' : '刷新' }}
+          </button>
+        </div>
       </header>
 
       <div v-if="!canAccess" class="card tip">
@@ -385,6 +395,7 @@
 
 <script setup>
 import { computed, onMounted, reactive, ref, watch } from 'vue'
+import * as XLSX from 'xlsx'
 import VChart from 'vue-echarts'
 import { getUploadConfig } from '@/api/attendance'
 import { canAccessMashangban } from '@/utils/roleMatch'
@@ -403,6 +414,7 @@ import {
 
 const canAccess = ref(false)
 const loading = ref(false)
+const exportLoading = ref(false)
 const ordersLoading = ref(false)
 const months = ref([])
 const rangeMode = ref('month') // month | range | year
@@ -1185,6 +1197,62 @@ async function onYearChange() {
   await loadRangeData()
 }
 
+function exportCellValue(row, key, scope) {
+  if (scope === 'person' && key === 'typeCounts') return typeCountsText(row)
+  if (scope === 'person' && key === 'rateCounts') return rateCountsText(row)
+  if (scope === 'order' && key === 'createdAt') return fmtTime(row.createdAt)
+  if (scope === 'order' && key === 'ratingLabel') return row.ratingLabel || row.ratingScore || ''
+  const v = row[key]
+  if (v == null || v === '') return ''
+  return v
+}
+
+function buildDeptSheet(rows) {
+  const header = deptColumns.map(col => col.label)
+  const body = rows.map(row => deptColumns.map(col => exportCellValue(row, col.key, 'dept')))
+  return XLSX.utils.aoa_to_sheet([header, ...body])
+}
+
+function buildPersonSheet(rows) {
+  const header = ['排名', ...personColumns.map(col => col.label)]
+  const body = rows.map(row => [
+    personServiceRank(row) + 1,
+    ...personColumns.map(col => exportCellValue(row, col.key, 'person')),
+  ])
+  return XLSX.utils.aoa_to_sheet([header, ...body])
+}
+
+function buildOrderSheet(rows) {
+  const header = orderColumns.map(col => col.label)
+  const body = rows.map(row => orderColumns.map(col => exportCellValue(row, col.key, 'order')))
+  return XLSX.utils.aoa_to_sheet([header, ...body])
+}
+
+function exportFileName() {
+  const label = rangeLabel.value.replace(/[<>:"/\\|?*\s]+/g, '_')
+  return `工艺码上办月报_${label}.xlsx`
+}
+
+function handleExportExcel() {
+  if (!activeMonths.value.length) {
+    alert('请先选择统计月份')
+    return
+  }
+  exportLoading.value = true
+  try {
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(wb, buildDeptSheet(filteredDeptRows.value), '科室统计')
+    XLSX.utils.book_append_sheet(wb, buildPersonSheet(filteredPersonRows.value), '人员服务绩效')
+    XLSX.utils.book_append_sheet(wb, buildOrderSheet(filteredOrderRows.value), '工单明细')
+    XLSX.writeFile(wb, exportFileName())
+  } catch (e) {
+    console.error(e)
+    alert(e?.message || '导出失败，请稍后重试')
+  } finally {
+    exportLoading.value = false
+  }
+}
+
 onMounted(async () => {
   await checkPermission()
   if (canAccess.value) await reloadAll()
@@ -1207,6 +1275,20 @@ onMounted(async () => {
   align-items: flex-start;
   gap: 16px;
   margin-bottom: 16px;
+}
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.btn-export {
+  background: #059669;
+  color: #fff;
+  border-color: #059669;
+}
+.btn-export:hover:not(:disabled) {
+  filter: brightness(1.06);
 }
 .page-header h1 {
   margin: 0 0 6px;

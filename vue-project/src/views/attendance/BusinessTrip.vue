@@ -101,7 +101,12 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="(r, idx) in recordDisplayList" :key="r.id != null && r.id !== '' ? String(r.id) : `row-${idx}`" :data-record-id="r.id">
+                <tr
+                  v-for="(r, idx) in recordDisplayList"
+                  :key="r.id != null && r.id !== '' ? String(r.id) : `row-${idx}`"
+                  :data-record-id="r.id"
+                  :class="{ 'record-row-focused': focusedRecordId && String(r.id) === focusedRecordId }"
+                >
                   <td>{{ r.tripScope || '—' }}</td>
                   <td>{{ r.tripScope === '市内公出' ? '—' : (r.targetUnit || '—') }}</td>
                   <td>{{ r.person }}</td>
@@ -570,6 +575,7 @@ const deptLsysOptions = ref([])
 const recordMonthPermission = ref(null)
 const recordKeyword = ref('')
 const recordSort = ref('assignTime_desc')
+const focusedRecordId = ref('')
 const TRIP_LOCAL_SORT_FIELDS = [
   { field: 'assignTime', type: 'date', get: (r) => r.assignTime },
   { field: 'startTime', type: 'date', get: (r) => r.startTime },
@@ -1026,26 +1032,47 @@ onMounted(async () => {
   if (q.view === 'ledger' || q.from === 'leader') {
     if (tripListMeta.value.canViewAll) {
       recordDataRange.value = 'all'
+    } else if (tripListMeta.value.canViewLsys && q.focusId) {
+      recordDataRange.value = 'major'
     }
     const qy = parseInt(q.year, 10)
     if (qy > 2000) {
       recordYear.value = qy
       const qm = parseInt(q.month, 10)
       recordMonthPermission.value = qm >= 1 && qm <= 12 ? qm : null
+    } else if (q.focusId) {
+      recordMonthPermission.value = null
     }
     if (q.from === 'leader') {
       recordStatusFilter.value = '已通过'
       if (q.focusName) recordKeyword.value = q.focusName
     }
+    if (q.status === 'processing_rejected' || q.status === '已通过') {
+      recordStatusFilter.value = q.status
+    }
+    if (q.focusName) recordKeyword.value = q.focusName
   } else if (q.focusId) {
+    if (tripListMeta.value.canViewAll) {
+      recordDataRange.value = 'all'
+    } else if (tripListMeta.value.canViewLsys) {
+      recordDataRange.value = 'major'
+    }
     if (q.year) recordYear.value = Number(q.year)
+    recordMonthPermission.value = null
     if (q.status === 'processing_rejected' || q.status === '已通过') recordStatusFilter.value = q.status
+    if (q.focusName) recordKeyword.value = q.focusName
   }
   tripRecordsMounted = true
   await fetchTripRecords()
   if (q.focusId) {
-    const list = filteredRecordList.value
-    const idx = list.findIndex(r => String(r.id) === String(q.focusId))
+    focusedRecordId.value = String(q.focusId)
+    let list = filteredRecordList.value
+    let idx = list.findIndex(r => String(r.id) === String(q.focusId))
+    if (idx < 0 && q.focusName && recordKeyword.value) {
+      recordKeyword.value = ''
+      list = filteredRecordList.value
+      idx = list.findIndex(r => String(r.id) === String(q.focusId))
+    }
     if (idx >= 0) {
       recordPage.value = Math.ceil((idx + 1) / recordPageSize.value)
       await nextTick()
@@ -1511,6 +1538,15 @@ watch(showApplyModal, async (visible) => {
 
 .record-table tbody tr:hover td {
   background: var(--color-bg-spotlight);
+}
+
+.record-table tbody tr.record-row-focused td {
+  background: #fef3c7;
+  box-shadow: inset 3px 0 0 #d97706;
+}
+
+.record-table tbody tr.record-row-focused:hover td {
+  background: #fde68a;
 }
 
 .return-time-cell {

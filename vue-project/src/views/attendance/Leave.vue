@@ -91,7 +91,12 @@
                 </tr>
               </thead>
               <tbody>
-                <tr v-for="r in recordDisplayList" :key="r.id" :data-record-id="r.id">
+                <tr
+                  v-for="r in recordDisplayList"
+                  :key="r.id"
+                  :data-record-id="r.id"
+                  :class="{ 'record-row-focused': focusedRecordId && String(r.id) === focusedRecordId }"
+                >
                   <td v-if="showApplicantColumn">{{ r.applicant || '—' }}</td>
                   <td><span class="type-tag" :class="leaveTypeClass(r.type)">{{ r.type }}</span></td>
                   <td>{{ r.startTime }}</td>
@@ -299,6 +304,7 @@ const myRecordList = ref([])
 const recordPage = ref(1)
 const recordPageSize = ref(10)
 const recordKeyword = ref('')
+const focusedRecordId = ref('')
 const recordLeaveType = ref('')
 const recordSort = ref('startTime_desc')
 const LEAVE_SORT_FIELDS = [
@@ -649,12 +655,19 @@ onMounted(async () => {
   const q = route.query
   if (q.from === 'leader' || q.from === 'all-records' || q.view === 'ledger') {
     recordSource.value = 'all'
-    recordStatus.value = 'approved'
+    if (q.status === 'processing' || q.status === 'approved' || q.status === 'all') {
+      recordStatus.value = q.status
+    } else {
+      recordStatus.value = 'approved'
+    }
     const qy = parseInt(q.year, 10)
     if (qy > 2000) {
       recordYear.value = qy
       const qm = parseInt(q.month, 10)
       if (qm >= 1 && qm <= 12) recordMonth.value = qm
+    } else if (q.focusId) {
+      // 按记录定位时默认查全年，避免跨月请假被月份筛掉
+      recordMonth.value = null
     }
     if (q.focusName) recordKeyword.value = q.focusName
   } else if (q.focusId) {
@@ -662,13 +675,30 @@ onMounted(async () => {
     if (q.month) {
       const mo = Number(q.month)
       if (mo >= 1 && mo <= 12) recordMonth.value = mo
+    } else {
+      recordMonth.value = null
     }
     if (q.status === 'processing' || q.status === 'approved' || q.status === 'all') recordStatus.value = q.status
+    if (q.focusName) recordKeyword.value = q.focusName
   }
   leaveListMounted = true
   await fetchLeaveList()
+  if (q.focusId && (q.view === 'ledger' || q.from === 'all-records' || q.from === 'leader')) {
+    const meta = leaveListMeta.value
+    if (recordSource.value === 'all' && !meta.canViewAll && meta.canViewLsys && meta.lsysLabel) {
+      recordSource.value = 'dept:' + meta.lsysLabel
+      await fetchLeaveList()
+    }
+  }
   if (q.focusId) {
-    const idx = myRecordList.value.findIndex(r => String(r.id) === String(q.focusId))
+    focusedRecordId.value = String(q.focusId)
+    let list = recordProcessedList.value
+    let idx = list.findIndex(r => String(r.id) === String(q.focusId))
+    if (idx < 0 && q.focusName && recordKeyword.value) {
+      recordKeyword.value = ''
+      list = recordProcessedList.value
+      idx = list.findIndex(r => String(r.id) === String(q.focusId))
+    }
     if (idx >= 0) {
       recordPage.value = Math.ceil((idx + 1) / recordPageSize.value)
       await nextTick()
@@ -881,6 +911,8 @@ const submitApplication = async () => {
 .record-table th, .record-table td { padding: 12px var(--spacing-xl); text-align: left; border-bottom: 1px solid var(--color-border-lighter); background: white; }
 .record-table th { font-weight: 600; color: var(--color-text-primary); }
 .record-table tbody tr:hover td { background: var(--color-bg-spotlight); }
+.record-table tbody tr.record-row-focused td { background: #ede9fe; box-shadow: inset 3px 0 0 #7c3aed; }
+.record-table tbody tr.record-row-focused:hover td { background: #ddd6fe; }
 .record-card__body .status-tag { display: inline-block; padding: 2px 8px; border-radius: var(--radius-sm); font-size: var(--font-size-xs); }
 .record-card__body .status-tag.status-approved { color: #059669; background: #d1fae5; }
 .record-card__body .status-tag.status-processing { color: #d97706; background: #fef3c7; }
