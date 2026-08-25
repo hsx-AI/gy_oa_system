@@ -55,7 +55,7 @@
               <div class="todo-item__bottom">
                 <span class="todo-item__meta">{{ task.applicant }} · {{ task.time }}</span>
                 <button type="button" class="todo-item__btn" @click="handleTodoAction(task)">
-                  {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
+                  {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? (task.btnLabel || '去审批') : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
                 </button>
               </div>
             </li>

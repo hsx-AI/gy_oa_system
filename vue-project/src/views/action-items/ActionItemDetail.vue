@@ -16,7 +16,8 @@
           </div>
         </div>
         <button v-if="canAdminAdjust" class="btn function-edit" @click="openAdjust">调整</button>
-        <button v-if="canAdminCancel" class="btn danger" @click="cancelPublished">删除</button>
+        <button v-if="canManagePublished" class="btn function-complete" @click="completePublished">设为已完成</button>
+        <button v-if="canManagePublished" class="btn danger" @click="cancelPublished">删除</button>
         <button v-if="canExecute" class="btn function-progress" @click="openProgress">填报进展</button>
         <button v-if="canExecute" class="btn function-complete" @click="openCompletion">申请完工</button>
         <button v-if="canChange" class="btn function-change" @click="requestChange">申请变更</button>
@@ -193,7 +194,7 @@ import { useRoute, useRouter } from 'vue-router'
 import {
   actionAttachmentUrl, addActionProgress, applyActionChange, applyActionCompletion,
   approveActionChange, approveActionCompletion, assignActionResponsible, cancelPublishedAction,
-  getActionDetail, getActionDirectory, receiveAction, remindAction, updateAction,
+  forceCompleteAction, getActionDetail, getActionDirectory, receiveAction, remindAction, updateAction,
 } from '@/api/actionItems'
 
 const route = useRoute(); const router = useRouter(); const actionId = Number(route.params.id)
@@ -233,7 +234,10 @@ const canAssign = computed(() => item.current_status === '待接收'
   && assignmentScope.departments?.length
   && assignmentScope.people?.length)
 const canAdminAdjust = computed(() => user.minutes_admin && !['草稿', '待发布', '已取消'].includes(item.current_status))
-const canAdminCancel = computed(() => user.minutes_admin && !['草稿', '待发布', '已取消'].includes(item.current_status))
+const canManagePublished = computed(() => (
+  !!permissions.managePublished
+  && !['草稿', '待发布', '已取消', '已完成'].includes(item.current_status)
+))
 const departmentPeople = computed(() => assignmentScope.people || [])
 const adjustPeople = computed(() => directory.people.filter(p => !adjustForm.responsible_department_id || p.department === adjustForm.responsible_department_id))
 const canExecute = computed(() => (
@@ -306,6 +310,15 @@ async function submitAdjust() {
     modal.value = ''
     await load()
   } catch (e) { fail(e) } finally { saving.value = false }
+}
+async function completePublished() {
+  const note = prompt(`将「${item.title}」设为已完成并闭环。\n确认后不再推送逾期/未更新提醒。`, '领导确认闭环')
+  if (note === null) return
+  try {
+    const result = await forceCompleteAction(actionId, { current_user: currentUser, note })
+    alert(result?.message || '行动项已闭环')
+    await load()
+  } catch (e) { fail(e) }
 }
 async function cancelPublished() {
   const reason = prompt(`删除「${item.title}」并保留历史记录。\n可填写删除原因：`, '台账管理删除')

@@ -56,6 +56,9 @@ export const cancelActionDraft = (id, data) =>
 export const cancelPublishedAction = (id, data) =>
   request({ url: `${P}/${id}/cancel`, method: 'post', data })
 
+export const forceCompleteAction = (id, data) =>
+  request({ url: `${P}/${id}/force-complete`, method: 'post', data })
+
 export const publishActions = data =>
   request({ url: `${P}/publish`, method: 'post', data })
 

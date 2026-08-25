@@ -17,8 +17,11 @@
 </template>
 
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, ref, watch } from 'vue'
+import { useRoute } from 'vue-router'
 import { getSSOLink } from '@/api/sso'
+
+const route = useRoute()
 
 const MSG = {
   loading: '\u6b63\u5728\u52a0\u8f7d\u4eba\u4e8b\u6863\u6848\u2026',
@@ -58,7 +61,8 @@ async function loadEmbed() {
   embedUrl.value = ''
 
   try {
-    const res = await getSSOLink('B', name)
+    const redirect = String(route.query.redirect || '').trim()
+    const res = await getSSOLink('B', name, redirect || undefined)
     if (res?.success && res?.url) {
       embedUrl.value = res.url
     } else {
@@ -75,6 +79,7 @@ async function loadEmbed() {
 }
 
 onMounted(loadEmbed)
+watch(() => route.query.redirect, loadEmbed)
 </script>
 
 <style scoped>

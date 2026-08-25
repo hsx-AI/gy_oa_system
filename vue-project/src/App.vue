@@ -327,6 +327,18 @@
               </svg>
             </button>
             <div v-show="isSidebarGroupOpen('files')" class="sidebar-group-panel">
+          <router-link
+            v-if="!isOtherDeptUser"
+            to="/action-items/dashboard"
+            class="sidebar-item"
+            :class="{ 'sidebar-item-active': route.path.startsWith('/action-items') }"
+          >
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M9 11l3 3L22 4" />
+              <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11" />
+            </svg>
+            <span>行动项督办</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/seal/apply" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z" />
@@ -529,7 +541,7 @@
                         <div class="todo-popover-item__bottom">
                           <span class="todo-popover-item__meta">{{ task.applicant }}{{ task.time ? ' · ' + task.time : '' }}</span>
                           <button type="button" class="todo-popover-item__btn" @click="onHeaderTodoAction(task)">
-                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? '去处理' : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
+                            {{ task.isHxpNotice ? '已读' : (task.isHxpApproval ? '去审批' : (task.isPersonnel ? (task.btnLabel || '去审批') : (task.isSixianghuibao ? (task.btnLabel || '去处理') : (task.isReturnReminder ? '去登记' : (task.isSealUsePending ? '已用印' : (task.isSealApproval ? '去审批' : (task.btnLabel || '处理'))))))) }}
                           </button>
                         </div>
                       </li>
@@ -771,7 +783,8 @@ function getSidebarGroupByPath(path) {
     path.startsWith('/seal') ||
     path.startsWith('/low-value-reimbursement') ||
     path === '/confidentiality-ledger' ||
-    path === '/personnel-archive'
+    path === '/personnel-archive' ||
+    path.startsWith('/action-items')
   ) {
     return 'files'
   }
@@ -786,8 +799,7 @@ function getSidebarGroupByPath(path) {
   if (
     path === '/' ||
     path === '/ai-assistant' ||
-    path === '/profile' ||
-    path.startsWith('/action-items')
+    path === '/profile'
   ) {
     return 'common'
   }
@@ -1220,7 +1232,7 @@ const canManagePerformance = computed(() => {
   return isDirectorLevel(jb) || jb.includes('组长')
 })
 
-// 工艺码上办月报：admin1、经理/副经理/经理助理、综合技术室主任/副主任
+// 工艺码上办月报：admin1、经理/副经理/经理助理、各科室主任/副主任/班组长
 const canSeeMashangban = computed(() => {
   return canAccessMashangban({
     name: (currentUser.value?.name || currentUser.value?.userName || '').trim(),
@@ -1360,6 +1372,7 @@ const sidebarMenuCatalog = computed(() => {
     keywords: ['邮箱', '邮件', 'IMAP'],
   })
 
+  add({ label: '行动项督办', group: '数字化办公', to: '/action-items/dashboard', visible: !isOtherDeptUser.value, keywords: ['行动项', '督办', '会议纪要', 'AI'] })
   add({ label: '部门用印申请', group: '数字化办公', to: '/seal/apply', visible: !isOtherDeptUser.value, keywords: ['用印', '印章'] })
   add({ label: '低值易耗报销', group: '数字化办公', to: '/low-value-reimbursement', visible: !isOtherDeptUser.value, keywords: ['报销', '低值'] })
   add({ label: '保密审批台账', group: '数字化办公', to: '/confidentiality-ledger', keywords: ['保密', '台账'] })

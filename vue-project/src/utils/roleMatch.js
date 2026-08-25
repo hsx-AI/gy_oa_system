@@ -121,11 +121,11 @@ export function isManagerLevel(jb) {
   return j === '经理' || j === '副经理' || j === '经理助理'
 }
 
-/** 工艺码上办月报：admin1、经理/副经理/经理助理、综合技术室主任/副主任 */
+/** 工艺码上办月报：admin1、经理/副经理/经理助理、各科室主任/副主任/班组长 */
 export function canAccessMashangban({ name, jb, lsys, admin1 }) {
   if (isAdmin1User(name, admin1)) return true
   if (isManagerLevel(jb)) return true
-  return isZongheTechDirector({ jb, lsys })
+  return isDeptLeader(jb)
 }
 
 /** 换休票批量管理：admin1、admin2、部长/副部长、综合技术室主任/副主任 */

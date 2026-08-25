@@ -1753,7 +1753,7 @@ async def run_shift_schedule_email_once(
     force: bool = False,
 ) -> dict:
     """发送周排班邮件：按发送时间与收件人单位合并，同单位同时间只发一封（多附件）。"""
-    lock_scope = department_filter or ",".join(only_departments or []) or "all"
+    lock_scope = department_filter or ",".join(sorted(only_departments or [])) or "all"
     lock_week = target_week_start.strftime("%Y-%m-%d") if target_week_start else datetime.now().strftime("%Y-%m-%d")
     lock_name = f"oa_shift_schedule_email_{lock_week}_{hashlib.sha256(lock_scope.encode('utf-8')).hexdigest()[:16]}"
     lock_conn = _try_acquire_mysql_lock(lock_name, "ShiftScheduleEmail")
@@ -2458,7 +2458,7 @@ async def run_shift_holiday_email_once(
         _load_shift_email_feature_config,
     )
 
-    lock_scope = ",".join(only_departments or []) or "all"
+    lock_scope = ",".join(sorted(only_departments or [])) or "all"
     lock_key = f"{target_year or ''}|{target_holiday or ''}|{datetime.now().strftime('%Y-%m-%d')}"
     lock_name = f"oa_shift_holiday_email_{hashlib.sha256((lock_scope + lock_key).encode('utf-8')).hexdigest()[:16]}"
     lock_conn = _try_acquire_mysql_lock(lock_name, "ShiftHolidayEmail")

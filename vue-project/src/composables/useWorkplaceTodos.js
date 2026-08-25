@@ -138,6 +138,7 @@ const displayTodoList = computed(() => {
       applicant: '人事档案',
       time: '',
       isPersonnel: true,
+      btnLabel: '去审批',
     })
   }
   if (shiftCoverageGap.value?.hasPending) {
@@ -745,8 +746,11 @@ export async function refreshWorkplaceTodos() {
   ])
 }
 
-async function goPersonnelArchiveLazy() {
-  router.push('/personnel-archive')
+async function goPersonnelArchiveLazy(redirect = 'approval') {
+  router.push({
+    path: '/personnel-archive',
+    query: redirect ? { redirect } : {},
+  })
 }
 
 export function useWorkplaceTodos() {
@@ -833,7 +837,7 @@ export function useWorkplaceTodos() {
       return
     }
     if (task.isPersonnel) {
-      goPersonnelArchiveLazy()
+      goPersonnelArchiveLazy('approval')
       return
     }
     if (task.isSixianghuibao) {

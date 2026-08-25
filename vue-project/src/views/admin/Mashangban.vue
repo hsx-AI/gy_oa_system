@@ -4,7 +4,7 @@
       <header class="page-header">
         <div>
           <h1>工艺码上办月报</h1>
-          <p>支持单月 / 区间 / 全年统计（admin1、经理层、综合技术室主任/副主任）</p>
+          <p>支持单月 / 区间 / 全年统计（admin1、经理层、各科室主任/副主任/班组长）</p>
         </div>
         <div class="header-actions">
           <button
@@ -22,7 +22,7 @@
       </header>
 
       <div v-if="!canAccess" class="card tip">
-        <p>您暂无权限访问此页面。仅系统管理员（admin1）、经理/副经理/经理助理，以及综合技术室主任/副主任可见。</p>
+        <p>您暂无权限访问此页面。仅系统管理员（admin1）、经理/副经理/经理助理，以及各科室主任/副主任/班组长可见。</p>
         <router-link to="/" class="btn">返回首页</router-link>
       </div>
 

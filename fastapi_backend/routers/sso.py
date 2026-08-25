@@ -9,6 +9,7 @@ import hmac
 import hashlib
 import time
 import logging
+from urllib.parse import quote
 from fastapi import APIRouter, Query, HTTPException
 from config import settings
 from database import db
@@ -134,6 +135,7 @@ def get_personnel_page_url(
 def get_sso_link(
     target: str = Query(..., description="目标系统标识：B=人事档案，sixianghuibao=思想汇报管理"),
     name: str = Query(..., description="当前登录用户姓名，用于校验并生成 ticket"),
+    redirect: str = Query("", description="登录后跳转：approval=审批页，或人事档案内路径如 /index/approvalManage"),
 ):
     """
     生成免登链接：校验当前用户已登录（在 yggl 中存在），生成 ticket 并返回目标系统入口 URL。
@@ -203,6 +205,9 @@ def get_sso_link(
         if not entry_path.startswith("/"):
             entry_path = "/" + entry_path
         url = f"{base_url}{entry_path}?ticket={ticket}"
+        redirect_val = (redirect or "").strip()
+        if redirect_val:
+            url += f"&redirect={quote(redirect_val, safe='')}"
         return {"success": True, "url": url}
     except HTTPException:
         raise

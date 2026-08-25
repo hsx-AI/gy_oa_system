@@ -481,15 +481,40 @@ def _role_context(name: str) -> dict:
     minutes_admin = admin or dept.startswith("综合") or dept == "综合技术室"
     minutes_uploader = minutes_admin or company_manager
     action_creator = minutes_admin or department_leader or company_manager
+    zonghe_tech_director = (
+        (dept == "综合技术室" or dept.startswith("综合"))
+        and _job_director_priority(jb) is not None
+    )
     return {
         "name": n, "dept": dept, "jb": jb, "admin": admin, "admin2": admin2,
         "department_leader": department_leader,
+        "company_manager": company_manager,
         "dept_manager": dept_manager,
         "dept_director": _job_director_priority(jb) is not None,
+        "zonghe_tech_director": zonghe_tech_director,
         "minutes_admin": minutes_admin, "minutes_uploader": minutes_uploader,
         "action_creator": action_creator,
         "view_all": admin or department_leader or minutes_admin,
     }
+
+
+def _can_manage_published_action(ctx: dict) -> bool:
+    """已发布行动项台账闭环：领导、综合室主任/副主任、综合室管理员。"""
+    return bool(
+        ctx.get("admin")
+        or ctx.get("minutes_admin")
+        or ctx.get("department_leader")
+        or ctx.get("company_manager")
+        or ctx.get("zonghe_tech_director")
+    )
+
+
+def _close_all_action_reminders(action_id: int) -> None:
+    db.execute_update(
+        "UPDATE action_reminder SET read_at=COALESCE(read_at,NOW()) "
+        "WHERE action_item_id=%s AND read_at IS NULL",
+        (action_id,),
+    )
 
 
 def _permissions(ctx: dict) -> dict:
@@ -500,6 +525,7 @@ def _permissions(ctx: dict) -> dict:
         "actionCreate": bool(ctx["action_creator"]),
         "extract": bool(ctx["minutes_admin"]),
         "publish": bool(ctx["minutes_admin"]),
+        "managePublished": bool(_can_manage_published_action(ctx)),
         "supervise": bool(ctx["minutes_admin"] or ctx["department_leader"]),
         "export": bool(ctx["minutes_admin"] or ctx["department_leader"]),
         "departmentAssign": bool(ctx["dept_manager"] or ctx["view_all"]),
@@ -2782,11 +2808,14 @@ class CancelPublishedRequest(BaseModel):
 
 @router.post("/{action_id}/cancel")
 def cancel_published_action(action_id: int, req: CancelPublishedRequest):
-    """综合室/系统管理员在台账中取消已发布行动项（软删除，保留审计）。"""
+    """领导、综合室主任/副主任或综合室管理员取消已发布行动项（软删除，保留审计）。"""
     ensure_tables()
     ctx = _role_context(req.current_user)
-    if not ctx["minutes_admin"]:
-        raise HTTPException(status_code=403, detail="仅综合室或系统管理员可删除已发布行动项")
+    if not _can_manage_published_action(ctx):
+        raise HTTPException(
+            status_code=403,
+            detail="仅领导、综合室主任/副主任或综合室管理员可删除已发布行动项",
+        )
     action = _action_row(action_id)
     status = action.get("current_status") or ""
     if status in (STATUS_DRAFT, STATUS_PENDING_PUBLISH):
@@ -2798,12 +2827,68 @@ def cancel_published_action(action_id: int, req: CancelPublishedRequest):
         "UPDATE action_item SET current_status=%s,last_progress_at=NOW() WHERE id=%s",
         (STATUS_CANCELLED, action_id),
     )
+    _close_all_action_reminders(action_id)
     _event(
         ctx["name"], "台账删除", f"已发布行动项被取消：{reason}",
         action_id=action_id, meeting_id=action.get("source_meeting_id"),
         data={"reason": reason, "previousStatus": status},
     )
     return {"success": True, "message": "行动项已删除（取消）并保留历史记录"}
+
+
+class ForceCompleteRequest(BaseModel):
+    current_user: str
+    note: str = ""
+
+
+@router.post("/{action_id}/force-complete")
+def force_complete_action(action_id: int, req: ForceCompleteRequest):
+    """领导、综合室主任/副主任或综合室管理员将已发布行动项直接闭环为已完成。"""
+    ensure_tables()
+    ctx = _role_context(req.current_user)
+    if not _can_manage_published_action(ctx):
+        raise HTTPException(
+            status_code=403,
+            detail="仅领导、综合室主任/副主任或综合室管理员可闭环行动项",
+        )
+    action = _action_row(action_id)
+    status = action.get("current_status") or ""
+    if status in (STATUS_DRAFT, STATUS_PENDING_PUBLISH):
+        raise HTTPException(status_code=400, detail="未发布行动项不可直接设为已完成")
+    if status == STATUS_COMPLETED:
+        return {"success": True, "message": "行动项已是已完成状态"}
+    if status == STATUS_CANCELLED:
+        raise HTTPException(status_code=400, detail="已取消行动项不可设为已完成")
+    note = (req.note or "").strip() or "领导确认闭环"
+    _ensure_department_executions(action)
+    db.execute_update(
+        "UPDATE action_department_execution "
+        "SET execution_status=%s, progress_percent=100, completed_at=NOW() "
+        "WHERE action_item_id=%s",
+        (STATUS_COMPLETED, action_id),
+    )
+    db.execute_update(
+        "UPDATE action_item SET current_status=%s, current_progress=100, "
+        "actual_completion_date=CURDATE(), last_progress_at=NOW() WHERE id=%s",
+        (STATUS_COMPLETED, action_id),
+    )
+    db.execute_update(
+        "UPDATE completion_application SET approval_status=%s "
+        "WHERE action_item_id=%s AND approval_status='待审批'",
+        ("已通过", action_id),
+    )
+    db.execute_update(
+        "UPDATE action_change SET approval_status=%s "
+        "WHERE action_item_id=%s AND approval_status='待审批'",
+        ("已关闭", action_id),
+    )
+    _close_all_action_reminders(action_id)
+    _event(
+        ctx["name"], "领导闭环", f"行动项已设为已完成：{note}",
+        action_id=action_id, meeting_id=action.get("source_meeting_id"),
+        data={"note": note, "previousStatus": status},
+    )
+    return {"success": True, "message": "行动项已闭环，将不再推送提醒"}
 
 
 @router.post("/publish")

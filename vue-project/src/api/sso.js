@@ -6,11 +6,13 @@ import request from '@/utils/request'
  * @param {string} name - 当前登录用户姓名
  * @returns {Promise<{ success: boolean, url: string }>} 返回 B 系统完整入口 URL，前端执行 window.location.href = url 即可跳转
  */
-export function getSSOLink(target, name) {
+export function getSSOLink(target, name, redirect) {
+  const params = { target, name }
+  if (redirect) params.redirect = redirect
   return request({
     url: '/sso/link',
     method: 'get',
-    params: { target, name }
+    params,
   })
 }
 
