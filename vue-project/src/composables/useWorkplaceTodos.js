@@ -746,15 +746,20 @@ export async function refreshWorkplaceTodos() {
   ])
 }
 
-async function goPersonnelArchiveLazy(redirect = 'approval') {
-  router.push({
-    path: '/personnel-archive',
-    query: redirect ? { redirect } : {},
-  })
-}
-
 export function useWorkplaceTodos() {
   const router = useRouter()
+
+  function goPersonnelArchiveLazy(redirect = 'approval') {
+    const query = { redirect }
+    // 已在人事档案页时，追加时间戳强制 iframe 重新拉取 SSO 链接
+    if (router.currentRoute.value.path === '/personnel-archive') {
+      query._ts = String(Date.now())
+    }
+    return router.push({
+      path: '/personnel-archive',
+      query,
+    })
+  }
 
   function goApprove(task) {
     router.push({ path: '/attendance/approvals', query: { type: task.tabType } })
@@ -837,7 +842,7 @@ export function useWorkplaceTodos() {
       return
     }
     if (task.isPersonnel) {
-      goPersonnelArchiveLazy('approval')
+      await goPersonnelArchiveLazy('approval')
       return
     }
     if (task.isSixianghuibao) {

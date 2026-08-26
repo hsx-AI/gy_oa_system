@@ -79,7 +79,12 @@ async function loadEmbed() {
 }
 
 onMounted(loadEmbed)
-watch(() => route.query.redirect, loadEmbed)
+watch(
+  () => [route.query.redirect, route.query._ts],
+  () => {
+    if (route.path === '/personnel-archive') loadEmbed()
+  }
+)
 </script>
 
 <style scoped>
