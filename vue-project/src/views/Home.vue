@@ -730,12 +730,11 @@
                   <span
                     class="ai-mail-task__complete"
                     role="button"
-                    title="标记已完成（去除旗帜并删除记录）"
+                    title="标记已完成"
                     @click.stop="completeInboxTaskAction(task.id)"
-                    :class="{ disabled: inboxCompletingId === task.id }"
                   >
                     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/></svg>
-                    {{ inboxCompletingId === task.id ? '处理中…' : '待完成' }}
+                    待完成
                   </span>
                 </span>
                 <span class="ai-mail-task__summary" :title="task.taskSummary">{{ task.taskSummary }}</span>
@@ -1224,9 +1223,15 @@ async function syncPersonalInboxBoard() {
 
 async function finishPersonalInboxTask(id) {
   const name = userName.value?.trim()
-  if (!name) return
-  await completePersonalInboxTask({ current_user: name, id })
-  await loadPersonalInboxBoard()
+  if (!name || !id) return
+  const prev = personalInboxTasks.value.slice()
+  // 乐观更新：立刻从看板移除，不等待邮箱去红旗
+  personalInboxTasks.value = personalInboxTasks.value.filter(t => t.id !== id)
+  try {
+    await completePersonalInboxTask({ current_user: name, id })
+  } catch {
+    personalInboxTasks.value = prev
+  }
 }
 
 function startEditPersonalDeadline(task) {
@@ -1271,7 +1276,6 @@ const inboxTasks = ref([])
 const inboxTaskStats = ref({ pending: 0, failed: 0, taskCount: 0, total: 0 })
 const inboxTaskLoading = ref(false)
 const inboxConfigured = ref(true)
-const inboxCompletingId = ref(null)
 const inboxSyncing = ref(false)
 const inboxDetailOpen = ref(false)
 const inboxDetailItem = ref(null)
@@ -2688,25 +2692,24 @@ async function saveInboxDeadline(id) {
 }
 
 async function completeInboxTaskAction(id) {
-  if (!id || inboxCompletingId.value) return
+  if (!id) return
   const name = (userName.value || '').trim()
   if (!name) return
-  inboxCompletingId.value = id
+  const prev = inboxTasks.value.slice()
+  // 乐观更新：立刻从看板移除；后端仅标记 completed，保留记录防重复同步
+  inboxTasks.value = inboxTasks.value.filter(t => t.id !== id)
   try {
     const res = await completeInboxTask({ current_user: name, id })
-    if (res && res.success) {
-      inboxTaskMsg.value = res.message || '任务已完成'
-      inboxTaskMsgType.value = 'success'
-      await loadInboxTasks()
-    } else {
+    if (!res || !res.success) {
+      inboxTasks.value = prev
       inboxTaskMsg.value = (res && res.message) || '操作失败'
       inboxTaskMsgType.value = 'error'
+      setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
     }
   } catch (e) {
+    inboxTasks.value = prev
     inboxTaskMsg.value = e?.message || '操作失败'
     inboxTaskMsgType.value = 'error'
-  } finally {
-    inboxCompletingId.value = null
     setTimeout(() => { inboxTaskMsg.value = '' }, 5000)
   }
 }

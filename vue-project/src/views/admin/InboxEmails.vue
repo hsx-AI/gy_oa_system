@@ -210,14 +210,13 @@
                       v-if="!selectionMode"
                       type="button"
                       class="task-complete-btn"
-                      title="标记已完成（去除旗帜并删除记录）"
+                      title="标记已完成（保留邮件记录，避免再次同步识别）"
                       @click.stop="completeTask(t.id)"
-                      :disabled="completingId === t.id"
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                         <circle cx="12" cy="12" r="10" />
                       </svg>
-                      {{ completingId === t.id ? '处理中…' : '待完成' }}
+                      待完成
                     </button>
                   </div>
                   <div class="task-summary" :title="t.taskSummary">{{ t.taskSummary }}</div>
@@ -440,7 +439,6 @@ const analyzing = ref(false)
 const taskMsg = ref('')
 const taskMsgType = ref('')
 const marqueeMainRef = ref(null)
-const completingId = ref(null)
 const selectionMode = ref(false)
 const selectedTaskIds = ref([])
 const batchCompleting = ref(false)
@@ -774,24 +772,25 @@ function onTaskCardClick(id) {
 }
 
 async function completeTask(id) {
-  if (!id || completingId.value || batchCompleting.value) return
-  completingId.value = id
+  if (!id || batchCompleting.value) return
+  const removed = tasks.value.find(t => t.id === id)
+  tasks.value = tasks.value.filter(t => t.id !== id)
+  selectedTaskIds.value = selectedTaskIds.value.filter(item => item !== id)
   try {
     const res = await completeInboxTask({ current_user: currentUserName.value, id })
     if (res && res.success) {
-      taskMsg.value = res.message || '任务已完成'
-      taskMsgType.value = 'success'
-      await loadTasks()
-      await loadList()
+      // 列表页可能仍展示该邮件，仅刷新列表状态；看板已乐观移除
+      loadList().catch(() => {})
     } else {
+      if (removed) tasks.value = [removed, ...tasks.value]
       taskMsg.value = (res && res.message) || '操作失败'
       taskMsgType.value = 'error'
+      setTimeout(() => { taskMsg.value = '' }, 5000)
     }
   } catch (e) {
+    if (removed) tasks.value = [removed, ...tasks.value]
     taskMsg.value = e.message || '操作失败'
     taskMsgType.value = 'error'
-  } finally {
-    completingId.value = null
     setTimeout(() => { taskMsg.value = '' }, 5000)
   }
 }
@@ -799,33 +798,36 @@ async function completeTask(id) {
 async function batchCompleteTasks() {
   const ids = [...selectedTaskIds.value]
   if (!ids.length || batchCompleting.value) return
-  if (!window.confirm(`确认将选中的 ${ids.length} 个任务标记为已完成？将去除邮件旗帜并删除记录。`)) return
+  if (!window.confirm(`确认将选中的 ${ids.length} 个任务标记为已完成？将从待办看板移除，邮件本身保留且不会再次被识别为待办。`)) return
+  const removedMap = new Map(tasks.value.filter(t => ids.includes(t.id)).map(t => [t.id, t]))
+  tasks.value = tasks.value.filter(t => !ids.includes(t.id))
+  exitSelectionMode()
   batchCompleting.value = true
-  let ok = 0
-  let fail = 0
   try {
-    for (const id of ids) {
-      try {
-        const res = await completeInboxTask({ current_user: currentUserName.value, id })
-        if (res && res.success) ok += 1
-        else fail += 1
-      } catch {
-        fail += 1
-      }
+    const results = await Promise.allSettled(
+      ids.map(id => completeInboxTask({ current_user: currentUserName.value, id }))
+    )
+    let ok = 0
+    const failedIds = []
+    results.forEach((r, i) => {
+      if (r.status === 'fulfilled' && r.value && r.value.success) ok += 1
+      else failedIds.push(ids[i])
+    })
+    if (failedIds.length) {
+      const restore = failedIds.map(id => removedMap.get(id)).filter(Boolean)
+      tasks.value = [...restore, ...tasks.value]
     }
-    if (fail === 0) {
+    if (failedIds.length === 0) {
       taskMsg.value = `已批量完成 ${ok} 个任务`
       taskMsgType.value = 'success'
     } else if (ok === 0) {
-      taskMsg.value = `批量完成失败（${fail} 个）`
+      taskMsg.value = `批量完成失败（${failedIds.length} 个）`
       taskMsgType.value = 'error'
     } else {
-      taskMsg.value = `部分完成：成功 ${ok} 个，失败 ${fail} 个`
+      taskMsg.value = `部分完成：成功 ${ok} 个，失败 ${failedIds.length} 个（已恢复显示）`
       taskMsgType.value = 'error'
     }
-    exitSelectionMode()
-    await loadTasks()
-    await loadList()
+    loadList().catch(() => {})
   } finally {
     batchCompleting.value = false
     setTimeout(() => { taskMsg.value = '' }, 6000)

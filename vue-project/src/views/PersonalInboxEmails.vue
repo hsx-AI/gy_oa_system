@@ -93,9 +93,7 @@
             <p>{{ task.subject || '（无主题）' }}</p>
             <footer>
               <span>{{ task.emailDate || task.receivedAt }}</span>
-              <button :disabled="selectionMode || completingId === task.id" @click.stop="complete(task.id)">
-                {{ completingId === task.id ? '处理中…' : '标记完成' }}
-              </button>
+              <button :disabled="selectionMode" @click.stop="complete(task.id)">标记完成</button>
             </footer>
           </article>
         </div>
@@ -137,7 +135,6 @@ const configured = ref(true)
 const loading = ref(false)
 const syncing = ref(false)
 const analyzing = ref(false)
-const completingId = ref(null)
 const message = ref('')
 const selectionMode = ref(false)
 const selectedIds = ref([])
@@ -219,9 +216,16 @@ async function analyze() {
 }
 
 async function complete(id) {
-  completingId.value = id
-  try { await completePersonalInboxTask({ current_user: name.value, id }); await load() }
-  finally { completingId.value = null }
+  const removed = tasks.value.find(t => t.id === id)
+  // 乐观更新：立刻从列表移除，邮箱去红旗由后端后台完成
+  tasks.value = tasks.value.filter(t => t.id !== id)
+  selectedIds.value = selectedIds.value.filter(item => item !== id)
+  try {
+    await completePersonalInboxTask({ current_user: name.value, id })
+  } catch (e) {
+    if (removed) tasks.value = [removed, ...tasks.value]
+    message.value = e?.response?.data?.detail || e?.message || '标记完成失败'
+  }
 }
 
 function toggleSelected(id) {
@@ -234,23 +238,30 @@ function exitSelection() { selectionMode.value = false; selectedIds.value = [] }
 
 async function batchComplete() {
   if (!selectedIds.value.length || batchCompleting.value) return
-  batchCompleting.value = true
   const ids = [...selectedIds.value]
-  let completed = 0
+  const removedMap = new Map(tasks.value.filter(t => ids.includes(t.id)).map(t => [t.id, t]))
+  // 乐观更新：选中项立刻消失，请求并行发出，不阻塞 UI
+  tasks.value = tasks.value.filter(t => !ids.includes(t.id))
+  exitSelection()
+  batchCompleting.value = true
   try {
-    for (const id of ids) {
-      try {
-        await completePersonalInboxTask({ current_user: name.value, id })
-        completed += 1
-      } catch (e) {
-        message.value = `已完成 ${completed} 项；任务 ${id} 处理失败：${e?.response?.data?.detail || e?.message || '未知错误'}`
-        break
-      }
+    const results = await Promise.allSettled(
+      ids.map(id => completePersonalInboxTask({ current_user: name.value, id }))
+    )
+    const failedIds = []
+    results.forEach((r, i) => {
+      if (r.status === 'rejected') failedIds.push(ids[i])
+    })
+    if (failedIds.length) {
+      const restore = failedIds.map(id => removedMap.get(id)).filter(Boolean)
+      tasks.value = [...restore, ...tasks.value]
+      message.value = `已完成 ${ids.length - failedIds.length} 项；${failedIds.length} 项失败已恢复显示`
+    } else {
+      message.value = `已批量完成 ${ids.length} 项待办`
     }
-    if (completed === ids.length) message.value = `已批量完成 ${completed} 项待办`
-    exitSelection()
-    await load()
-  } finally { batchCompleting.value = false }
+  } finally {
+    batchCompleting.value = false
+  }
 }
 
 function toInput(value) { return (value || '').replace(' ', 'T').slice(0, 16) }

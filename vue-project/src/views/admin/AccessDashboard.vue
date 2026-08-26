@@ -1,8 +1,10 @@
 <template>
   <main class="screen">
+    <div class="industrial-bg" aria-hidden="true"><i></i><i></i><i></i></div>
     <div class="ambient a1"></div><div class="ambient a2"></div>
     <header class="topbar">
       <div class="brand"><span class="mark">OA</span><div><h1>系统访问情况组态看板</h1><p>INTELLIGENT MANUFACTURING · OPERATION CENTER</p></div></div>
+      <div class="platform-title"><span>哈电机智能制造工艺部集成办公平台</span></div>
       <div class="headline"><i></i><span>数据实时监测中</span><b>{{ clock }}</b><small>{{ dateText }}</small></div>
     </header>
 
@@ -10,71 +12,80 @@
     <template v-else>
       <section class="metrics">
         <article v-for="card in metricCards" :key="card.label" class="metric-card">
-          <div class="metric-icon" v-html="card.icon"></div><div><span>{{ card.label }}</span><strong>{{ fmt(card.value) }}</strong><em>{{ card.note }}</em></div>
+          <div class="metric-icon" v-html="card.icon"></div><div class="metric-copy"><span>{{ card.label }}</span><strong>{{ fmt(card.value) }}</strong><em>{{ card.note }}</em></div>
         </article>
       </section>
 
       <section class="grid">
         <article class="panel trend-panel">
-          <PanelTitle title="近 7 日访问趋势" sub="DAILY ACCESS TREND" />
+          <PanelTitle icon="trend" title="近 7 日访问趋势" />
           <div class="legend"><span><i class="cyan"></i>访问次数</span><span><i class="blue"></i>访问人数</span></div>
-          <svg class="trend" viewBox="0 0 720 220" preserveAspectRatio="none">
-            <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#22d3ee" stop-opacity=".42"/><stop offset="1" stop-color="#22d3ee" stop-opacity="0"/></linearGradient></defs>
-            <g class="lines"><line v-for="n in 5" :key="n" x1="28" :y1="n*36" x2="705" :y2="n*36"/></g>
+          <svg class="trend" viewBox="0 0 720 240" preserveAspectRatio="none">
+            <defs><linearGradient id="area" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#20c8ff" stop-opacity=".48"/><stop offset="1" stop-color="#0878d8" stop-opacity=".04"/></linearGradient></defs>
+            <g class="lines"><line v-for="n in 6" :key="n" x1="54" :y1="22+(n-1)*35" x2="705" :y2="22+(n-1)*35"/></g>
+            <g class="axis-labels"><text v-for="n in 6" :key="n" x="42" :y="26+(n-1)*35">{{ fmt(Math.round(dailyMax*(6-n)/5)) }}</text></g>
             <path :d="areaPath" fill="url(#area)"/><polyline :points="visitPoints" class="line visit"/><polyline :points="userPoints" class="line user"/>
-            <g v-for="(d,i) in data.daily" :key="d.day"><circle :cx="x(i, data.daily.length)" :cy="y(d.visits, dailyMax)" r="3.5"/><text :x="x(i,data.daily.length)" y="207">{{ d.day.slice(5) }}</text></g>
+            <g v-for="(d,i) in data.daily" :key="d.day"><circle :cx="x(i, data.daily.length)" :cy="y(d.visits, dailyMax)" r="4"/><text :x="x(i,data.daily.length)" y="225">{{ d.day.slice(5) }}</text></g>
           </svg>
         </article>
 
         <article class="panel health-panel">
-          <PanelTitle title="核心服务状态" sub="SERVICE HEALTH" />
+          <PanelTitle icon="shield" title="核心服务状态" />
           <div class="gauge-row">
-            <div class="mini-gauge health" :style="gaugeStyle(healthScore)"><div><strong>{{ healthScore }}</strong><small>健康指数</small></div></div>
-            <div class="mini-gauge" :style="gaugeStyle(data.hardware?.cpu)"><div><strong>{{ gaugeValue(data.hardware?.cpu) }}</strong><small>CPU · {{ data.hardware?.cpu_cores || '--' }} 核</small></div></div>
-            <div class="mini-gauge" :style="gaugeStyle(data.hardware?.memory)"><div><strong>{{ gaugeValue(data.hardware?.memory) }}</strong><small>内存 · {{ capacity(data.hardware?.memory_used_gb, data.hardware?.memory_total_gb) }}</small></div></div>
-            <div class="mini-gauge" :style="gaugeStyle(data.hardware?.disk)"><div><strong>{{ gaugeValue(data.hardware?.disk) }}</strong><small>磁盘 · {{ capacity(data.hardware?.disk_used_gb, data.hardware?.disk_total_gb) }}</small></div></div>
+            <div class="gauge-item"><div class="mini-gauge health" :style="gaugeStyle(healthScore)"><div><strong>{{ healthScore }}%</strong><small>健康度</small></div></div><span>OA 应用服务</span><em><i></i>正常</em></div>
+            <div class="gauge-item"><div class="mini-gauge" :style="gaugeStyle(data.hardware?.cpu)"><div><strong>{{ gaugeValue(data.hardware?.cpu) }}</strong><small>CPU 使用率</small></div></div><span>业务数据库</span><em><i></i>{{ data.hardware?.cpu_cores || '--' }} 核</em></div>
+            <div class="gauge-item"><div class="mini-gauge" :style="gaugeStyle(data.hardware?.memory)"><div><strong>{{ gaugeValue(data.hardware?.memory) }}</strong><small>内存使用率</small></div></div><span>服务器资源</span><em><i></i>{{ capacity(data.hardware?.memory_used_gb, data.hardware?.memory_total_gb) }}</em></div>
+            <div class="gauge-item"><div class="mini-gauge" :style="gaugeStyle(data.hardware?.disk)"><div><strong>{{ gaugeValue(data.hardware?.disk) }}</strong><small>磁盘使用率</small></div></div><span>磁盘存储资源</span><em><i></i>{{ capacity(data.hardware?.disk_used_gb, data.hardware?.disk_total_gb) }}</em></div>
           </div>
-          <div class="services"><div v-for="s in data.services" :key="s.name"><i :class="s.status"></i><span>{{ s.name }}</span><b>{{ statusLabel(s.status) }}</b></div></div>
+          <div class="service-summary"><span class="shield-mini">◇</span>所有核心服务运行{{ healthScore === 100 ? '正常' : '状态已更新' }}</div>
         </article>
 
         <article class="panel hourly-panel">
-          <PanelTitle title="今日访问时段分布" sub="HOURLY DISTRIBUTION" />
+          <PanelTitle icon="clock" title="今日访问时段分布" />
+          <div class="chart-grid"><span v-for="n in 7" :key="n">{{ Math.round(hourMax*(7-n)/6) }}</span></div>
           <div class="bars"><div v-for="h in data.hourly" :key="h.hour" class="bar-wrap" :title="`${h.hour}:00 · ${h.visits} 次`"><div class="bar" :style="{height: Math.max(3,h.visits/hourMax*100)+'%'}"></div><span v-if="h.hour%3===0">{{ pad(h.hour) }}</span></div></div>
         </article>
 
         <article class="panel pages-panel">
-          <PanelTitle title="热门功能排行" sub="TOP MODULES" />
+          <PanelTitle icon="fire" title="热门功能排行" />
           <div class="ranking"><div v-for="(p,i) in data.pages.slice(0,6)" :key="p.path" :title="displayPageTitle(p)"><em>{{ pad(i+1) }}</em><span>{{ displayPageTitle(p) }}</span><div><i :style="{width:(p.visits/pageMax*100)+'%'}"></i></div><b>{{ p.visits }}</b></div><p v-if="!data.pages.length" class="empty">今日暂无访问记录</p></div>
         </article>
 
         <article class="panel dept-panel">
-          <PanelTitle title="科室活跃度" sub="DEPARTMENT ACTIVITY" />
+          <PanelTitle icon="building" title="科室活跃度" />
+          <div class="dept-head"><span>科室名称</span><b>活跃人数</b><em>访问次数</em></div>
           <div class="dept-list"><div v-for="d in data.departments.slice(0,6)" :key="d.department"><span>{{ d.department }}</span><div><i :style="{width:(d.visits/deptMax*100)+'%'}"></i></div><b>{{ d.users }} 人</b><em>{{ d.visits }} 次</em></div><p v-if="!data.departments.length" class="empty">等待访问数据沉淀</p></div>
         </article>
 
         <article class="panel live-panel">
-          <PanelTitle title="实时访问动态" sub="LIVE ACCESS FEED" />
-          <div class="live-list"><div v-for="(r,i) in data.recent.slice(0,7)" :key="i"><time>{{ r.time }}</time><i></i><span><b>{{ mask(r.user_name) }}</b> 访问了 {{ displayPageTitle(r) }}</span><em>{{ r.department || '未归属' }}</em></div><p v-if="!data.recent.length" class="empty">新的访问将实时显示在这里</p></div>
+          <PanelTitle icon="live" title="实时访问动态" />
+          <div class="live-list"><div v-for="(r,i) in data.recent.slice(0,7)" :key="i"><time>{{ r.time }}</time><i :class="{warning:i === 3}"></i><span><b>{{ mask(r.user_name) }}</b> 访问了 {{ displayPageTitle(r) }}</span><em>{{ r.department || '未归属' }}</em></div><p v-if="!data.recent.length" class="empty">新的访问将实时显示在这里</p></div>
         </article>
       </section>
     </template>
-    <footer><span>数据范围：系统页面访问事件 · 在线口径：近 15 分钟</span><b>每 30 秒自动刷新</b><span>按 F11 进入浏览器全屏展示</span></footer>
+    <footer><span></span><b><i>◇</i> 数据每 30 秒自动刷新</b><span></span></footer>
   </main>
 </template>
 
 <script setup>
 import { computed, defineComponent, h, onBeforeUnmount, onMounted, ref } from 'vue'
 import { getAccessDashboard } from '@/api/accessDashboard'
-const PanelTitle=defineComponent({props:['title','sub'],setup:p=>()=>h('div',{class:'panel-title'},[h('div',[h('h2',p.title),h('small',p.sub)]),h('span')])})
+const PANEL_ICONS={trend:'↗',shield:'⬡',clock:'◷',fire:'♨',building:'▥',live:'◉'}
+const PanelTitle=defineComponent({props:['title','icon'],setup:p=>()=>h('div',{class:'panel-title'},[h('i',{class:`title-icon ${p.icon||''}`},PANEL_ICONS[p.icon]||'◇'),h('h2',p.title)])})
 const data=ref({summary:{},daily:[],hourly:[],pages:[],departments:[],recent:[],services:[],hardware:{}}); const error=ref(''); const now=ref(new Date()); let refreshTimer,clockTimer
 const userName=()=>{try{const u=JSON.parse(localStorage.getItem('userInfo')||'{}');return (u.name||u.userName||'').trim()}catch{return ''}}
 async function load(){try{error.value='';data.value=await getAccessDashboard({current_user:userName()})}catch(e){error.value=e?.response?.data?.detail||e.message||'无法获取看板数据'}}
 const clock=computed(()=>now.value.toLocaleTimeString('zh-CN',{hour12:false})); const dateText=computed(()=>now.value.toLocaleDateString('zh-CN',{year:'numeric',month:'2-digit',day:'2-digit',weekday:'short'}))
 const generatedTime=computed(()=>(data.value.generated_at||'--').slice(11)); const fmt=v=>Number(v||0).toLocaleString('zh-CN'); const pad=v=>String(v).padStart(2,'0')
-const metricCards=computed(()=>[{label:'今日访问次数',value:data.value.summary.visits,note:'累计页面浏览量',icon:'↗'},{label:'今日访问人数',value:data.value.summary.unique_users,note:'独立登录用户',icon:'◉'},{label:'当前活跃用户',value:data.value.summary.active_users,note:'近 15 分钟',icon:'⌁'},{label:'系统在册用户',value:data.value.summary.total_users,note:'当前在职人员',icon:'◇'}])
+const metricCards=computed(()=>[
+  {label:'今日访问次数',value:data.value.summary.visits,note:'累计页面浏览量',icon:'<svg viewBox="0 0 48 48"><path d="M10 34l9-10 7 6 12-15M29 15h9v9"/></svg>'},
+  {label:'今日访问人数',value:data.value.summary.unique_users,note:'独立登录用户',icon:'<svg viewBox="0 0 48 48"><circle cx="19" cy="18" r="7"/><circle cx="32" cy="20" r="5"/><path d="M7 37c1-8 5-12 12-12s11 4 12 12M29 28c7 0 10 3 11 9"/></svg>'},
+  {label:'当前活跃用户',value:data.value.summary.active_users,note:'近 15 分钟',icon:'<svg viewBox="0 0 48 48"><path d="M7 25h9l4-12 7 24 5-16 3 4h7"/></svg>'},
+  {label:'系统在册用户',value:data.value.summary.total_users,note:'当前在职人员',icon:'<svg viewBox="0 0 48 48"><circle cx="21" cy="18" r="7"/><path d="M8 38c1-9 5-13 13-13s12 4 13 13M36 15v10M31 20h10"/></svg>'}
+])
 const dailyMax=computed(()=>Math.max(5,...data.value.daily.map(d=>+d.visits))); const hourMax=computed(()=>Math.max(1,...data.value.hourly.map(d=>+d.visits))); const pageMax=computed(()=>Math.max(1,...data.value.pages.map(d=>+d.visits))); const deptMax=computed(()=>Math.max(1,...data.value.departments.map(d=>+d.visits)))
-const x=(i,n)=>28+i*(677/Math.max(1,n-1)); const y=(v,max)=>190-(+v/max)*155
-const visitPoints=computed(()=>data.value.daily.map((d,i)=>`${x(i,data.value.daily.length)},${y(d.visits,dailyMax.value)}`).join(' ')); const userPoints=computed(()=>data.value.daily.map((d,i)=>`${x(i,data.value.daily.length)},${y(d.users,dailyMax.value)}`).join(' ')); const areaPath=computed(()=>data.value.daily.length?`M ${visitPoints.value.replaceAll(' ',' L ')} L 705 190 L 28 190 Z`:'')
+const x=(i,n)=>66+i*(624/Math.max(1,n-1)); const y=(v,max)=>197-(+v/max)*175
+const visitPoints=computed(()=>data.value.daily.map((d,i)=>`${x(i,data.value.daily.length)},${y(d.visits,dailyMax.value)}`).join(' ')); const userPoints=computed(()=>data.value.daily.map((d,i)=>`${x(i,data.value.daily.length)},${y(d.users,dailyMax.value)}`).join(' ')); const areaPath=computed(()=>data.value.daily.length?`M ${visitPoints.value.replaceAll(' ',' L ')} L 690 197 L 66 197 Z`:'')
 const healthScore=computed(()=>{const s=data.value.services;if(!s.length)return 0;return Math.round(s.filter(v=>v.status==='ok').length/s.length*100)})
 const gaugeStyle=value=>{const v=Math.max(0,Math.min(100,Number(value)||0));const color=v>=90?'#fb7185':v>=75?'#fbbf24':'#22d3ee';return {'--gauge':`${v*3.6}deg`,'--gauge-color':color}}
 const gaugeValue=value=>value==null?'--':`${Math.round(Number(value))}%`
@@ -123,4 +134,44 @@ onMounted(()=>{load();refreshTimer=setInterval(load,30000);clockTimer=setInterva
 footer{height:24px;min-height:24px}
 @media(max-height:850px){.brand p{display:none}.topbar{height:56px;min-height:56px}.mark{width:44px;height:44px}.metrics{margin:8px 0}.metric-card{height:76px}.metric-icon{width:42px;height:42px}.grid{grid-template-rows:minmax(235px,1.08fr) minmax(205px,.92fr)}.gauge-row{height:108px}.mini-gauge{width:min(72px,100%)}.services div{height:24px}}
 @media(max-width:1200px){.screen{height:auto;min-height:100vh;overflow:auto}.grid{grid-template-columns:1.2fr 1fr;grid-template-rows:auto}.health-panel{grid-column:2}.hourly-panel{grid-column:1/-1}.metrics{grid-template-columns:repeat(2,1fr)}}
+
+/* 访问组态看板 · 设计稿复刻层 */
+.screen{
+  --cyan:#2fc7ff;--blue:#2389ff;--deep:#020b16;--panel:#071d32;
+  height:100vh;min-height:760px;padding:0 22px;color:#d9ecff;
+  background:
+    radial-gradient(ellipse at 50% -8%,rgba(8,92,154,.20),transparent 46%),
+    radial-gradient(ellipse at 10% 88%,rgba(0,112,191,.10),transparent 35%),
+    linear-gradient(180deg,#020a14 0,#041426 15%,#031323 100%);
+  font-family:"Microsoft YaHei","PingFang SC",sans-serif;
+}
+.screen:before{opacity:.65;background-size:56px 56px;background-image:linear-gradient(rgba(32,130,190,.035) 1px,transparent 1px),linear-gradient(90deg,rgba(32,130,190,.035) 1px,transparent 1px)}
+.screen:after{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(90deg,rgba(0,85,154,.12),transparent 12%,transparent 88%,rgba(0,85,154,.10));box-shadow:inset 0 0 90px rgba(0,0,0,.3)}
+.ambient{z-index:0;opacity:.10}.industrial-bg{position:absolute;z-index:0;left:0;right:0;top:0;height:105px;overflow:hidden;border-bottom:1px solid rgba(31,132,205,.24);pointer-events:none}
+.industrial-bg:before{content:"";position:absolute;left:33%;right:15%;top:-125px;height:260px;border:1px solid rgba(20,120,190,.14);border-radius:50%;transform:skewX(-12deg);box-shadow:0 0 0 18px rgba(16,100,170,.02),0 0 0 42px rgba(16,100,170,.018)}
+.industrial-bg:after{content:"";position:absolute;right:5%;top:-50px;width:430px;height:190px;opacity:.22;background:repeating-linear-gradient(156deg,transparent 0 12px,rgba(26,126,194,.18) 13px,transparent 14px)}
+.industrial-bg i{position:absolute;border:1px solid rgba(35,136,204,.13);border-radius:50%}.industrial-bg i:nth-child(1){width:112px;height:112px;right:25%;top:-7px;box-shadow:0 0 0 11px rgba(16,110,180,.025),inset 0 0 0 20px rgba(8,74,125,.03)}.industrial-bg i:nth-child(2){width:220px;height:220px;left:35%;top:-160px}.industrial-bg i:nth-child(3){width:310px;height:80px;left:4%;top:65px;border-radius:50%}
+.topbar,.metrics,.grid,footer,.error-state{z-index:1}.topbar{height:105px;min-height:105px;padding:0;position:relative;border-bottom:1px solid rgba(40,145,216,.20)}
+.topbar:after{left:8%;width:84%;height:1px;background:linear-gradient(90deg,transparent,#1687d1 18%,transparent 50%,#1687d1 82%,transparent)}
+.brand{height:100%;gap:22px}.mark{position:relative;width:96px;height:74px;clip-path:polygon(0 0,78% 0,100% 50%,78% 100%,0 100%);font:800 35px "Arial Narrow",Arial;letter-spacing:3px;border:0;background:linear-gradient(90deg,rgba(7,31,51,.88),rgba(7,63,104,.38));filter:drop-shadow(0 0 8px rgba(29,139,209,.12))}
+.mark:before{content:"";position:absolute;inset:0;clip-path:inherit;background:linear-gradient(120deg,#064476,#168bd7,#064476);z-index:-2}.mark:after{content:"";position:absolute;inset:1px;clip-path:inherit;background:#071b2b;z-index:-1}.brand h1{font-size:34px;line-height:1;font-weight:700;letter-spacing:6px;text-shadow:0 0 14px rgba(171,222,255,.20)}.brand p{font:12px Arial;letter-spacing:1.5px;color:#9bb2c5;margin-top:9px}
+.platform-title{position:absolute;left:50%;top:0;transform:translateX(-50%);width:460px;height:54px;display:flex;justify-content:center;align-items:center;color:#e4f0ff;font-size:17px;letter-spacing:4px;white-space:nowrap;clip-path:polygon(6% 0,94% 0,100% 0,89% 100%,11% 100%,0 0);background:linear-gradient(90deg,#0876c4,#123e72 15%,#123e72 85%,#0876c4)}
+.platform-title:before{content:"";position:absolute;inset:0 1px 1px;clip-path:inherit;background:linear-gradient(180deg,#061422,#04101d)}.platform-title span{position:relative}
+.headline{height:100%;padding-top:10px;gap:13px;font-size:14px;align-items:center}.headline i{width:10px;height:10px}.headline b{font:500 27px "Consolas","DIN Alternate",monospace;letter-spacing:2px;margin-left:7px;padding-left:20px;border-left:1px solid rgba(47,199,255,.28)}.headline small{width:76px;font-size:11px;line-height:1.65;color:#b7c9d7}
+.metrics{height:110px;margin:12px 0 11px;gap:13px}.metric-card{height:110px;padding:16px 19px;gap:25px;border-radius:5px;background:linear-gradient(110deg,rgba(10,38,64,.96),rgba(5,25,44,.88));border:1px solid rgba(65,153,209,.34);box-shadow:inset 0 1px rgba(172,226,255,.05),0 8px 22px rgba(0,0,0,.12)}
+.metric-card:before{content:"";position:absolute;inset:0;background:linear-gradient(115deg,rgba(36,145,214,.09),transparent 45%);pointer-events:none}.metric-card:after{display:none}.metric-icon{width:72px;height:72px;min-width:72px;border-radius:50%;font-size:0;border:1px solid rgba(47,199,255,.52);background:radial-gradient(circle,rgba(20,104,159,.25),rgba(4,25,43,.76) 68%);box-shadow:inset 0 0 15px rgba(14,115,179,.16),0 0 14px rgba(20,139,213,.08)}
+.metric-icon svg{width:43px;height:43px;fill:none;stroke:#2faeff;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;filter:drop-shadow(0 0 4px rgba(40,177,255,.45))}.metric-copy{display:flex;flex-direction:column;justify-content:center;height:100%}.metric-card span{font-size:15px;color:#c0d6e9;order:0}.metric-card strong{font:700 43px/1 "Arial Narrow",Arial;color:#f6fbff;margin:8px 0 0;letter-spacing:1px;order:1;text-shadow:0 0 10px rgba(255,255,255,.1)}.metric-card em{display:none}
+.grid{grid-template-columns:1.12fr 1fr 1.02fr;grid-template-rows:minmax(278px,1.08fr) minmax(250px,.98fr);gap:10px;flex:1;min-height:0}.panel{padding:15px 17px 12px;border-radius:5px;border:1px solid rgba(59,148,204,.38);background:linear-gradient(145deg,rgba(9,33,56,.97),rgba(4,22,39,.91));box-shadow:inset 0 1px rgba(167,220,255,.035),0 8px 24px rgba(0,0,0,.12)}.panel:before{content:"";position:absolute;inset:0;pointer-events:none;background:linear-gradient(135deg,rgba(32,123,185,.05),transparent 40%)}.panel:after{display:none}
+.panel-title{height:42px;padding:0 0 10px;display:flex;align-items:center;justify-content:flex-start;gap:10px;border-bottom:1px solid rgba(72,141,185,.17)}.panel-title h2{font-size:18px;line-height:1;font-weight:700;letter-spacing:1px;color:#e7f2ff}.panel-title .title-icon{width:22px;color:#329cff;font:700 24px/1 Arial;font-style:normal;text-align:center;text-shadow:0 0 8px rgba(41,148,255,.45)}.panel-title .title-icon.trend{border-left:5px solid #31beff;width:6px;height:24px;font-size:0;box-shadow:0 0 8px rgba(49,190,255,.38)}
+.legend{right:19px;top:21px;font-size:11px;color:#afc7d8;gap:18px}.legend i{width:18px}.trend{height:auto;flex:1;margin:1px 0 0}.lines line{stroke:rgba(84,145,185,.18);stroke-width:1}.axis-labels text{fill:#9aafbf;font-size:10px;text-anchor:end}.line{stroke-width:1.8}.visit{stroke:#37c7ff;filter:drop-shadow(0 0 2px rgba(55,199,255,.45))}.user{stroke:#5ccdf7;stroke-dasharray:5 4}.trend circle{fill:#dffaff;stroke:#2bbcff;stroke-width:2}.trend text{fill:#aabccc;font-size:10px}
+.gauge-row{height:calc(100% - 74px);min-height:138px;padding:11px 0 2px;gap:8px;align-items:start}.gauge-item{text-align:center;min-width:0}.mini-gauge{width:min(103px,92%);background:radial-gradient(circle,#07192b 57%,transparent 59%),conic-gradient(var(--gauge-color) var(--gauge),#0b3c62 0);filter:drop-shadow(0 0 8px rgba(34,176,238,.10))}.mini-gauge:after{content:"";position:absolute;width:76%;height:76%;border-radius:50%;border:1px solid rgba(34,157,218,.13)}.mini-gauge>div{position:relative;z-index:1}.mini-gauge strong{font-size:21px}.mini-gauge small{font-size:9px;color:#a7bbca}.mini-gauge.health{--gauge-color:#ff687a}.gauge-item>span{display:block;margin-top:8px;font-size:13px;color:#ecf5ff;white-space:nowrap}.gauge-item>em{display:block;margin-top:7px;font-size:10px;font-style:normal;color:#9db4c5;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.gauge-item>em i{display:inline-block;width:7px;height:7px;margin-right:7px;border-radius:50%;background:#39d77c;box-shadow:0 0 7px #2fd372}
+.service-summary{position:absolute;left:17px;right:17px;bottom:0;height:36px;border-top:1px solid rgba(54,127,174,.16);display:flex;align-items:center;justify-content:center;font-size:12px;color:#b8cedd}.shield-mini{margin-right:10px;color:#269cff;font-size:19px}
+.hourly-panel{position:relative}.chart-grid{position:absolute;z-index:0;left:17px;right:17px;top:60px;bottom:27px;display:flex;flex-direction:column;justify-content:space-between}.chart-grid:after{content:"";position:absolute;left:34px;right:0;top:2px;bottom:4px;background:repeating-linear-gradient(to bottom,rgba(83,145,184,.18) 0 1px,transparent 1px calc(16.66%));border-bottom:1px solid rgba(94,153,188,.3)}.chart-grid span{font-size:9px;color:#9ab0c1;height:1px}.bars{z-index:1;position:relative;height:auto;flex:1;margin-left:30px;padding:16px 0 0;gap:4px}.bar-wrap{padding-bottom:19px}.bar{width:66%;background:linear-gradient(180deg,#31dcf5 0,#25b6ef 22%,#1475d7 70%,#0c58ba 100%);box-shadow:0 0 8px rgba(35,186,239,.25)}.bar-wrap span{color:#9bb0bf;font-size:9px}
+.ranking,.dept-list,.live-list{position:relative}.ranking{padding:7px 5px 0;height:calc(100% - 42px);grid-template-rows:repeat(6,1fr)}.ranking>div{grid-template-columns:35px minmax(115px,.95fr) minmax(80px,1.55fr) 42px;gap:9px;min-height:25px;font-size:12px}.ranking em{font:700 17px "Arial Narrow",Arial;color:#319eff}.ranking span{line-height:1.2;color:#d4e4ee}.ranking div>div,.dept-list div>div{height:10px;background:#102f4d}.ranking div>div i,.dept-list div>div i{background:linear-gradient(90deg,#0a70d9,#43d7f1);box-shadow:0 0 6px rgba(36,170,236,.18)}.ranking b{font-size:13px;color:#7fd8ff}
+.dept-head{height:27px;display:grid;grid-template-columns:1fr 65px 70px;align-items:end;font-size:10px;color:#718da2;padding:0 5px 4px}.dept-head b,.dept-head em{text-align:right;font-weight:400;font-style:normal}.dept-list{height:calc(100% - 69px);padding:0 5px}.dept-list>div{grid-template-columns:minmax(90px,.9fr) minmax(90px,1.5fr) 65px 70px;gap:9px;min-height:26px;font-size:11px}.dept-list span{color:#d3e5ef}.dept-list b{font-size:11px;text-align:right;color:#d7e9f4}.dept-list em{font-size:11px;color:#c5d9e5}
+.live-list{height:calc(100% - 42px);padding-top:5px}.live-list>div{grid-template-columns:64px 15px minmax(130px,1fr) 98px;height:auto;min-height:26px;font-size:11px;border-bottom:1px solid rgba(61,125,168,.11)}.live-list time{font-size:11px;color:#7e9aad}.live-list i{width:9px;height:9px;background:#35d375;box-shadow:0 0 6px rgba(53,211,117,.42)}.live-list i.warning{background:#ffad13;box-shadow:0 0 6px rgba(255,173,19,.42)}.live-list span{color:#c2d6e2}.live-list span b{font-weight:400;color:#c2d6e2}.live-list em{color:#718da2}
+footer{height:47px;min-height:47px;align-items:center}.screen footer>span{height:1px;flex:1;background:linear-gradient(90deg,transparent,rgba(35,125,185,.38))}.screen footer>span:last-child{transform:scaleX(-1)}footer b{margin:0 27px;font-size:12px;color:#94b2c7;letter-spacing:.5px}footer b i{font-size:19px;font-style:normal;color:#259cff;margin-right:8px}.error-state button{cursor:pointer;border-radius:2px}
+@media(max-height:900px){.topbar{height:88px;min-height:88px}.industrial-bg{height:88px}.brand h1{font-size:30px}.brand p{margin-top:7px}.mark{width:82px;height:64px}.metrics{height:96px;margin:10px 0}.metric-card{height:96px}.metric-icon{width:62px;height:62px;min-width:62px}.metric-card strong{font-size:36px}.grid{grid-template-rows:minmax(255px,1.08fr) minmax(226px,.98fr)}footer{height:34px;min-height:34px}.gauge-item>span{margin-top:5px}.gauge-item>em{margin-top:4px}.mini-gauge{width:min(86px,92%)}.service-summary{height:30px}}
+@media(max-width:1450px){.platform-title{width:380px;font-size:14px;letter-spacing:2px}.brand h1{font-size:27px;letter-spacing:4px}.headline span{display:none}.headline b{font-size:23px}.metric-card{gap:16px}.metric-icon{width:58px;height:58px;min-width:58px}.metric-card strong{font-size:35px}.grid{grid-template-columns:1.12fr 1.05fr 1fr}.panel-title h2{font-size:16px}}
+@media(max-width:1200px){.screen{height:auto;min-height:100vh;padding-bottom:20px}.platform-title{display:none}.grid{grid-template-columns:1fr 1fr}.health-panel{grid-column:auto}.hourly-panel{grid-column:auto}.panel{min-height:280px}.metrics{height:auto}.metric-card{height:96px}footer{display:none}}
 </style>

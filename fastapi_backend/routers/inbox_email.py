@@ -18,7 +18,7 @@ from email.header import decode_header, make_header
 from email.utils import parsedate_to_datetime, getaddresses
 from typing import List, Optional
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from pydantic import BaseModel
 
 from database import db
@@ -45,6 +45,7 @@ ANALYSIS_STATUS_PENDING = "pending"
 ANALYSIS_STATUS_SUCCESS = "success"
 ANALYSIS_STATUS_NO_TASK = "no_task"
 ANALYSIS_STATUS_FAILED = "failed"
+ANALYSIS_STATUS_COMPLETED = "completed"  # 用户已完成待办：保留记录用于同步去重，避免再次入库/识别
 
 # 联网模型（DeepSeek）兜底配置
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
@@ -109,7 +110,7 @@ def _ensure_inbox_task_columns():
         ("has_task", "TINYINT(1) DEFAULT 0 COMMENT '是否包含待办任务'"),
         ("task_summary", "TEXT COMMENT '任务摘要（大模型抽取）'"),
         ("task_deadline", "VARCHAR(50) DEFAULT '' COMMENT '任务截止时间（文本）'"),
-        ("task_analysis_status", "VARCHAR(20) DEFAULT 'pending' COMMENT '分析状态：pending/success/no_task/failed'"),
+        ("task_analysis_status", "VARCHAR(20) DEFAULT 'pending' COMMENT '分析状态：pending/success/no_task/failed/completed'"),
         ("task_analyzed_at", "DATETIME DEFAULT NULL COMMENT '最近一次分析时间'"),
         ("task_analysis_error", "TEXT COMMENT '最近一次分析的错误信息（若失败）'"),
     ]:
@@ -1324,24 +1325,30 @@ def complete_inbox_task(
     id: int = Query(..., ge=1, description="inbox_emails 表的 id"),
 ):
     """
-    标记任务已完成：从公用待办数据中删除该记录，不改动原邮箱邮件。
+    标记任务已完成：不删邮件记录、不改动原邮箱。
+    仅关闭 has_task，并标记 analysis_status=completed，
+    以便后续同步仍按 Message-ID 去重，不会再次入库并被识别成待办。
     """
     _require_inbox_access(current_user)
     owner = SHARED_INBOX_OWNER
 
     rows = db.execute_query(
-        f"SELECT id, message_id FROM inbox_emails WHERE id = %s AND {_owner_filter_sql()} LIMIT 1",
+        f"SELECT id FROM inbox_emails WHERE id = %s AND {_owner_filter_sql()} LIMIT 1",
         (int(id), owner),
     )
     if not rows:
         raise HTTPException(status_code=404, detail="邮件记录不存在")
     try:
         db.execute_update(
-            f"DELETE FROM inbox_emails WHERE id = %s AND {_owner_filter_sql()}",
-            (int(id), owner),
+            f"""UPDATE inbox_emails
+                    SET has_task = 0,
+                        task_analysis_status = %s,
+                        task_analyzed_at = NOW()
+                  WHERE id = %s AND {_owner_filter_sql()}""",
+            (ANALYSIS_STATUS_COMPLETED, int(id), owner),
         )
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"删除邮件记录失败: {e}")
+        raise HTTPException(status_code=500, detail=f"标记任务完成失败: {e}")
 
     return {"success": True, "message": "任务已完成"}
 
@@ -1490,8 +1497,26 @@ def update_personal_inbox_task_deadline(req: InboxTaskDeadlineRequest):
     return {"success": True, "message": "完成时间已更新", "taskDeadline": deadline}
 
 
+def _unflag_personal_email_bg(address: str, auth_code: str, message_id: str, owner: str, task_id: int) -> None:
+    """后台去除个人邮箱红旗；失败只记日志，不影响前端已完成态。"""
+    err = _unflag_email_imap(address, auth_code, message_id)
+    if err:
+        logger.warning(
+            "[InboxEmail] 个人红旗去除失败 owner=%s id=%s message_id=%s err=%s",
+            owner, task_id, message_id, err,
+        )
+
+
 @router.post("/personal/complete")
-async def complete_personal_inbox_task(current_user: str = Query(...), id: int = Query(..., ge=1)):
+async def complete_personal_inbox_task(
+    background_tasks: BackgroundTasks,
+    current_user: str = Query(...),
+    id: int = Query(..., ge=1),
+):
+    """
+    标记个人红旗待办已完成：先删库并立即返回，IMAP 去红旗放到后台执行，
+    避免邮箱服务器延迟拖慢前端。
+    """
     _require_personal_inbox_access(current_user)
     owner = current_user.strip()
     rows = db.execute_query("SELECT message_id FROM inbox_emails WHERE id=%s AND owner=%s LIMIT 1", (id, owner)) or []
@@ -1499,10 +1524,16 @@ async def complete_personal_inbox_task(current_user: str = Query(...), id: int =
         raise HTTPException(status_code=404, detail="任务不存在")
     cfg = _get_personal_inbox_config(current_user)
     message_id = (rows[0].get("message_id") or "").strip()
-    if cfg["address"] and cfg["auth_code"] and message_id:
-        loop = asyncio.get_event_loop()
-        await loop.run_in_executor(None, _unflag_email_imap, cfg["address"], cfg["auth_code"], message_id)
     db.execute_update("DELETE FROM inbox_emails WHERE id=%s AND owner=%s", (id, owner))
+    if cfg["address"] and cfg["auth_code"] and message_id:
+        background_tasks.add_task(
+            _unflag_personal_email_bg,
+            cfg["address"],
+            cfg["auth_code"],
+            message_id,
+            owner,
+            int(id),
+        )
     return {"success": True, "message": "个人待办已完成"}
 
 
