@@ -2064,6 +2064,14 @@ const rawFeatureGroups = [
         iconPath: 'M12 2l9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5'
       },
       {
+        id: 'file-page-counter',
+        title: '文件页数统计',
+        description: '批量统计 PDF、Word、PPT、Excel 文件页数，支持拖拽上传与导出',
+        path: '/tools/file-page-counter',
+        color: 'linear-gradient(135deg, #6366f1 0%, #8b5cf6 100%)',
+        iconPath: 'M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z'
+      },
+      {
         id: 'low-value-reimbursement',
         title: '低值易耗报销',
         description: '提交低值易耗报销申请，审批流转并导出台账',

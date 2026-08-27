@@ -438,6 +438,15 @@
             </svg>
             <span>3D打印委托</span>
           </router-link>
+          <router-link to="/tools/file-page-counter" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+              <polyline points="14 2 14 8 20 8" />
+              <line x1="16" y1="13" x2="8" y2="13" />
+              <line x1="16" y1="17" x2="8" y2="17" />
+            </svg>
+            <span>文件页数统计</span>
+          </router-link>
           <router-link v-if="!isOtherDeptUser" to="/file/policy-query" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
@@ -1384,6 +1393,7 @@ const sidebarMenuCatalog = computed(() => {
   add({ label: '通讯录', group: '实用工具', to: '/contacts', visible: !isOtherDeptUser.value, keywords: ['联系', '电话'] })
   add({ label: '转轮叶片配重', group: '实用工具', to: '/weldoa/ypp_main', visible: canUseRotorBladeBalance.value, keywords: ['转轮', '叶片', '配重'] })
   add({ label: '3D打印委托', group: '实用工具', to: '/print3d', keywords: ['3D', '打印'] })
+  add({ label: '文件页数统计', group: '实用工具', to: '/tools/file-page-counter', keywords: ['页数', '统计', 'PDF', 'Word', 'PPT'] })
   add({ label: '制度查询', group: '实用工具', to: '/file/policy-query', visible: !isOtherDeptUser.value, keywords: ['制度', '政策'] })
   add({ label: '工艺投标文件', group: '实用工具', to: '/file/bid-templates', visible: !isOtherDeptUser.value, keywords: ['投标', '文件'] })
   add({ label: '意见与建议', group: '实用工具', to: '/feedback', visible: !isOtherDeptUser.value, keywords: ['反馈', '建议'] })

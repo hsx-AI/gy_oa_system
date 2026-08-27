@@ -409,6 +409,12 @@ const routes = [
     component: () => import('@/views/massage/MassageChairBooking.vue'),
     meta: { title: '健康角预约' }
   },
+  {
+    path: '/tools/file-page-counter',
+    name: 'FilePageCounter',
+    component: () => import('@/views/tools/FilePageCounter.vue'),
+    meta: { title: '文件页数统计' }
+  },
   // AI 助手（公测）：仅智能制造技术室全员 + 公司经理/副经理/经理助理可访问，见下方 beforeEach 守卫
   {
     path: '/ai-assistant',
