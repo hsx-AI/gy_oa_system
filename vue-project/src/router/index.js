@@ -461,18 +461,35 @@ router.beforeEach(async (to, _from, next) => {
     next('/login')
     return
   }
-  // localStorage 会跨浏览器重启保留。每次进入受保护页面都向后端复核，
-  // 使密码安全升级前已登录的弱密码账号也不能绕过新规则。
+  // localStorage 会跨浏览器重启保留。每次进入受保护页面都向后端复核：
+  // 1) 弱密码强制升级；2) 改密后 sessionVer 不一致则作废其它端登录态。
   try {
     const cachedUser = JSON.parse(raw)
     const cachedName = (cachedUser.name || cachedUser.userName || '').trim()
     if (!cachedName) throw new Error('登录用户无效')
     const passwordState = await getPasswordStatus({ name: cachedName })
+    if (!passwordState || passwordState.success === false) {
+      throw new Error(passwordState?.message || '登录状态无效')
+    }
     if (passwordState.mustChangePassword) {
       localStorage.removeItem('userInfo')
       sessionStorage.setItem('forcePasswordChangeName', cachedName)
       next({ path: '/login', query: { passwordUpgrade: '1' } })
       return
+    }
+    const serverVer = Number(passwordState.sessionVer)
+    if (Number.isFinite(serverVer) && serverVer > 0) {
+      const localVerRaw = cachedUser.sessionVer
+      if (localVerRaw == null || localVerRaw === '') {
+        // 旧本地态尚无版本号：写入当前服务端版本，下次改密后再校验
+        cachedUser.sessionVer = serverVer
+        localStorage.setItem('userInfo', JSON.stringify(cachedUser))
+      } else if (Number(localVerRaw) !== serverVer) {
+        localStorage.removeItem('userInfo')
+        sessionStorage.setItem('sessionExpiredReason', 'password_changed')
+        next({ path: '/login', query: { sessionExpired: '1' } })
+        return
+      }
     }
   } catch (error) {
     console.error('登录安全状态检查失败:', error)

@@ -172,9 +172,20 @@ const handleChangePassword = async () => {
       newPassword: passwordForm.value.newPassword
     })
     if (res.success) {
-      alert('密码修改成功')
+      alert(res.message || '密码修改成功，其它已登录设备需重新登录')
       showPasswordModal.value = false
       passwordForm.value = { oldPassword: '', newPassword: '', confirmPassword: '' }
+      // 同步本机会话版本，避免改密后把自己踢下线；其它浏览器仍持旧版本，将被强制重登
+      if (res.sessionVer != null) {
+        try {
+          const raw = localStorage.getItem('userInfo')
+          if (raw) {
+            const u = JSON.parse(raw)
+            u.sessionVer = res.sessionVer
+            localStorage.setItem('userInfo', JSON.stringify(u))
+          }
+        } catch { /* ignore */ }
+      }
     } else {
       passwordError.value = res.message || '修改失败'
     }

@@ -10,6 +10,7 @@ import base64
 import json
 import asyncio
 import hashlib
+import time
 from collections import defaultdict
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
@@ -33,6 +34,9 @@ router = APIRouter(prefix="/email", tags=["邮件发送"])
 
 SMTP_SERVER = "smtp.qiye.163.com"
 SMTP_PORT_SSL = 465
+SMTP_TIMEOUT_SECONDS = 60
+SMTP_RETRY_COUNT = 3
+SMTP_RETRY_BASE_DELAY_SECONDS = 2.0
 SHIFT_COMPLAINT_QR_CID = "shift_complaint_qr"
 SHIFT_COMPLAINT_QR_PATH = Path(__file__).resolve().parent.parent / "scripts" / "投诉码.png"
 
@@ -436,36 +440,77 @@ def _get_dept_leader_emails_for_reminder(depts_with_exceptions: List[str], email
     return result
 
 
-def _smtp_send_batch(sender: str, password: str, messages: List[tuple]):
-    """通过单次 SMTP 连接发送多封邮件。messages: [(all_recipients, MIMEMultipart), ...]"""
-    smtp_obj = None
-    success_count = 0
-    failures = []
-    try:
-        smtp_obj = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=30)
-        smtp_obj.login(sender, password)
-        for recipients, msg in messages:
-            try:
-                smtp_obj.sendmail(sender, recipients, msg.as_string())
-                success_count += 1
-            except Exception as e:
-                failures.append(str(e))
-                logger.warning(f"邮件发送失败 -> {recipients}: {e}")
-    except smtplib.SMTPAuthenticationError:
-        raise HTTPException(status_code=401, detail="SMTP 登录失败，请检查邮箱地址和授权码")
-    except smtplib.SMTPException as e:
-        logger.error(f"SMTP 错误: {e}")
-        raise HTTPException(status_code=500, detail=f"SMTP 发送失败: {str(e)}")
-    except Exception as e:
-        logger.error(f"邮件发送异常: {e}")
-        raise HTTPException(status_code=500, detail=f"发送失败: {str(e)}")
-    finally:
-        if smtp_obj:
-            try:
-                smtp_obj.quit()
-            except Exception:
-                pass
-    return success_count, failures
+def _smtp_send_batch(
+    sender: str,
+    password: str,
+    messages: List[tuple],
+    *,
+    raise_http: bool = True,
+    retries: int = 1,
+):
+    """通过单次 SMTP 连接发送多封邮件。messages: [(all_recipients, MIMEMultipart), ...]
+
+    raise_http=False 时连接级失败返回 (0, [错误])，供后台任务重试，避免直接抛 HTTPException。
+    retries>1 时对连接/登录失败做短暂退避重试。
+    """
+    if not messages:
+        return 0, []
+
+    last_error = ""
+    attempts = max(1, int(retries or 1))
+    for attempt in range(attempts):
+        smtp_obj = None
+        success_count = 0
+        failures = []
+        try:
+            smtp_obj = smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=SMTP_TIMEOUT_SECONDS)
+            smtp_obj.login(sender, password)
+            for recipients, msg in messages:
+                try:
+                    smtp_obj.sendmail(sender, recipients, msg.as_string())
+                    success_count += 1
+                except Exception as e:
+                    failures.append(str(e))
+                    logger.warning("邮件发送失败 -> %s: %s", recipients, e)
+            return success_count, failures
+        except smtplib.SMTPAuthenticationError:
+            if raise_http:
+                raise HTTPException(status_code=401, detail="SMTP 登录失败，请检查邮箱地址和授权码")
+            return 0, ["SMTP 登录失败，请检查邮箱地址和授权码"]
+        except Exception as e:
+            last_error = str(e)
+            logger.error(
+                "SMTP 发送异常(第 %s/%s 次): %s",
+                attempt + 1,
+                attempts,
+                e,
+            )
+            if attempt < attempts - 1:
+                time.sleep(SMTP_RETRY_BASE_DELAY_SECONDS * (attempt + 1))
+                continue
+            if raise_http:
+                if isinstance(e, smtplib.SMTPException):
+                    raise HTTPException(status_code=500, detail=f"SMTP 发送失败: {last_error}")
+                raise HTTPException(status_code=500, detail=f"发送失败: {last_error}")
+            return 0, [last_error]
+        finally:
+            if smtp_obj:
+                try:
+                    smtp_obj.quit()
+                except Exception:
+                    pass
+    return 0, [last_error or "SMTP 未返回成功"]
+
+
+def _smtp_send_one_resilient(sender: str, password: str, recipients: List[str], message: MIMEMultipart):
+    """单封邮件：独立连接 + 多次重试，适合连续发送多封提醒时降低超时漏发。"""
+    return _smtp_send_batch(
+        sender,
+        password,
+        [(recipients, message)],
+        raise_http=False,
+        retries=SMTP_RETRY_COUNT,
+    )
 
 
 def _normalize_test_recipients(test_recipients: Optional[List[str]]) -> List[str]:
@@ -1683,7 +1728,8 @@ def _send_shift_schedule_missing_notice(
         "html",
     )
     all_recipients = list(set(to_emails + cc_emails))
-    success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
+    # 缺排提醒常在 17:00 连续多封发出，独立连接 + 重试，避免前一封占住/打满 SMTP 后下一封超时
+    success_count, failures = _smtp_send_one_resilient(sender_addr, password, all_recipients, msg)
     if success_count:
         return True, notice_text, len(to_emails), len(cc_emails)
     return False, "；".join(failures) if failures else "SMTP 未返回成功", len(to_emails), len(cc_emails)
@@ -1847,6 +1893,7 @@ async def _run_shift_schedule_email_once_locked(
             details.append({"department": job["department"], "status": "skipped", "message": "无法归入发送批次"})
 
     missing_notice_sent_keys = set()
+    missing_notice_count = 0
     company_leaders = _get_shift_company_leader_recipients()
     for bucket in buckets.values():
         to_emails = sorted(bucket["to_emails"])
@@ -1867,9 +1914,15 @@ async def _run_shift_schedule_email_once_locked(
                 notice_msg = ""
                 notice_to_count = 0
                 notice_cc_count = 0
+                notice_status = ""
                 if missing_rows:
                     notice_key = (dept, report["week_start"].strftime("%Y-%m-%d"))
-                    if notice_key not in missing_notice_sent_keys:
+                    if notice_key in missing_notice_sent_keys:
+                        notice_status = "本轮已发送或已尝试过"
+                    else:
+                        if missing_notice_count > 0:
+                            # 连续多封提醒之间稍作间隔，降低企业邮连接超时概率
+                            time.sleep(1.5)
                         try:
                             notice_ok, notice_msg, notice_to_count, notice_cc_count = _send_shift_schedule_missing_notice(
                                 sender_addr,
@@ -1880,15 +1933,18 @@ async def _run_shift_schedule_email_once_locked(
                                 (bucket.get("leaders_by_dept") or {}).get(dept) or [],
                                 company_leaders,
                             )
+                            notice_status = "已发送" if notice_ok else "发送失败"
+                            missing_notice_count += 1
                         except Exception as notice_err:
-                            notice_msg = str(notice_err)[:200]
+                            notice_msg = str(getattr(notice_err, "detail", None) or notice_err)[:200]
+                            notice_status = "发送失败"
                             logger.error("[ShiftScheduleEmail] %s 缺排提醒邮件发送失败: %s", dept, notice_err)
                         missing_notice_sent_keys.add(notice_key)
                     missing_days_text = _format_shift_missing_days(missing_rows) or "部分日期"
                     log_msg = (
                         f"{report['week_start'].strftime('%Y-%m-%d')}至{report['week_end'].strftime('%Y-%m-%d')} "
                         f"{missing_days_text}缺少排班人员；{blocked_msg}；"
-                        f"提醒邮件{'已发送' if notice_ok else '发送失败或已发送过'}"
+                        f"提醒邮件{notice_status}"
                     )
                     if notice_msg:
                         log_msg = f"{log_msg}：{notice_msg}"
@@ -1917,6 +1973,7 @@ async def _run_shift_schedule_email_once_locked(
                     detail.update({
                         "missingDays": [str(row.get("date") or "")[:10] for row in missing_rows],
                         "noticeSent": notice_ok,
+                        "noticeStatus": notice_status,
                         "noticeToCount": notice_to_count,
                         "noticeCcCount": notice_cc_count,
                     })
@@ -1957,7 +2014,14 @@ async def _run_shift_schedule_email_once_locked(
         )
         all_recipients = list(set(to_emails + cc_emails))
         try:
-            success_count, failures = _smtp_send_batch(sender_addr, password, [(all_recipients, msg)])
+            # 正式排班表也可能连续多封，连接失败时重试，避免 HTTPException 中断整轮
+            success_count, failures = _smtp_send_batch(
+                sender_addr,
+                password,
+                [(all_recipients, msg)],
+                raise_http=False,
+                retries=SMTP_RETRY_COUNT,
+            )
             if success_count:
                 mail_sent += 1
                 log_msg = (

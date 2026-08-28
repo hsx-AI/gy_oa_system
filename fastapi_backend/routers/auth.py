@@ -24,6 +24,62 @@ _verification_codes = {}
 _verification_lock = threading.Lock()
 
 
+def _ensure_session_ver_column():
+    """登录会话版本号：改密后递增，用于作废其它浏览器中的本地登录态。"""
+    try:
+        db.execute_update(
+            "ALTER TABLE yggl ADD COLUMN session_ver INT NOT NULL DEFAULT 1 "
+            "COMMENT '登录会话版本，改密后递增'",
+            (),
+        )
+    except Exception:
+        pass
+
+
+_ensure_session_ver_column()
+
+
+def _read_session_ver(row_or_name) -> int:
+    """从查询行或按姓名读取 session_ver；缺列/异常时回退为 1。"""
+    if isinstance(row_or_name, dict):
+        raw = row_or_name.get("session_ver")
+        try:
+            return max(1, int(raw or 1))
+        except (TypeError, ValueError):
+            return 1
+    name = (row_or_name or "").strip()
+    if not name:
+        return 1
+    try:
+        rows = db.execute_query(
+            "SELECT session_ver FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1",
+            (name,),
+        )
+        if not rows:
+            return 1
+        return _read_session_ver(rows[0])
+    except Exception:
+        return 1
+
+
+def _bump_session_ver(name: str) -> int:
+    """密码变更后递增会话版本，返回新版本号。"""
+    clean = (name or "").strip()
+    if not clean:
+        return 1
+    _ensure_session_ver_column()
+    try:
+        db.execute_update(
+            "UPDATE yggl SET session_ver = COALESCE(session_ver, 1) + 1 "
+            "WHERE name=%s AND COALESCE(zaizhi,0)=0",
+            (clean,),
+        )
+    except Exception as e:
+        logger.warning("递增 session_ver 失败（将继续改密）: %s", e)
+        return _read_session_ver(clean)
+    return _read_session_ver(clean)
+
+
 def _password_is_strong(password: str) -> bool:
     if len(password or "") < 6:
         return False
@@ -44,10 +100,16 @@ def _masked_email(address: str) -> str:
 
 
 def _get_login_user(name: str):
-    rows = db.execute_query(
-        "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt, enterprise_email "
-        "FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1", (name,)
-    )
+    try:
+        rows = db.execute_query(
+            "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt, enterprise_email, session_ver "
+            "FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1", (name,)
+        )
+    except Exception:
+        rows = db.execute_query(
+            "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt, enterprise_email "
+            "FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1", (name,)
+        )
     return rows[0] if rows else None
 
 
@@ -63,6 +125,7 @@ def _user_info(user_data: dict) -> dict:
         "showIntro": show_intro,
         "unreadNotifications": [],
         "mustChangePassword": not _password_is_strong((user_data.get("pass") or "").strip()),
+        "sessionVer": _read_session_ver(user_data),
     }
 
 
@@ -154,20 +217,27 @@ class SetLoginStatusRequest(BaseModel):
 
 @router.get("/password-status")
 async def password_status(name: str = Query(..., description="员工姓名")):
-    """供已登录浏览器启动时复核密码安全状态，拦截升级前遗留的本地登录状态。"""
+    """供已登录浏览器复核密码强度与会话版本；会话版本不一致时前端应强制重新登录。"""
     clean_name = (name or "").strip()
     if not clean_name:
         return {"success": False, "message": "用户名为空"}
     try:
-        rows = db.execute_query(
-            "SELECT `pass` FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1",
-            (clean_name,),
-        )
+        try:
+            rows = db.execute_query(
+                "SELECT `pass`, session_ver FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1",
+                (clean_name,),
+            )
+        except Exception:
+            rows = db.execute_query(
+                "SELECT `pass` FROM yggl WHERE name=%s AND COALESCE(zaizhi,0)=0 LIMIT 1",
+                (clean_name,),
+            )
         if not rows:
             return {"success": False, "message": "用户不存在或已离职"}
         return {
             "success": True,
             "mustChangePassword": not _password_is_strong((rows[0].get("pass") or "").strip()),
+            "sessionVer": _read_session_ver(rows[0]),
         }
     except Exception as e:
         logger.error("检查密码安全状态失败: %s", e)
@@ -191,12 +261,25 @@ def login(request: LoginRequest):
             )
         
         # 先查是否存在该用户（在职），再校验密码，便于区分「无此用户」与「密码错误」
-        check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+        check_user_sql = (
+            "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt, session_ver "
+            "FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+        )
         try:
             user_rows = db.execute_query(check_user_sql, (request.admin,))
         except Exception:
-            check_user_sql = "SELECT name, `pass`, lsys, jb, gh, xbie FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
-            user_rows = db.execute_query(check_user_sql, (request.admin,))
+            try:
+                check_user_sql = (
+                    "SELECT name, `pass`, lsys, jb, gh, xbie, denglu_zt, gx_gt "
+                    "FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+                )
+                user_rows = db.execute_query(check_user_sql, (request.admin,))
+            except Exception:
+                check_user_sql = (
+                    "SELECT name, `pass`, lsys, jb, gh, xbie FROM yggl "
+                    "WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
+                )
+                user_rows = db.execute_query(check_user_sql, (request.admin,))
         if not user_rows or len(user_rows) == 0:
             return LoginResponse(
                 success=False,
@@ -244,6 +327,7 @@ def login(request: LoginRequest):
             "showIntro": show_intro,
             "unreadNotifications": unread_notifications,
             "mustChangePassword": not _password_is_strong(db_pass),
+            "sessionVer": _read_session_ver(user_data),
         }
         return LoginResponse(
             success=True,
@@ -506,7 +590,7 @@ class ChangePasswordRequest(BaseModel):
 
 @router.post("/change-password")
 def change_password(req: ChangePasswordRequest):
-    """修改密码"""
+    """修改密码；成功后递增 session_ver，使其它已登录浏览器的本地态失效。"""
     try:
         if not _password_is_strong(req.newPassword):
             return {"success": False, "message": PASSWORD_RULE_MESSAGE}
@@ -520,7 +604,12 @@ def change_password(req: ChangePasswordRequest):
             "UPDATE yggl SET `pass`=%s WHERE name=%s",
             (req.newPassword, req.name)
         )
-        return {"success": True, "message": "密码修改成功"}
+        session_ver = _bump_session_ver(req.name)
+        return {
+            "success": True,
+            "message": "密码修改成功，其它已登录设备需重新登录",
+            "sessionVer": session_ver,
+        }
     except Exception as e:
         logger.error(f"修改密码失败: {str(e)}")
         return {"success": False, "message": str(e)}
@@ -629,7 +718,12 @@ def reset_password_by_code(req: ResetPasswordByCodeRequest):
         )
         if not updated:
             return {"success": False, "message": "用户不存在或已离职"}
-        return {"success": True, "message": "密码修改成功，请使用新密码登录"}
+        session_ver = _bump_session_ver(name)
+        return {
+            "success": True,
+            "message": "密码修改成功，请使用新密码登录",
+            "sessionVer": session_ver,
+        }
     except Exception as e:
         logger.error("验证码修改密码失败: %s", e)
         return {"success": False, "message": "密码修改失败，请稍后重试"}

@@ -726,7 +726,7 @@
 <script setup>
 import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { getUploadConfig, setLoginStatus, getUserStyle, saveUserStyle } from '@/api/attendance'
+import { getUploadConfig, setLoginStatus, getUserStyle, saveUserStyle, getPasswordStatus } from '@/api/attendance'
 import { getDbManagerPermission } from '@/api/dbManager'
 import { getSSOLink } from '@/api/sso'
 import { dismissNotification, listNotifications } from '@/api/admin'
@@ -1502,6 +1502,45 @@ const handleLogout = () => {
   router.push('/login')
 }
 
+/** 切回标签页时复核会话版本：改密后其它端立即失效，无需再点路由 */
+async function checkSessionStillValid() {
+  if (route.path === '/login') return
+  const raw = localStorage.getItem('userInfo')
+  if (!raw) return
+  try {
+    const cachedUser = JSON.parse(raw)
+    const name = (cachedUser.name || cachedUser.userName || '').trim()
+    if (!name) return
+    const state = await getPasswordStatus({ name })
+    if (!state || state.success === false) {
+      handleLogout()
+      return
+    }
+    const serverVer = Number(state.sessionVer)
+    if (!Number.isFinite(serverVer) || serverVer <= 0) return
+    if (cachedUser.sessionVer == null || cachedUser.sessionVer === '') {
+      cachedUser.sessionVer = serverVer
+      localStorage.setItem('userInfo', JSON.stringify(cachedUser))
+      return
+    }
+    if (Number(cachedUser.sessionVer) !== serverVer) {
+      localStorage.removeItem('userInfo')
+      sessionStorage.setItem('sessionExpiredReason', 'password_changed')
+      currentUser.value = { name: '', dept: '', username: '' }
+      applySkinStyle('default')
+      router.push({ path: '/login', query: { sessionExpired: '1' } })
+    }
+  } catch (e) {
+    console.warn('会话校验失败:', e)
+  }
+}
+
+function onVisibilityChange() {
+  if (document.visibilityState === 'visible') {
+    checkSessionStillValid()
+  }
+}
+
 // 加载用户信息
 const loadUserInfo = () => {
   try {
@@ -1650,11 +1689,13 @@ const loadUploadConfig = () => {
 
 onMounted(() => {
   document.addEventListener('click', onDocumentClick)
+  document.addEventListener('visibilitychange', onVisibilityChange)
   loadUploadConfig()
 })
 
 onUnmounted(() => {
   document.removeEventListener('click', onDocumentClick)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 
 // 跳转思想汇报管理（单点登录，新窗口）

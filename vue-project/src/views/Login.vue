@@ -171,11 +171,12 @@
 
 <script setup>
 import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRouter, useRoute } from 'vue-router'
 import { login, loginByCode, sendVerificationCode, changePassword, resetPasswordByCode } from '@/api/attendance'
 import logoUrl from '@/assets/changbiao.png'
 
 const router = useRouter()
+const route = useRoute()
 const loading = ref(false)
 const showPwd = ref(false)
 const focusField = ref('')
@@ -231,8 +232,9 @@ async function submitPasswordChange() {
   loading.value = true
   try {
     if (forcedChange.value) {
-      await changePassword({ name: form.username, oldPassword: form.password, newPassword: resetForm.newPassword })
+      const res = await changePassword({ name: form.username, oldPassword: form.password, newPassword: resetForm.newPassword })
       pendingUserInfo.mustChangePassword = false
+      if (res?.sessionVer != null) pendingUserInfo.sessionVer = res.sessionVer
       finishLogin(pendingUserInfo)
     } else {
       const res = await resetPasswordByCode({ name: resetForm.name, code: resetForm.code, newPassword: resetForm.newPassword })
@@ -504,6 +506,9 @@ onMounted(() => {
     form.username = upgradeName
     sessionStorage.removeItem('forcePasswordChangeName')
     setTimeout(() => alert('当前账号密码过于简单，为保证账号安全，请使用原密码登录后按提示修改密码，或通过邮箱验证码修改。'), 100)
+  } else if (route.query.sessionExpired === '1' || sessionStorage.getItem('sessionExpiredReason') === 'password_changed') {
+    sessionStorage.removeItem('sessionExpiredReason')
+    setTimeout(() => alert('密码已在其它设备修改，为保障账号安全，请重新登录。'), 100)
   }
 })
 
