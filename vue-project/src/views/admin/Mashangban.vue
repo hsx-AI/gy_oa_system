@@ -27,6 +27,73 @@
       </div>
 
       <template v-else>
+        <section v-if="isAdmin1" class="card email-config-card">
+          <div class="email-config-head">
+            <div>
+              <h3>月底自动邮件</h3>
+              <p>每月最后一天按时发送；正文含全年趋势图，附件为本月导出报表。</p>
+            </div>
+            <label class="switch-row">
+              <input v-model="emailCfg.enabled" type="checkbox" />
+              <span>{{ emailCfg.enabled ? '已启用' : '未启用' }}</span>
+            </label>
+          </div>
+          <div class="email-config-grid">
+            <label>
+              发送时刻
+              <span class="time-pair">
+                <input v-model.number="emailCfg.hour" type="number" min="0" max="23" />
+                :
+                <input v-model.number="emailCfg.minute" type="number" min="0" max="59" />
+              </span>
+            </label>
+            <label class="switch-row inline">
+              <input v-model="emailCfg.useAutoRecipients" type="checkbox" />
+              <span>自动收件人（admin1 / 经理层 / 主任副主任班组长，有企业邮箱）约 {{ emailCfg.autoRecipientCount }} 人</span>
+            </label>
+          </div>
+          <div class="email-extra">
+            <label class="grow">
+              额外收件人（每行：姓名,邮箱 或仅邮箱）
+              <textarea
+                v-model="emailRecipientsText"
+                rows="3"
+                placeholder="张三,zhangsan@example.com&#10;lisi@example.com"
+              />
+            </label>
+          </div>
+          <div class="email-actions">
+            <button type="button" class="btn" :disabled="emailSaving" @click="saveEmailConfig">
+              {{ emailSaving ? '保存中…' : '保存配置' }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-export"
+              :disabled="emailSending || !monthStart"
+              @click="runEmailNow(false)"
+            >
+              {{ emailSending ? '发送中…' : `发送 ${monthStart || '本月'} 邮件` }}
+            </button>
+            <button
+              type="button"
+              class="btn btn-ghost"
+              :disabled="emailSending || !monthStart"
+              @click="runEmailNow(true)"
+            >
+              强制重发
+            </button>
+            <span class="meta">额外收件人有值时，手动发送只发给这些人（便于测试）。门户：{{ emailCfg.portalUrl }}</span>
+          </div>
+          <div v-if="emailLogs.length" class="email-log">
+            <strong>最近发送</strong>
+            <ul>
+              <li v-for="item in emailLogs" :key="item.id">
+                {{ item.sentAt }} · {{ item.reportMonth }} · {{ item.status }} · {{ item.message }}
+              </li>
+            </ul>
+          </div>
+        </section>
+
         <div class="card toolbar top-bar">
           <label>
             统计方式
@@ -407,15 +474,34 @@ import {
 } from '@/utils/chartConfig'
 import {
   getMashangbanDept,
+  getMashangbanEmailConfig,
+  getMashangbanEmailLog,
   getMashangbanMonths,
   getMashangbanOrders,
-  getMashangbanPerson
+  getMashangbanPerson,
+  runMashangbanEmail,
+  saveMashangbanEmailConfig
 } from '@/api/mashangban'
 
 const canAccess = ref(false)
+const isAdmin1 = ref(false)
+const currentUserName = ref('')
 const loading = ref(false)
 const exportLoading = ref(false)
 const ordersLoading = ref(false)
+const emailSaving = ref(false)
+const emailSending = ref(false)
+const emailRecipientsText = ref('')
+const emailLogs = ref([])
+const emailCfg = reactive({
+  enabled: false,
+  hour: 17,
+  minute: 0,
+  useAutoRecipients: true,
+  autoRecipientCount: 0,
+  portalUrl: 'http://10.42.60.230/admin/mashangban',
+  recipients: []
+})
 const months = ref([])
 const rangeMode = ref('month') // month | range | year
 const monthStart = ref('')
@@ -914,8 +1000,10 @@ async function checkPermission() {
     const name = (user?.name || user?.userName || '').trim()
     const jb = (user?.jb || '').trim()
     const lsys = (user?.dept || user?.lsys || '').trim()
+    currentUserName.value = name
     if (!name) {
       canAccess.value = false
+      isAdmin1.value = false
       return
     }
     let admin1Name = ''
@@ -924,8 +1012,103 @@ async function checkPermission() {
       admin1Name = (cfg?.admin1 || '').trim()
     } catch { /* ignore */ }
     canAccess.value = canAccessMashangban({ name, jb, lsys, admin1: admin1Name })
+    isAdmin1.value = !!(admin1Name && name === admin1Name)
   } catch {
     canAccess.value = false
+    isAdmin1.value = false
+  }
+}
+
+function recipientsToText(list) {
+  return (list || [])
+    .map((item) => {
+      const name = (item.name || '').trim()
+      const email = (item.email || '').trim()
+      if (!email) return ''
+      return name ? `${name},${email}` : email
+    })
+    .filter(Boolean)
+    .join('\n')
+}
+
+function parseRecipientsText(text) {
+  return String(text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(/[,，;\s]+/).map((x) => x.trim()).filter(Boolean)
+      if (parts.length >= 2 && parts[parts.length - 1].includes('@')) {
+        return { name: parts.slice(0, -1).join(' '), email: parts[parts.length - 1] }
+      }
+      if (parts.length === 1 && parts[0].includes('@')) {
+        return { name: '', email: parts[0] }
+      }
+      return null
+    })
+    .filter(Boolean)
+}
+
+async function loadEmailConfig() {
+  if (!isAdmin1.value || !currentUserName.value) return
+  try {
+    const res = await getMashangbanEmailConfig(currentUserName.value)
+    emailCfg.enabled = !!res?.enabled
+    emailCfg.hour = Number(res?.hour ?? 17)
+    emailCfg.minute = Number(res?.minute ?? 0)
+    emailCfg.useAutoRecipients = res?.useAutoRecipients !== false
+    emailCfg.autoRecipientCount = Number(res?.autoRecipientCount || 0)
+    emailCfg.portalUrl = res?.portalUrl || emailCfg.portalUrl
+    emailCfg.recipients = res?.recipients || []
+    emailRecipientsText.value = recipientsToText(emailCfg.recipients)
+    const logRes = await getMashangbanEmailLog(currentUserName.value, 8)
+    emailLogs.value = logRes?.items || []
+  } catch (e) {
+    console.warn('加载码上办邮件配置失败', e)
+  }
+}
+
+async function saveEmailConfig() {
+  if (!currentUserName.value) return
+  emailSaving.value = true
+  try {
+    const res = await saveMashangbanEmailConfig({
+      current_user: currentUserName.value,
+      enabled: !!emailCfg.enabled,
+      hour: Number(emailCfg.hour) || 0,
+      minute: Number(emailCfg.minute) || 0,
+      useAutoRecipients: !!emailCfg.useAutoRecipients,
+      recipients: parseRecipientsText(emailRecipientsText.value)
+    })
+    emailCfg.enabled = !!res?.enabled
+    emailCfg.recipients = res?.recipients || []
+    emailRecipientsText.value = recipientsToText(emailCfg.recipients)
+    alert(res?.message || '配置已保存')
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '保存失败')
+  } finally {
+    emailSaving.value = false
+  }
+}
+
+async function runEmailNow(force = false) {
+  if (!currentUserName.value || !monthStart.value) return
+  emailSending.value = true
+  try {
+    const extras = parseRecipientsText(emailRecipientsText.value).map((x) => x.email)
+    const res = await runMashangbanEmail({
+      current_user: currentUserName.value,
+      yearMonth: monthStart.value,
+      force: !!force,
+      testRecipients: extras.length ? extras : null,
+      testOnly: extras.length > 0
+    })
+    alert(res?.message || (res?.success ? '发送完成' : '发送失败'))
+    await loadEmailConfig()
+  } catch (e) {
+    alert(e?.response?.data?.detail || e?.message || '发送失败')
+  } finally {
+    emailSending.value = false
   }
 }
 
@@ -1255,7 +1438,10 @@ function handleExportExcel() {
 
 onMounted(async () => {
   await checkPermission()
-  if (canAccess.value) await reloadAll()
+  if (canAccess.value) {
+    await reloadAll()
+    if (isAdmin1.value) await loadEmailConfig()
+  }
 })
 </script>
 
@@ -1289,6 +1475,74 @@ onMounted(async () => {
 }
 .btn-export:hover:not(:disabled) {
   filter: brightness(1.06);
+}
+.email-config-card h3 {
+  margin: 0 0 4px;
+  font-size: 16px;
+  color: #0f172a;
+}
+.email-config-card > .email-config-head > div > p,
+.email-config-card .meta {
+  margin: 0;
+  color: #64748b;
+  font-size: 13px;
+}
+.email-config-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.email-config-grid,
+.email-actions,
+.email-extra {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+  margin-bottom: 10px;
+}
+.email-extra .grow,
+.email-extra label {
+  flex: 1;
+  min-width: 280px;
+}
+.email-extra textarea {
+  width: 100%;
+  min-height: 72px;
+  border: 1px solid #d7dce5;
+  border-radius: 6px;
+  padding: 8px 10px;
+  font-size: 13px;
+  resize: vertical;
+}
+.switch-row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+  color: #334155;
+  font-size: 13px;
+}
+.time-pair {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+.time-pair input {
+  width: 64px;
+}
+.email-log {
+  margin-top: 8px;
+  padding-top: 10px;
+  border-top: 1px solid #eef2f7;
+  font-size: 12px;
+  color: #475569;
+}
+.email-log ul {
+  margin: 6px 0 0;
+  padding-left: 18px;
 }
 .page-header h1 {
   margin: 0 0 6px;

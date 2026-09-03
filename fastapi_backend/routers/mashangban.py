@@ -15,9 +15,11 @@ from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from openpyxl import load_workbook
 
 from database import db
+from routers.mashangban_email import router as mashangban_email_router
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/mashangban", tags=["工艺码上办"])
+router.include_router(mashangban_email_router)
 
 BASE_DIR = Path(__file__).resolve().parents[1]
 DATA_DIR = BASE_DIR / "data" / "mashangban"

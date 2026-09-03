@@ -126,6 +126,9 @@ async def startup_event():
     # 行动项临期、逾期和长期未更新提醒
     from routers.action_items import action_reminder_background_loop
     _asyncio.get_event_loop().create_task(action_reminder_background_loop())
+    # 工艺码上办月报：月底自动邮件
+    from routers.mashangban_email import mashangban_email_background_loop
+    _asyncio.get_event_loop().create_task(mashangban_email_background_loop())
 
 
 @app.get("/")

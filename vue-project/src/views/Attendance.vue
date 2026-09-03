@@ -61,6 +61,9 @@
           </div>
           <span class="suggestions-hint text-tertiary text-sm">基于当前数据分析</span>
         </div>
+        <div v-if="hasUnresolvedAttendanceExceptions" class="overtime-lock-hint">
+          本月存在未处理的考勤异常（红色），请先处理后再使用智能建议填报加班
+        </div>
         <div class="suggestions-grid">
           <div
             v-for="(suggestion, index) in suggestions"
@@ -93,14 +96,18 @@
               <div class="suggestion-desc">{{ suggestion.message }}</div>
             </div>
             <!-- 自动填报按钮 - 处理完成(绿)/正在审核(橙)/未处理显示操作按钮 -->
-            <!-- 加班建议 -->
+            <!-- 加班建议：本月有未处理红色考勤异常时不可填报 -->
             <button 
               v-if="suggestion.message && suggestion.message.includes('加班')"
               class="auto-fill-btn btn-overtime"
-              :class="{ 'btn-handled': suggestion.handled, 'btn-under-review': suggestion.under_review }"
+              :class="{
+                'btn-handled': suggestion.handled,
+                'btn-under-review': suggestion.under_review,
+                'btn-overtime-locked': !suggestion.handled && !suggestion.under_review && hasUnresolvedAttendanceExceptions
+              }"
               :disabled="suggestion.handled || suggestion.under_review"
               @click.stop="!suggestion.handled && !suggestion.under_review && handleOvertimeFill(suggestion)"
-              :title="suggestion.handled ? '已处理完成' : suggestion.under_review ? '已提交，正在审核' : '自动填报加班申请'"
+              :title="overtimeFillTitle(suggestion)"
             >
               <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <template v-if="suggestion.handled">
@@ -548,6 +555,10 @@ const toTimeValue = (t) => {
 // 处理加班自动填报：本页弹窗，无需跳转，可连续填报
 const handleOvertimeFill = (suggestion) => {
   if (!suggestion) return
+  if (hasUnresolvedAttendanceExceptions.value) {
+    alert('请先处理本月考勤异常（红色）。完成请假/公出/打卡异常申请并进入审核流程后，才可使用智能建议填报加班。')
+    return
+  }
   const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
   const startTime = timeMatch ? toTimeValue(timeMatch[1]) : '08:00:00'
   const endTime = timeMatch ? toTimeValue(timeMatch[2]) : '17:00:00'
@@ -796,6 +807,22 @@ const loadFullAttendance = async () => {
 
 // 智能建议
 const suggestions = ref([])
+
+// 本月是否存在未处理的红色考勤异常（缺勤/迟到等）；仅 handled 或 under_review 后才允许智能填报加班
+const hasUnresolvedAttendanceExceptions = computed(() =>
+  suggestions.value.some(
+    (s) => s.type === 'warning' && !s.handled && !s.under_review
+  )
+)
+
+const overtimeFillTitle = (suggestion) => {
+  if (suggestion?.handled) return '已处理完成'
+  if (suggestion?.under_review) return '已提交，正在审核'
+  if (hasUnresolvedAttendanceExceptions.value) {
+    return '请先处理本月考勤异常（红色），进入审核流程后才可填报加班'
+  }
+  return '自动填报加班申请'
+}
 
 // 加载智能建议（按选定月份从表读取，上传打卡时已预生成）
 const loadSuggestions = async () => {
@@ -1446,6 +1473,27 @@ watch(selectedMonth, () => {
 .btn-overtime:hover {
   box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
   transform: translateY(-2px);
+}
+
+.btn-overtime.btn-overtime-locked {
+  background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
+  opacity: 0.85;
+}
+
+.btn-overtime.btn-overtime-locked:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.overtime-lock-hint {
+  margin-bottom: var(--spacing-base, 12px);
+  padding: 10px 14px;
+  border-radius: var(--radius-base);
+  background: #fef2f2;
+  border: 1px solid #fecaca;
+  color: #b91c1c;
+  font-size: var(--font-size-sm);
+  line-height: 1.5;
 }
 
 /* 请假填报按钮 - 黄橙渐变 */
