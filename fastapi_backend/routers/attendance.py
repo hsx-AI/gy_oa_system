@@ -438,15 +438,16 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
         if not keys_to_process:
             return
 
-        # 避免单次 SQL 过长，分批删除旧建议
-        key_list = list(keys_to_process)
+        # 按姓名+年月删除（不限科室），避免科室变更后旧科室建议残留导致重复
+        name_month_keys = list({(name, y, m) for (name, _dept, y, m) in keys_to_process})
         _chunk = 400
-        for i in range(0, len(key_list), _chunk):
-            attendance_db.delete_suggestions_batch(key_list[i : i + _chunk])
+        for i in range(0, len(name_month_keys), _chunk):
+            attendance_db.delete_suggestions_by_name_months(name_month_keys[i : i + _chunk])
 
         holidays_cache: dict = {}
         holiday_festival_cache: dict = {}
-        month_records: dict = {}
+        # 按姓名聚合打卡：科室变更后历史记录仍挂在旧 department 上
+        month_records_by_name: dict = {}
         for (y, m) in months:
             start_date = f"{y}-{m:02d}-01"
             if m == 12:
@@ -457,10 +458,10 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
             all_recs = attendance_db.get_all_records_by_date_range(start_date, end_date)
             grouped = defaultdict(list)
             for r in all_recs:
-                key = ((r.get("employee_name") or "").strip(),
-                       (r.get("department") or "").strip())
-                grouped[key].append(r)
-            month_records[(y, m)] = grouped
+                emp_name = (r.get("employee_name") or "").strip()
+                if emp_name:
+                    grouped[emp_name].append(r)
+            month_records_by_name[(y, m)] = grouped
 
             year_str = str(y)
             if year_str not in holidays_cache:
@@ -470,7 +471,7 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
 
         for (name, dept, y, m) in keys_to_process:
             try:
-                person_records = month_records.get((y, m), {}).get((name, dept), [])
+                person_records = month_records_by_name.get((y, m), {}).get(name, [])
                 holidays = holidays_cache[str(y)]
                 holiday_festival_map = holiday_festival_cache[str(y)]
                 suggestions_list = generate_suggestions_for_month_with_records(
@@ -1595,12 +1596,12 @@ def query_attendance(
 @router.get("/dates", response_model=dict)
 def get_attendance_dates(
     name: str = Query(..., description="员工姓名"),
-    dept: str = Query(..., description="部门")
+    dept: Optional[str] = Query(None, description="部门（可选；不传则按姓名查全部科室历史）")
 ):
     """
     获取某个员工的所有打卡日期
     
-    用于前端判断哪些日期有打卡记录
+    用于前端判断哪些日期有打卡记录。不传 dept 时可看到科室变更前的历史打卡日期。
     """
     
     try:
@@ -1692,7 +1693,7 @@ def dakaman_process_exception(req: DakamanProcessRequest):
     except (ValueError, IndexError):
         raise HTTPException(status_code=400, detail="日期格式错误")
 
-    suggestions = attendance_db.get_suggestions(emp_name, dept, year, month)
+    suggestions = attendance_db.get_suggestions(emp_name, None, year, month)
     day_suggestions = [
         s for s in suggestions
         if str(s.get("date", ""))[:10] == att_date and s.get("status") == 1

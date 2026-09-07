@@ -1554,7 +1554,7 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
     else:
         last = (date(year, month + 1, 1) - timedelta(days=1))
         end_date = last.strftime("%Y-%m-%d")
-    records = attendance_db.query_by_date_range(start_date, end_date, name=name, dept=dept)
+    records = attendance_db.query_by_date_range(start_date, end_date, name=name, dept=None)
     existing_dates = set()
     for record in records:
         dt = _parse_record_date(record.get("attendance_date"))
@@ -1643,15 +1643,17 @@ def get_suggestions(
     """
     获取智能建议。优先从表 attendance_suggestions 按年月读取（上传打卡后已预生成）；
     若未传 year/month 则退回按当月计算（兼容旧逻辑）。
+    dept 可选：个人页可不传，按姓名读取全部科室历史建议（兼容 yggl.lsys 变更）。
     """
-    if not name or not dept:
+    if not name:
         return SuggestionResponse(success=False, suggestions=[])
 
     try:
         is_female = _is_female_employee(name)
         if year is not None and month is not None and 1 <= month <= 12:
             attendance_db.ensure_suggestions_table()
-            rows = attendance_db.get_suggestions(name, dept, year, month)
+            # dept 有值时仍可按科室精确查（管理端）；为空则按姓名跨科室
+            rows = attendance_db.get_suggestions(name, (dept or None), year, month)
             jiaban_rows, qj_rows, gcsqb_rows = [], [], []
             jiaban_pending, qj_pending, gcsqb_pending = [], [], []
             # 用区间重叠查询，解决跨月请假/加班匹配不到的问题

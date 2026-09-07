@@ -277,16 +277,20 @@ class AttendanceDatabase:
             logger.error(f"查询失败: {str(e)}")
             return []
     
-    def get_all_attendance_dates(self, name: str, dept: str) -> List[str]:
-        """获取某个员工的所有打卡日期"""
+    def get_all_attendance_dates(self, name: str, dept: str = None) -> List[str]:
+        """获取某个员工的所有打卡日期。dept 为空时按姓名查（兼容科室变更后的历史记录）。"""
         try:
             sql = """
                 SELECT DISTINCT attendance_date 
                 FROM attendance_records 
-                WHERE employee_name = %s AND department = %s
-                ORDER BY attendance_date
+                WHERE employee_name = %s
             """
-            rows = db.execute_query(sql, (name, dept))
+            params = [name]
+            if dept:
+                sql += " AND department = %s"
+                params.append(dept)
+            sql += " ORDER BY attendance_date"
+            rows = db.execute_query(sql, tuple(params))
             
             # rows 是字典列表，需要提取日期并转为字符串
             dates = []
@@ -400,6 +404,25 @@ class AttendanceDatabase:
             logger.error(f"删除智能建议失败: {str(e)}")
             return 0
 
+    def delete_suggestions_by_name_months(self, keys: list) -> int:
+        """按姓名+年月批量删除建议（不限科室，避免科室变更后残留旧科室建议）。
+        keys: [(name, year, month), ...]"""
+        if not keys:
+            return 0
+        try:
+            conditions = " OR ".join(
+                ["(employee_name = %s AND year = %s AND month = %s)"] * len(keys)
+            )
+            params = []
+            for name, year, month in keys:
+                params.extend([name, year, month])
+            sql = f"DELETE FROM attendance_suggestions WHERE {conditions}"
+            n = db.execute_update(sql, tuple(params))
+            return n if n >= 0 else 0
+        except Exception as e:
+            logger.error(f"按姓名年月批量删除智能建议失败: {str(e)}")
+            return 0
+
     def delete_suggestions_batch(self, keys: list) -> int:
         """批量删除多个人月组合的建议。keys: [(name, dept, year, month), ...]"""
         if not keys:
@@ -454,19 +477,26 @@ class AttendanceDatabase:
             logger.error(f"插入智能建议失败: {str(e)}")
             return 0
 
-    def get_suggestions(self, employee_name: str, department: str, year: int, month: int) -> List[Dict]:
-        """按人、年月查询已存储的智能建议"""
+    def get_suggestions(self, employee_name: str, department: str = None, year: int = None, month: int = None) -> List[Dict]:
+        """按人、年月查询已存储的智能建议。
+        department 为空时按姓名查全部科室（兼容 yggl.lsys 变更后的历史建议），并去重。"""
         try:
             sql = """
                 SELECT DATE(start_time) AS date, day_type AS dayType, message AS suggestion,
                        start_time AS start_time, end_time AS end_time, status AS status
                 FROM attendance_suggestions
-                WHERE employee_name = %s AND department = %s AND year = %s AND month = %s
-                ORDER BY start_time, id
+                WHERE employee_name = %s AND year = %s AND month = %s
             """
-            rows = db.execute_query(sql, (employee_name, department, year, month))
-            return [
-                {
+            params = [employee_name, year, month]
+            if department:
+                sql += " AND department = %s"
+                params.append(department)
+            sql += " ORDER BY start_time, id"
+            rows = db.execute_query(sql, tuple(params))
+            result = []
+            seen = set()
+            for r in rows:
+                item = {
                     "date": str(r.get("date") or ""),
                     "dayType": r.get("dayType") or "",
                     "suggestion": r.get("suggestion") or "",
@@ -474,8 +504,19 @@ class AttendanceDatabase:
                     "end_time": r.get("end_time"),
                     "status": r.get("status") if r.get("status") is not None else 0,
                 }
-                for r in rows
-            ]
+                # 跨科室重复行：按日期+起止时间+文案去重
+                key = (
+                    item["date"],
+                    str(item["start_time"] or ""),
+                    str(item["end_time"] or ""),
+                    item["suggestion"],
+                    item["status"],
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append(item)
+            return result
         except Exception as e:
             logger.error(f"查询智能建议失败: {str(e)}")
             return []

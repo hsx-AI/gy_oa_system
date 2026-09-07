@@ -763,15 +763,15 @@ const initCurrentMonth = () => {
   selectedMonth.value = `${year}-${month}`
 }
 
-// 选择距离当前最近的有考勤记录的月份
+// 选择距离当前最近的有考勤记录的月份（按姓名查，兼容科室变更前历史）
 const initMonthWithLatestData = async () => {
   const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
-  if (!userInfo.name || !userInfo.dept) {
+  if (!userInfo.name) {
     initCurrentMonth()
     return
   }
   try {
-    const res = await getAttendanceDates({ name: userInfo.name, dept: userInfo.dept })
+    const res = await getAttendanceDates({ name: userInfo.name })
     const dates = (res && res.dates) || []
     if (dates.length === 0) {
       initCurrentMonth()
@@ -824,16 +824,15 @@ const overtimeFillTitle = (suggestion) => {
   return '自动填报加班申请'
 }
 
-// 加载智能建议（按选定月份从表读取，上传打卡时已预生成）
+// 加载智能建议（按选定月份从表读取；按姓名查，兼容科室变更前历史）
 const loadSuggestions = async () => {
   try {
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
-    if (!userInfo.name || !userInfo.dept) return
+    if (!userInfo.name) return
     const [year, month] = selectedMonth.value.split('-')
     if (!year || !month) return
     const response = await getSuggestions({
       name: userInfo.name,
-      dept: userInfo.dept,
       year: parseInt(year, 10),
       month: parseInt(month, 10)
     })
@@ -881,7 +880,7 @@ onMounted(async () => {
 // 考勤记录
 const records = ref([])
 
-// 加载考勤记录
+// 加载考勤记录（按姓名+日期范围，兼容科室变更前历史）
 const loadAttendanceRecords = async () => {
   try {
     // 从 localStorage 获取当前登录用户信息
@@ -889,7 +888,7 @@ const loadAttendanceRecords = async () => {
     
     console.log('正在加载考勤记录，用户信息:', userInfo)
     
-    if (!userInfo.name || !userInfo.dept) {
+    if (!userInfo.name) {
       console.error('用户信息不完整')
       return
     }
@@ -906,7 +905,6 @@ const loadAttendanceRecords = async () => {
     
     const response = await queryAttendance({
       name: userInfo.name,
-      dept: userInfo.dept,
       start_date: startDate,
       end_date: endDate
     })
