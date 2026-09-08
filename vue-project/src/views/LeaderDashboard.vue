@@ -339,7 +339,7 @@
             <span>满勤统计</span>
             <span class="section-sub">{{ filterYear }}年{{ filterMonth ? filterMonth + '月' : '全年' }}</span>
           </h2>
-          <p class="section-desc">根据打卡数据识别，考勤异常全部由公出覆盖或无异常即视为满勤。</p>
+          <p class="section-desc">缺勤建议均已处理成绿色，且当月无请假，即视为满勤。</p>
 
           <div v-if="fullAttendance.totalPeople != null" class="full-attendance-content">
             <div class="full-attendance-summary">

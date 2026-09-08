@@ -479,7 +479,7 @@ const reports = computed(() => [
   {
     id: 'full-attendance',
     title: '满勤名单',
-    source: '用于统计满勤情况，注，公出处理时，只有走完了全部审批流程的公出才算满勤',
+    source: '缺勤建议均已处理成绿色且无请假即算满勤；有请假或未处理完则不算',
     group: 'attendance',
     kind: 'leaderMonth',
     canUse: canLeaderExports.value,

@@ -67,6 +67,7 @@ try:
         is_workday,
         calc_suggestion_style_overtime_for_record,
         calc_dashboard_auto_overtime_for_record,
+        _suggestion_handled,
     )
 except Exception:  # pragma: no cover - import fallback for unusual startup order
     collect_valid_times_with_marks = None
@@ -76,6 +77,7 @@ except Exception:  # pragma: no cover - import fallback for unusual startup orde
     is_workday = None
     calc_suggestion_style_overtime_for_record = None
     calc_dashboard_auto_overtime_for_record = None
+    _suggestion_handled = None
 
 logger = logging.getLogger(__name__)
 
@@ -2245,6 +2247,12 @@ def _compute_full_attendance_info(names: List[str], year: int, month: Optional[i
     """
     计算不满勤的人员姓名集合，以及满勤人员各自的公出天数。
 
+    满勤口径（放宽后）：
+      1) 当月/当年所有 status=1 缺勤建议均已「处理完成」(绿色)，判定方式与考勤页一致
+         （允许多段公出拼凑覆盖，不因多余错误公出而误判）；
+      2) 且该时段内不存在请假记录（qjzt IN 0/1/3/4）。
+      有请假，或仍有未处理成绿色的缺勤建议 → 未满勤。
+
     返回 (abnormal_set, gc_days_by_name):
       - abnormal_set: 不满勤人员姓名集合
       - gc_days_by_name: {姓名: 公出天数}，仅包含满勤且有公出的人员
@@ -2253,7 +2261,13 @@ def _compute_full_attendance_info(names: List[str], year: int, month: Optional[i
     if not names:
         return empty
 
+    if _suggestion_handled is None:
+        logger.error("满勤判定依赖 _suggestion_handled 导入失败")
+        return (set(names), {})
+
     if month:
+        month_start = f"{year}-{month:02d}-01"
+        month_end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
         sugg_rows = db.execute_query(
             """SELECT employee_name, start_time, end_time
                FROM attendance_suggestions
@@ -2261,6 +2275,8 @@ def _compute_full_attendance_info(names: List[str], year: int, month: Optional[i
             (year, month)
         )
     else:
+        month_start = f"{year}-01-01"
+        month_end = f"{year + 1}-01-01"
         sugg_rows = db.execute_query(
             """SELECT employee_name, start_time, end_time
                FROM attendance_suggestions
@@ -2268,38 +2284,47 @@ def _compute_full_attendance_info(names: List[str], year: int, month: Optional[i
             (year,)
         )
 
-    if not sugg_rows:
-        return empty
-
     per_person: Dict[str, list] = defaultdict(list)
-    for r in sugg_rows:
+    for r in sugg_rows or []:
         n = (r.get("employee_name") or "").strip()
         if n:
             per_person[n].append(r)
 
-    name_set = set(names)
-    relevant = {n: items for n, items in per_person.items() if n in name_set}
-    if not relevant:
+    name_list = [(n or "").strip() for n in names if (n or "").strip()]
+    if not name_list:
         return empty
 
-    if month:
-        month_start = f"{year}-{month:02d}-01"
-        month_end = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
-    else:
-        month_start = f"{year}-01-01"
-        month_end = f"{year + 1}-01-01"
+    ph = ",".join(["%s"] * len(name_list))
+    leave_names: set = set()
+    qj_by_name: Dict[str, list] = defaultdict(list)
+    gc_by_name: Dict[str, list] = defaultdict(list)
 
-    rel_names = list(relevant.keys())
-    ph = ",".join(["%s"] * len(rel_names))
+    try:
+        leave_rows = db.execute_query(
+            f"SELECT DISTINCT xm FROM qj "
+            f"WHERE xm IN ({ph}) AND qjzt IN (0, 1, 3, 4) "
+            f"AND timefrom < %s AND timeto >= %s",
+            tuple(name_list) + (month_end, month_start),
+        ) or []
+        for r in leave_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                leave_names.add(n)
+    except Exception as e:
+        logger.warning("满勤判定查询请假失败: %s", e)
 
     try:
         qj_rows = db.execute_query(
             f"SELECT xm, timefrom, timeto FROM qj "
             f"WHERE xm IN ({ph}) AND qjzt = 4 AND timefrom < %s AND timeto >= %s",
-            tuple(rel_names) + (month_end, month_start),
-        )
-    except Exception:
-        qj_rows = []
+            tuple(name_list) + (month_end, month_start),
+        ) or []
+        for r in qj_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                qj_by_name[n].append(r)
+    except Exception as e:
+        logger.warning("满勤判定查询已通过请假失败: %s", e)
 
     try:
         gc_rows = db.execute_query(
@@ -2307,42 +2332,47 @@ def _compute_full_attendance_info(names: List[str], year: int, month: Optional[i
             f"WHERE gcr IN ({ph}) AND bldzt = 2 AND szrzt = 2 "
             f"AND (yjcfsj IS NOT NULL OR yjfhsj IS NOT NULL) "
             f"AND COALESCE(yjcfsj, gcsj) < %s AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s",
-            tuple(rel_names) + (month_end, month_start),
-        )
-    except Exception:
-        gc_rows = []
-
-    qj_by_name: Dict[str, list] = defaultdict(list)
-    for r in qj_rows:
-        n = (r.get("xm") or "").strip()
-        if n:
-            qj_by_name[n].append(r)
-
-    gc_by_name: Dict[str, list] = defaultdict(list)
-    for r in gc_rows:
-        n = (r.get("xm") or "").strip()
-        if n:
-            gc_by_name[n].append(r)
+            tuple(name_list) + (month_end, month_start),
+        ) or []
+        for r in gc_rows:
+            n = (r.get("xm") or "").strip()
+            if n:
+                gc_by_name[n].append(r)
+    except Exception as e:
+        logger.warning("满勤判定查询公出失败: %s", e)
 
     abnormal = set()
     gc_dates_by_name: Dict[str, set] = defaultdict(set)
-    for n, items in relevant.items():
+
+    for n in name_list:
+        if n in leave_names:
+            abnormal.add(n)
+            continue
+
         is_abnormal = False
-        for s in items:
-            s_start = _to_comparable_dt(s.get("start_time"))
-            s_end = _to_comparable_dt(s.get("end_time"))
-            if not s_start or not s_end:
+        for s in per_person.get(n, []):
+            s_start = s.get("start_time")
+            s_end = s.get("end_time")
+            # 与考勤页「处理完成/绿色」同一套覆盖判定（支持多段公出拼凑）
+            handled = _suggestion_handled(
+                s_start, s_end, 1,
+                [], qj_by_name.get(n, []), gc_by_name.get(n, []),
+            )
+            if not handled:
                 is_abnormal = True
                 break
-            covered_by_gc = _interval_covered_by(
-                s_start, s_end, gc_by_name.get(n, []),
+            # 公出天数：建议日若能被某条已通过公出整段覆盖则计入
+            s_start_c = _to_comparable_dt(s_start)
+            s_end_c = _to_comparable_dt(s_end)
+            if s_start_c and s_end_c and _interval_covered_by(
+                s_start_c, s_end_c, gc_by_name.get(n, []),
                 lambda r: (r.get("yjcfsj") or r.get("gcsj"), r.get("yjfhsj") or r.get("sjfhtime")),
-            )
-            if covered_by_gc:
-                gc_dates_by_name[n].add(s_start[:10])
-                continue
-            is_abnormal = True
-            break
+            ):
+                gc_dates_by_name[n].add(s_start_c[:10])
+            elif s_start_c and gc_by_name.get(n):
+                # 拼凑覆盖也算有公出处理，按建议日起算 1 天
+                gc_dates_by_name[n].add(s_start_c[:10])
+
         if is_abnormal:
             abnormal.add(n)
 
@@ -2366,7 +2396,7 @@ def get_person_full_attendance(
 ):
     """
     查询指定员工某月是否满勤。
-    满勤 = 当月 status=1 的考勤异常全部由已通过公出覆盖（或无异常）。
+    满勤 = 当月 status=1 缺勤建议均已处理成绿色（与考勤页一致），且当月无请假。
     返回: { success, isFull: bool }
     """
     try:
@@ -2390,7 +2420,8 @@ def get_leader_full_attendance(
 ):
     """
     满勤率：指定月份全员或指定科室的满勤率。
-    满勤 = 当月 status=1 的考勤异常全部由已通过公出覆盖（或无异常）；有请假覆盖或未处理则不满勤。
+    满勤 = 当月 status=1 缺勤建议均已处理成绿色（与考勤页一致），且当月无请假；
+    有请假或仍有未处理建议则不满勤。
     返回: workdays(当月应出勤工作日，仅作参考), totalPeople, fullCount, rate, fullNames(满勤人员姓名),
     byDept(仅当未传lsys时，各科室明细)
     """
@@ -2475,7 +2506,8 @@ def get_leader_full_attendance_export(
     lsys: Optional[str] = Query(None, description="隶属科室，不传则全员")
 ):
     """
-    满勤名单导出：与领导人看板满勤统计同一逻辑（异常全部由公出覆盖仍算满勤，有请假或未处理则不满勤）。
+    满勤名单导出：与领导人看板满勤统计同一逻辑
+    （缺勤建议均已处理成绿色且无请假 → 满勤；有请假或未处理完 → 不满勤）。
     返回 byDept 中每项含 fullNames（满勤人员姓名列表），用于 Excel 等导出。
     """
     try:
@@ -2566,7 +2598,7 @@ def get_leader_full_attendance_year(
 ):
     """
     满勤率（全年）：指定年份全员或指定科室的全年满勤率。
-    全年满勤 = 该年度内 status=1 异常全部由已通过公出覆盖（或无异常）。
+    全年满勤 = 该年度内 status=1 缺勤建议均已处理成绿色，且全年无请假。
     返回: totalPeople, fullCount, rate, fullNames(满勤人员姓名), byDept(仅当未传lsys时)，无 workdays。
     """
     try:
@@ -2646,7 +2678,7 @@ def get_leader_full_attendance_by_month(
 ):
     """
     按月考勤满勤人数：横轴月份，纵轴满勤人数，可筛选科室。
-    满勤 = 当月异常全部由公出覆盖或无异常。返回 12 个月每月的 fullCount、totalPeople。
+    满勤 = 当月缺勤建议均已处理成绿色且无请假。返回 12 个月每月的 fullCount、totalPeople。
     返回: list[{ month, monthLabel, fullCount, totalPeople }]
     """
     try:

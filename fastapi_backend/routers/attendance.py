@@ -1361,6 +1361,85 @@ def _parse_datetime_for_excel(val) -> Optional[datetime]:
     return None
 
 
+def _is_noon_end(dt: Optional[datetime]) -> bool:
+    """结束时间是否为当天 12:00（智能建议午休分段的上午段终点）。"""
+    return dt is not None and dt.hour == 12 and dt.minute == 0 and dt.second == 0
+
+
+def _is_afternoon_start(dt: Optional[datetime]) -> bool:
+    """开始时间是否为当天 13:00（智能建议午休分段的下午段起点）。"""
+    return dt is not None and dt.hour == 13 and dt.minute == 0 and dt.second == 0
+
+
+def _merge_lunch_split_leave_handler_rows(rows: List[dict]) -> List[dict]:
+    """
+    公司系统不支持午休分段：若同一人、同一请假类别存在
+    「…–12:00」与「13:00–…」两段，补上 12:00–13:00 即可连成一整段时，导出前合并为一条。
+    仅影响异常处理表导出，不改动请假/公出原始数据。
+    """
+    if not rows:
+        return rows
+
+    prepared: List[dict] = []
+    for r in rows:
+        dt_start = _parse_datetime_for_excel(r.get("timefrom"))
+        dt_end = _parse_datetime_for_excel(r.get("timeto"))
+        prepared.append({
+            "gh": (r.get("gh") or "").strip(),
+            "xm": (r.get("xm") or "").strip(),
+            "qjfs": (r.get("qjfs") or "").strip(),
+            "timefrom": r.get("timefrom"),
+            "timeto": r.get("timeto"),
+            "_start": dt_start,
+            "_end": dt_end,
+        })
+
+    prepared.sort(
+        key=lambda x: (
+            x["gh"] or x["xm"],
+            x["qjfs"],
+            x["_start"] or datetime.min,
+            x["_end"] or datetime.min,
+        )
+    )
+
+    merged: List[dict] = []
+    for item in prepared:
+        if not merged:
+            merged.append(item)
+            continue
+        prev = merged[-1]
+        same_person = (
+            (prev["gh"] and item["gh"] and prev["gh"] == item["gh"])
+            or (
+                (not prev["gh"] or not item["gh"])
+                and prev["xm"]
+                and item["xm"]
+                and prev["xm"] == item["xm"]
+            )
+        )
+        same_category = prev["qjfs"] == item["qjfs"]
+        can_bridge_lunch = (
+            same_person
+            and same_category
+            and prev["_end"] is not None
+            and item["_start"] is not None
+            and prev["_end"].date() == item["_start"].date()
+            and _is_noon_end(prev["_end"])
+            and _is_afternoon_start(item["_start"])
+        )
+        if can_bridge_lunch:
+            prev["timeto"] = item["timeto"]
+            prev["_end"] = item["_end"]
+            continue
+        merged.append(item)
+
+    for item in merged:
+        item.pop("_start", None)
+        item.pop("_end", None)
+    return merged
+
+
 @router.get("/leave-handler-export")
 def export_leave_handler_table(
     year: int = Query(..., description="年份"),
@@ -1373,6 +1452,8 @@ def export_leave_handler_table(
     D 请假/公出开始时间(DATE TIME) E 实际请假/公出结束时间(DATE TIME) F 请假类别(string)。
     请假走 qj.qjfs；公出走 gcsqb.gclx（市内公出/境内公出/境外公出），gclx 为空时默认「境内公出」。
     数据来源：qj 表（已通过 qjzt=4 + 审核中 qjzt IN(0,1,3)）+ gcsqb 表（已通过+审核中，排除驳回 bldzt/szrzt=22）。
+    导出前：同一人、同一请假类别若存在「…–12:00」与「13:00–…」两段（智能建议午休分段），
+    补上 12:00–13:00 可连成一整段时合并为一条，以适配公司系统不支持午休分段的要求。
     """
     import calendar
     allowed, _, _, _ = _can_see_attendance_exceptions(current_user or "")
@@ -1478,6 +1559,10 @@ def export_leave_handler_table(
                         "qjfs": "三八节",
                     })
                 rows.sort(key=lambda x: (_parse_datetime_for_excel(x.get("timefrom")) or datetime.min, (x.get("xm") or "")))
+
+        # 公司系统不支持午休分段：导出前把「…–12:00」+「13:00–…」可拼接的同人同类别记录合并
+        rows = _merge_lunch_split_leave_handler_rows(rows)
+        rows.sort(key=lambda x: (_parse_datetime_for_excel(x.get("timefrom")) or datetime.min, (x.get("xm") or "")))
 
         wb = Workbook()
         ws = wb.active
