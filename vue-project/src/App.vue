@@ -268,6 +268,13 @@
             </svg>
             <span>系统管理员</span>
           </router-link>
+          <router-link v-if="canAccessDbManager" to="/admin/travel-itinerary" class="sidebar-item" active-class="sidebar-item-active">
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 17l6-6 4 4 8-8" />
+              <path d="M14 7h7v7" />
+            </svg>
+            <span>差旅行程明细</span>
+          </router-link>
           <router-link v-if="canShowAccessDashboard" to="/admin/access-dashboard" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v18h18"/><path d="m7 15 4-4 3 3 5-7"/></svg>
             <span>系统访问看板</span>
@@ -1368,6 +1375,7 @@ const sidebarMenuCatalog = computed(() => {
   add({ label: '换休票管理', group: '统计与管理', to: '/admin/hxp-manage', visible: canManageHxp.value, keywords: ['换休', '休票'] })
   add({ label: '数据库表管理', group: '统计与管理', to: '/admin/db-manager', visible: canAccessDbManager.value, keywords: ['数据库'] })
   add({ label: '系统管理员', group: '统计与管理', to: '/admin/health-monitor', visible: canAccessDbManager.value, keywords: ['系统', '配置', '监控'] })
+  add({ label: '差旅行程明细', group: '统计与管理', to: '/admin/travel-itinerary', visible: canAccessDbManager.value, keywords: ['差旅', '行程', '哈尔滨'] })
   add({ label: '系统访问看板', group: '统计与管理', to: '/admin/access-dashboard', visible: canShowAccessDashboard.value, keywords: ['访问', '看板'] })
   add({ label: '主表批量填充', group: '统计与管理', to: '/admin/yggl-fill', visible: canAccessDbManager.value, keywords: ['批量', '填充'] })
   add({ label: '邮件发送', group: '统计与管理', to: '/admin/email', visible: canAccessDbManager.value, keywords: ['邮件'] })

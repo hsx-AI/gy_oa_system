@@ -29,6 +29,20 @@
         <section class="card admin-config-card">
           <div class="config-card-head">
             <div>
+              <h2 class="section-title">差旅行程明细查询</h2>
+              <p class="section-desc">
+                查看公网 pusher 推送的「离开哈尔滨 / 到达哈尔滨」差旅明细。单据编号唯一；状态为「完成」的单据入库后不再更新。
+              </p>
+            </div>
+            <div class="config-actions">
+              <router-link to="/admin/travel-itinerary" class="btn btn-primary btn-sm">打开查询页</router-link>
+            </div>
+          </div>
+        </section>
+
+        <section class="card admin-config-card">
+          <div class="config-card-head">
+            <div>
               <h2 class="section-title">经理层公用邮箱配置</h2>
               <p class="section-desc">
                 配置经理、副经理和经理助理共用的重要邮件邮箱。系统会同步收件箱全部新邮件，并由 AI 自动筛选、提取待办任务。

@@ -74,7 +74,25 @@ def push_data(req: PushDataRequest):
         "updated_at": _now_text(),
     }
     _save_store(store)
-    return {"success": True, "status": "ok", "key": cache_key, "time": _now_text()}
+
+    # 差旅行程报表：同步写入独立业务表（单据编号去重，「完成」不再更新）
+    ingest_stats = None
+    if (req.type or "").strip() == "report" and (req.key or "").strip() in (
+        "arrival_harbin",
+        "departure_harbin",
+    ):
+        try:
+            from routers.travel_itinerary import ingest_pushed_report
+
+            ingest_stats = ingest_pushed_report((req.key or "").strip(), req.data)
+        except Exception as exc:
+            # 缓存已写入成功；入库失败不阻断推送，避免公网 pusher 反复失败
+            ingest_stats = {"error": str(exc)[:200]}
+
+    resp = {"success": True, "status": "ok", "key": cache_key, "time": _now_text()}
+    if ingest_stats is not None:
+        resp["travelIngest"] = ingest_stats
+    return resp
 
 
 @router.post("/push/media")

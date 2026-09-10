@@ -219,6 +219,12 @@ const routes = [
     meta: { title: '系统管理员' }
   },
   {
+    path: '/admin/travel-itinerary',
+    name: 'TravelItinerary',
+    component: () => import('../views/admin/TravelItinerary.vue'),
+    meta: { title: '差旅行程明细查询' }
+  },
+  {
     path: '/admin/access-dashboard',
     name: 'AccessDashboard',
     component: () => import('../views/admin/AccessDashboard.vue'),
@@ -788,7 +794,7 @@ router.beforeEach(async (to, _from, next) => {
     }
     return
   }
-  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
+  if (to.path === '/admin/db-manager' || to.path === '/admin/health-monitor' || to.path === '/admin/travel-itinerary' || to.path === '/admin/yggl-fill' || to.path === '/admin/email' || to.path === '/admin/notification') {
     try {
       const raw = localStorage.getItem('userInfo')
       if (!raw) {

@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "../../personnel-archive-system"
+		},
+		{
+			"path": "../../pusher"
 		}
 	],
 	"settings": {}
