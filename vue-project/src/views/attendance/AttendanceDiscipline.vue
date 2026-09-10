@@ -4,7 +4,7 @@
       <div class="header-content">
         <div class="header-info">
           <h1 class="header-title">考勤纪律审查</h1>
-          <p class="header-subtitle">基于打卡数据检测踩点上班与踩点下班。假期值班核查请从侧边栏「排班管理」内的「值班出勤核查」进入。</p>
+          <p class="header-subtitle">基于打卡数据检测踩点上班与踩点下班；并核查差旅行程离哈前 / 返哈后空缺的工作小时。假期值班核查请从侧边栏「排班管理」内的「值班出勤核查」进入。</p>
         </div>
         <router-link to="/leader-dashboard" class="btn btn-back">
           <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -238,6 +238,7 @@
       </div>
 
       <HolidayDutySection :external-lsys-list="lsysList" />
+      <TravelGapSection :external-lsys-list="lsysList" />
     </div>
 
     <!-- ====== 个人打卡散点图弹窗 ====== -->
@@ -326,6 +327,7 @@
 import { ref, computed, onMounted } from 'vue'
 import VChart from 'vue-echarts'
 import HolidayDutySection from '@/components/attendance/HolidayDutySection.vue'
+import TravelGapSection from '@/components/attendance/TravelGapSection.vue'
 import {
   getStatisticsPermission,
   getDeptLsysList,

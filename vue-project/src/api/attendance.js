@@ -873,6 +873,27 @@ export function exportHolidayDutyAttendanceCheck(params) {
   })
 }
 
+/** 差旅行程空缺核查：离哈前最近打卡 / 返哈后首次打卡，按标准工时累计空缺小时 */
+export function getTravelGapCheck(params) {
+  const name = currentUserNameForDiscipline()
+  return request({
+    url: '/discipline/travel-gap-check',
+    method: 'get',
+    params: { ...params, name },
+  })
+}
+
+/** 导出差旅行程空缺核查 */
+export function exportTravelGapCheck(params) {
+  const name = currentUserNameForDiscipline()
+  return request({
+    url: '/discipline/travel-gap-check/export',
+    method: 'get',
+    params: { ...params, name },
+    responseType: 'blob',
+  })
+}
+
 /** 个人打卡散点图数据：逐日上班/下班时间 */
 export function getPersonScatterData(params) {
   return request({ url: '/discipline/person-scatter', method: 'get', params })

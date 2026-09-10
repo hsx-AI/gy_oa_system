@@ -3812,6 +3812,714 @@ async def export_holiday_duty_attendance(
     )
 
 
+# ============================================================
+# 差旅行程空缺核查（离哈前 / 返哈后 · 工作小时）
+# ============================================================
+
+_TRAVEL_GAP_AM = ((8, 0), (12, 0))
+_TRAVEL_GAP_PM = ((13, 0), (17, 0))
+
+
+def _count_gap_work_hours(
+    t_start: datetime,
+    t_end: datetime,
+    non_workdays: set,
+) -> float:
+    """
+    统计 (t_start, t_end) 之间与标准工作时段的重叠小时数。
+    工作时段：工作日 08:00-12:00、13:00-17:00（每天最多 8 小时）；
+    周末/法定假日不计，调休上班日计。
+    """
+    segs = _gap_work_segments(t_start, t_end, non_workdays)
+    total_seconds = sum((hi - lo).total_seconds() for lo, hi in segs)
+    return round(total_seconds / 3600.0, 1)
+
+
+def _gap_work_segments(
+    t_start: datetime,
+    t_end: datetime,
+    non_workdays: set,
+) -> List[Tuple[datetime, datetime]]:
+    """Return work-hour segments overlapping (t_start, t_end)."""
+    from datetime import timedelta, time as dtime
+
+    if not t_start or not t_end or t_end <= t_start:
+        return []
+    specs = [
+        (dtime(*_TRAVEL_GAP_AM[0]), dtime(*_TRAVEL_GAP_AM[1])),
+        (dtime(*_TRAVEL_GAP_PM[0]), dtime(*_TRAVEL_GAP_PM[1])),
+    ]
+    out: List[Tuple[datetime, datetime]] = []
+    cur = t_start.date()
+    end_d = t_end.date()
+    one = timedelta(days=1)
+    while cur <= end_d:
+        ds = cur.strftime("%Y-%m-%d")
+        if ds not in non_workdays:
+            for hs, he in specs:
+                seg_start = datetime.combine(cur, hs)
+                seg_end = datetime.combine(cur, he)
+                lo = max(seg_start, t_start)
+                hi = min(seg_end, t_end)
+                if hi > lo:
+                    out.append((lo, hi))
+        cur += one
+    return out
+
+
+def _as_datetime_val(v) -> Optional[datetime]:
+    if v is None:
+        return None
+    if isinstance(v, datetime):
+        return v
+    if isinstance(v, date):
+        return datetime.combine(v, datetime.min.time())
+    s = str(v).strip().replace("T", " ")
+    if not s:
+        return None
+    for fmt, n in (("%Y-%m-%d %H:%M:%S", 19), ("%Y-%m-%d %H:%M", 16), ("%Y-%m-%d", 10)):
+        try:
+            return datetime.strptime(s[:n], fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def _merge_dt_intervals(
+    intervals: List[Tuple[datetime, datetime]],
+) -> List[Tuple[datetime, datetime]]:
+    if not intervals:
+        return []
+    items = sorted((a, b) for a, b in intervals if a and b and b > a)
+    if not items:
+        return []
+    merged = [items[0]]
+    for a, b in items[1:]:
+        la, lb = merged[-1]
+        if a <= lb:
+            merged[-1] = (la, max(lb, b))
+        else:
+            merged.append((a, b))
+    return merged
+
+
+def _covered_work_hours_detail(
+    t_start: datetime,
+    t_end: datetime,
+    cover_intervals: List[Tuple[datetime, datetime]],
+    non_workdays: set,
+) -> Tuple[float, float]:
+    """
+    Return (covered_hours, uncovered_hours) for work segments inside gap,
+    against merged leave/city-trip cover intervals.
+    """
+    segs = _gap_work_segments(t_start, t_end, non_workdays)
+    if not segs:
+        return 0.0, 0.0
+    covers = _merge_dt_intervals(cover_intervals)
+    covered_sec = 0.0
+    total_sec = 0.0
+    for seg_s, seg_e in segs:
+        total_sec += (seg_e - seg_s).total_seconds()
+        for c_s, c_e in covers:
+            lo = max(seg_s, c_s)
+            hi = min(seg_e, c_e)
+            if hi > lo:
+                covered_sec += (hi - lo).total_seconds()
+    covered_h = round(covered_sec / 3600.0, 1)
+    total_h = round(total_sec / 3600.0, 1)
+    uncovered_h = round(max(0.0, total_h - covered_h), 1)
+    return covered_h, uncovered_h
+
+
+def _analyze_gap_leave_city_cover(
+    person: str,
+    t_start: Optional[datetime],
+    t_end: Optional[datetime],
+    leave_by_name: Dict[str, List[dict]],
+    city_by_name: Dict[str, List[dict]],
+    non_workdays: set,
+) -> dict:
+    """Check whether gap work hours are covered by approved leave / city trip."""
+    empty = {
+        "coverStatus": "",
+        "coverStatusText": "-",
+        "coveredHours": None,
+        "uncoveredHours": None,
+        "coverDetail": "",
+        "coverSources": [],
+    }
+    if not t_start or not t_end or t_end <= t_start:
+        return empty
+
+    gap_h = _count_gap_work_hours(t_start, t_end, non_workdays)
+    if gap_h <= 0:
+        return {
+            "coverStatus": "none_needed",
+            "coverStatusText": "无空缺",
+            "coveredHours": 0.0,
+            "uncoveredHours": 0.0,
+            "coverDetail": "",
+            "coverSources": [],
+        }
+
+    hits: List[dict] = []
+    intervals: List[Tuple[datetime, datetime]] = []
+
+    for row in leave_by_name.get(person) or []:
+        s = _as_datetime_val(row.get("timefrom"))
+        e = _as_datetime_val(row.get("timeto"))
+        if not s or not e:
+            continue
+        if s < t_end and e > t_start:
+            intervals.append((s, e))
+            qjfs = (row.get("qjfs") or "").strip() or "请假"
+            hits.append({
+                "type": "leave",
+                "typeText": "请假",
+                "label": qjfs,
+                "start": _fmt_dt(s),
+                "end": _fmt_dt(e),
+            })
+
+    for row in city_by_name.get(person) or []:
+        s = _as_datetime_val(row.get("start_dt"))
+        e = _as_datetime_val(row.get("end_dt"))
+        if not s or not e:
+            continue
+        if s < t_end and e > t_start:
+            intervals.append((s, e))
+            hits.append({
+                "type": "city_trip",
+                "typeText": "市内公出",
+                "label": "市内公出",
+                "start": _fmt_dt(s),
+                "end": _fmt_dt(e),
+            })
+
+    covered_h, uncovered_h = _covered_work_hours_detail(
+        t_start, t_end, intervals, non_workdays
+    )
+    # 容忍浮点误差：覆盖小时达到空缺小时即视为已覆盖
+    if covered_h + 0.05 >= gap_h:
+        status, text = "full", "已覆盖"
+        uncovered_h = 0.0
+        covered_h = gap_h
+    elif covered_h > 0:
+        status, text = "partial", "部分覆盖"
+    else:
+        status, text = "none", "未覆盖"
+
+    detail_parts = []
+    for h in hits[:8]:
+        detail_parts.append(
+            f"{h['typeText']}({h['label']}) {h['start'] or ''}~{h['end'] or ''}"
+        )
+    if len(hits) > 8:
+        detail_parts.append(f"...共{len(hits)}条")
+
+    return {
+        "coverStatus": status,
+        "coverStatusText": text,
+        "coveredHours": covered_h,
+        "uncoveredHours": uncovered_h,
+        "coverDetail": "；".join(detail_parts),
+        "coverSources": hits,
+    }
+
+
+def _attendance_row_punch_datetimes(row: dict) -> List[datetime]:
+    """Expand one attendance_records row into punch datetimes (date + time_1..time_10)."""
+    from datetime import time as dtime
+
+    ad = row.get("attendance_date")
+    if isinstance(ad, datetime):
+        base_d = ad.date()
+    elif isinstance(ad, date):
+        base_d = ad
+    else:
+        try:
+            base_d = datetime.strptime(str(ad)[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return []
+    out: List[datetime] = []
+    for i in range(1, 11):
+        t = _parse_time_str(row.get(f"time_{i}"))
+        if not t:
+            continue
+        try:
+            hh, mm, ss = [int(x) for x in t.split(":")[:3]]
+            out.append(datetime.combine(base_d, dtime(hour=hh, minute=mm, second=ss)))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def _find_prev_punch(punches: List[datetime], node: datetime) -> Optional[datetime]:
+    """Latest punch strictly before node."""
+    prev = None
+    for p in punches:
+        if p < node:
+            prev = p
+        else:
+            break
+    return prev
+
+
+def _find_next_punch(punches: List[datetime], node: datetime) -> Optional[datetime]:
+    """Earliest punch strictly after node."""
+    for p in punches:
+        if p > node:
+            return p
+    return None
+
+
+def _fmt_dt(v: Optional[datetime]) -> Optional[str]:
+    return v.strftime("%Y-%m-%d %H:%M:%S") if v else None
+
+
+def _build_travel_gap_check(
+    start_date: str,
+    end_date: str,
+    lsys: Optional[str] = None,
+    min_hours: float = 0,
+) -> dict:
+    """Core travel gap check used by API and export."""
+    from datetime import timedelta, time as dtime
+    from routers.travel_itinerary import TABLE_DEPARTURE, TABLE_ARRIVAL
+
+    d0 = datetime.strptime(str(start_date)[:10], "%Y-%m-%d").date()
+    d1 = datetime.strptime(str(end_date)[:10], "%Y-%m-%d").date()
+    if d1 < d0:
+        raise HTTPException(status_code=400, detail="结束日期不能早于开始日期")
+    # 差旅核查常跨自然年；允许约 3 年窗口（含首尾日）
+    if (d1 - d0).days > 1095:
+        raise HTTPException(status_code=400, detail="单次最多查询约 3 年（1096 天）")
+
+    try:
+        min_h = max(0.0, float(min_hours or 0))
+    except (TypeError, ValueError):
+        min_h = 0.0
+
+    punch_lo = (d0 - timedelta(days=120)).strftime("%Y-%m-%d")
+    punch_hi = (d1 + timedelta(days=120)).strftime("%Y-%m-%d")
+    holiday_lo = punch_lo
+    holiday_hi = punch_hi
+    non_workdays = _load_non_workday_set(holiday_lo, holiday_hi)
+
+    leave_node_tod = dtime(8, 0, 0)
+    return_node_tod = dtime(17, 0, 0)
+
+    dept_filter_sql = ""
+    dept_params: list = []
+    if lsys and str(lsys).strip():
+        dept_filter_sql = " AND TRIM(y.lsys) = %s"
+        dept_params.append(str(lsys).strip())
+
+    def _load_trips(table: str, date_col: str) -> List[dict]:
+        sql = f"""
+            SELECT
+                t.bill_no,
+                TRIM(t.reimbursed_by) AS person_name,
+                TRIM(COALESCE(t.account_dept, '')) AS account_dept,
+                TRIM(COALESCE(y.lsys, '')) AS dept,
+                TRIM(COALESCE(t.depart_city, '')) AS depart_city,
+                TRIM(COALESCE(t.arrive_city, '')) AS arrive_city,
+                t.depart_date,
+                t.arrive_date,
+                t.leave_date,
+                TRIM(COALESCE(t.bill_status, '')) AS bill_status
+            FROM `{table}` t
+            LEFT JOIN yggl y
+                ON TRIM(y.name) = TRIM(t.reimbursed_by)
+               AND COALESCE(y.zaizhi, 0) = 0
+               AND RIGHT(TRIM(y.name), 1) != '1'
+               AND RIGHT(TRIM(COALESCE(y.lsys, '')), 1) != '1'
+               AND TRIM(COALESCE(y.lsys, '')) NOT IN ('其他部门员工','其他部门成员')
+            WHERE t.{date_col} IS NOT NULL
+              AND t.{date_col} >= %s
+              AND t.{date_col} <= %s
+              AND TRIM(COALESCE(t.reimbursed_by, '')) != ''
+              {dept_filter_sql}
+            ORDER BY t.{date_col}, t.reimbursed_by, t.bill_no
+        """
+        params = [d0.strftime("%Y-%m-%d"), d1.strftime("%Y-%m-%d")] + dept_params
+        return db.execute_query(sql, tuple(params)) or []
+
+    dep_trips = _load_trips(TABLE_DEPARTURE, "depart_date")
+    arr_trips = _load_trips(TABLE_ARRIVAL, "arrive_date")
+
+    names = sorted({
+        (r.get("person_name") or "").strip()
+        for r in (dep_trips + arr_trips)
+        if (r.get("person_name") or "").strip()
+    })
+    punches_by_name: Dict[str, List[datetime]] = {n: [] for n in names}
+    if names:
+        # Chunk IN clause to avoid oversized SQL
+        chunk = 200
+        for i in range(0, len(names), chunk):
+            part = names[i:i + chunk]
+            placeholders = ",".join(["%s"] * len(part))
+            sql = f"""
+                SELECT employee_name, attendance_date,
+                       time_1, time_2, time_3, time_4, time_5,
+                       time_6, time_7, time_8, time_9, time_10
+                FROM attendance_records
+                WHERE attendance_date >= %s
+                  AND attendance_date <= %s
+                  AND TRIM(employee_name) IN ({placeholders})
+            """
+            rows = db.execute_query(sql, tuple([punch_lo, punch_hi] + part)) or []
+            for row in rows:
+                n = (row.get("employee_name") or "").strip()
+                if n not in punches_by_name:
+                    continue
+                punches_by_name[n].extend(_attendance_row_punch_datetimes(row))
+        for n in punches_by_name:
+            punches_by_name[n].sort()
+
+    # 已通过请假 / 市内公出（按人缓存，用于空缺时段覆盖核查）
+    leave_by_name: Dict[str, List[dict]] = {n: [] for n in names}
+    city_by_name: Dict[str, List[dict]] = {n: [] for n in names}
+    if names:
+        chunk = 200
+        for i in range(0, len(names), chunk):
+            part = names[i:i + chunk]
+            placeholders = ",".join(["%s"] * len(part))
+            qj_sql = f"""
+                SELECT TRIM(xm) AS person_name, timefrom, timeto, qjfs
+                FROM qj
+                WHERE qjzt = 4
+                  AND TRIM(xm) IN ({placeholders})
+                  AND timefrom < %s
+                  AND timeto >= %s
+            """
+            qj_rows = db.execute_query(
+                qj_sql, tuple(part + [punch_hi + " 23:59:59", punch_lo + " 00:00:00"])
+            ) or []
+            for row in qj_rows:
+                n = (row.get("person_name") or "").strip()
+                if n in leave_by_name:
+                    leave_by_name[n].append(row)
+
+            gc_sql = f"""
+                SELECT TRIM(gcr) AS person_name,
+                       COALESCE(yjcfsj, gcsj) AS start_dt,
+                       COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) AS end_dt,
+                       gclx
+                FROM gcsqb
+                WHERE bldzt = 2 AND szrzt = 2
+                  AND TRIM(COALESCE(gclx, '')) = %s
+                  AND TRIM(gcr) IN ({placeholders})
+                  AND COALESCE(yjcfsj, gcsj) < %s
+                  AND COALESCE(yjfhsj, sjfhtime, yjcfsj, gcsj) >= %s
+            """
+            gc_rows = db.execute_query(
+                gc_sql,
+                tuple(["市内公出"] + part + [punch_hi + " 23:59:59", punch_lo + " 00:00:00"]),
+            ) or []
+            for row in gc_rows:
+                n = (row.get("person_name") or "").strip()
+                if n in city_by_name:
+                    city_by_name[n].append(row)
+
+    def _as_date(v) -> Optional[date]:
+        if v is None:
+            return None
+        if isinstance(v, datetime):
+            return v.date()
+        if isinstance(v, date):
+            return v
+        try:
+            return datetime.strptime(str(v)[:10], "%Y-%m-%d").date()
+        except (TypeError, ValueError):
+            return None
+
+    def _row_with_cover(base: dict, gap_start, gap_end) -> dict:
+        cover = _analyze_gap_leave_city_cover(
+            base["name"], gap_start, gap_end, leave_by_name, city_by_name, non_workdays
+        )
+        base.update(cover)
+        return base
+
+    departure_rows: List[dict] = []
+    arrival_rows: List[dict] = []
+
+    for trip in dep_trips:
+        name = (trip.get("person_name") or "").strip()
+        event_d = _as_date(trip.get("depart_date"))
+        node = datetime.combine(event_d, leave_node_tod) if event_d else None
+        punches = punches_by_name.get(name) or []
+        prev = _find_prev_punch(punches, node) if node else None
+        gap = _count_gap_work_hours(prev, node, non_workdays) if (prev and node) else None
+        remark = ""
+        if not event_d:
+            remark = "缺少离哈日期"
+        elif not punches:
+            remark = "无匹配打卡记录"
+        elif not prev:
+            remark = "离哈前未找到打卡"
+        if gap is not None and gap < min_h:
+            continue
+        departure_rows.append(_row_with_cover({
+            "checkType": "departure",
+            "checkTypeText": "离哈前空缺",
+            "billNo": trip.get("bill_no") or "",
+            "name": name,
+            "dept": (trip.get("dept") or trip.get("account_dept") or "").strip(),
+            "accountDept": (trip.get("account_dept") or "").strip(),
+            "departCity": (trip.get("depart_city") or "").strip(),
+            "arriveCity": (trip.get("arrive_city") or "").strip(),
+            "eventDate": event_d.strftime("%Y-%m-%d") if event_d else "",
+            "eventNode": _fmt_dt(node),
+            "anchorPunch": _fmt_dt(prev),
+            "gapHours": gap if gap is not None else None,
+            "gapWorkDays": round(gap / 8.0, 2) if gap is not None else None,
+            "billStatus": (trip.get("bill_status") or "").strip(),
+            "remark": remark,
+        }, prev, node))
+
+    for trip in arr_trips:
+        name = (trip.get("person_name") or "").strip()
+        event_d = _as_date(trip.get("arrive_date"))
+        node = datetime.combine(event_d, return_node_tod) if event_d else None
+        punches = punches_by_name.get(name) or []
+        nxt = _find_next_punch(punches, node) if node else None
+        gap = _count_gap_work_hours(node, nxt, non_workdays) if (node and nxt) else None
+        remark = ""
+        if not event_d:
+            remark = "缺少返哈日期"
+        elif not punches:
+            remark = "无匹配打卡记录"
+        elif not nxt:
+            remark = "返哈后未找到打卡"
+        if gap is not None and gap < min_h:
+            continue
+        arrival_rows.append(_row_with_cover({
+            "checkType": "arrival",
+            "checkTypeText": "返哈后空缺",
+            "billNo": trip.get("bill_no") or "",
+            "name": name,
+            "dept": (trip.get("dept") or trip.get("account_dept") or "").strip(),
+            "accountDept": (trip.get("account_dept") or "").strip(),
+            "departCity": (trip.get("depart_city") or "").strip(),
+            "arriveCity": (trip.get("arrive_city") or "").strip(),
+            "eventDate": event_d.strftime("%Y-%m-%d") if event_d else "",
+            "eventNode": _fmt_dt(node),
+            "anchorPunch": _fmt_dt(nxt),
+            "gapHours": gap if gap is not None else None,
+            "gapWorkDays": round(gap / 8.0, 2) if gap is not None else None,
+            "billStatus": (trip.get("bill_status") or "").strip(),
+            "remark": remark,
+        }, node, nxt))
+
+    # 可疑：仍有未覆盖空缺小时，或无法计算空缺
+    def _suspicious(rows: List[dict]) -> int:
+        n = 0
+        for r in rows:
+            u = r.get("uncoveredHours")
+            if isinstance(u, (int, float)) and u > 0:
+                n += 1
+            elif r.get("gapHours") is None and (r.get("remark") or ""):
+                n += 1
+        return n
+
+    all_rows = departure_rows + arrival_rows
+    all_rows.sort(
+        key=lambda r: (
+            -(r.get("uncoveredHours") if isinstance(r.get("uncoveredHours"), (int, float)) else -1),
+            -(r.get("gapHours") if isinstance(r.get("gapHours"), (int, float)) else -1),
+            r.get("eventDate") or "",
+            r.get("name") or "",
+            r.get("billNo") or "",
+        )
+    )
+
+    return {
+        "success": True,
+        "startDate": d0.strftime("%Y-%m-%d"),
+        "endDate": d1.strftime("%Y-%m-%d"),
+        "lsys": (lsys or "").strip(),
+        "minHours": min_h,
+        "rules": {
+            "workAm": "08:00-12:00",
+            "workPm": "13:00-17:00",
+            "leaveNode": "离哈日 08:00",
+            "returnNode": "返哈日 17:00",
+            "holiday": "周末+法定假日不计，调休上班日计",
+            "unit": "工作小时（与标准工时重叠累计）",
+            "cover": "空缺工时是否被已通过请假或市内公出覆盖",
+        },
+        "summary": {
+            "departureTrips": len(departure_rows),
+            "arrivalTrips": len(arrival_rows),
+            "departureSuspicious": _suspicious(departure_rows),
+            "arrivalSuspicious": _suspicious(arrival_rows),
+            "totalSuspicious": _suspicious(all_rows),
+            "maxGapHours": max(
+                (float(r["gapHours"]) for r in all_rows if isinstance(r.get("gapHours"), (int, float))),
+                default=0.0,
+            ),
+            "maxUncoveredHours": max(
+                (float(r["uncoveredHours"]) for r in all_rows if isinstance(r.get("uncoveredHours"), (int, float))),
+                default=0.0,
+            ),
+            "fullyCovered": sum(1 for r in all_rows if r.get("coverStatus") == "full"),
+            "partialCovered": sum(1 for r in all_rows if r.get("coverStatus") == "partial"),
+            "uncovered": sum(1 for r in all_rows if r.get("coverStatus") == "none"),
+        },
+        "rows": all_rows,
+        "departureRows": departure_rows,
+        "arrivalRows": arrival_rows,
+    }
+
+
+@router.get("/discipline/travel-gap-check")
+def get_travel_gap_check(
+    name: str = Query(..., description="当前登录用户姓名，用于鉴权"),
+    start_date: str = Query(..., description="行程事件日起 YYYY-MM-DD"),
+    end_date: str = Query(..., description="行程事件日止 YYYY-MM-DD"),
+    lsys: Optional[str] = Query(None, description="科室过滤（yggl.lsys）"),
+    min_hours: float = Query(0, description="仅返回空缺工作小时 >= 该值的记录；0 表示全部"),
+):
+    """
+    差旅行程空缺核查：
+    - 离哈：报销人姓名映射打卡，取离哈日 08:00 前最近一次打卡，按标准工时累计中间空缺小时；
+    - 返哈：取返哈日 17:00 后第一次打卡，按标准工时累计中间空缺小时。
+    工时口径：工作日 08:00-12:00、13:00-17:00；节假日口径与系统 holiday 表一致。
+    """
+    try:
+        if not _can_access_holiday_duty_attendance(name):
+            raise HTTPException(status_code=403, detail="无差旅行程空缺核查权限")
+        try:
+            datetime.strptime(str(start_date)[:10], "%Y-%m-%d")
+            datetime.strptime(str(end_date)[:10], "%Y-%m-%d")
+        except ValueError:
+            raise HTTPException(status_code=400, detail="日期格式应为 YYYY-MM-DD")
+        return _build_travel_gap_check(start_date, end_date, lsys, min_hours)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"差旅行程空缺核查失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/discipline/travel-gap-check/export")
+def export_travel_gap_check(
+    name: str = Query(..., description="当前登录用户姓名，用于鉴权"),
+    start_date: str = Query(..., description="行程事件日起 YYYY-MM-DD"),
+    end_date: str = Query(..., description="行程事件日止 YYYY-MM-DD"),
+    lsys: Optional[str] = Query(None, description="科室过滤（yggl.lsys）"),
+    min_hours: float = Query(0, description="仅导出空缺工作小时 >= 该值的记录"),
+):
+    """导出差旅行程空缺核查结果。"""
+    try:
+        if not _can_access_holiday_duty_attendance(name):
+            raise HTTPException(status_code=403, detail="无差旅行程空缺核查权限")
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, Alignment, PatternFill, Border, Side
+        from openpyxl.utils import get_column_letter
+    except HTTPException:
+        raise
+    except Exception:
+        raise HTTPException(status_code=500, detail="服务端未安装 openpyxl，无法导出")
+
+    try:
+        data = _build_travel_gap_check(start_date, end_date, lsys, min_hours)
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"差旅行程空缺核查导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+    wb = Workbook()
+    header_fill = PatternFill("solid", fgColor="E5E7EB")
+    title_fill = PatternFill("solid", fgColor="DBEAFE")
+    thin = Side(style="thin", color="D1D5DB")
+    border = Border(left=thin, right=thin, top=thin, bottom=thin)
+    title_font = Font(name="Microsoft YaHei", size=14, bold=True, color="1F2937")
+    header_font = Font(name="Microsoft YaHei", size=10, bold=True, color="111827")
+    body_font = Font(name="Microsoft YaHei", size=10, color="111827")
+    center = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    scope_name = (lsys or "全部科室").strip()
+    title = f"{scope_name} {data.get('startDate')} 至 {data.get('endDate')} 差旅行程空缺核查"
+
+    headers = [
+        "核查类型", "单据编号", "姓名", "科室", "报账部门",
+        "出发城市", "到达城市", "事件日期", "事件节点", "对照打卡",
+        "空缺小时", "折合工作日",
+        "请假/市内公出", "已覆盖小时", "未覆盖小时", "覆盖明细",
+        "单据状态", "备注",
+    ]
+
+    def _write_sheet(ws, rows):
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=len(headers))
+        ws.cell(1, 1, title)
+        ws.append([])
+        ws.append(headers)
+        for item in rows:
+            ws.append([
+                item.get("checkTypeText", ""),
+                item.get("billNo", ""),
+                item.get("name", ""),
+                item.get("dept", ""),
+                item.get("accountDept", ""),
+                item.get("departCity", ""),
+                item.get("arriveCity", ""),
+                item.get("eventDate", ""),
+                item.get("eventNode", ""),
+                item.get("anchorPunch", ""),
+                item.get("gapHours") if item.get("gapHours") is not None else "",
+                item.get("gapWorkDays") if item.get("gapWorkDays") is not None else "",
+                item.get("coverStatusText", ""),
+                item.get("coveredHours") if item.get("coveredHours") is not None else "",
+                item.get("uncoveredHours") if item.get("uncoveredHours") is not None else "",
+                item.get("coverDetail", ""),
+                item.get("billStatus", ""),
+                item.get("remark", ""),
+            ])
+        for row in ws.iter_rows():
+            for cell in row:
+                cell.border = border
+                cell.alignment = center
+                cell.font = body_font
+        for cell in ws[1]:
+            cell.font = title_font
+            cell.fill = title_fill
+        for cell in ws[3]:
+            cell.font = header_font
+            cell.fill = header_fill
+        for col in range(1, ws.max_column + 1):
+            max_len = 10
+            for row in range(1, ws.max_row + 1):
+                v = ws.cell(row=row, column=col).value
+                if v is not None:
+                    max_len = max(max_len, min(len(str(v)) + 2, 40))
+            ws.column_dimensions[get_column_letter(col)].width = max_len
+        ws.freeze_panes = "A4"
+
+    ws_all = wb.active
+    ws_all.title = "全部"
+    _write_sheet(ws_all, data.get("rows") or [])
+
+    ws_dep = wb.create_sheet("离哈前空缺")
+    _write_sheet(ws_dep, data.get("departureRows") or [])
+
+    ws_arr = wb.create_sheet("返哈后空缺")
+    _write_sheet(ws_arr, data.get("arrivalRows") or [])
+
+    bio = BytesIO()
+    wb.save(bio)
+    fname = f"{scope_name}_{data.get('startDate')}_{data.get('endDate')}_差旅行程空缺核查.xlsx"
+    return Response(
+        content=bio.getvalue(),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": f"attachment; filename*=UTF-8''{quote(fname)}"},
+    )
+
+
 def _get_overtime_by_person(year: int, month: Optional[int], lsys: Optional[str]) -> dict:
     """按人汇总加班小时 {name: hours}，仅已通过(jiabanzt=4)"""
     all_staff = not (lsys and lsys.strip())
