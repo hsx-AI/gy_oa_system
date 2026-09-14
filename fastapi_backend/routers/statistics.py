@@ -3966,6 +3966,211 @@ def _covered_work_hours_detail(
     return covered_h, uncovered_h
 
 
+def _intersect_intervals(
+    bases: List[Tuple[datetime, datetime]],
+    covers: List[Tuple[datetime, datetime]],
+) -> List[Tuple[datetime, datetime]]:
+    """Intersect base segments with cover intervals."""
+    covers = _merge_dt_intervals(covers)
+    out: List[Tuple[datetime, datetime]] = []
+    for bs, be in bases:
+        for cs, ce in covers:
+            lo = max(bs, cs)
+            hi = min(be, ce)
+            if hi > lo:
+                out.append((lo, hi))
+    return _merge_dt_intervals(out)
+
+
+def _subtract_intervals(
+    bases: List[Tuple[datetime, datetime]],
+    cuts: List[Tuple[datetime, datetime]],
+) -> List[Tuple[datetime, datetime]]:
+    """Subtract cut intervals from base segments."""
+    cuts = _merge_dt_intervals(cuts)
+    if not cuts:
+        return list(bases)
+    out: List[Tuple[datetime, datetime]] = []
+    for bs, be in bases:
+        pieces = [(bs, be)]
+        for cs, ce in cuts:
+            nxt = []
+            for ps, pe in pieces:
+                if ce <= ps or cs >= pe:
+                    nxt.append((ps, pe))
+                    continue
+                if cs > ps:
+                    nxt.append((ps, cs))
+                if ce < pe:
+                    nxt.append((ce, pe))
+            pieces = nxt
+        out.extend(pieces)
+    return _merge_dt_intervals(out)
+
+
+def _seg_hours(segs: List[Tuple[datetime, datetime]]) -> float:
+    return round(sum((e - s).total_seconds() for s, e in segs) / 3600.0, 1)
+
+
+def _timeline_items(
+    kind: str,
+    label: str,
+    segs: List[Tuple[datetime, datetime]],
+) -> List[dict]:
+    items = []
+    for s, e in segs:
+        h = round((e - s).total_seconds() / 3600.0, 2)
+        if h <= 0:
+            continue
+        items.append({
+            "type": kind,
+            "label": label,
+            "start": _fmt_dt(s),
+            "end": _fmt_dt(e),
+            "hours": h,
+        })
+    return items
+
+
+def _clip_intervals_to_axis(
+    intervals: List[Tuple[datetime, datetime]],
+    t_start: datetime,
+    t_end: datetime,
+) -> List[Tuple[datetime, datetime]]:
+    """Clip intervals to [t_start, t_end] and merge overlaps."""
+    out: List[Tuple[datetime, datetime]] = []
+    for s, e in intervals or []:
+        if not s or not e or e <= s:
+            continue
+        lo = max(s, t_start)
+        hi = min(e, t_end)
+        if hi > lo:
+            out.append((lo, hi))
+    return _merge_dt_intervals(out)
+
+
+def _merge_work_spans_across_bridges(
+    segs: List[Tuple[datetime, datetime]],
+    non_workdays: set,
+) -> List[Tuple[datetime, datetime]]:
+    """
+    数轴展示用：两段同色工时之间若没有其它工作时段
+    （午休、17:00→下一工作日 08:00、周末/节假日），则合并为连续色块。
+    """
+    items = _merge_dt_intervals(segs)
+    if len(items) <= 1:
+        return items
+    merged = [items[0]]
+    for s, e in items[1:]:
+        ls, le = merged[-1]
+        if not _gap_work_segments(le, s, non_workdays):
+            merged[-1] = (ls, e)
+        else:
+            merged.append((s, e))
+    return merged
+
+
+def _build_gap_axis_timeline(
+    t_start: datetime,
+    t_end: datetime,
+    leave_intervals: List[Tuple[datetime, datetime]],
+    city_intervals: List[Tuple[datetime, datetime]],
+    outbound_intervals: List[Tuple[datetime, datetime]],
+    non_workdays: set,
+) -> dict:
+    """
+    Build number-line segments for gap analysis.
+    Axis is real time left->right (t_start early, t_end late).
+
+    展示口径：
+    - 请假 / 市内公出 / 公出瞒报：按业务区间连续上色（中间含假期也不断开）
+    - 未处理：按工时段上色，并桥接午休与跨日/跨节假日
+    - 图例小时仍只统计真实工时
+    """
+    from datetime import timedelta
+
+    work = _gap_work_segments(t_start, t_end, non_workdays)
+    leave_work = _intersect_intervals(work, leave_intervals)
+    rest = _subtract_intervals(work, leave_work)
+    city_work = _intersect_intervals(rest, city_intervals)
+    rest = _subtract_intervals(rest, city_work)
+    conceal_work = _intersect_intervals(rest, outbound_intervals)
+    unhandled_work = _subtract_intervals(rest, conceal_work)
+
+    legend_hours = {
+        "leave": _seg_hours(leave_work),
+        "city": _seg_hours(city_work),
+        "conceal": _seg_hours(conceal_work),
+        "unhandled": _seg_hours(unhandled_work),
+        "work": _seg_hours(work),
+    }
+
+    # 连续业务区间上色（假期不断开）；优先级：请假 > 市内公出 > 瞒报 > 未处理
+    leave_draw = _clip_intervals_to_axis(leave_intervals, t_start, t_end)
+    city_draw = _subtract_intervals(
+        _clip_intervals_to_axis(city_intervals, t_start, t_end), leave_draw
+    )
+    conceal_draw = _subtract_intervals(
+        _clip_intervals_to_axis(outbound_intervals, t_start, t_end),
+        leave_draw + city_draw,
+    )
+    unhandled_draw = _subtract_intervals(
+        _merge_work_spans_across_bridges(unhandled_work, non_workdays),
+        leave_draw + city_draw + conceal_draw,
+    )
+
+    work_colored = _merge_dt_intervals(
+        leave_draw + city_draw + conceal_draw + unhandled_draw
+    )
+    nonwork_parts = _subtract_intervals([(t_start, t_end)], work_colored)
+
+    def _items_with_work_hours(kind: str, label: str, draw_segs, work_segs):
+        items = []
+        for s, e in draw_segs:
+            h = _seg_hours(_intersect_intervals([(s, e)], work_segs)) if work_segs else 0.0
+            # 业务连续区间即使工时为 0（纯假期）也展示色块
+            if e <= s:
+                continue
+            items.append({
+                "type": kind,
+                "label": label,
+                "start": _fmt_dt(s),
+                "end": _fmt_dt(e),
+                "hours": h,
+            })
+        return items
+
+    segments = []
+    segments.extend(_timeline_items("nonwork", "\u975e\u5de5\u65f6/\u8282\u5047\u65e5", nonwork_parts))
+    segments.extend(_items_with_work_hours("leave", "\u8bf7\u5047", leave_draw, leave_work))
+    segments.extend(_items_with_work_hours("city", "\u5e02\u5185\u516c\u51fa", city_draw, city_work))
+    segments.extend(_items_with_work_hours("conceal", "\u516c\u51fa\u7792\u62a5\u91cd\u53e0", conceal_draw, conceal_work))
+    segments.extend(_items_with_work_hours("unhandled", "\u8003\u52e4\u5f02\u5e38\u672a\u5904\u7406", unhandled_draw, unhandled_work))
+    segments.sort(key=lambda x: x.get("start") or "")
+
+    ticks = []
+    cur = t_start.date()
+    end_d = t_end.date()
+    one = timedelta(days=1)
+    while cur <= end_d:
+        ds = cur.strftime("%Y-%m-%d")
+        ticks.append({
+            "date": ds,
+            "label": f"{cur.month}/{cur.day}",
+            "isNonWork": ds in non_workdays,
+        })
+        cur += one
+
+    return {
+        "axisStart": _fmt_dt(t_start),
+        "axisEnd": _fmt_dt(t_end),
+        "segments": segments,
+        "ticks": ticks,
+        "legendHours": legend_hours,
+    }
+
+
+
 def _fmt_cn_day(v: datetime) -> str:
     return f"{v.year}\u5e74{v.month}\u6708{v.day}\u65e5"
 
@@ -4000,12 +4205,16 @@ def _analyze_gap_leave_city_cover(
         "concealDetail": "",
         "concealSources": [],
         "unhandledHours": None,
+        "timeline": None,
     }
     if not t_start or not t_end or t_end <= t_start:
         return empty
 
     gap_h = _count_gap_work_hours(t_start, t_end, non_workdays)
     if gap_h <= 0:
+        timeline = _build_gap_axis_timeline(
+            t_start, t_end, [], [], [], non_workdays
+        )
         return {
             "coverStatus": "none_needed",
             "coverStatusText": "\u65e0\u7a7a\u7f3a",
@@ -4019,6 +4228,7 @@ def _analyze_gap_leave_city_cover(
             "concealDetail": "",
             "concealSources": [],
             "unhandledHours": 0.0,
+            "timeline": timeline,
         }
 
     hits: List[dict] = []
@@ -4108,6 +4318,14 @@ def _analyze_gap_leave_city_cover(
         t_start, t_end, outbound_intervals, non_workdays
     )
     unhandled_h = round(max(0.0, gap_h - leave_h - city_h - conceal_h), 1)
+    timeline = _build_gap_axis_timeline(
+        t_start,
+        t_end,
+        leave_intervals,
+        city_intervals,
+        outbound_intervals,
+        non_workdays,
+    )
 
     return {
         "coverStatus": status,
@@ -4123,6 +4341,7 @@ def _analyze_gap_leave_city_cover(
         "concealDetail": "\uff1b".join(h["text"] for h in conceal_hits),
         "concealSources": conceal_hits,
         "unhandledHours": unhandled_h,
+        "timeline": timeline,
     }
 
 

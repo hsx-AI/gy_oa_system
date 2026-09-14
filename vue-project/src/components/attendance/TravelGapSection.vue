@@ -89,7 +89,7 @@
       </div>
 
       <div class="table-toolbar">
-        <span class="table-count">{{ t.totalPrefix }}{{ displayRows.length }}{{ t.totalSuffix }}</span>
+        <span class="table-count">{{ t.totalPrefix }}{{ displayRows.length }}{{ t.totalSuffix }} · {{ t.axisHint }}</span>
         <input
           v-model.trim="keyword"
           type="search"
@@ -106,93 +106,152 @@
             </tr>
           </thead>
           <tbody>
-            <tr
-              v-for="r in displayRows"
-              :key="r.checkType + '-' + r.billNo"
-              :class="{
-                'row-warn': (r.unhandledHours || 0) > 0,
-                'row-danger': (r.unhandledHours || 0) >= 16,
-                'row-ok': (r.unhandledHours || 0) === 0 && r.gapHours > 0,
-              }"
-            >
-              <td>
-                <span :class="['status-pill', r.checkType === 'departure' ? 'status-dep' : 'status-arr']">
-                  {{ r.checkTypeText }}
-                </span>
-              </td>
-              <td>{{ r.name }}</td>
-              <td>{{ r.dept || dash }}</td>
-              <td>{{ r.billNo }}</td>
-              <td>{{ r.departCity || dash }}</td>
-              <td>{{ r.arriveCity || dash }}</td>
-              <td>{{ r.eventDate || dash }}</td>
-              <td>{{ r.eventNode || dash }}</td>
-              <td>{{ r.anchorPunch || dash }}</td>
-              <td>
-                <strong v-if="r.gapHours != null" :class="gapClass(r.gapHours)">{{ r.gapHours }}</strong>
-                <span v-else>{{ dash }}</span>
-              </td>
-              <td>{{ r.gapWorkDays != null ? r.gapWorkDays : dash }}</td>
-              <td>
-                <span :class="['status-pill', coverPillClass(r.coverStatus)]">
-                  {{ r.coverStatusText || dash }}
-                </span>
-              </td>
-              <td>{{ r.coveredHours != null ? r.coveredHours : dash }}</td>
-              <td>
-                <strong v-if="r.uncoveredHours != null" :class="gapClass(r.uncoveredHours)">{{ r.uncoveredHours }}</strong>
-                <span v-else>{{ dash }}</span>
-              </td>
-              <td class="cover-detail-cell">
-                <template v-if="concealItems(r).length">
-                  <div v-if="r.concealHours != null" class="conceal-hours">{{ r.concealHours }}{{ t.hourUnit }}</div>
-                  <ul class="cover-detail-list" :class="{ expanded: isConcealExpanded(r) }">
-                    <li
-                      v-for="(item, idx) in visibleConcealItems(r)"
-                      :key="'c-' + idx"
-                    >{{ item }}</li>
-                  </ul>
-                  <button
-                    v-if="concealItems(r).length > coverPreviewCount"
-                    type="button"
-                    class="cover-toggle"
-                    @click="toggleConceal(r)"
-                  >
-                    {{ isConcealExpanded(r)
-                      ? t.collapseCover
-                      : (t.expandCover + ' (' + concealItems(r).length + ')') }}
-                  </button>
-                </template>
-                <span v-else>{{ dash }}</span>
-              </td>
-              <td>
-                <strong v-if="r.unhandledHours != null" :class="gapClass(r.unhandledHours)">{{ r.unhandledHours }}</strong>
-                <span v-else>{{ dash }}</span>
-              </td>
-              <td class="cover-detail-cell">
-                <template v-if="coverItems(r).length">
-                  <ul class="cover-detail-list" :class="{ expanded: isCoverExpanded(r) }">
-                    <li
-                      v-for="(item, idx) in visibleCoverItems(r)"
-                      :key="idx"
-                    >{{ item }}</li>
-                  </ul>
-                  <button
-                    v-if="coverItems(r).length > coverPreviewCount"
-                    type="button"
-                    class="cover-toggle"
-                    @click="toggleCover(r)"
-                  >
-                    {{ isCoverExpanded(r)
-                      ? t.collapseCover
-                      : (t.expandCover + ' (' + coverItems(r).length + ')') }}
-                  </button>
-                </template>
-                <span v-else>{{ dash }}</span>
-              </td>
-              <td>{{ r.billStatus || dash }}</td>
-              <td class="remark-cell">{{ r.remark || '' }}</td>
-            </tr>
+            <template v-for="r in displayRows" :key="r.checkType + '-' + r.billNo">
+              <tr
+                class="data-row"
+                :class="{
+                  'row-warn': (r.unhandledHours || 0) > 0,
+                  'row-danger': (r.unhandledHours || 0) >= 16,
+                  'row-ok': (r.unhandledHours || 0) === 0 && r.gapHours > 0,
+                  'row-open': isAxisOpen(r),
+                }"
+                @click="toggleAxis(r)"
+              >
+                <td>
+                  <span :class="['status-pill', r.checkType === 'departure' ? 'status-dep' : 'status-arr']">
+                    {{ r.checkTypeText }}
+                  </span>
+                </td>
+                <td>{{ r.name }}</td>
+                <td>{{ r.dept || dash }}</td>
+                <td>{{ r.billNo }}</td>
+                <td>{{ r.departCity || dash }}</td>
+                <td>{{ r.arriveCity || dash }}</td>
+                <td>{{ r.eventDate || dash }}</td>
+                <td>{{ r.eventNode || dash }}</td>
+                <td>{{ r.anchorPunch || dash }}</td>
+                <td>
+                  <strong v-if="r.gapHours != null" :class="gapClass(r.gapHours)">{{ r.gapHours }}</strong>
+                  <span v-else>{{ dash }}</span>
+                </td>
+                <td>{{ r.gapWorkDays != null ? r.gapWorkDays : dash }}</td>
+                <td>
+                  <span :class="['status-pill', coverPillClass(r.coverStatus)]">
+                    {{ r.coverStatusText || dash }}
+                  </span>
+                </td>
+                <td>{{ r.coveredHours != null ? r.coveredHours : dash }}</td>
+                <td>
+                  <strong v-if="r.uncoveredHours != null" :class="gapClass(r.uncoveredHours)">{{ r.uncoveredHours }}</strong>
+                  <span v-else>{{ dash }}</span>
+                </td>
+                <td class="cover-detail-cell" @click.stop>
+                  <template v-if="concealItems(r).length">
+                    <div v-if="r.concealHours != null" class="conceal-hours">{{ r.concealHours }}{{ t.hourUnit }}</div>
+                    <ul class="cover-detail-list" :class="{ expanded: isConcealExpanded(r) }">
+                      <li
+                        v-for="(item, idx) in visibleConcealItems(r)"
+                        :key="'c-' + idx"
+                      >{{ item }}</li>
+                    </ul>
+                    <button
+                      v-if="concealItems(r).length > coverPreviewCount"
+                      type="button"
+                      class="cover-toggle"
+                      @click="toggleConceal(r)"
+                    >
+                      {{ isConcealExpanded(r)
+                        ? t.collapseCover
+                        : (t.expandCover + ' (' + concealItems(r).length + ')') }}
+                    </button>
+                  </template>
+                  <span v-else>{{ dash }}</span>
+                </td>
+                <td>
+                  <strong v-if="r.unhandledHours != null" :class="gapClass(r.unhandledHours)">{{ r.unhandledHours }}</strong>
+                  <span v-else>{{ dash }}</span>
+                </td>
+                <td class="cover-detail-cell" @click.stop>
+                  <template v-if="coverItems(r).length">
+                    <ul class="cover-detail-list" :class="{ expanded: isCoverExpanded(r) }">
+                      <li
+                        v-for="(item, idx) in visibleCoverItems(r)"
+                        :key="idx"
+                      >{{ item }}</li>
+                    </ul>
+                    <button
+                      v-if="coverItems(r).length > coverPreviewCount"
+                      type="button"
+                      class="cover-toggle"
+                      @click="toggleCover(r)"
+                    >
+                      {{ isCoverExpanded(r)
+                        ? t.collapseCover
+                        : (t.expandCover + ' (' + coverItems(r).length + ')') }}
+                    </button>
+                  </template>
+                  <span v-else>{{ dash }}</span>
+                </td>
+                <td>{{ r.billStatus || dash }}</td>
+                <td class="remark-cell">{{ r.remark || '' }}</td>
+              </tr>
+              <tr v-if="isAxisOpen(r)" class="axis-row">
+                <td :colspan="t.columns.length">
+                  <div class="axis-panel">
+                    <div class="axis-panel-head">
+                      <div>
+                        <strong>{{ t.axisTitle }}</strong>
+                        <span class="axis-sub">{{ r.name }} · {{ r.checkTypeText }} · {{ r.billNo }}</span>
+                      </div>
+                      <button type="button" class="cover-toggle" @click.stop="toggleAxis(r)">{{ t.collapseCover }}</button>
+                    </div>
+                    <div class="axis-endpoints">
+                      <span>{{ t.axisLeft }}：{{ axisLeftLabel(r) }}</span>
+                      <span>{{ t.axisRight }}：{{ axisRightLabel(r) }}</span>
+                    </div>
+                    <div v-if="axisModel(r)" class="axis-chart">
+                      <div class="axis-track">
+                        <div
+                          v-for="(seg, idx) in axisModel(r).segments"
+                          :key="'seg-' + idx"
+                          class="axis-seg"
+                          :class="'seg-' + seg.type"
+                          :style="{ left: seg.left + '%', width: Math.max(seg.width, 0.35) + '%' }"
+                          :title="segTitle(seg)"
+                        ></div>
+                        <div class="axis-line"></div>
+                        <div class="axis-endpoint-dot left"></div>
+                        <div class="axis-endpoint-dot right"></div>
+                      </div>
+                      <div class="axis-ticks">
+                        <span
+                          v-for="(tick, idx) in axisModel(r).ticks"
+                          :key="'tick-' + idx"
+                          class="axis-tick"
+                          :class="{ holiday: tick.isNonWork }"
+                          :style="{ left: tick.left + '%' }"
+                        >{{ tick.label }}</span>
+                      </div>
+                    </div>
+                    <div v-else class="axis-empty">{{ t.axisEmpty }}</div>
+                    <div class="axis-legend">
+                      <span class="leg leg-leave">{{ t.legLeave }}</span>
+                      <span class="leg leg-city">{{ t.legCity }}</span>
+                      <span class="leg leg-conceal">{{ t.legConceal }}</span>
+                      <span class="leg leg-unhandled">{{ t.legUnhandled }}</span>
+                      <span class="leg leg-nonwork">{{ t.legNonwork }}</span>
+                    </div>
+                    <div v-if="axisModel(r)?.legendHours" class="axis-hours">
+                      <span>{{ t.legLeave }} {{ axisModel(r).legendHours.leave || 0 }}h</span>
+                      <span>{{ t.legCity }} {{ axisModel(r).legendHours.city || 0 }}h</span>
+                      <span>{{ t.legConceal }} {{ axisModel(r).legendHours.conceal || 0 }}h</span>
+                      <span>{{ t.legUnhandled }} {{ axisModel(r).legendHours.unhandled || 0 }}h</span>
+                      <span>{{ t.legWork }} {{ axisModel(r).legendHours.work || 0 }}h</span>
+                    </div>
+                  </div>
+                </td>
+              </tr>
+            </template>
             <tr v-if="!displayRows.length">
               <td colspan="19" class="table-empty-cell">{{ t.empty }}</td>
             </tr>
@@ -276,6 +335,17 @@ const t = {
   expandCover: '\u5c55\u5f00\u5168\u90e8',
   collapseCover: '\u6536\u8d77',
   hourUnit: ' \u5c0f\u65f6',
+  axisTitle: '\u7a7a\u7f3a\u533a\u95f4\u6570\u8f74\u5206\u6790',
+  axisLeft: '\u8f74\u5de6\uff08\u65e9\uff09',
+  axisRight: '\u8f74\u53f3\uff08\u665a\uff09',
+  axisEmpty: '\u65e0\u6cd5\u7ed8\u5236\u6570\u8f74\uff08\u7f3a\u5c11\u4e8b\u4ef6\u8282\u70b9\u6216\u5bf9\u7167\u6253\u5361\uff09',
+  axisHint: '\u70b9\u51fb\u884c\u53ef\u5c55\u5f00/\u6536\u8d77\u6570\u8f74',
+  legLeave: '\u8bf7\u5047',
+  legCity: '\u5e02\u5185\u516c\u51fa',
+  legConceal: '\u516c\u51fa\u7792\u62a5',
+  legUnhandled: '\u672a\u5904\u7406',
+  legNonwork: '\u975e\u5de5\u65f6/\u8282\u5047',
+  legWork: '\u7a7a\u7f3a\u5de5\u65f6\u5408\u8ba1',
 }
 
 function defaultRange() {
@@ -299,7 +369,9 @@ const rows = ref([])
 const lsysList = ref([])
 const expandedCovers = ref({})
 const expandedConceals = ref({})
+const expandedAxes = ref({})
 const coverPreviewCount = 2
+const axisModelCache = new Map()
 
 const typedRows = computed(() => {
   if (checkType.value === 'departure') return rows.value.filter(r => r.checkType === 'departure')
@@ -401,6 +473,89 @@ function coverPillClass(status) {
   return 'status-cover-na'
 }
 
+function isAxisOpen(r) {
+  return !!expandedAxes.value[rowKey(r)]
+}
+
+function toggleAxis(r) {
+  const key = rowKey(r)
+  expandedAxes.value = {
+    ...expandedAxes.value,
+    [key]: !expandedAxes.value[key],
+  }
+}
+
+function parseAxisTime(s) {
+  if (!s) return null
+  const t = Date.parse(String(s).replace(/-/g, '/'))
+  return Number.isFinite(t) ? t : null
+}
+
+function axisLeftLabel(r) {
+  const a = parseAxisTime(r.anchorPunch)
+  const e = parseAxisTime(r.eventNode)
+  if (a == null || e == null) return r.anchorPunch || r.eventNode || dash
+  return a <= e ? (r.anchorPunch || dash) : (r.eventNode || dash)
+}
+
+function axisRightLabel(r) {
+  const a = parseAxisTime(r.anchorPunch)
+  const e = parseAxisTime(r.eventNode)
+  if (a == null || e == null) return r.eventNode || r.anchorPunch || dash
+  return a <= e ? (r.eventNode || dash) : (r.anchorPunch || dash)
+}
+
+function axisModel(r) {
+  const key = rowKey(r)
+  if (axisModelCache.has(key)) return axisModelCache.get(key)
+  const tl = r.timeline
+  if (!tl || !tl.axisStart || !tl.axisEnd) {
+    axisModelCache.set(key, null)
+    return null
+  }
+  const startMs = parseAxisTime(tl.axisStart)
+  const endMs = parseAxisTime(tl.axisEnd)
+  if (startMs == null || endMs == null || endMs <= startMs) {
+    axisModelCache.set(key, null)
+    return null
+  }
+  const span = endMs - startMs
+  const toPct = (ms) => Math.min(100, Math.max(0, ((ms - startMs) / span) * 100))
+  const segments = (tl.segments || []).map((seg) => {
+    const s = parseAxisTime(seg.start)
+    const e = parseAxisTime(seg.end)
+    if (s == null || e == null || e <= s) return null
+    const left = toPct(s)
+    const right = toPct(e)
+    return {
+      ...seg,
+      left,
+      width: Math.max(0, right - left),
+    }
+  }).filter(Boolean)
+
+  const ticks = (tl.ticks || []).map((tick) => {
+    const ms = parseAxisTime(`${tick.date} 00:00:00`)
+    return {
+      ...tick,
+      left: ms == null ? 0 : toPct(ms),
+    }
+  })
+
+  const model = {
+    segments,
+    ticks,
+    legendHours: tl.legendHours || {},
+  }
+  axisModelCache.set(key, model)
+  return model
+}
+
+function segTitle(seg) {
+  const h = seg.hours != null ? `${seg.hours}h` : ''
+  return `${seg.label || seg.type} ${seg.start || ''} ~ ${seg.end || ''} ${h}`.trim()
+}
+
 async function fetchCheck() {
   if (!startDate.value || !endDate.value) return
   loading.value = true
@@ -418,16 +573,22 @@ async function fetchCheck() {
       rows.value = res.rows || []
       expandedCovers.value = {}
       expandedConceals.value = {}
+      expandedAxes.value = {}
+      axisModelCache.clear()
     } else {
       summary.value = {}
       rows.value = []
       expandedCovers.value = {}
       expandedConceals.value = {}
+      expandedAxes.value = {}
+      axisModelCache.clear()
     }
   } catch (e) {
     console.error(e)
     summary.value = {}
     rows.value = []
+    expandedAxes.value = {}
+    axisModelCache.clear()
   } finally {
     loading.value = false
   }
@@ -770,6 +931,156 @@ onMounted(() => {
 
 .row-ok {
   background: #f0fdf4;
+}
+
+.data-row {
+  cursor: pointer;
+}
+
+.data-row.row-open {
+  outline: 2px solid rgba(15, 118, 110, 0.25);
+  outline-offset: -2px;
+}
+
+.axis-row td {
+  background: #f8fafc;
+  padding: 12px 16px !important;
+  border-bottom: 1px solid var(--color-border-lighter);
+}
+
+.axis-panel {
+  text-align: left;
+}
+
+.axis-panel-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+.axis-sub {
+  margin-left: 10px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  font-weight: 400;
+}
+
+.axis-endpoints {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+  margin-bottom: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+
+.axis-chart {
+  position: relative;
+  padding: 8px 8px 28px;
+}
+
+.axis-track {
+  position: relative;
+  height: 28px;
+  border-radius: 8px;
+  background: #e5e7eb;
+  overflow: hidden;
+}
+
+.axis-line {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 50%;
+  height: 2px;
+  background: #94a3b8;
+  transform: translateY(-50%);
+  z-index: 1;
+}
+
+.axis-endpoint-dot {
+  position: absolute;
+  top: 50%;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #0f766e;
+  border: 2px solid #fff;
+  transform: translate(-50%, -50%);
+  z-index: 3;
+}
+
+.axis-endpoint-dot.left { left: 0; }
+.axis-endpoint-dot.right { left: 100%; }
+
+.axis-seg {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  border-radius: 4px;
+  z-index: 2;
+  opacity: 0.92;
+}
+
+.seg-nonwork { background: repeating-linear-gradient(135deg, #d1d5db, #d1d5db 4px, #e5e7eb 4px, #e5e7eb 8px); }
+.seg-leave { background: #34d399; }
+.seg-city { background: #22d3ee; }
+.seg-conceal { background: #fbbf24; }
+.seg-unhandled { background: #f87171; }
+
+.axis-ticks {
+  position: relative;
+  height: 22px;
+  margin-top: 6px;
+}
+
+.axis-tick {
+  position: absolute;
+  transform: translateX(-50%);
+  font-size: 11px;
+  color: #6b7280;
+  white-space: nowrap;
+}
+
+.axis-tick.holiday {
+  color: #9ca3af;
+  text-decoration: line-through;
+}
+
+.axis-empty {
+  color: var(--color-text-tertiary);
+  padding: 8px 0;
+}
+
+.axis-legend,
+.axis-hours {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 14px;
+  margin-top: 10px;
+  font-size: var(--font-size-xs);
+  color: var(--color-text-secondary);
+}
+
+.leg::before {
+  content: '';
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  margin-right: 6px;
+  vertical-align: -1px;
+}
+
+.leg-leave::before { background: #34d399; }
+.leg-city::before { background: #22d3ee; }
+.leg-conceal::before { background: #fbbf24; }
+.leg-unhandled::before { background: #f87171; }
+.leg-nonwork::before {
+  background: repeating-linear-gradient(135deg, #d1d5db, #d1d5db 3px, #e5e7eb 3px, #e5e7eb 6px);
 }
 
 .gap-warn { color: #d97706; }
