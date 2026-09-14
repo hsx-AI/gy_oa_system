@@ -3103,28 +3103,37 @@ def _load_non_workday_set(start_date: str, end_date: str) -> set:
     但 holiday 表 type 含'班'的调休上班日排除在外（视为工作日）。
     """
     from utils.holiday_loader import load_holidays_dict
-    import calendar as _cal
 
     years = set()
     try:
-        years.add(int(start_date[:4]))
-        years.add(int(end_date[:4]))
-    except (ValueError, IndexError):
+        y0 = int(str(start_date)[:4])
+        y1 = int(str(end_date)[:4])
+        if y1 < y0:
+            y0, y1 = y1, y0
+        # 必须覆盖区间内所有年份；仅取首尾年会漏掉中间年法定假日
+        for y in range(y0, y1 + 1):
+            years.add(y)
+    except (ValueError, IndexError, TypeError):
         pass
 
     holidays: dict = {}
     for y in years:
-        holidays.update(load_holidays_dict(str(y)))
+        raw = load_holidays_dict(str(y)) or {}
+        # 统一成 YYYY-MM-DD，避免库里出现 2026-1-1 导致匹配失败
+        for dk, ht in raw.items():
+            ds = _normalize_holiday_date_key(dk)
+            if ds:
+                holidays[ds] = ht
 
     non_work = set()
     try:
         from datetime import timedelta
-        cur = datetime.strptime(start_date, "%Y-%m-%d")
-        end = datetime.strptime(end_date, "%Y-%m-%d")
+        cur = datetime.strptime(str(start_date)[:10], "%Y-%m-%d")
+        end = datetime.strptime(str(end_date)[:10], "%Y-%m-%d")
         while cur <= end:
             ds = cur.strftime("%Y-%m-%d")
             is_weekend = cur.weekday() in (5, 6)
-            ht = holidays.get(ds, "")
+            ht = holidays.get(ds, "") or ""
             is_holiday_off = ("假" in ht or "休" in ht)
             is_makeup_work = ("班" in ht)
             if is_makeup_work:
@@ -3135,6 +3144,31 @@ def _load_non_workday_set(start_date: str, end_date: str) -> set:
     except Exception as e:
         logger.warning(f"构建非工作日集合失败: {e}")
     return non_work
+
+
+def _normalize_holiday_date_key(val) -> str:
+    """Normalize holiday date keys to YYYY-MM-DD."""
+    if val is None:
+        return ""
+    if hasattr(val, "strftime"):
+        try:
+            return val.strftime("%Y-%m-%d")
+        except Exception:
+            pass
+    s = str(val).strip().replace("/", "-")
+    if not s:
+        return ""
+    try:
+        parts = s.split("-")
+        if len(parts) >= 3:
+            y, m, d = int(parts[0]), int(parts[1]), int(parts[2][:2])
+            return f"{y:04d}-{m:02d}-{d:02d}"
+    except (TypeError, ValueError):
+        pass
+    try:
+        return datetime.strptime(s[:10], "%Y-%m-%d").strftime("%Y-%m-%d")
+    except ValueError:
+        return s[:10]
 
 
 _DISCIPLINE_MINUTE_WHITELIST = frozenset((2, 3, 4, 5, 10, 20, 30, 60))
