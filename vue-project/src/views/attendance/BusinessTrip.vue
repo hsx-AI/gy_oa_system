@@ -371,10 +371,10 @@
                   :key="r.id"
                   :value="r.id"
                 >
-                  {{ r.assignTime || '无委派时间' }}｜{{ r.projectName || '无项目名称' }}｜{{ r.location || '无地点' }}
+                  {{ formatReturnCandidateLabel(r) }}
                 </option>
               </select>
-              <p class="hint-text">仅展示状态为“已通过”且未做返回登记的记录。</p>
+              <p class="hint-text">仅展示状态为“已通过”且未做返回登记的记录。选项含公出类型、预计时间与地点，便于区分多条市内公出。</p>
             </div>
           </div>
           <div class="form-row">
@@ -686,6 +686,33 @@ const returnCandidates = computed(() =>
       isOwnTripRow(r) && r.status === '已通过' && !(Number(r.fhdjStatus) === 1)
   )
 )
+
+function compactTripDateTime(s) {
+  if (!s || typeof s !== 'string') return ''
+  const t = s.trim().replace('T', ' ')
+  if (t.length >= 16) return t.slice(0, 16)
+  return t
+}
+
+/** 返回登记下拉文案：类型 + 预计时间 + 地点/项目，避免市内公出只显示地点无法区分 */
+function formatReturnCandidateLabel(r) {
+  if (!r) return '公出记录'
+  const parts = []
+  const scope = (r.tripScope || '').trim()
+  if (scope) parts.push(scope)
+  const start = compactTripDateTime(r.expectedStartTime || r.startTime || '')
+  const end = compactTripDateTime(r.expectedReturnTime || '')
+  if (start && end) parts.push(`${start}～${end}`)
+  else if (start) parts.push(`出发 ${start}`)
+  else if (end) parts.push(`返回 ${end}`)
+  const loc = (r.location || '').trim()
+  if (loc) parts.push(loc)
+  const project = (r.projectName || '').trim()
+  if (project && project !== '无') parts.push(project)
+  const assign = compactTripDateTime(r.assignTime || '')
+  if (assign && scope !== '市内公出') parts.push(`委派${assign.slice(0, 10)}`)
+  return parts.join('｜') || '公出记录'
+}
 
 const returnForm = reactive({
   recordId: '',

@@ -110,9 +110,9 @@
               v-for="r in displayRows"
               :key="r.checkType + '-' + r.billNo"
               :class="{
-                'row-warn': (r.uncoveredHours || 0) > 0,
-                'row-danger': (r.uncoveredHours || 0) >= 16,
-                'row-ok': r.coverStatus === 'full',
+                'row-warn': (r.unhandledHours || 0) > 0,
+                'row-danger': (r.unhandledHours || 0) >= 16,
+                'row-ok': (r.unhandledHours || 0) === 0 && r.gapHours > 0,
               }"
             >
               <td>
@@ -143,12 +143,58 @@
                 <strong v-if="r.uncoveredHours != null" :class="gapClass(r.uncoveredHours)">{{ r.uncoveredHours }}</strong>
                 <span v-else>{{ dash }}</span>
               </td>
-              <td class="remark-cell" :title="r.coverDetail || ''">{{ r.coverDetail || dash }}</td>
+              <td class="cover-detail-cell">
+                <template v-if="concealItems(r).length">
+                  <div v-if="r.concealHours != null" class="conceal-hours">{{ r.concealHours }}{{ t.hourUnit }}</div>
+                  <ul class="cover-detail-list" :class="{ expanded: isConcealExpanded(r) }">
+                    <li
+                      v-for="(item, idx) in visibleConcealItems(r)"
+                      :key="'c-' + idx"
+                    >{{ item }}</li>
+                  </ul>
+                  <button
+                    v-if="concealItems(r).length > coverPreviewCount"
+                    type="button"
+                    class="cover-toggle"
+                    @click="toggleConceal(r)"
+                  >
+                    {{ isConcealExpanded(r)
+                      ? t.collapseCover
+                      : (t.expandCover + ' (' + concealItems(r).length + ')') }}
+                  </button>
+                </template>
+                <span v-else>{{ dash }}</span>
+              </td>
+              <td>
+                <strong v-if="r.unhandledHours != null" :class="gapClass(r.unhandledHours)">{{ r.unhandledHours }}</strong>
+                <span v-else>{{ dash }}</span>
+              </td>
+              <td class="cover-detail-cell">
+                <template v-if="coverItems(r).length">
+                  <ul class="cover-detail-list" :class="{ expanded: isCoverExpanded(r) }">
+                    <li
+                      v-for="(item, idx) in visibleCoverItems(r)"
+                      :key="idx"
+                    >{{ item }}</li>
+                  </ul>
+                  <button
+                    v-if="coverItems(r).length > coverPreviewCount"
+                    type="button"
+                    class="cover-toggle"
+                    @click="toggleCover(r)"
+                  >
+                    {{ isCoverExpanded(r)
+                      ? t.collapseCover
+                      : (t.expandCover + ' (' + coverItems(r).length + ')') }}
+                  </button>
+                </template>
+                <span v-else>{{ dash }}</span>
+              </td>
               <td>{{ r.billStatus || dash }}</td>
               <td class="remark-cell">{{ r.remark || '' }}</td>
             </tr>
             <tr v-if="!displayRows.length">
-              <td colspan="17" class="table-empty-cell">{{ t.empty }}</td>
+              <td colspan="19" class="table-empty-cell">{{ t.empty }}</td>
             </tr>
           </tbody>
         </table>
@@ -219,12 +265,17 @@ const t = {
     '\u8bf7\u5047/\u5e02\u5185\u516c\u51fa',
     '\u5df2\u8986\u76d6\u5c0f\u65f6',
     '\u672a\u8986\u76d6\u5c0f\u65f6',
+    '\u516c\u51fa\u7792\u62a5\u6821\u9a8c',
+    '\u8003\u52e4\u5f02\u5e38\u672a\u5904\u7406\u5c0f\u65f6',
     '\u8986\u76d6\u660e\u7ec6',
     '\u72b6\u6001',
     '\u5907\u6ce8',
   ],
   exportName: '\u5dee\u65c5\u884c\u7a0b\u7a7a\u7f3a\u6838\u67e5',
   allDeptFile: '\u5168\u90e8\u79d1\u5ba4',
+  expandCover: '\u5c55\u5f00\u5168\u90e8',
+  collapseCover: '\u6536\u8d77',
+  hourUnit: ' \u5c0f\u65f6',
 }
 
 function defaultRange() {
@@ -246,6 +297,9 @@ const fetched = ref(false)
 const summary = ref({})
 const rows = ref([])
 const lsysList = ref([])
+const expandedCovers = ref({})
+const expandedConceals = ref({})
+const coverPreviewCount = 2
 
 const typedRows = computed(() => {
   if (checkType.value === 'departure') return rows.value.filter(r => r.checkType === 'departure')
@@ -257,7 +311,7 @@ const displayRows = computed(() => {
   const kw = keyword.value.toLowerCase()
   if (!kw) return typedRows.value
   return typedRows.value.filter(r => {
-    const blob = [r.name, r.billNo, r.departCity, r.arriveCity, r.dept, r.accountDept, r.coverDetail, r.coverStatusText]
+    const blob = [r.name, r.billNo, r.departCity, r.arriveCity, r.dept, r.accountDept, r.coverDetail, r.coverStatusText, r.concealDetail]
       .map(v => String(v || '').toLowerCase())
       .join('|')
     return blob.includes(kw)
@@ -268,6 +322,71 @@ const coverSummaryText = computed(() => {
   const s = summary.value || {}
   return `\u5df2\u8986\u76d6 ${s.fullyCovered || 0} / \u90e8\u5206 ${s.partialCovered || 0} / \u672a\u8986\u76d6 ${s.uncovered || 0}`
 })
+
+function rowKey(r) {
+  return `${r.checkType || ''}-${r.billNo || ''}`
+}
+
+function coverItems(r) {
+  const sources = Array.isArray(r.coverSources) ? r.coverSources : []
+  if (sources.length) {
+    return sources.map(h => {
+      const typ = h.typeText || h.type || ''
+      const label = h.label ? `(${h.label})` : ''
+      const span = [h.start || '', h.end || ''].filter(Boolean).join('~')
+      return `${typ}${label} ${span}`.trim()
+    })
+  }
+  const detail = (r.coverDetail || '').trim()
+  if (!detail) return []
+  return detail.split('\uFF1B').map(s => s.trim()).filter(Boolean)
+}
+
+function isCoverExpanded(r) {
+  return !!expandedCovers.value[rowKey(r)]
+}
+
+function visibleCoverItems(r) {
+  const items = coverItems(r)
+  if (isCoverExpanded(r) || items.length <= coverPreviewCount) return items
+  return items.slice(0, coverPreviewCount)
+}
+
+function toggleCover(r) {
+  const key = rowKey(r)
+  expandedCovers.value = {
+    ...expandedCovers.value,
+    [key]: !expandedCovers.value[key],
+  }
+}
+
+function concealItems(r) {
+  const sources = Array.isArray(r.concealSources) ? r.concealSources : []
+  if (sources.length) {
+    return sources.map(h => (h.text || '').trim()).filter(Boolean)
+  }
+  const detail = (r.concealDetail || '').trim()
+  if (!detail) return []
+  return detail.split('\uFF1B').map(s => s.trim()).filter(Boolean)
+}
+
+function isConcealExpanded(r) {
+  return !!expandedConceals.value[rowKey(r)]
+}
+
+function visibleConcealItems(r) {
+  const items = concealItems(r)
+  if (isConcealExpanded(r) || items.length <= coverPreviewCount) return items
+  return items.slice(0, coverPreviewCount)
+}
+
+function toggleConceal(r) {
+  const key = rowKey(r)
+  expandedConceals.value = {
+    ...expandedConceals.value,
+    [key]: !expandedConceals.value[key],
+  }
+}
 
 function gapClass(n) {
   if (n >= 16) return 'gap-danger'
@@ -297,9 +416,13 @@ async function fetchCheck() {
     if (res.success) {
       summary.value = res.summary || {}
       rows.value = res.rows || []
+      expandedCovers.value = {}
+      expandedConceals.value = {}
     } else {
       summary.value = {}
       rows.value = []
+      expandedCovers.value = {}
+      expandedConceals.value = {}
     }
   } catch (e) {
     console.error(e)
@@ -656,6 +779,41 @@ onMounted(() => {
   color: #b45309;
   max-width: 200px;
   white-space: normal;
+}
+
+.cover-detail-cell {
+  text-align: left;
+  min-width: 260px;
+  max-width: 420px;
+  white-space: normal;
+  vertical-align: top;
+}
+
+.cover-detail-list {
+  margin: 0;
+  padding-left: 18px;
+  color: var(--color-text-primary);
+  line-height: 1.45;
+}
+
+.cover-toggle {
+  margin-top: 4px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--color-primary);
+  cursor: pointer;
+  font-size: var(--font-size-xs);
+}
+
+.cover-toggle:hover {
+  text-decoration: underline;
+}
+
+.conceal-hours {
+  font-weight: 600;
+  color: #b45309;
+  margin-bottom: 4px;
 }
 
 @media (max-width: 960px) {

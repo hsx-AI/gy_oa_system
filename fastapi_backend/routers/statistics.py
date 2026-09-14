@@ -3932,12 +3932,24 @@ def _covered_work_hours_detail(
     return covered_h, uncovered_h
 
 
+def _fmt_cn_day(v: datetime) -> str:
+    return f"{v.year}\u5e74{v.month}\u6708{v.day}\u65e5"
+
+
+def _outbound_gclx_label(raw) -> str:
+    s = (raw or "").strip()
+    if not s:
+        return "\u5883\u5185\u516c\u51fa(\u672a\u586b\u7c7b\u578b)"
+    return s
+
+
 def _analyze_gap_leave_city_cover(
     person: str,
     t_start: Optional[datetime],
     t_end: Optional[datetime],
     leave_by_name: Dict[str, List[dict]],
     city_by_name: Dict[str, List[dict]],
+    outbound_by_name: Dict[str, List[dict]],
     non_workdays: set,
 ) -> dict:
     """Check whether gap work hours are covered by approved leave / city trip."""
@@ -3948,6 +3960,12 @@ def _analyze_gap_leave_city_cover(
         "uncoveredHours": None,
         "coverDetail": "",
         "coverSources": [],
+        "leaveHours": None,
+        "cityHours": None,
+        "concealHours": None,
+        "concealDetail": "",
+        "concealSources": [],
+        "unhandledHours": None,
     }
     if not t_start or not t_end or t_end <= t_start:
         return empty
@@ -3956,15 +3974,22 @@ def _analyze_gap_leave_city_cover(
     if gap_h <= 0:
         return {
             "coverStatus": "none_needed",
-            "coverStatusText": "无空缺",
+            "coverStatusText": "\u65e0\u7a7a\u7f3a",
             "coveredHours": 0.0,
             "uncoveredHours": 0.0,
             "coverDetail": "",
             "coverSources": [],
+            "leaveHours": 0.0,
+            "cityHours": 0.0,
+            "concealHours": 0.0,
+            "concealDetail": "",
+            "concealSources": [],
+            "unhandledHours": 0.0,
         }
 
     hits: List[dict] = []
-    intervals: List[Tuple[datetime, datetime]] = []
+    leave_intervals: List[Tuple[datetime, datetime]] = []
+    city_intervals: List[Tuple[datetime, datetime]] = []
 
     for row in leave_by_name.get(person) or []:
         s = _as_datetime_val(row.get("timefrom"))
@@ -3972,11 +3997,11 @@ def _analyze_gap_leave_city_cover(
         if not s or not e:
             continue
         if s < t_end and e > t_start:
-            intervals.append((s, e))
-            qjfs = (row.get("qjfs") or "").strip() or "请假"
+            leave_intervals.append((s, e))
+            qjfs = (row.get("qjfs") or "").strip() or "\u8bf7\u5047"
             hits.append({
                 "type": "leave",
-                "typeText": "请假",
+                "typeText": "\u8bf7\u5047",
                 "label": qjfs,
                 "start": _fmt_dt(s),
                 "end": _fmt_dt(e),
@@ -3988,43 +4013,82 @@ def _analyze_gap_leave_city_cover(
         if not s or not e:
             continue
         if s < t_end and e > t_start:
-            intervals.append((s, e))
+            city_intervals.append((s, e))
             hits.append({
                 "type": "city_trip",
-                "typeText": "市内公出",
-                "label": "市内公出",
+                "typeText": "\u5e02\u5185\u516c\u51fa",
+                "label": "\u5e02\u5185\u516c\u51fa",
                 "start": _fmt_dt(s),
                 "end": _fmt_dt(e),
             })
 
+    combined = leave_intervals + city_intervals
     covered_h, uncovered_h = _covered_work_hours_detail(
-        t_start, t_end, intervals, non_workdays
+        t_start, t_end, combined, non_workdays
     )
+    leave_h, _ = _covered_work_hours_detail(t_start, t_end, leave_intervals, non_workdays)
+    city_h, _ = _covered_work_hours_detail(t_start, t_end, city_intervals, non_workdays)
+
     # 容忍浮点误差：覆盖小时达到空缺小时即视为已覆盖
     if covered_h + 0.05 >= gap_h:
-        status, text = "full", "已覆盖"
+        status, text = "full", "\u5df2\u8986\u76d6"
         uncovered_h = 0.0
         covered_h = gap_h
     elif covered_h > 0:
-        status, text = "partial", "部分覆盖"
+        status, text = "partial", "\u90e8\u5206\u8986\u76d6"
     else:
-        status, text = "none", "未覆盖"
+        status, text = "none", "\u672a\u8986\u76d6"
 
     detail_parts = []
-    for h in hits[:8]:
+    for h in hits:
         detail_parts.append(
             f"{h['typeText']}({h['label']}) {h['start'] or ''}~{h['end'] or ''}"
         )
-    if len(hits) > 8:
-        detail_parts.append(f"...共{len(hits)}条")
+
+    conceal_hits: List[dict] = []
+    outbound_intervals: List[Tuple[datetime, datetime]] = []
+    for row in outbound_by_name.get(person) or []:
+        s = _as_datetime_val(row.get("yjcfsj"))
+        e = _as_datetime_val(row.get("yjfhsj"))
+        if not s or not e or e <= s:
+            continue
+        if not (s < t_end and e > t_start):
+            continue
+        outbound_intervals.append((s, e))
+        item_h, _ = _covered_work_hours_detail(t_start, t_end, [(s, e)], non_workdays)
+        if item_h <= 0:
+            continue
+        label = _outbound_gclx_label(row.get("gclx"))
+        line = f"{_fmt_cn_day(s)}-{_fmt_cn_day(e)} {item_h:g}\u5c0f\u65f6"
+        conceal_hits.append({
+            "type": "outbound_trip",
+            "typeText": label,
+            "label": label,
+            "start": _fmt_dt(s),
+            "end": _fmt_dt(e),
+            "hours": item_h,
+            "text": f"{label} {line}",
+        })
+
+    conceal_h, _ = _covered_work_hours_detail(
+        t_start, t_end, outbound_intervals, non_workdays
+    )
+    unhandled_h = round(max(0.0, gap_h - leave_h - city_h - conceal_h), 1)
 
     return {
         "coverStatus": status,
         "coverStatusText": text,
         "coveredHours": covered_h,
         "uncoveredHours": uncovered_h,
-        "coverDetail": "；".join(detail_parts),
+        "coverDetail": "\uff1b".join(detail_parts),
         "coverSources": hits,
+        "coverCount": len(hits),
+        "leaveHours": leave_h,
+        "cityHours": city_h,
+        "concealHours": conceal_h,
+        "concealDetail": "\uff1b".join(h["text"] for h in conceal_hits),
+        "concealSources": conceal_hits,
+        "unhandledHours": unhandled_h,
     }
 
 
@@ -4179,9 +4243,10 @@ def _build_travel_gap_check(
         for n in punches_by_name:
             punches_by_name[n].sort()
 
-    # 已通过请假 / 市内公出（按人缓存，用于空缺时段覆盖核查）
+    # 已通过请假 / 市内公出 / 非市内公出（按人缓存）
     leave_by_name: Dict[str, List[dict]] = {n: [] for n in names}
     city_by_name: Dict[str, List[dict]] = {n: [] for n in names}
+    outbound_by_name: Dict[str, List[dict]] = {n: [] for n in names}
     if names:
         chunk = 200
         for i in range(0, len(names), chunk):
@@ -4224,6 +4289,26 @@ def _build_travel_gap_check(
                 if n in city_by_name:
                     city_by_name[n].append(row)
 
+            outbound_sql = f"""
+                SELECT TRIM(gcr) AS person_name, yjcfsj, yjfhsj, gclx
+                FROM gcsqb
+                WHERE bldzt = 2 AND szrzt = 2
+                  AND TRIM(COALESCE(gclx, '')) != %s
+                  AND TRIM(gcr) IN ({placeholders})
+                  AND yjcfsj IS NOT NULL
+                  AND yjfhsj IS NOT NULL
+                  AND yjcfsj < %s
+                  AND yjfhsj >= %s
+            """
+            outbound_rows = db.execute_query(
+                outbound_sql,
+                tuple(["市内公出"] + part + [punch_hi + " 23:59:59", punch_lo + " 00:00:00"]),
+            ) or []
+            for row in outbound_rows:
+                n = (row.get("person_name") or "").strip()
+                if n in outbound_by_name:
+                    outbound_by_name[n].append(row)
+
     def _as_date(v) -> Optional[date]:
         if v is None:
             return None
@@ -4238,7 +4323,13 @@ def _build_travel_gap_check(
 
     def _row_with_cover(base: dict, gap_start, gap_end) -> dict:
         cover = _analyze_gap_leave_city_cover(
-            base["name"], gap_start, gap_end, leave_by_name, city_by_name, non_workdays
+            base["name"],
+            gap_start,
+            gap_end,
+            leave_by_name,
+            city_by_name,
+            outbound_by_name,
+            non_workdays,
         )
         base.update(cover)
         return base
@@ -4350,6 +4441,8 @@ def _build_travel_gap_check(
             "holiday": "周末+法定假日不计，调休上班日计",
             "unit": "工作小时（与标准工时重叠累计）",
             "cover": "空缺工时是否被已通过请假或市内公出覆盖",
+            "conceal": "空缺工时与已批准境内/境外公出（含 gclx 为空）的 yjcfsj~yjfhsj 重叠",
+            "unhandled": "空缺小时 - 请假小时 - 市内公出小时 - 公出瞒报重叠小时",
         },
         "summary": {
             "departureTrips": len(departure_rows),
@@ -4450,7 +4543,8 @@ def export_travel_gap_check(
         "核查类型", "单据编号", "姓名", "科室", "报账部门",
         "出发城市", "到达城市", "事件日期", "事件节点", "对照打卡",
         "空缺小时", "折合工作日",
-        "请假/市内公出", "已覆盖小时", "未覆盖小时", "覆盖明细",
+        "请假/市内公出", "已覆盖小时", "未覆盖小时",
+        "公出瞒报校验", "考勤异常未处理小时", "覆盖明细",
         "单据状态", "备注",
     ]
 
@@ -4460,6 +4554,20 @@ def export_travel_gap_check(
         ws.append([])
         ws.append(headers)
         for item in rows:
+            cover_detail = item.get("coverDetail") or ""
+            sources = item.get("coverSources") or []
+            if sources:
+                cover_detail = "\n".join(
+                    f"{(h.get('typeText') or '')}({(h.get('label') or '')}) "
+                    f"{(h.get('start') or '')}~{(h.get('end') or '')}".strip()
+                    for h in sources
+                )
+            conceal_detail = item.get("concealDetail") or ""
+            conceal_sources = item.get("concealSources") or []
+            if conceal_sources:
+                conceal_detail = "\n".join(
+                    (h.get("text") or "").strip() for h in conceal_sources if h.get("text")
+                )
             ws.append([
                 item.get("checkTypeText", ""),
                 item.get("billNo", ""),
@@ -4476,10 +4584,15 @@ def export_travel_gap_check(
                 item.get("coverStatusText", ""),
                 item.get("coveredHours") if item.get("coveredHours") is not None else "",
                 item.get("uncoveredHours") if item.get("uncoveredHours") is not None else "",
-                item.get("coverDetail", ""),
+                conceal_detail,
+                item.get("unhandledHours") if item.get("unhandledHours") is not None else "",
+                cover_detail,
                 item.get("billStatus", ""),
                 item.get("remark", ""),
             ])
+            extra_lines = max(len(sources), len(conceal_sources), 1)
+            if extra_lines > 2:
+                ws.row_dimensions[ws.max_row].height = min(15 * extra_lines + 10, 180)
         for row in ws.iter_rows():
             for cell in row:
                 cell.border = border
@@ -4491,13 +4604,22 @@ def export_travel_gap_check(
         for cell in ws[3]:
             cell.font = header_font
             cell.fill = header_fill
+        left_wrap = Alignment(horizontal="left", vertical="top", wrap_text=True)
+        wrap_cols = (16, 18)
+        for row_idx in range(4, ws.max_row + 1):
+            for col in wrap_cols:
+                ws.cell(row=row_idx, column=col).alignment = left_wrap
         for col in range(1, ws.max_column + 1):
             max_len = 10
             for row in range(1, ws.max_row + 1):
                 v = ws.cell(row=row, column=col).value
                 if v is not None:
-                    max_len = max(max_len, min(len(str(v)) + 2, 40))
-            ws.column_dimensions[get_column_letter(col)].width = max_len
+                    if col in wrap_cols:
+                        parts = str(v).split("\n")
+                        max_len = max(max_len, min(max((len(p) for p in parts), default=10) + 2, 56))
+                    else:
+                        max_len = max(max_len, min(len(str(v)) + 2, 40))
+            ws.column_dimensions[get_column_letter(col)].width = max(max_len, 48) if col in wrap_cols else max_len
         ws.freeze_panes = "A4"
 
     ws_all = wb.active
