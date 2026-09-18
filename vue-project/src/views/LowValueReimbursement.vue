@@ -98,9 +98,9 @@
           <FileBox title="已购买的实物照片" hint="支持拖拽、点击或 Ctrl+V 粘贴图片" accept=".jpg,.jpeg,.png,.gif,.bmp,.webp" :file="photoFile" @change="setPhotoFile" @invalid="showToast($event, 'error')" />
           <FileBox
             title="发票"
-            hint="上传PDF自动识别；也可从文件夹复制后 Ctrl+V 粘贴 PDF/图片"
+            hint="仅支持 PDF；可点击/拖拽上传，或从文件夹复制后 Ctrl+V 粘贴"
             :status="invoiceParseStatus"
-            accept=".jpg,.jpeg,.png,.gif,.bmp,.webp,.pdf,.ofd"
+            accept=".pdf"
             :file="invoiceFile"
             @change="setInvoiceFile"
             @invalid="showToast($event, 'error')"
@@ -153,6 +153,7 @@
         @preview="openPreview"
         @toggle="toggleSelect"
         @toggle-all="toggleSelectAll"
+        @range-select="onPendingRangeSelect"
         @detail="openDetail"
       />
     </section>
@@ -220,14 +221,58 @@
             <input v-model="filter.date_to" class="filter-date" type="date" @change="loadRecords(1)" />
             <button class="btn-plain" @click="loadRecords(1)">查询</button>
             <a class="btn-primary btn-link" :href="exportHref" target="_blank">导出Excel</a>
-            <a class="btn-primary btn-link btn-outline" :href="invoiceZipHref" target="_blank">发票ZIP</a>
+            <a
+              class="btn-primary btn-link btn-outline"
+              :class="{ 'is-disabled': !recordsSelectedIds.length }"
+              :href="invoiceZipHref"
+              target="_blank"
+              @click="onExportInvoiceZip"
+            >发票ZIP{{ recordsSelectedIds.length ? `（${recordsSelectedIds.length}）` : '' }}</a>
           </div>
         </div>
-        <RecordTable :rows="recordsList" mode="records" :page="recordsPage" :page-size="pageSize" @preview="openPreview" @delete="handleDelete" @detail="openDetail" />
-        <div class="pagination" v-if="recordsTotal > pageSize">
+        <div v-if="recordsList.length" class="select-toolbar">
+          <span class="select-toolbar__count">已选 <strong>{{ recordsSelectedIds.length }}</strong> / {{ recordsList.length }}</span>
+          <button type="button" class="btn-plain btn-sm" @click="toggleAllRecords(true)">本页全选</button>
+          <button type="button" class="btn-plain btn-sm" @click="invertRecordsSelection">反选</button>
+          <button type="button" class="btn-plain btn-sm" @click="toggleAllRecords(false)">清空</button>
+          <span class="select-toolbar__divider" />
+          <label class="select-range">
+            序号
+            <input v-model.trim="recordsRangeFrom" class="range-input" type="number" min="1" placeholder="起" @keyup.enter="selectRecordsByIdRange" />
+            <span>—</span>
+            <input v-model.trim="recordsRangeTo" class="range-input" type="number" min="1" placeholder="止" @keyup.enter="selectRecordsByIdRange" />
+            <button type="button" class="btn-primary btn-sm" @click="selectRecordsByIdRange">勾选区间</button>
+          </label>
+          <span class="select-toolbar__tip">也可在勾选列按住鼠标上下拖动划选</span>
+        </div>
+        <RecordTable
+          :rows="recordsList"
+          mode="records"
+          :page="recordsPage"
+          :page-size="pageSize"
+          :selected-ids="recordsSelectedIds"
+          :all-selected="allRecordsSelected"
+          :sort-by="recordsSortBy"
+          :sort-dir="recordsSortDir"
+          @preview="openPreview"
+          @delete="handleDelete"
+          @detail="openDetail"
+          @toggle="toggleRecordSelect"
+          @toggle-all="toggleAllRecords"
+          @range-select="onRecordsRangeSelect"
+          @sort="onRecordsSort"
+        />
+        <div class="pagination" v-if="recordsTotal > 0">
           <button :disabled="recordsPage <= 1" @click="loadRecords(recordsPage - 1)">上一页</button>
-          <span>第 {{ recordsPage }} / {{ Math.ceil(recordsTotal / pageSize) }} 页，共 {{ recordsTotal }} 条</span>
+          <span>第 {{ recordsPage }} / {{ Math.max(1, Math.ceil(recordsTotal / pageSize)) }} 页，共 {{ recordsTotal }} 条</span>
           <button :disabled="recordsPage >= Math.ceil(recordsTotal / pageSize)" @click="loadRecords(recordsPage + 1)">下一页</button>
+          <label class="page-size-ctrl">
+            每页
+            <select v-model.number="pageSize" class="filter-select page-size-select" @change="onPageSizeChange">
+              <option v-for="n in pageSizeOptions" :key="n" :value="n">{{ n }}</option>
+            </select>
+            条
+          </label>
         </div>
       </div>
     </section>
@@ -273,7 +318,7 @@
       </div>
     </div>
 
-    <div v-if="rejectVisible" class="modal-overlay" @click.self="rejectVisible = false">
+    <div v-if="rejectVisible" class="modal-overlay modal-overlay--elevated" @click.self="rejectVisible = false">
       <div class="reject-modal">
         <h3 class="panel-title">{{ rejectMode === 'batch' ? '批量驳回' : '驳回申请' }}</h3>
         <p class="reject-target">
@@ -401,38 +446,81 @@
           <button type="button" class="preview-close" aria-label="关闭" @click="invoiceCheckVisible = false">×</button>
         </div>
         <div class="check-summary" v-if="invoiceCheckResult?.summary">
-          <span>{{ invoiceCheckResult.summary.scope || '近一年未驳回申请' }}</span>
+          <span>{{ invoiceCheckResult.summary.scope || '历史全部未驳回申请' }}</span>
           <span>已校验 {{ invoiceCheckResult.summary.checked_count }} 项</span>
           <span>校验通过 {{ invoiceCheckResult.summary.passed_count || 0 }} 项</span>
           <span>重复发票 {{ invoiceCheckResult.summary.duplicate_count }} 组</span>
           <span>拆分风险 {{ invoiceCheckResult.summary.split_risk_count }} 组</span>
+          <span>抬头异常 {{ invoiceCheckResult.summary.buyer_header_issue_count || 0 }} 项</span>
           <span v-if="invoiceCheckResult.summary.skipped_count">跳过 {{ invoiceCheckResult.summary.skipped_count }} 项</span>
         </div>
         <div class="check-modal__body">
           <section class="check-section">
             <h4>重复提交发票</h4>
-            <p v-if="!invoiceCheckResult?.duplicate_invoices?.length" class="check-empty">未发现重复发票号码。</p>
+            <p v-if="!invoiceCheckResult?.duplicate_invoices?.length" class="check-empty">未发现需关注的重复发票号码（全组已完成报销的不提示）。</p>
             <div v-for="group in invoiceCheckResult?.duplicate_invoices || []" :key="group.invoice_number" class="risk-group">
               <strong>发票号码：{{ group.invoice_number }}</strong>
               <ul>
-                <li v-for="item in group.items" :key="item.id">
-                  <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，{{ item.supplier || '-' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
-                  <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
+                <li v-for="item in group.items" :key="item.id" class="risk-item">
+                  <div class="risk-item__main">
+                    <span class="status-tag" :class="statusClass(item.status)">{{ item.status_text || '-' }}</span>
+                    <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，{{ item.supplier || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
+                  </div>
+                  <div class="risk-item__actions">
+                    <template v-if="isPendingForMe(item)">
+                      <button type="button" class="btn-reject btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkReject(item)">驳回</button>
+                      <button type="button" class="btn-approve btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkApprove(item)">{{ Number(item.status) === 2 ? '完成报销' : '通过' }}</button>
+                    </template>
+                    <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
+                  </div>
                 </li>
               </ul>
             </div>
           </section>
           <section class="check-section">
             <h4>拆分报销风险</h4>
-            <p v-if="!invoiceCheckResult?.split_risks?.length" class="check-empty">未发现同供应商同开票日期的多张发票。</p>
+            <p v-if="!invoiceCheckResult?.split_risks?.length" class="check-empty">未发现需关注的拆分风险（全组已完成报销的不提示）。</p>
             <div v-for="group in invoiceCheckResult?.split_risks || []" :key="`${group.supplier}-${group.invoice_date}`" class="risk-group">
               <strong>{{ group.supplier }}，开票日期：{{ group.invoice_date }}</strong>
               <ul>
-                <li v-for="item in group.items" :key="item.id">
-                  <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，发票号 {{ item.invoice_number || '未识别' }}，{{ item.status_text || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
-                  <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
+                <li v-for="item in group.items" :key="item.id" class="risk-item">
+                  <div class="risk-item__main">
+                    <span class="status-tag" :class="statusClass(item.status)">{{ item.status_text || '-' }}</span>
+                    <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，发票号 {{ item.invoice_number || '未识别' }}，金额 {{ formatMoney(item.total_price) }}</span>
+                  </div>
+                  <div class="risk-item__actions">
+                    <template v-if="isPendingForMe(item)">
+                      <button type="button" class="btn-reject btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkReject(item)">驳回</button>
+                      <button type="button" class="btn-approve btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkApprove(item)">{{ Number(item.status) === 2 ? '完成报销' : '通过' }}</button>
+                    </template>
+                    <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
+                  </div>
                 </li>
               </ul>
+            </div>
+          </section>
+          <section class="check-section">
+            <h4>购买方抬头异常</h4>
+            <p class="check-hint">要求：名称「哈尔滨电机厂有限责任公司」，统一社会信用代码/纳税人识别号「912301991270479655」。仅提示审核中的申请。</p>
+            <p v-if="!invoiceCheckResult?.buyer_header_issues?.length" class="check-empty">未发现审核中的抬头异常发票。</p>
+            <div v-for="item in invoiceCheckResult?.buyer_header_issues || []" :key="`buyer-${item.id}`" class="risk-group">
+              <div class="risk-item">
+                <div class="risk-item__main">
+                  <span class="status-tag" :class="statusClass(item.status)">{{ item.status_text || '-' }}</span>
+                  <span>#{{ item.id }} {{ item.applicant }} - {{ item.material_name || '-' }}，金额 {{ formatMoney(item.total_price) }}</span>
+                </div>
+                <div class="risk-item__actions">
+                  <template v-if="isPendingForMe(item)">
+                    <button type="button" class="btn-reject btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkReject(item)">驳回</button>
+                    <button type="button" class="btn-approve btn-sm" :disabled="checkActionLoadingId === item.id" @click="checkApprove(item)">{{ Number(item.status) === 2 ? '完成报销' : '通过' }}</button>
+                  </template>
+                  <button type="button" class="risk-preview-btn" @click="previewCheckedInvoice(item)">预览发票</button>
+                </div>
+              </div>
+              <ul class="buyer-issue-list">
+                <li v-for="(issue, idx) in (item.buyer_issues || [])" :key="idx">{{ issue }}</li>
+              </ul>
+              <p class="buyer-meta">识别名称：{{ item.buyer_name || '未识别' }}；识别税号：{{ item.buyer_tax_id || '未识别' }}</p>
             </div>
           </section>
           <section v-if="invoiceCheckResult?.skipped?.length" class="check-section">
@@ -555,7 +643,7 @@ const FileBox = defineComponent({
       const file = files.find(acceptsFile)
       if (!file) {
         if (files.length) emit('invalid', `${props.title || '附件'}不支持剪贴板中的文件格式`)
-        else if (pasteTarget.value) emit('invalid', '未检测到可粘贴文件，请先在文件夹中复制 PDF/图片后再粘贴')
+        else if (pasteTarget.value) emit('invalid', '未检测到可粘贴文件，请先复制文件后再粘贴')
         return
       }
       e.preventDefault()
@@ -624,19 +712,89 @@ const RecordTable = defineComponent({
     pageSize: { type: Number, default: 20 },
     selectedIds: { type: Array, default: () => [] },
     allSelected: { type: Boolean, default: false },
+    sortBy: { type: String, default: '' },
+    sortDir: { type: String, default: 'desc' },
   },
-  emits: ['approve', 'reject', 'complete', 'preview', 'toggle', 'toggle-all', 'delete', 'detail'],
+  emits: ['approve', 'reject', 'complete', 'preview', 'toggle', 'toggle-all', 'delete', 'detail', 'sort', 'range-select'],
   setup(props, { emit }) {
     const cell = (text, cls = '') => h('td', { class: cls, title: text || '' }, text || '-')
+    const drag = { active: false, startIndex: -1, selecting: true, snapshot: null }
+
+    const stopDragListeners = () => {
+      window.removeEventListener('mousemove', onDragMove)
+      window.removeEventListener('mouseup', onDragEnd)
+      window.removeEventListener('blur', onDragEnd)
+    }
+
+    const onDragMove = (e) => {
+      if (!drag.active) return
+      const el = document.elementFromPoint(e.clientX, e.clientY)
+      const tr = el?.closest?.('tr[data-row-index]')
+      if (!tr) return
+      const to = Number(tr.getAttribute('data-row-index'))
+      if (Number.isNaN(to)) return
+      emit('range-select', {
+        from: drag.startIndex,
+        to,
+        selecting: drag.selecting,
+        snapshot: drag.snapshot,
+      })
+    }
+
+    const onDragEnd = () => {
+      if (!drag.active) return
+      drag.active = false
+      drag.snapshot = null
+      stopDragListeners()
+    }
+
+    const startDragSelect = (e, index, id) => {
+      if (e.button !== 0) return
+      e.preventDefault()
+      e.stopPropagation()
+      const selecting = !props.selectedIds.includes(id)
+      drag.active = true
+      drag.startIndex = index
+      drag.selecting = selecting
+      drag.snapshot = [...(props.selectedIds || [])]
+      emit('range-select', {
+        from: index,
+        to: index,
+        selecting,
+        snapshot: drag.snapshot,
+      })
+      window.addEventListener('mousemove', onDragMove)
+      window.addEventListener('mouseup', onDragEnd)
+      window.addEventListener('blur', onDragEnd)
+    }
+
+    onBeforeUnmount(() => {
+      stopDragListeners()
+    })
+
     return () => {
       const rows = props.rows || []
-      const selectable = props.mode === 'pending'
+      const selectable = props.mode === 'pending' || props.mode === 'records'
       if (!rows.length) return h('div', { class: 'empty-state' }, '暂无记录')
       const headers = [
-        '序号', '物资名称', '申请人', '规格', '单价', '数量', '总价',
-        '实物照片', '用途', '发票',
-        '供应商', '工作号/科研号', '部套号',
-        '二级审批人', '三级审批人', '状态', '申请日期', '操作',
+        { key: 'id', label: '序号' },
+        { key: 'material_name', label: '物资名称' },
+        { key: 'applicant', label: '申请人' },
+        { key: 'specification', label: '规格' },
+        { key: 'unit_price', label: '单价' },
+        { key: 'quantity', label: '数量' },
+        { key: 'total_price', label: '总价' },
+        { key: null, label: '实物照片' },
+        { key: 'usage_detail', label: '用途' },
+        { key: null, label: '发票' },
+        { key: 'supplier', label: '供应商' },
+        { key: 'work_no', label: '工作号/科研号' },
+        { key: 'part_no', label: '部套号' },
+        { key: 'approver2', label: '二级审批人' },
+        { key: 'approver3', label: '三级审批人' },
+        { key: 'status', label: '状态' },
+        { key: 'apply_time', label: '申请日期' },
+        { key: null, label: '操作' },
       ]
       const headRow = []
       if (selectable) {
@@ -644,29 +802,49 @@ const RecordTable = defineComponent({
           h('input', {
             type: 'checkbox',
             class: 'row-check',
+            title: '全选/取消本页',
             checked: props.allSelected,
             onChange: (e) => emit('toggle-all', e.target.checked),
           }),
         ]))
       }
-      headers.forEach((x) => headRow.push(h('th', x)))
+      headers.forEach((col) => {
+        if (props.mode === 'records' && col.key) {
+          const active = props.sortBy === col.key
+          headRow.push(h('th', {
+            class: ['th-sortable', active ? 'th-sortable--active' : ''],
+            title: '点击排序',
+            onClick: () => emit('sort', col.key),
+          }, [
+            h('span', col.label),
+            h('span', { class: ['sort-ind', active ? '' : 'sort-ind--muted'] }, active ? (props.sortDir === 'asc' ? ' ↑' : ' ↓') : ' ↕'),
+          ]))
+        } else {
+          headRow.push(h('th', col.label))
+        }
+      })
       return h('div', { class: 'table-wrap' }, [
         h('table', { class: 'data-table' }, [
           h('thead', [h('tr', headRow)]),
           h('tbody', rows.map((r, index) => {
             const tds = []
             if (selectable) {
-              tds.push(h('td', { class: 'select-cell' }, [
+              tds.push(h('td', {
+                class: 'select-cell select-cell--drag',
+                title: '单击勾选；按住拖动可连续划选',
+                onMousedown: (e) => startDragSelect(e, index, r.id),
+              }, [
                 h('input', {
                   type: 'checkbox',
                   class: 'row-check',
                   checked: props.selectedIds.includes(r.id),
-                  onChange: () => emit('toggle', r.id),
+                  tabindex: -1,
+                  onClick: (e) => e.preventDefault(),
                 }),
               ]))
             }
             tds.push(
-              cell(String((Number(props.page) - 1) * Number(props.pageSize) + index + 1), 'index-cell'),
+              cell(String(r.id ?? ''), 'index-cell'),
               cell(r.material_name, 'name-cell'),
               cell(r.applicant),
               cell(r.specification),
@@ -685,7 +863,11 @@ const RecordTable = defineComponent({
               cell((r.apply_time || '').slice(0, 10)),
               h('td', { class: 'action-cell' }, actionButtons(r, props.mode, emit)),
             )
-            return h('tr', { key: r.id, class: props.selectedIds.includes(r.id) ? 'row-selected' : '' }, tds)
+            return h('tr', {
+              key: r.id,
+              'data-row-index': String(index),
+              class: props.selectedIds.includes(r.id) ? 'row-selected' : '',
+            }, tds)
           })),
         ]),
       ])
@@ -745,7 +927,14 @@ const myList = ref([])
 const recordsList = ref([])
 const recordsTotal = ref(0)
 const recordsPage = ref(1)
-const pageSize = 20
+const pageSize = ref(20)
+const pageSizeOptions = [10, 20, 50, 100]
+const recordsSelectedIds = ref([])
+const recordsLastSelectIndex = ref(null)
+const recordsRangeFrom = ref('')
+const recordsRangeTo = ref('')
+const recordsSortBy = ref('apply_time')
+const recordsSortDir = ref('desc')
 const filter = ref({ keyword: '', status: '', date_from: '', date_to: '' })
 const currentYear = new Date().getFullYear()
 const budgetYear = ref(currentYear)
@@ -768,10 +957,12 @@ const rejectTarget = ref(null)
 const rejectReason = ref('')
 const rejectMode = ref('single')
 const selectedIds = ref([])
+const pendingLastSelectIndex = ref(null)
 const batchLoading = ref(false)
 const invoiceCheckLoading = ref(false)
 const invoiceCheckVisible = ref(false)
 const invoiceCheckResult = ref(null)
+const checkActionLoadingId = ref(null)
 const toastMsg = ref('')
 const toastType = ref('success')
 let toastTimer = null
@@ -809,13 +1000,57 @@ const previewCanApprove = computed(() => {
 })
 
 const pendingCount = computed(() => pendingList.value.length)
+const pendingIdSet = computed(() => new Set(pendingList.value.map((row) => Number(row.id))))
 const allPendingSelected = computed(() => pendingList.value.length > 0 && selectedIds.value.length === pendingList.value.length)
+const allRecordsSelected = computed(() => (
+  recordsList.value.length > 0
+  && recordsList.value.every((row) => recordsSelectedIds.value.includes(row.id))
+))
 const selectablePassedIds = computed(() => {
-  const pendingIds = new Set(pendingList.value.map((row) => Number(row.id)))
   return (invoiceCheckResult.value?.checked || [])
-    .filter((item) => item.check_passed && pendingIds.has(Number(item.id)))
+    .filter((item) => item.check_passed && pendingIdSet.value.has(Number(item.id)))
     .map((item) => item.id)
 })
+
+function isPendingForMe(item) {
+  return pendingIdSet.value.has(Number(item?.id))
+}
+
+function patchCheckResultItem(id, patch) {
+  if (!invoiceCheckResult.value) return
+  const apply = (list) => {
+    if (!Array.isArray(list)) return
+    for (const item of list) {
+      if (Number(item.id) === Number(id)) Object.assign(item, patch)
+    }
+  }
+  apply(invoiceCheckResult.value.checked)
+  for (const group of invoiceCheckResult.value.duplicate_invoices || []) apply(group.items)
+  for (const group of invoiceCheckResult.value.split_risks || []) apply(group.items)
+  apply(invoiceCheckResult.value.buyer_header_issues)
+
+  const stillInProcess = (status) => [0, 1, 2].includes(Number(status))
+  const filterGroups = (groups) => (groups || []).filter((group) => (group.items || []).some((item) => stillInProcess(item.status)))
+  invoiceCheckResult.value.duplicate_invoices = filterGroups(invoiceCheckResult.value.duplicate_invoices)
+  invoiceCheckResult.value.split_risks = filterGroups(invoiceCheckResult.value.split_risks)
+  invoiceCheckResult.value.buyer_header_issues = (invoiceCheckResult.value.buyer_header_issues || [])
+    .filter((item) => stillInProcess(item.status) && (item.buyer_issues || []).length)
+  if (invoiceCheckResult.value.summary) {
+    invoiceCheckResult.value.summary.duplicate_count = invoiceCheckResult.value.duplicate_invoices.length
+    invoiceCheckResult.value.summary.split_risk_count = invoiceCheckResult.value.split_risks.length
+    invoiceCheckResult.value.summary.buyer_header_issue_count = invoiceCheckResult.value.buyer_header_issues.length
+  }
+}
+
+function statusTextAfterAction(action, prevStatus) {
+  if (action === 'reject') return { status: 22, status_text: '已驳回' }
+  if (action === 'complete') return { status: 3, status_text: '已完成' }
+  const st = Number(prevStatus)
+  if (st === 0) return { status: 1, status_text: '待三级审批' }
+  if (st === 1) return { status: 2, status_text: '待报销完成' }
+  if (st === 2) return { status: 3, status_text: '已完成' }
+  return { status: st, status_text: '-' }
+}
 const totalPrice = computed(() => formatMoney((Number(form.value.unit_price) || 0) * (Number(form.value.quantity) || 0)))
 const invoiceParsedSummary = computed(() => {
   const data = invoiceParsed.value
@@ -842,7 +1077,10 @@ const canViewLedger = computed(() => {
 const visibleTabs = computed(() => tabs.filter((tab) => tab.key !== 'records' || canViewLedger.value))
 const ledgerParams = computed(() => ({ ...filter.value, current_user: userName.value }))
 const exportHref = computed(() => lowValueExportUrl(ledgerParams.value))
-const invoiceZipHref = computed(() => lowValueInvoiceZipUrl(ledgerParams.value))
+const invoiceZipHref = computed(() => lowValueInvoiceZipUrl({
+  ...ledgerParams.value,
+  ids: recordsSelectedIds.value.join(','),
+}))
 
 function defaultForm() {
   return {
@@ -901,8 +1139,26 @@ function previewCheckedInvoice(item) {
     stored: item.invoice_attachment,
     original: item.invoice_original,
     row: item,
-    mode: 'check',
+    mode: isPendingForMe(item) ? 'pending' : 'check',
   })
+}
+
+async function checkApprove(item) {
+  if (!isPendingForMe(item) || checkActionLoadingId.value) return
+  const prevStatus = item.status
+  const action = Number(item.status) === 2 ? 'complete' : 'approve'
+  checkActionLoadingId.value = item.id
+  try {
+    const ok = await handleAction(item, action)
+    if (ok) patchCheckResultItem(item.id, statusTextAfterAction(action, prevStatus))
+  } finally {
+    checkActionLoadingId.value = null
+  }
+}
+
+function checkReject(item) {
+  if (!isPendingForMe(item)) return
+  openReject(item)
 }
 
 function closePreview() {
@@ -913,8 +1169,10 @@ function closePreview() {
 async function previewApprove() {
   const row = previewActionRow.value
   if (!row) return
+  const prevStatus = row.status
   const action = Number(row.status) === 2 ? 'complete' : 'approve'
-  await handleAction(row, action)
+  const ok = await handleAction(row, action)
+  if (ok) patchCheckResultItem(row.id, statusTextAfterAction(action, prevStatus))
   closePreview()
   if (detailVisible.value) closeDetail()
 }
@@ -975,11 +1233,6 @@ async function setInvoiceFile(file) {
   invoiceParseStatus.value = ''
   invoiceParseMessage.value = ''
   if (!file) return
-  if (!String(file.name || '').toLowerCase().endsWith('.pdf')) {
-    invoiceParseStatus.value = 'idle'
-    invoiceParseMessage.value = '当前仅PDF发票支持自动识别，图片发票请手工填写'
-    return
-  }
   invoiceParseStatus.value = 'loading'
   invoiceParseMessage.value = '正在识别发票信息...'
   try {
@@ -1062,16 +1315,36 @@ async function loadPending() {
 function pruneSelection() {
   const ids = new Set(pendingList.value.map((r) => r.id))
   selectedIds.value = selectedIds.value.filter((id) => ids.has(id))
+  pendingLastSelectIndex.value = null
 }
 
-function toggleSelect(id) {
+function toggleSelect(payload) {
+  const id = payload?.id ?? payload
   const idx = selectedIds.value.indexOf(id)
   if (idx >= 0) selectedIds.value.splice(idx, 1)
   else selectedIds.value.push(id)
+  const index = Number.isInteger(payload?.index)
+    ? payload.index
+    : pendingList.value.findIndex((row) => row.id === id)
+  if (index >= 0) pendingLastSelectIndex.value = index
+}
+
+function onPendingRangeSelect({ from, to, selecting, snapshot }) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return
+  const start = Math.min(from, to)
+  const end = Math.max(from, to)
+  const set = new Set(Array.isArray(snapshot) ? snapshot : selectedIds.value)
+  pendingList.value.slice(start, end + 1).forEach((row) => {
+    if (selecting) set.add(row.id)
+    else set.delete(row.id)
+  })
+  selectedIds.value = [...set]
+  pendingLastSelectIndex.value = end
 }
 
 function toggleSelectAll(checked) {
   selectedIds.value = checked ? pendingList.value.map((r) => r.id) : []
+  pendingLastSelectIndex.value = null
 }
 
 function selectCheckedPassed() {
@@ -1086,8 +1359,10 @@ async function runInvoiceCheck() {
     invoiceCheckResult.value = res?.data || null
     invoiceCheckVisible.value = true
     const summary = invoiceCheckResult.value?.summary || {}
-    const riskCount = Number(summary.duplicate_count || 0) + Number(summary.split_risk_count || 0)
-    showToast(riskCount ? `发现 ${riskCount} 组发票风险` : '未发现发票风险', riskCount ? 'error' : 'success')
+    const riskCount = Number(summary.duplicate_count || 0)
+      + Number(summary.split_risk_count || 0)
+      + Number(summary.buyer_header_issue_count || 0)
+    showToast(riskCount ? `发现 ${riskCount} 项发票风险` : '未发现发票风险', riskCount ? 'error' : 'success')
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '发票校验失败'
     showToast(typeof msg === 'string' ? msg : '发票校验失败', 'error')
@@ -1146,18 +1421,111 @@ async function loadRecords(page = 1) {
   if (!canViewLedger.value) {
     recordsList.value = []
     recordsTotal.value = 0
+    recordsSelectedIds.value = []
+    recordsLastSelectIndex.value = null
     return
   }
   recordsPage.value = page
   try {
-    const res = await getLowValueRecords({ page, page_size: pageSize, ...ledgerParams.value })
+    const res = await getLowValueRecords({
+      page,
+      page_size: pageSize.value,
+      sort_by: recordsSortBy.value,
+      sort_dir: recordsSortDir.value,
+      ...ledgerParams.value,
+    })
     recordsList.value = res?.data || []
     recordsTotal.value = res?.total || 0
+    recordsSelectedIds.value = []
+    recordsLastSelectIndex.value = null
   } catch {
     recordsList.value = []
     recordsTotal.value = 0
+    recordsSelectedIds.value = []
+    recordsLastSelectIndex.value = null
   }
   await loadBudgetSummary()
+}
+
+function onPageSizeChange() {
+  loadRecords(1)
+}
+
+function onRecordsSort(key) {
+  if (!key) return
+  if (recordsSortBy.value === key) {
+    recordsSortDir.value = recordsSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    recordsSortBy.value = key
+    recordsSortDir.value = 'asc'
+  }
+  loadRecords(1)
+}
+
+function toggleRecordSelect(payload) {
+  const id = payload?.id ?? payload
+  const idx = recordsSelectedIds.value.indexOf(id)
+  if (idx >= 0) recordsSelectedIds.value.splice(idx, 1)
+  else recordsSelectedIds.value.push(id)
+  const index = Number.isInteger(payload?.index)
+    ? payload.index
+    : recordsList.value.findIndex((row) => row.id === id)
+  if (index >= 0) recordsLastSelectIndex.value = index
+}
+
+function onRecordsRangeSelect({ from, to, selecting, snapshot }) {
+  if (!Number.isInteger(from) || !Number.isInteger(to)) return
+  const start = Math.min(from, to)
+  const end = Math.max(from, to)
+  const set = new Set(Array.isArray(snapshot) ? snapshot : recordsSelectedIds.value)
+  recordsList.value.slice(start, end + 1).forEach((row) => {
+    if (selecting) set.add(row.id)
+    else set.delete(row.id)
+  })
+  recordsSelectedIds.value = [...set]
+  recordsLastSelectIndex.value = end
+}
+
+function toggleAllRecords(checked) {
+  recordsSelectedIds.value = checked ? recordsList.value.map((row) => row.id) : []
+  recordsLastSelectIndex.value = null
+}
+
+function invertRecordsSelection() {
+  const selected = new Set(recordsSelectedIds.value)
+  recordsSelectedIds.value = recordsList.value
+    .map((row) => row.id)
+    .filter((id) => !selected.has(id))
+  recordsLastSelectIndex.value = null
+}
+
+function selectRecordsByIdRange() {
+  const from = Number(recordsRangeFrom.value)
+  const to = Number(recordsRangeTo.value)
+  if (!Number.isFinite(from) || !Number.isFinite(to)) {
+    showToast('请输入有效的起止序号', 'error')
+    return
+  }
+  const lo = Math.min(from, to)
+  const hi = Math.max(from, to)
+  const matched = recordsList.value.filter((row) => {
+    const id = Number(row.id)
+    return Number.isFinite(id) && id >= lo && id <= hi
+  })
+  if (!matched.length) {
+    showToast('当前页没有落在该序号区间的记录', 'error')
+    return
+  }
+  const set = new Set(recordsSelectedIds.value)
+  matched.forEach((row) => set.add(row.id))
+  recordsSelectedIds.value = [...set]
+  showToast(`已勾选序号 ${lo}-${hi} 范围内 ${matched.length} 条`)
+}
+
+function onExportInvoiceZip(e) {
+  if (recordsSelectedIds.value.length) return
+  e.preventDefault()
+  showToast('请先勾选要导出的发票', 'error')
 }
 
 async function loadBudgetSummary() {
@@ -1257,9 +1625,11 @@ async function handleAction(row, action) {
     } else if (canViewLedger.value) {
       await loadBudgetSummary()
     }
+    return true
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '操作失败'
     showToast(typeof msg === 'string' ? msg : '操作失败', 'error')
+    return false
   }
 }
 
@@ -1311,8 +1681,9 @@ async function confirmReject() {
   }
   if (!rejectTarget.value) return
   try {
+    const targetId = rejectTarget.value.id
     await actionLowValueReimbursement({
-      id: rejectTarget.value.id,
+      id: targetId,
       operator: userName.value,
       action: 'reject',
       reject_reason: rejectReason.value,
@@ -1320,6 +1691,7 @@ async function confirmReject() {
     showToast('已驳回')
     rejectVisible.value = false
     await loadPending()
+    patchCheckResultItem(targetId, statusTextAfterAction('reject'))
   } catch (e) {
     const msg = e?.response?.data?.detail || e?.message || '操作失败'
     showToast(typeof msg === 'string' ? msg : '操作失败', 'error')
@@ -1687,6 +2059,11 @@ watch(rejectVisible, (visible) => {
   align-items: center;
   text-decoration: none;
 }
+.btn-link.is-disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+  pointer-events: auto;
+}
 .btn-plain {
   border: 1px solid var(--color-border-base);
   color: var(--color-text-secondary);
@@ -1948,6 +2325,49 @@ watch(rejectVisible, (visible) => {
   font-size: var(--font-size-sm);
   color: var(--color-text-tertiary);
 }
+.select-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 10px;
+  padding: 8px var(--spacing-lg);
+  border-bottom: 1px solid var(--color-border-lighter);
+  background: var(--color-bg-spotlight);
+}
+.select-toolbar__count {
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+  margin-right: 4px;
+}
+.select-toolbar__divider {
+  width: 1px;
+  height: 18px;
+  background: var(--color-border-base);
+  margin: 0 2px;
+}
+.select-toolbar__tip {
+  font-size: var(--font-size-xs);
+  color: var(--color-text-tertiary);
+}
+.select-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--font-size-sm);
+  color: var(--color-text-secondary);
+}
+.range-input {
+  width: 76px;
+  padding: 4px 8px;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  background: var(--color-bg-container);
+  color: var(--color-text-primary);
+}
+.btn-sm {
+  padding: 4px 10px;
+  font-size: var(--font-size-xs);
+}
 .batch-count strong {
   color: var(--color-primary);
 }
@@ -2103,6 +2523,7 @@ watch(rejectVisible, (visible) => {
   display: flex;
   justify-content: center;
   align-items: center;
+  flex-wrap: wrap;
   gap: 12px;
   padding: var(--spacing-base);
   color: var(--color-text-secondary);
@@ -2120,6 +2541,35 @@ watch(rejectVisible, (visible) => {
   opacity: .5;
   cursor: not-allowed;
 }
+.page-size-ctrl {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 4px;
+}
+.page-size-select {
+  width: auto;
+  min-width: 72px;
+  padding: 4px 8px;
+}
+.th-sortable {
+  cursor: pointer;
+  user-select: none;
+  white-space: nowrap;
+}
+.th-sortable:hover {
+  color: var(--color-primary);
+}
+.th-sortable--active {
+  color: var(--color-primary);
+}
+.sort-ind {
+  font-size: 11px;
+  margin-left: 2px;
+}
+.sort-ind--muted {
+  opacity: 0.35;
+}
 
 /* 弹窗通用 */
 .modal-overlay {
@@ -2130,6 +2580,9 @@ watch(rejectVisible, (visible) => {
   display: flex;
   align-items: center;
   justify-content: center;
+}
+.modal-overlay--elevated {
+  z-index: calc(var(--z-index-modal) + 20);
 }
 .reject-modal {
   width: 440px;
@@ -2202,6 +2655,12 @@ watch(rejectVisible, (visible) => {
   color: var(--color-text-tertiary);
   font-size: var(--font-size-sm);
 }
+.check-hint {
+  margin: 0 0 8px;
+  color: var(--color-text-secondary);
+  font-size: var(--font-size-xs);
+  line-height: 1.5;
+}
 .risk-group {
   padding: 10px 12px;
   border: 1px solid var(--color-error-light);
@@ -2215,16 +2674,58 @@ watch(rejectVisible, (visible) => {
 .risk-group ul,
 .skip-list {
   margin: 8px 0 0;
-  padding-left: 18px;
+  padding-left: 0;
+  list-style: none;
   color: var(--color-text-secondary);
   font-size: var(--font-size-sm);
   line-height: 1.65;
 }
+.skip-list {
+  padding-left: 18px;
+  list-style: disc;
+}
 .risk-group li {
   margin: 6px 0;
 }
+.risk-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.risk-item__main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  flex: 1;
+}
+.risk-item__actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.risk-item__actions .btn-sm {
+  padding: 3px 9px;
+  font-size: var(--font-size-xs);
+}
+.buyer-issue-list {
+  margin-top: 6px;
+  padding-left: 18px;
+  color: var(--color-error);
+  font-size: var(--font-size-sm);
+}
+.buyer-meta {
+  margin: 6px 0 0;
+  color: var(--color-text-tertiary);
+  font-size: var(--font-size-xs);
+}
 .risk-preview-btn {
-  margin-left: 10px;
+  margin-left: 0;
   padding: 3px 9px;
   border: 1px solid #93c5fd;
   border-radius: 6px;
@@ -2232,6 +2733,7 @@ watch(rejectVisible, (visible) => {
   background: #eff6ff;
   cursor: pointer;
   white-space: nowrap;
+  flex-shrink: 0;
 }
 .risk-preview-btn:hover {
   border-color: #3b82f6;
@@ -2503,6 +3005,28 @@ watch(rejectVisible, (visible) => {
   background: var(--color-bg-spotlight);
   color: var(--color-text-secondary);
   font-weight: var(--font-weight-semibold);
+}
+.lvr-page .data-table th.th-sortable {
+  cursor: pointer;
+  user-select: none;
+}
+.lvr-page .data-table th.th-sortable:hover,
+.lvr-page .data-table th.th-sortable--active {
+  color: var(--color-primary);
+}
+.lvr-page .data-table th .sort-ind {
+  font-size: 11px;
+  margin-left: 2px;
+}
+.lvr-page .data-table th .sort-ind--muted {
+  opacity: 0.35;
+}
+.lvr-page .select-cell--drag {
+  cursor: pointer;
+  user-select: none;
+}
+.lvr-page .select-cell--drag .row-check {
+  pointer-events: none;
 }
 .lvr-page .data-table tbody tr:hover {
   background: var(--color-primary-lightest);

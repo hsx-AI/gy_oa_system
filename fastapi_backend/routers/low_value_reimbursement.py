@@ -31,13 +31,18 @@ UPLOAD_DIR = _BASE / settings.UPLOAD_DIR / "low_value_reimbursement"
 EXPORT_DIR = _BASE / "temp_docs"
 
 IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".gif", ".bmp", ".webp"}
-INVOICE_EXTENSIONS = IMAGE_EXTENSIONS | {".pdf", ".ofd"}
+INVOICE_EXTENSIONS = {".pdf"}
 
 STATUS_PENDING_SECOND = 0
 STATUS_PENDING_THIRD = 1
 STATUS_PENDING_COMPLETE = 2
 STATUS_COMPLETED = 3
 STATUS_REJECTED = 22
+
+# 低值易耗发票购买方抬头（须与公司开票信息一致）
+EXPECTED_BUYER_NAME = "哈尔滨电机厂有限责任公司"
+EXPECTED_BUYER_TAX_ID = "912301991270479655"
+IN_PROCESS_STATUSES = (STATUS_PENDING_SECOND, STATUS_PENDING_THIRD, STATUS_PENDING_COMPLETE)
 
 
 def _ensure_dirs():
@@ -172,6 +177,19 @@ def _fmt_date(value):
     return str(value)[:10]
 
 
+def _fmt_date_zh_md(value) -> str:
+    """申请日期格式化为「几月几日」，如 1月7日。"""
+    if not value:
+        return ""
+    if hasattr(value, "month") and hasattr(value, "day"):
+        return f"{int(value.month)}月{int(value.day)}日"
+    text = str(value).strip()
+    match = re.match(r"^(\d{4})[-/](\d{1,2})[-/](\d{1,2})", text)
+    if match:
+        return f"{int(match.group(2))}月{int(match.group(3))}日"
+    return text[:10]
+
+
 def _safe_zip_name(value: str) -> str:
     value = (value or "").strip() or "invoice.pdf"
     return re.sub(r'[\\/:*?"<>|\r\n]+', "_", value)
@@ -210,6 +228,107 @@ def _extract_invoice_number(text: str) -> str:
 
 def _normalize_supplier(value: str) -> str:
     return re.sub(r"\s+", "", value or "")
+
+
+def _normalize_invoice_compact(text: str) -> str:
+    return re.sub(r"\s+", "", text or "")
+
+
+def _extract_buyer_info(text: str) -> dict:
+    """从发票文本提取购买方名称与统一社会信用代码/纳税人识别号。"""
+    raw = text or ""
+    lines = [line.strip() for line in raw.splitlines() if line.strip()]
+    compact = _normalize_invoice_compact(raw)
+
+    buyer_section = ""
+    section_match = re.search(
+        r"购\s*买\s*方(?:信息)?(.*?)(?:销\s*售\s*方|销\s*方)",
+        compact,
+    )
+    if section_match:
+        buyer_section = section_match.group(1)
+    else:
+        section_match = re.search(r"购\s*方(.*?)销\s*方", compact)
+        if section_match:
+            buyer_section = section_match.group(1)
+    search_space = buyer_section or compact
+
+    buyer_tax_id = ""
+    for pattern in (
+        r"(?:统一社会信用代码(?:/纳税人识别号)?|纳税人识别号)[:：]?([0-9A-Za-z]{15,20})",
+        r"([0-9]{17}[0-9A-Za-z])",
+    ):
+        tax_match = re.search(pattern, search_space)
+        if tax_match:
+            buyer_tax_id = tax_match.group(1).upper()
+            break
+
+    buyer_name = ""
+    # 优先截取「名称」到税号标签之间的完整内容，避免「厂/公司」短后缀过早截断
+    name_match = re.search(
+        r"名称[:：]?(.+?)(?:统一社会信用代码|纳税人识别号|$)",
+        search_space,
+    )
+    if name_match:
+        buyer_name = name_match.group(1)
+
+    if not buyer_name:
+        for idx, line in enumerate(lines):
+            if not re.search(r"购\s*买\s*方|购\s*方", line):
+                continue
+            for candidate in lines[idx: idx + 10]:
+                if re.search(r"销\s*售\s*方|销\s*方", candidate):
+                    break
+                nm = re.search(r"名\s*称[:：]?\s*(.+)", candidate)
+                if nm:
+                    buyer_name = nm.group(1)
+                    break
+            break
+
+    buyer_name = _normalize_invoice_compact(buyer_name)
+    buyer_name = re.sub(r"(统一社会信用代码|纳税人识别号).*$", "", buyer_name)
+    if buyer_tax_id and buyer_name.endswith(buyer_tax_id):
+        buyer_name = buyer_name[: -len(buyer_tax_id)]
+    buyer_name = buyer_name.strip("：:，,;；/\\")
+
+    return {
+        "buyer_name": buyer_name,
+        "buyer_tax_id": buyer_tax_id,
+    }
+
+
+def _buyer_header_issues(buyer_name: str, buyer_tax_id: str) -> list[str]:
+    """校验购买方抬头是否为本公司。"""
+    name = _normalize_invoice_compact(buyer_name)
+    tax = _normalize_invoice_compact(buyer_tax_id).upper()
+    issues: list[str] = []
+    if not name and not tax:
+        issues.append("未识别购买方抬头信息")
+        return issues
+    if name != EXPECTED_BUYER_NAME:
+        issues.append(f"购买方名称异常：{name or '未识别'}（应为{EXPECTED_BUYER_NAME}）")
+    if tax != EXPECTED_BUYER_TAX_ID:
+        issues.append(f"纳税人识别号异常：{tax or '未识别'}（应为{EXPECTED_BUYER_TAX_ID}）")
+    return issues
+
+
+def _group_has_in_process(items: list[dict]) -> bool:
+    """风险组中是否仍有审核中的申请；全部已完成则无需再提示。"""
+    for item in items:
+        try:
+            status = int(item.get("status"))
+        except (TypeError, ValueError):
+            continue
+        if status in IN_PROCESS_STATUSES:
+            return True
+    return False
+
+
+def _is_in_process_status(status) -> bool:
+    try:
+        return int(status) in IN_PROCESS_STATUSES
+    except (TypeError, ValueError):
+        return False
 
 
 def _extract_item_numbers(lines: list[str], item_start: int | None) -> tuple[float | None, float | None]:
@@ -286,6 +405,7 @@ def _extract_invoice_fields(text: str, filename: str = "") -> dict:
         quantity = 1.0
         quantity_defaulted = True
     unit_price = round(float(invoice_total) / float(quantity), 2) if invoice_total is not None and quantity else raw_unit_price
+    buyer = _extract_buyer_info(text)
 
     return {
         "supplier": supplier,
@@ -297,6 +417,8 @@ def _extract_invoice_fields(text: str, filename: str = "") -> dict:
         "raw_unit_price": raw_unit_price,
         "invoice_date": invoice_date,
         "material_name": item_name,
+        "buyer_name": buyer.get("buyer_name") or "",
+        "buyer_tax_id": buyer.get("buyer_tax_id") or "",
         "text": text or "",
     }
 
@@ -409,6 +531,33 @@ def _status_text(status) -> str:
         STATUS_COMPLETED: "已完成",
         STATUS_REJECTED: "已驳回",
     }.get(st, "未知")
+
+
+# 台账可排序列：(SQL 列名, 是否中文文本——用 GBK 近似拼音首字母序)
+_RECORDS_SORTABLE = {
+    "id": ("id", False),
+    "material_name": ("material_name", True),
+    "applicant": ("applicant", True),
+    "specification": ("specification", True),
+    "unit_price": ("unit_price", False),
+    "quantity": ("quantity", False),
+    "total_price": ("total_price", False),
+    "usage_detail": ("usage_detail", True),
+    "supplier": ("supplier", True),
+    "work_no": ("work_no", True),
+    "part_no": ("part_no", True),
+    "approver2": ("approver2", True),
+    "approver3": ("approver3", True),
+    "status": ("status", False),
+    "apply_time": ("apply_time", False),
+}
+
+
+def _records_order_by(sort_by: str, sort_dir: str) -> str:
+    col, is_text = _RECORDS_SORTABLE.get((sort_by or "").strip()) or _RECORDS_SORTABLE["apply_time"]
+    direction = "ASC" if str(sort_dir or "").lower() == "asc" else "DESC"
+    expr = f"CONVERT({col} USING gbk)" if is_text else col
+    return f"{expr} {direction}, id {direction}"
 
 
 def _attach_display_fields(row: dict) -> None:
@@ -756,7 +905,12 @@ def reimbursement_action_batch(
 def check_reimbursement_invoices(
     operator: str = Form(""),
 ):
-    """智能校验近一年内未驳回发票：重复发票号、同供应商同开票日期拆分风险。"""
+    """智能校验历史全部未驳回发票：重复发票号、拆分风险、购买方抬头。
+
+    - 对照范围为历史全部未驳回记录（含已完成），便于发现与历史票重复/拆分；
+    - 若某一风险组内申请均已报销完成，则不再弹出该组；
+    - 购买方抬头异常仅提示仍在审核中的申请。
+    """
     _ensure_table()
     _ensure_dirs()
     name = operator.strip()
@@ -769,7 +923,6 @@ def check_reimbursement_invoices(
         SELECT *
         FROM low_value_reimbursement
         WHERE status != %s
-          AND apply_time >= DATE_SUB(NOW(), INTERVAL 1 YEAR)
         ORDER BY apply_time DESC
         """,
         (STATUS_REJECTED,),
@@ -795,6 +948,10 @@ def check_reimbursement_invoices(
         except HTTPException as e:
             skipped.append({"id": rid, "reason": str(e.detail)})
             continue
+
+        buyer_name = fields.get("buyer_name") or ""
+        buyer_tax_id = fields.get("buyer_tax_id") or ""
+        buyer_issues = _buyer_header_issues(buyer_name, buyer_tax_id)
         checked.append({
             "id": rid,
             "material_name": row.get("material_name") or "",
@@ -802,6 +959,9 @@ def check_reimbursement_invoices(
             "supplier": fields.get("supplier") or row.get("supplier") or "",
             "invoice_number": fields.get("invoice_number") or "",
             "invoice_date": fields.get("invoice_date") or "",
+            "buyer_name": buyer_name,
+            "buyer_tax_id": buyer_tax_id,
+            "buyer_issues": buyer_issues,
             "invoice_attachment": stored,
             "invoice_original": row.get("invoice_original") or "",
             "total_price": _to_money(row.get("total_price")),
@@ -817,7 +977,7 @@ def check_reimbursement_invoices(
         if number:
             by_number.setdefault(number, []).append(item)
     for number, items in by_number.items():
-        if len(items) > 1:
+        if len(items) > 1 and _group_has_in_process(items):
             duplicate_groups.append({"invoice_number": number, "items": items})
 
     split_groups = []
@@ -828,9 +988,14 @@ def check_reimbursement_invoices(
         if supplier_key and invoice_date:
             by_supplier_date.setdefault((supplier_key, invoice_date), []).append(item)
     for (supplier_key, invoice_date), items in by_supplier_date.items():
-        if len(items) > 1:
+        if len(items) > 1 and _group_has_in_process(items):
             supplier = items[0].get("supplier") or supplier_key
             split_groups.append({"supplier": supplier, "invoice_date": invoice_date, "items": items})
+
+    buyer_header_issues = [
+        item for item in checked
+        if _is_in_process_status(item.get("status")) and item.get("buyer_issues")
+    ]
 
     risk_reasons_by_id: dict[int, list[str]] = {}
     for group in duplicate_groups:
@@ -840,7 +1005,11 @@ def check_reimbursement_invoices(
         for item in group["items"]:
             risk_reasons_by_id.setdefault(item["id"], []).append("疑似拆分报销")
     for item in checked:
-        reasons = risk_reasons_by_id.get(item["id"], [])
+        reasons = list(risk_reasons_by_id.get(item["id"], []))
+        if _is_in_process_status(item.get("status")):
+            for issue in item.get("buyer_issues") or []:
+                if issue not in reasons:
+                    reasons.append(issue)
         item["check_passed"] = not reasons
         item["risk_reasons"] = reasons
 
@@ -851,13 +1020,15 @@ def check_reimbursement_invoices(
             "skipped": skipped,
             "duplicate_invoices": duplicate_groups,
             "split_risks": split_groups,
+            "buyer_header_issues": buyer_header_issues,
             "summary": {
                 "checked_count": len(checked),
                 "passed_count": sum(1 for item in checked if item["check_passed"]),
                 "skipped_count": len(skipped),
                 "duplicate_count": len(duplicate_groups),
                 "split_risk_count": len(split_groups),
-                "scope": "近一年未驳回申请",
+                "buyer_header_issue_count": len(buyer_header_issues),
+                "scope": "历史全部未驳回申请（已完成仅作对照；全组已完成不提示）",
             },
         },
     }
@@ -982,24 +1153,27 @@ def upsert_budget(
 @router.get("/records")
 def get_reimbursement_records(
     page: int = Query(1, ge=1),
-    page_size: int = Query(20, ge=1, le=100),
+    page_size: int = Query(20, ge=1, le=200),
     keyword: str = Query(""),
     status: str = Query(""),
     date_from: str = Query(""),
     date_to: str = Query(""),
     current_user: str = Query(""),
+    sort_by: str = Query("apply_time"),
+    sort_dir: str = Query("desc"),
 ):
     _ensure_table()
     _require_ledger_permission(current_user)
     where, params = _build_records_where(keyword, status, date_from, date_to)
     total = db.execute_scalar(f"SELECT COUNT(*) AS cnt FROM low_value_reimbursement WHERE {where}", tuple(params)) or 0
     offset = (page - 1) * page_size
+    order_sql = _records_order_by(sort_by, sort_dir)
     rows = db.execute_query(
         f"""
         SELECT *
         FROM low_value_reimbursement
         WHERE {where}
-        ORDER BY apply_time DESC
+        ORDER BY {order_sql}
         LIMIT %s OFFSET %s
         """,
         tuple(params) + (page_size, offset),
@@ -1173,14 +1347,29 @@ def export_invoice_zip(
     date_from: str = Query(""),
     date_to: str = Query(""),
     current_user: str = Query(""),
+    ids: str = Query(""),
 ):
     _ensure_table()
     _require_ledger_permission(current_user)
     _ensure_dirs()
     where, params = _build_records_where(keyword, status, date_from, date_to)
+    id_list = [int(x) for x in re.split(r"[,\s]+", (ids or "").strip()) if x.strip().isdigit()]
+    # 必须勾选导出：未传 ids 时不导出全部，避免误导全部发票
+    if not id_list:
+        zip_path = EXPORT_DIR / f"low_value_invoices_{uuid.uuid4().hex}.zip"
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("README.txt", "未勾选任何记录，请在台账页勾选后再导出发票 ZIP。")
+        return FileResponse(
+            path=str(zip_path),
+            filename=f"低值易耗发票PDF_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip",
+            media_type="application/zip",
+        )
+    placeholders = ",".join(["%s"] * len(id_list))
+    where = f"({where}) AND id IN ({placeholders})"
+    params = list(params) + id_list
     rows = db.execute_query(
         f"""
-        SELECT id, applicant, invoice_attachment, invoice_original, apply_time
+        SELECT id, applicant, invoice_attachment, invoice_original, apply_time, total_price
         FROM low_value_reimbursement
         WHERE {where}
         ORDER BY apply_time DESC
@@ -1192,18 +1381,22 @@ def export_invoice_zip(
     with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
         for row in rows:
             stored = row.get("invoice_attachment") or ""
-            if Path(stored).suffix.lower() != ".pdf":
+            ext = Path(stored).suffix.lower()
+            if ext != ".pdf":
                 continue
             file_path = UPLOAD_DIR / stored
             if not file_path.exists():
                 continue
-            apply_date = _fmt_date(row.get("apply_time")) or "no-date"
-            original = _safe_zip_name(row.get("invoice_original") or stored)
-            arcname = _safe_zip_name(f"{apply_date}_{row.get('id')}_{row.get('applicant') or ''}_{original}")
+            apply_date = _fmt_date_zh_md(row.get("apply_time")) or "无日期"
+            serial = row.get("id") or ""
+            applicant = (row.get("applicant") or "").strip() or "未知"
+            price = f"{_to_money(row.get('total_price')):.2f}"
+            # 命名：申请日期-序号-姓名-价格.pdf（序号与列表唯一序列号一致）
+            arcname = _safe_zip_name(f"{apply_date}-{serial}-{applicant}-{price}{ext}")
             zf.write(file_path, arcname)
             added += 1
         if added == 0:
-            zf.writestr("README.txt", "当前筛选条件下没有可导出的 PDF 发票。")
+            zf.writestr("README.txt", "勾选记录中没有可导出的 PDF 发票。")
     return FileResponse(
         path=str(zip_path),
         filename=f"低值易耗发票PDF_{datetime.now().strftime('%Y%m%d%H%M%S')}.zip",

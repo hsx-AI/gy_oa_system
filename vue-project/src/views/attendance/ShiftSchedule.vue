@@ -718,6 +718,101 @@
     <Transition name="shift-cap-toast-fade">
       <div v-if="shiftCapToast" class="shift-cap-toast" role="status">{{ shiftCapToast }}</div>
     </Transition>
+
+    <!-- 已发邮件排班改动后的补发确认（多步、强提醒） -->
+    <Teleport to="body">
+      <div
+        v-if="resendMailDialog.visible"
+        class="resend-mail-overlay"
+        role="alertdialog"
+        aria-modal="true"
+        aria-labelledby="resend-mail-title"
+        @keydown.esc.prevent="cancelResendMailDialog"
+      >
+        <div class="resend-mail-panel" :data-step="resendMailDialog.step">
+          <div class="resend-mail-banner">⚠ 高风险操作 · 请仔细阅读</div>
+          <h2 id="resend-mail-title" class="resend-mail-title">
+            你即将给<strong>分厂</strong>和<strong>部门领导</strong>补发排班邮件
+          </h2>
+          <p class="resend-mail-ranges">涉及已通知过的排班周期：{{ resendMailDialog.rangesText }}</p>
+
+          <template v-if="resendMailDialog.step === 1">
+            <div class="resend-mail-body">
+              <p class="resend-mail-highlight">
+                保存排班本身<strong>不会</strong>自动发信。<br />
+                只有你在本弹窗一路确认后，系统才会立刻向已配置的收件人（含分厂、部门领导等）发出<strong>正式邮件</strong>，发出后<strong>无法撤回</strong>。
+              </p>
+              <p class="resend-mail-warn">若只是改排班、不需要通知领导，请点「仅保存，不发邮件」。</p>
+            </div>
+            <div class="resend-mail-actions">
+              <button type="button" class="btn resend-mail-btn-safe" @click="cancelResendMailDialog">
+                仅保存，不发邮件
+              </button>
+              <button type="button" class="btn resend-mail-btn-danger" @click="advanceResendMailDialog">
+                我已知晓，仍要补发 →
+              </button>
+            </div>
+            <p class="resend-mail-step">第 1 / 3 步确认</p>
+          </template>
+
+          <template v-else-if="resendMailDialog.step === 2">
+            <div class="resend-mail-body">
+              <p class="resend-mail-highlight resend-mail-highlight--pulse">
+                请再确认一次：<br />
+                <strong>你真的要给分厂和部门领导补发这封排班邮件吗？</strong>
+              </p>
+              <p class="resend-mail-warn">
+                误点确认会导致领导邮箱再次收到正式排班通知。多数情况只需要保存排班，不必补发。
+              </p>
+            </div>
+            <div class="resend-mail-actions">
+              <button type="button" class="btn resend-mail-btn-safe" @click="cancelResendMailDialog">
+                取消，不发邮件
+              </button>
+              <button type="button" class="btn resend-mail-btn-danger" @click="advanceResendMailDialog">
+                确认要补发，进入最后一步 →
+              </button>
+            </div>
+            <p class="resend-mail-step">第 2 / 3 步确认</p>
+          </template>
+
+          <template v-else>
+            <div class="resend-mail-body">
+              <p class="resend-mail-highlight">
+                最后确认：输入下方红字短语后，才会真正发送。
+              </p>
+              <p class="resend-mail-phrase">{{ RESEND_CONFIRM_PHRASE }}</p>
+              <input
+                ref="resendMailInputRef"
+                v-model="resendMailDialog.typed"
+                class="resend-mail-input"
+                type="text"
+                autocomplete="off"
+                :placeholder="`请完整输入：${RESEND_CONFIRM_PHRASE}`"
+                @keydown.enter.prevent="submitResendMailDialog"
+              />
+              <p class="resend-mail-warn">
+                输入正确并点「立即补发邮件」后，邮件将马上发给分厂与部门领导，无法撤回。
+              </p>
+            </div>
+            <div class="resend-mail-actions">
+              <button type="button" class="btn resend-mail-btn-safe" @click="cancelResendMailDialog">
+                放弃发送
+              </button>
+              <button
+                type="button"
+                class="btn resend-mail-btn-danger"
+                :disabled="!resendMailTypedOk"
+                @click="submitResendMailDialog"
+              >
+                立即补发邮件
+              </button>
+            </div>
+            <p class="resend-mail-step">第 3 / 3 步确认（需输入短语）</p>
+          </template>
+        </div>
+      </div>
+    </Teleport>
   </div>
 </template>
 
@@ -812,23 +907,58 @@ function getChangedDates() {
   return [...changedShiftDates, ...changedPlanDates].filter(Boolean).sort()
 }
 
+const RESEND_CONFIRM_PHRASE = '确认补发排班邮件'
+const resendMailInputRef = ref(null)
+const resendMailDialog = reactive({
+  visible: false,
+  step: 1,
+  rangesText: '',
+  typed: '',
+  resolve: null,
+})
+const resendMailTypedOk = computed(
+  () => (resendMailDialog.typed || '').trim() === RESEND_CONFIRM_PHRASE,
+)
+
 function confirmResendScheduleEmail(sentWeeks) {
-  if (!sentWeeks.length) return false
-  const ranges = sentWeeks.map(w => `${w.weekStart} 至 ${w.weekEnd}`).join('、')
-  const firstConfirm = confirm(
-    `注意：您正在修改已经邮件通知过的排班（${ranges}）。\n\n`
-    + '保存排班本身不会自动通知收件人。\n'
-    + '如果选择重新发送，系统会立即向已配置收件人和抄送人发出正式邮件，无法撤回。\n\n'
-    + '是否进入重新发送确认？',
-  )
-  if (!firstConfirm) return false
-  const typed = prompt(
-    `请再次确认是否重新发送排班邮件。\n\n`
-    + `涉及范围：${ranges}\n`
-    + '邮件发出后无法撤回。若确认发送，请输入：重新发送',
-    '',
-  )
-  return (typed || '').trim() === '重新发送'
+  if (!sentWeeks.length) return Promise.resolve(false)
+  const ranges = sentWeeks.map((w) => `${w.weekStart} 至 ${w.weekEnd}`).join('、')
+  return new Promise((resolve) => {
+    resendMailDialog.visible = true
+    resendMailDialog.step = 1
+    resendMailDialog.rangesText = ranges
+    resendMailDialog.typed = ''
+    resendMailDialog.resolve = resolve
+  })
+}
+
+function finishResendMailDialog(ok) {
+  const resolve = resendMailDialog.resolve
+  resendMailDialog.visible = false
+  resendMailDialog.step = 1
+  resendMailDialog.typed = ''
+  resendMailDialog.resolve = null
+  if (resolve) resolve(!!ok)
+}
+
+function cancelResendMailDialog() {
+  finishResendMailDialog(false)
+}
+
+async function advanceResendMailDialog() {
+  if (resendMailDialog.step < 3) {
+    resendMailDialog.step += 1
+    resendMailDialog.typed = ''
+    if (resendMailDialog.step === 3) {
+      await nextTick()
+      resendMailInputRef.value?.focus?.()
+    }
+  }
+}
+
+function submitResendMailDialog() {
+  if (!resendMailTypedOk.value) return
+  finishResendMailDialog(true)
 }
 
 /** 单击单元格四选一：班次 + 值班位置 */
@@ -1801,7 +1931,7 @@ async function moSaveChanges() {
       const weeks = (res?.weeks || []).filter((week) => (
         sortedDates.some((ds) => ds >= week.weekStart && ds <= week.weekEnd)
       ))
-      if (weeks.length && confirmResendScheduleEmail(weeks)) resendWeeks = weeks
+      if (weeks.length && await confirmResendScheduleEmail(weeks)) resendWeeks = weeks
     } catch (e) {
       console.error('检查排班邮件发送记录失败:', e)
     }
@@ -2379,7 +2509,7 @@ async function handleSave() {
     }
     const sentWeeks = await getChangedSentWeeksForPrompt()
     if (sentWeeks.length) {
-      if (confirmResendScheduleEmail(sentWeeks)) resendWeeks = sentWeeks
+      if (await confirmResendScheduleEmail(sentWeeks)) resendWeeks = sentWeeks
     }
     await Promise.all(tasks)
     let resendError = ''
@@ -4079,6 +4209,170 @@ thead tr:first-child .sticky-col2 {
   background: #eef2ff;
   border-color: #6366f1;
   color: #3730a3;
+}
+
+/* 补发排班邮件：多步强提醒弹窗 */
+.resend-mail-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10050;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(80, 0, 0, 0.72);
+  backdrop-filter: blur(2px);
+}
+.resend-mail-panel {
+  width: min(560px, 100%);
+  max-height: min(90vh, 720px);
+  overflow: auto;
+  border-radius: 14px;
+  border: 4px solid #dc2626;
+  background: #fff7f7;
+  box-shadow:
+    0 0 0 6px rgba(220, 38, 38, 0.25),
+    0 24px 60px rgba(0, 0, 0, 0.45);
+  padding: 0 0 16px;
+  animation: resend-mail-shake 0.45s ease-out;
+}
+@keyframes resend-mail-shake {
+  0%, 100% { transform: translateX(0); }
+  20% { transform: translateX(-6px); }
+  40% { transform: translateX(6px); }
+  60% { transform: translateX(-4px); }
+  80% { transform: translateX(4px); }
+}
+.resend-mail-banner {
+  background: linear-gradient(90deg, #991b1b, #dc2626 40%, #b91c1c);
+  color: #fff;
+  font-size: 15px;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-align: center;
+  padding: 12px 16px;
+  text-shadow: 0 1px 0 rgba(0, 0, 0, 0.25);
+}
+.resend-mail-title {
+  margin: 18px 22px 8px;
+  font-size: 22px;
+  line-height: 1.45;
+  font-weight: 800;
+  color: #7f1d1d;
+  text-align: center;
+}
+.resend-mail-title strong {
+  color: #dc2626;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.resend-mail-ranges {
+  margin: 0 22px 14px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #fee2e2;
+  border: 1px dashed #f87171;
+  color: #991b1b;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  word-break: break-all;
+}
+.resend-mail-body {
+  margin: 0 22px 16px;
+}
+.resend-mail-highlight {
+  margin: 0 0 12px;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: #fff;
+  border: 2px solid #ef4444;
+  color: #450a0a;
+  font-size: 15px;
+  line-height: 1.65;
+  font-weight: 600;
+}
+.resend-mail-highlight--pulse {
+  animation: resend-mail-pulse 1.2s ease-in-out infinite;
+}
+@keyframes resend-mail-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgba(220, 38, 38, 0.35); }
+  50% { box-shadow: 0 0 0 8px rgba(220, 38, 38, 0); }
+}
+.resend-mail-warn {
+  margin: 0;
+  color: #b91c1c;
+  font-size: 14px;
+  font-weight: 700;
+  line-height: 1.55;
+}
+.resend-mail-phrase {
+  margin: 0 0 10px;
+  text-align: center;
+  font-size: 20px;
+  font-weight: 900;
+  color: #dc2626;
+  letter-spacing: 0.06em;
+  user-select: all;
+}
+.resend-mail-input {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 0 0 12px;
+  padding: 12px 14px;
+  font-size: 16px;
+  font-weight: 700;
+  border: 2px solid #f87171;
+  border-radius: 8px;
+  background: #fff;
+  color: #7f1d1d;
+  outline: none;
+}
+.resend-mail-input:focus {
+  border-color: #dc2626;
+  box-shadow: 0 0 0 3px rgba(220, 38, 38, 0.25);
+}
+.resend-mail-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  justify-content: stretch;
+  margin: 0 22px 8px;
+}
+.resend-mail-actions .btn {
+  flex: 1 1 180px;
+  min-height: 44px;
+  font-size: 14px;
+  font-weight: 700;
+}
+.resend-mail-btn-safe {
+  background: #ecfdf5 !important;
+  border: 2px solid #059669 !important;
+  color: #065f46 !important;
+}
+.resend-mail-btn-safe:hover {
+  background: #d1fae5 !important;
+}
+.resend-mail-btn-danger {
+  background: #dc2626 !important;
+  border: 2px solid #991b1b !important;
+  color: #fff !important;
+}
+.resend-mail-btn-danger:hover:not(:disabled) {
+  background: #b91c1c !important;
+}
+.resend-mail-btn-danger:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+.resend-mail-step {
+  margin: 4px 22px 0;
+  text-align: center;
+  font-size: 12px;
+  font-weight: 700;
+  color: #9f1239;
+  letter-spacing: 0.04em;
 }
 
 @media (max-width: 768px) {
