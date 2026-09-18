@@ -234,62 +234,104 @@ def _normalize_invoice_compact(text: str) -> str:
     return re.sub(r"\s+", "", text or "")
 
 
+def _clean_extracted_buyer_name(name: str, tax_id: str = "") -> str:
+    """清理购买方名称：去掉税号尾巴、竖排单元格串进来的「购买方信息」单字。"""
+    buyer_name = _normalize_invoice_compact(name)
+    buyer_name = re.sub(r"(统一社会信用代码|纳税人识别号).*$", "", buyer_name)
+    if tax_id and buyer_name.endswith(tax_id):
+        buyer_name = buyer_name[: -len(tax_id)]
+    # PDF 表格常把左侧竖排「购买方信息」逐字插入右侧单元格文本之间/末尾
+    buyer_name = buyer_name.strip("：:，,;；/\\")
+    buyer_name = buyer_name.rstrip("购买方信息")
+    buyer_name = buyer_name.lstrip("购买方信息")
+    return buyer_name.strip("：:，,;；/\\")
+
+
 def _extract_buyer_info(text: str) -> dict:
-    """从发票文本提取购买方名称与统一社会信用代码/纳税人识别号。"""
+    """从发票文本提取购买方名称与统一社会信用代码/纳税人识别号。
+
+    数电票常见版式：左侧单元格竖排「购买方信息」，右侧单元格才是名称/税号。
+    PyMuPDF 抽文本时常把竖排字逐个插入右侧内容中间，导致「购买方」无法连续匹配。
+    因此优先用「名称…税号」成对抽取，并识别本公司抬头原文是否出现在票面中。
+    """
     raw = text or ""
     lines = [line.strip() for line in raw.splitlines() if line.strip()]
     compact = _normalize_invoice_compact(raw)
 
-    buyer_section = ""
-    section_match = re.search(
-        r"购\s*买\s*方(?:信息)?(.*?)(?:销\s*售\s*方|销\s*方)",
-        compact,
+    pairs: list[tuple[str, str]] = []
+    pair_pattern = re.compile(
+        r"名称[:：]?(.+?)"
+        r"(?:统一社会信用代码(?:/纳税人识别号)?|纳税人识别号)[:：]?"
+        r"([0-9A-Za-z]{15,20})"
     )
-    if section_match:
-        buyer_section = section_match.group(1)
-    else:
-        section_match = re.search(r"购\s*方(.*?)销\s*方", compact)
-        if section_match:
-            buyer_section = section_match.group(1)
-    search_space = buyer_section or compact
-
-    buyer_tax_id = ""
-    for pattern in (
-        r"(?:统一社会信用代码(?:/纳税人识别号)?|纳税人识别号)[:：]?([0-9A-Za-z]{15,20})",
-        r"([0-9]{17}[0-9A-Za-z])",
-    ):
-        tax_match = re.search(pattern, search_space)
-        if tax_match:
-            buyer_tax_id = tax_match.group(1).upper()
-            break
+    for match in pair_pattern.finditer(compact):
+        tax = (match.group(2) or "").upper()
+        name = _clean_extracted_buyer_name(match.group(1) or "", tax)
+        if name or tax:
+            pairs.append((name, tax))
 
     buyer_name = ""
-    # 优先截取「名称」到税号标签之间的完整内容，避免「厂/公司」短后缀过早截断
-    name_match = re.search(
-        r"名称[:：]?(.+?)(?:统一社会信用代码|纳税人识别号|$)",
-        search_space,
-    )
-    if name_match:
-        buyer_name = name_match.group(1)
-
-    if not buyer_name:
-        for idx, line in enumerate(lines):
-            if not re.search(r"购\s*买\s*方|购\s*方", line):
-                continue
-            for candidate in lines[idx: idx + 10]:
-                if re.search(r"销\s*售\s*方|销\s*方", candidate):
-                    break
-                nm = re.search(r"名\s*称[:：]?\s*(.+)", candidate)
-                if nm:
-                    buyer_name = nm.group(1)
-                    break
+    buyer_tax_id = ""
+    # 优先命中本公司抬头；否则取票面第一组「名称+税号」（标准票购买方在前、销售方在后）
+    for name, tax in pairs:
+        if name == EXPECTED_BUYER_NAME or tax == EXPECTED_BUYER_TAX_ID:
+            buyer_name, buyer_tax_id = name, tax
             break
+    if not buyer_name and not buyer_tax_id and pairs:
+        buyer_name, buyer_tax_id = pairs[0]
 
-    buyer_name = _normalize_invoice_compact(buyer_name)
-    buyer_name = re.sub(r"(统一社会信用代码|纳税人识别号).*$", "", buyer_name)
-    if buyer_tax_id and buyer_name.endswith(buyer_tax_id):
-        buyer_name = buyer_name[: -len(buyer_tax_id)]
-    buyer_name = buyer_name.strip("：:，,;；/\\")
+    # 竖排交错导致成对正则失败时：票面若已出现完整本公司名称/税号，直接采用
+    if not buyer_name and EXPECTED_BUYER_NAME in compact:
+        buyer_name = EXPECTED_BUYER_NAME
+    if not buyer_tax_id and EXPECTED_BUYER_TAX_ID in compact:
+        buyer_tax_id = EXPECTED_BUYER_TAX_ID
+
+    if not buyer_name or not buyer_tax_id:
+        buyer_section = ""
+        section_match = re.search(
+            r"购\s*买\s*方(?:信息)?(.*?)(?:销\s*售\s*方|销\s*方)",
+            compact,
+        )
+        if section_match:
+            buyer_section = section_match.group(1)
+        else:
+            section_match = re.search(r"购\s*方(.*?)销\s*方", compact)
+            if section_match:
+                buyer_section = section_match.group(1)
+        search_space = buyer_section or compact
+
+        if not buyer_tax_id:
+            for pattern in (
+                r"(?:统一社会信用代码(?:/纳税人识别号)?|纳税人识别号)[:：]?([0-9A-Za-z]{15,20})",
+                r"([0-9]{17}[0-9A-Za-z])",
+            ):
+                tax_match = re.search(pattern, search_space)
+                if tax_match:
+                    buyer_tax_id = tax_match.group(1).upper()
+                    break
+
+        if not buyer_name:
+            name_match = re.search(
+                r"名称[:：]?(.+?)(?:统一社会信用代码|纳税人识别号|$)",
+                search_space,
+            )
+            if name_match:
+                buyer_name = name_match.group(1)
+
+        if not buyer_name:
+            for idx, line in enumerate(lines):
+                if not re.search(r"购\s*买\s*方|购\s*方", line):
+                    continue
+                for candidate in lines[idx: idx + 10]:
+                    if re.search(r"销\s*售\s*方|销\s*方", candidate):
+                        break
+                    nm = re.search(r"名\s*称[:：]?\s*(.+)", candidate)
+                    if nm:
+                        buyer_name = nm.group(1)
+                        break
+                break
+
+        buyer_name = _clean_extracted_buyer_name(buyer_name, buyer_tax_id)
 
     return {
         "buyer_name": buyer_name,
