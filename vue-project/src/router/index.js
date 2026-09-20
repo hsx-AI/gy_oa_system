@@ -215,9 +215,7 @@ const routes = [
   },
   {
     path: '/shared-files/test',
-    name: 'SharedFilesPhase2Test',
-    component: () => import('../views/shared-files/Phase2TestEntry.vue'),
-    meta: { title: '共享文档测试' }
+    redirect: '/shared-files'
   },
   {
     path: '/admin/employees',
