@@ -1,7 +1,9 @@
 # -*- coding: utf-8 -*-
-"""Shared documents: list/folders/upload/rename/delete + ONLYOFFICE editor-config."""
+"""Collaborative office module: folders visibility + leader file ops + blank docs."""
 from __future__ import annotations
 
+import io
+import json
 import logging
 import mimetypes
 import os
@@ -23,11 +25,11 @@ from services import shared_file_storage as storage
 
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/shared-files", tags=["shared-files"])
+router = APIRouter(prefix="/shared-files", tags=["collab-office"])
 
 OTHER_DEPT_LSYS = ("其他部门员工", "其他部门成员")
-
 ALLOWED_UPLOAD_EXT = {"doc", "docx", "xls", "xlsx", "ppt", "pptx"}
+BLANK_CREATE_EXT = {"docx", "xlsx", "pptx"}
 
 MIME_BY_EXT = {
     "doc": "application/msword",
@@ -37,15 +39,16 @@ MIME_BY_EXT = {
     "ppt": "application/vnd.ms-powerpoint",
     "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
 }
-
 DOC_TYPE_BY_EXT = {
-    "doc": "word",
-    "docx": "word",
-    "xls": "cell",
-    "xlsx": "cell",
-    "ppt": "slide",
-    "pptx": "slide",
+    "doc": "word", "docx": "word",
+    "xls": "cell", "xlsx": "cell",
+    "ppt": "slide", "pptx": "slide",
 }
+
+# Level keys used in folder visibility_levels JSON
+LEVEL_OPTIONS = [{'key': '部长', 'label': '部领导（部长/经理）'}, {'key': '副部长', 'label': '部领导（副部长/副经理/经理助理）'}, {'key': '主任', 'label': '室主任'}, {'key': '副主任', 'label': '室副主任'}, {'key': '组长', 'label': '班组长/组长'}]
+
+ROLE_MAP = {'部长': ['部长', '经理'], '副部长': ['副部长', '副经理', '经理助理'], '主任': ['主任'], '副主任': ['副主任'], '组长': ['组长', '班组长']}
 
 DDL = """
 CREATE TABLE IF NOT EXISTS shared_files (
@@ -62,6 +65,9 @@ CREATE TABLE IF NOT EXISTS shared_files (
   version INT NOT NULL DEFAULT 1,
   is_folder TINYINT NOT NULL DEFAULT 0,
   is_deleted TINYINT NOT NULL DEFAULT 0,
+  visibility_type VARCHAR(20) NOT NULL DEFAULT 'all',
+  visibility_depts TEXT NULL,
+  visibility_levels TEXT NULL,
   last_saved_key VARCHAR(100) NOT NULL DEFAULT '',
   last_saved_url VARCHAR(2000) NOT NULL DEFAULT '',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -69,7 +75,7 @@ CREATE TABLE IF NOT EXISTS shared_files (
   KEY idx_parent_deleted (parent_id, is_deleted),
   KEY idx_owner (owner_id),
   KEY idx_deleted (is_deleted)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='shared documents'
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='collab office files'
 """
 
 _NAME_BAD = re.compile(r'[\\/:*?"<>|\x00-\x1f]')
@@ -80,6 +86,15 @@ def _ensure_tables() -> None:
         db.execute_update(DDL, ())
     except Exception as e:
         logger.error("create shared_files failed: %s", e)
+    for stmt in (
+        "ALTER TABLE shared_files ADD COLUMN visibility_type VARCHAR(20) NOT NULL DEFAULT 'all'",
+        "ALTER TABLE shared_files ADD COLUMN visibility_depts TEXT NULL",
+        "ALTER TABLE shared_files ADD COLUMN visibility_levels TEXT NULL",
+    ):
+        try:
+            db.execute_update(stmt, ())
+        except Exception:
+            pass
 
 
 def _get_admin1() -> Optional[str]:
@@ -106,7 +121,47 @@ def is_admin1(name: str) -> bool:
     return bool(admin1 and (name or "").strip() == admin1)
 
 
-def can_access_shared_docs(name: str) -> Tuple[bool, str]:
+def _jb_norm(jb: str) -> str:
+    return (jb or "").strip()
+
+
+def _jb_match(jb: str, target: str) -> bool:
+    j = _jb_norm(jb)
+    if not j:
+        return False
+    titles = ROLE_MAP.get(target)
+    if titles:
+        for t in titles:
+            if j == t or j.startswith(t):
+                return True
+        if target == "副主任" and "副主任" in j:
+            return True
+        return False
+    return j == target or j.startswith(target)
+
+
+def is_minister_level(jb: str) -> bool:
+    return _jb_match(jb, "部长") or _jb_match(jb, "副部长")
+
+
+def is_director_level(jb: str) -> bool:
+    return _jb_match(jb, "主任") or _jb_match(jb, "副主任")
+
+
+def is_team_leader(jb: str) -> bool:
+    return _jb_match(jb, "组长")
+
+
+def can_manage_files(user: Dict[str, Any]) -> bool:
+    """Upload / create blank / delete files: dept leaders + room directors + team leaders + admin1."""
+    name = (user.get("name") or "").strip()
+    if is_admin1(name):
+        return True
+    jb = user.get("jb") or ""
+    return is_minister_level(jb) or is_director_level(jb) or is_team_leader(jb)
+
+
+def can_access_module(name: str) -> Tuple[bool, str]:
     user = _get_user_row(name)
     if not user:
         return False, "用户不存在或已离职"
@@ -114,28 +169,80 @@ def can_access_shared_docs(name: str) -> Tuple[bool, str]:
         return True, ""
     lsys = (user.get("lsys") or "").strip()
     if lsys in OTHER_DEPT_LSYS:
-        return False, "外部门用户暂不可访问共享文档"
+        return False, "外部门用户暂不可访问协同办公"
     if not lsys:
-        return False, "未分配科室，无法访问共享文档"
+        return False, "未分配科室，无法访问协同办公"
     return True, ""
 
 
 def require_module_access(name: str) -> Dict[str, Any]:
-    ok, msg = can_access_shared_docs(name)
+    ok, msg = can_access_module(name)
     if not ok:
-        logger.warning("shared-docs denied user=%s reason=%s", name, msg)
+        logger.warning("collab denied user=%s reason=%s", name, msg)
         raise HTTPException(status_code=403, detail=msg or "没有权限")
     user = _get_user_row(name)
     assert user is not None
     return user
 
 
-def can_mutate_meta(user_name: str, row: Dict[str, Any]) -> bool:
-    """Rename/delete: admin1 or creator."""
-    if is_admin1(user_name):
+def require_admin1(name: str) -> Dict[str, Any]:
+    user = require_module_access(name)
+    if not is_admin1(name):
+        raise HTTPException(status_code=403, detail="仅系统管理员可管理文件夹")
+    return user
+
+
+def require_file_manager(name: str) -> Dict[str, Any]:
+    user = require_module_access(name)
+    if not can_manage_files(user):
+        raise HTTPException(status_code=403, detail="仅部领导、室主任、班组长可上传/新建/删除文件")
+    return user
+
+
+def _parse_json_list(raw: Any) -> List[str]:
+    if raw is None:
+        return []
+    if isinstance(raw, list):
+        return [str(x).strip() for x in raw if str(x).strip()]
+    text = str(raw).strip()
+    if not text:
+        return []
+    try:
+        data = json.loads(text)
+        if isinstance(data, list):
+            return [str(x).strip() for x in data if str(x).strip()]
+    except Exception:
+        pass
+    return []
+
+
+def _visibility_of(row: Dict[str, Any]) -> Dict[str, Any]:
+    vtype = (row.get("visibility_type") or "all").strip().lower()
+    if vtype not in ("all", "restricted"):
+        vtype = "all"
+    return {
+        "visibility_type": vtype,
+        "visibility_depts": _parse_json_list(row.get("visibility_depts")),
+        "visibility_levels": _parse_json_list(row.get("visibility_levels")),
+    }
+
+
+def user_can_see_folder(user: Dict[str, Any], folder_row: Dict[str, Any]) -> bool:
+    name = (user.get("name") or "").strip()
+    if is_admin1(name):
         return True
-    creator = (row.get("created_by") or "").strip()
-    return bool(creator and creator == (user_name or "").strip())
+    vis = _visibility_of(folder_row)
+    if vis["visibility_type"] == "all":
+        return True
+    depts = vis["visibility_depts"]
+    levels = vis["visibility_levels"]
+    lsys = (user.get("lsys") or "").strip()
+    jb = user.get("jb") or ""
+    dept_ok = (not depts) or (lsys in depts)
+    level_ok = True
+    if levels:
+        level_ok = any(_jb_match(jb, lv) for lv in levels)
+    return bool(dept_ok and level_ok)
 
 
 def get_file_row(file_id: int, *, include_deleted: bool = False) -> Optional[Dict[str, Any]]:
@@ -149,6 +256,16 @@ def get_file_row(file_id: int, *, include_deleted: bool = False) -> Optional[Dic
     return rows[0] if rows else None
 
 
+def _assert_folder_visible(user: Dict[str, Any], folder_id: Optional[int]) -> None:
+    if folder_id is None:
+        return
+    folder = get_file_row(folder_id)
+    if not folder or not folder.get("is_folder"):
+        raise HTTPException(status_code=404, detail="父目录不存在")
+    if not user_can_see_folder(user, folder):
+        raise HTTPException(status_code=403, detail="无权访问该文件夹")
+
+
 def _now() -> str:
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -159,9 +276,7 @@ def _clean_name(name: str) -> str:
         raise HTTPException(status_code=400, detail="名称不能为空")
     if _NAME_BAD.search(clean) or clean in (".", ".."):
         raise HTTPException(status_code=400, detail="名称包含非法字符")
-    if len(clean) > 200:
-        clean = clean[:200]
-    return clean
+    return clean[:200]
 
 
 def _normalize_parent_id(parent_id: Optional[int]) -> Optional[int]:
@@ -182,16 +297,10 @@ def _assert_parent_folder(parent_id: Optional[int]) -> None:
 
 def _name_exists(parent_id: Optional[int], name: str, *, exclude_id: Optional[int] = None) -> bool:
     if parent_id is None:
-        sql = (
-            "SELECT id FROM shared_files WHERE parent_id IS NULL AND name=%s "
-            "AND COALESCE(is_deleted,0)=0"
-        )
+        sql = "SELECT id FROM shared_files WHERE parent_id IS NULL AND name=%s AND COALESCE(is_deleted,0)=0"
         params: tuple = (name,)
     else:
-        sql = (
-            "SELECT id FROM shared_files WHERE parent_id=%s AND name=%s "
-            "AND COALESCE(is_deleted,0)=0"
-        )
+        sql = "SELECT id FROM shared_files WHERE parent_id=%s AND name=%s AND COALESCE(is_deleted,0)=0"
         params = (parent_id, name)
     if exclude_id:
         sql += " AND id<>%s"
@@ -205,13 +314,27 @@ def _max_upload_bytes() -> int:
     return max(1, mb) * 1024 * 1024
 
 
-def _serialize_item(row: Dict[str, Any], current_user: str) -> Dict[str, Any]:
+def _perm_flags(user: Dict[str, Any], row: Dict[str, Any]) -> Dict[str, bool]:
+    name = (user.get("name") or "").strip()
+    admin = is_admin1(name)
+    file_mgr = can_manage_files(user)
+    is_folder = bool(row.get("is_folder"))
+    file_type = (row.get("file_type") or "").lower()
+    return {
+        "can_edit": (not is_folder) and file_type in DOC_TYPE_BY_EXT,
+        "can_rename": admin if is_folder else (admin or file_mgr),
+        "can_delete": admin if is_folder else file_mgr,
+        "can_set_visibility": admin and is_folder,
+    }
+
+
+def _serialize_item(row: Dict[str, Any], user: Dict[str, Any]) -> Dict[str, Any]:
     fid = int(row["id"])
     version = int(row.get("version") or 1)
     is_folder = bool(row.get("is_folder"))
     file_type = (row.get("file_type") or "").lower()
-    editable = (not is_folder) and file_type in DOC_TYPE_BY_EXT
-    return {
+    flags = _perm_flags(user, row)
+    data = {
         "id": fid,
         "name": row.get("name"),
         "file_type": file_type,
@@ -225,13 +348,14 @@ def _serialize_item(row: Dict[str, Any], current_user: str) -> Dict[str, Any]:
         "created_at": str(row.get("created_at") or ""),
         "updated_at": str(row.get("updated_at") or ""),
         "document_key": None if is_folder else oo_sec.build_document_key(fid, version),
-        "can_edit": editable,
-        "can_rename": can_mutate_meta(current_user, row),
-        "can_delete": can_mutate_meta(current_user, row),
+        **flags,
     }
+    if is_folder:
+        data.update(_visibility_of(row))
+    return data
 
 
-def _breadcrumb(file_id: Optional[int]) -> List[Dict[str, Any]]:
+def _breadcrumb(file_id: Optional[int], user: Dict[str, Any]) -> List[Dict[str, Any]]:
     crumbs: List[Dict[str, Any]] = []
     seen = set()
     cur = file_id
@@ -258,59 +382,37 @@ def _ensure_phase2_test_file() -> None:
             ("test.xlsx",),
         )
         if existing:
-            row = existing[0]
             try:
-                path = storage.resolve_storage_path(row.get("storage_path") or "")
+                path = storage.resolve_storage_path(existing[0].get("storage_path") or "")
                 if path.is_file():
                     return
-                logger.warning("test.xlsx meta exists but disk missing, rebuild id=%s", row.get("id"))
             except Exception:
-                logger.warning("test.xlsx storage_path invalid, rebuild id=%s", row.get("id"))
-
+                pass
         rel = storage.build_storage_relpath("xlsx")
         abs_path = storage.resolve_storage_path(rel)
         abs_path.parent.mkdir(parents=True, exist_ok=True)
-
         wb = Workbook()
         ws = wb.active
         ws.title = "Sheet1"
-        ws["A1"] = "ONLYOFFICE Phase2 Test"
-        ws["B1"] = "Edit this cell, close editor, reopen to verify save"
-        ws["A2"] = "Phase2/Phase3 collaboration"
+        ws["A1"] = "Collab Office Test"
         wb.save(str(abs_path))
         size = abs_path.stat().st_size
         now = _now()
-
         if existing:
             db.execute_update(
-                "UPDATE shared_files SET storage_path=%s, size=%s, version=1, "
-                "mime_type=%s, file_type=%s, updated_at=%s, last_saved_key='', last_saved_url='', "
-                "is_deleted=0 WHERE id=%s",
+                "UPDATE shared_files SET storage_path=%s, size=%s, version=1, mime_type=%s, file_type=%s, "
+                "updated_at=%s, last_saved_key='', last_saved_url='', is_deleted=0 WHERE id=%s",
                 (rel, size, MIME_BY_EXT["xlsx"], "xlsx", now, existing[0]["id"]),
             )
-            logger.info("rebuilt Phase2 test.xlsx id=%s path=%s", existing[0]["id"], rel)
             return
-
-        new_id = db.execute_insert(
+        db.execute_insert(
             "INSERT INTO shared_files "
             "(name, file_type, mime_type, parent_id, storage_path, size, owner_id, "
-            " created_by, updated_by, version, is_folder, is_deleted, "
+            " created_by, updated_by, version, is_folder, is_deleted, visibility_type, "
             " last_saved_key, last_saved_url, created_at, updated_at) "
-            "VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s,1,0,0,'','',%s,%s)",
-            (
-                "test.xlsx",
-                "xlsx",
-                MIME_BY_EXT["xlsx"],
-                rel,
-                size,
-                "system",
-                "system",
-                "system",
-                now,
-                now,
-            ),
+            "VALUES (%s,%s,%s,NULL,%s,%s,%s,%s,%s,1,0,0,'all','','',%s,%s)",
+            ("test.xlsx", "xlsx", MIME_BY_EXT["xlsx"], rel, size, "system", "system", "system", now, now),
         )
-        logger.info("created Phase2 test.xlsx id=%s path=%s", new_id, rel)
     except Exception as e:
         logger.error("init test.xlsx failed: %s", e)
 
@@ -332,14 +434,46 @@ def _public_callback_url(file_id: int) -> str:
 def _editor_user_payload(user: Dict[str, Any]) -> Dict[str, str]:
     name = (user.get("name") or "").strip()
     gh = (user.get("gh") or "").strip()
-    # Stable id helps ONLYOFFICE show the same collaborator across reloads.
     return {"id": gh or name, "name": name}
+
+
+def _build_blank_bytes(ext: str) -> bytes:
+    if ext == "xlsx":
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Sheet1"
+        buf = io.BytesIO()
+        wb.save(buf)
+        return buf.getvalue()
+    if ext == "docx":
+        from docx import Document
+        doc = Document()
+        doc.add_paragraph("")
+        buf = io.BytesIO()
+        doc.save(buf)
+        return buf.getvalue()
+    if ext == "pptx":
+        from pptx import Presentation
+        prs = Presentation()
+        # blank layout
+        try:
+            layout = prs.slide_layouts[6]
+        except Exception:
+            layout = prs.slide_layouts[0]
+        prs.slides.add_slide(layout)
+        buf = io.BytesIO()
+        prs.save(buf)
+        return buf.getvalue()
+    raise HTTPException(status_code=400, detail="不支持的文件类型")
 
 
 class FolderCreateRequest(BaseModel):
     name: str
     parent_id: Optional[int] = None
     current_user: str
+    visibility_type: str = "all"
+    visibility_depts: List[str] = Field(default_factory=list)
+    visibility_levels: List[str] = Field(default_factory=list)
 
 
 class RenameRequest(BaseModel):
@@ -347,14 +481,61 @@ class RenameRequest(BaseModel):
     current_user: str
 
 
+class VisibilityRequest(BaseModel):
+    current_user: str
+    visibility_type: str = "all"
+    visibility_depts: List[str] = Field(default_factory=list)
+    visibility_levels: List[str] = Field(default_factory=list)
+
+
+class BlankCreateRequest(BaseModel):
+    name: str
+    file_type: str
+    parent_id: Optional[int] = None
+    current_user: str
+
+
+def _normalize_visibility(vtype: str, depts: List[str], levels: List[str]) -> Tuple[str, str, str]:
+    vt = (vtype or "all").strip().lower()
+    if vt not in ("all", "restricted"):
+        vt = "all"
+    dept_list = [d.strip() for d in (depts or []) if d and str(d).strip()]
+    level_list = [lv.strip() for lv in (levels or []) if lv and str(lv).strip()]
+    allowed_keys = {x["key"] for x in LEVEL_OPTIONS}
+    level_list = [lv for lv in level_list if lv in allowed_keys]
+    if vt == "all":
+        return "all", "[]", "[]"
+    return "restricted", json.dumps(dept_list, ensure_ascii=False), json.dumps(level_list, ensure_ascii=False)
+
+
+@router.get("/meta/options")
+def get_options(current_user: str = Query(...)):
+    require_module_access(current_user)
+    depts = db.execute_query(
+        "SELECT DISTINCT TRIM(lsys) AS lsys FROM yggl "
+        "WHERE lsys IS NOT NULL AND TRIM(lsys) != '' "
+        "AND TRIM(lsys) NOT IN (%s,%s) AND COALESCE(zaizhi,0)=0 "
+        "ORDER BY lsys",
+        (OTHER_DEPT_LSYS[0], OTHER_DEPT_LSYS[1]),
+    )
+    return {
+        "success": True,
+        "departments": [r["lsys"] for r in (depts or []) if r.get("lsys")],
+        "levels": LEVEL_OPTIONS,
+        "blank_types": [
+            {"ext": "docx", "label": "Word (.docx)"},
+            {"ext": "xlsx", "label": "Excel (.xlsx)"},
+            {"ext": "pptx", "label": "PPT (.pptx)"},
+        ],
+    }
+
+
 @router.get("")
 @router.get("/")
-def list_shared_files(
-    current_user: str = Query(...),
-    parent_id: Optional[int] = Query(None),
-):
-    require_module_access(current_user)
+def list_shared_files(current_user: str = Query(...), parent_id: Optional[int] = Query(None)):
+    user = require_module_access(current_user)
     pid = _normalize_parent_id(parent_id)
+    _assert_folder_visible(user, pid)
     if pid is not None:
         _assert_parent_folder(pid)
         rows = db.execute_query(
@@ -368,67 +549,71 @@ def list_shared_files(
             "ORDER BY is_folder DESC, name ASC, id ASC",
             (),
         )
-    items = [_serialize_item(r, current_user) for r in (rows or [])]
+    items = []
+    for r in rows or []:
+        if r.get("is_folder") and not user_can_see_folder(user, r):
+            continue
+        items.append(_serialize_item(r, user))
+    name = (user.get("name") or "").strip()
     return {
         "success": True,
         "parent_id": pid,
-        "breadcrumb": _breadcrumb(pid),
+        "breadcrumb": _breadcrumb(pid, user),
         "items": items,
         "permissions": {
-            "can_upload": True,
-            "can_create_folder": True,
-            "is_admin": is_admin1(current_user),
-        },
-    }
-
-
-@router.get("/phase2-test-info")
-def phase2_test_info(current_user: str = Query(...)):
-    require_module_access(current_user)
-    rows = db.execute_query(
-        "SELECT id, name, version, size, updated_at, storage_path FROM shared_files "
-        "WHERE name=%s AND COALESCE(is_deleted,0)=0 ORDER BY id ASC LIMIT 1",
-        ("test.xlsx",),
-    )
-    if not rows:
-        raise HTTPException(status_code=404, detail="test.xlsx not found")
-    r = rows[0]
-    return {
-        "success": True,
-        "data": {
-            "id": r["id"],
-            "name": r.get("name"),
-            "version": r.get("version"),
-            "size": r.get("size"),
-            "updated_at": str(r.get("updated_at") or ""),
-            "edit_path": f"/shared-files/edit/{r['id']}",
+            "is_admin": is_admin1(name),
+            "can_create_folder": is_admin1(name),
+            "can_upload": can_manage_files(user),
+            "can_create_blank": can_manage_files(user),
+            "can_delete_file": can_manage_files(user),
         },
     }
 
 
 @router.post("/folders")
 def create_folder(req: FolderCreateRequest):
-    user = require_module_access(req.current_user)
+    user = require_admin1(req.current_user)
     name = _clean_name(req.name)
     pid = _normalize_parent_id(req.parent_id)
     _assert_parent_folder(pid)
+    if pid is not None:
+        _assert_folder_visible(user, pid)
     if _name_exists(pid, name):
         raise HTTPException(status_code=400, detail="同目录下已存在同名项目")
+    vt, vd, vl = _normalize_visibility(req.visibility_type, req.visibility_depts, req.visibility_levels)
     uname = (user.get("name") or "").strip()
     now = _now()
     new_id = db.execute_insert(
         "INSERT INTO shared_files "
         "(name, file_type, mime_type, parent_id, storage_path, size, owner_id, "
         " created_by, updated_by, version, is_folder, is_deleted, "
+        " visibility_type, visibility_depts, visibility_levels, "
         " last_saved_key, last_saved_url, created_at, updated_at) "
-        "VALUES (%s,'folder','',%s,'',0,%s,%s,%s,1,1,0,'','',%s,%s)",
-        (name, pid, uname, uname, uname, now, now),
+        "VALUES (%s,'folder','',%s,'',0,%s,%s,%s,1,1,0,%s,%s,%s,'','',%s,%s)",
+        (name, pid, uname, uname, uname, vt, vd, vl, now, now),
     )
     if not new_id:
         raise HTTPException(status_code=500, detail="create folder failed")
-    logger.info("shared folder create id=%s user=%s parent=%s name=%s", new_id, uname, pid, name)
-    row = get_file_row(int(new_id))
-    return {"success": True, "message": "文件夹已创建", "data": _serialize_item(row, uname)}
+    logger.info("collab folder create id=%s user=%s", new_id, uname)
+    return {"success": True, "message": "文件夹已创建", "data": _serialize_item(get_file_row(int(new_id)), user)}
+
+
+@router.patch("/{file_id}/visibility")
+def update_visibility(file_id: int, req: VisibilityRequest):
+    user = require_admin1(req.current_user)
+    row = get_file_row(file_id)
+    if not row or not row.get("is_folder"):
+        raise HTTPException(status_code=404, detail="文件不存在或已删除")
+    vt, vd, vl = _normalize_visibility(req.visibility_type, req.visibility_depts, req.visibility_levels)
+    now = _now()
+    uname = (user.get("name") or "").strip()
+    db.execute_update(
+        "UPDATE shared_files SET visibility_type=%s, visibility_depts=%s, visibility_levels=%s, "
+        "updated_by=%s, updated_at=%s WHERE id=%s",
+        (vt, vd, vl, uname, now, file_id),
+    )
+    logger.info("collab visibility updated file_id=%s user=%s type=%s", file_id, uname, vt)
+    return {"success": True, "message": "可见性已更新", "data": _serialize_item(get_file_row(file_id), user)}
 
 
 @router.post("/upload")
@@ -437,23 +622,21 @@ async def upload_file(
     parent_id: Optional[int] = Form(None),
     file: UploadFile = File(...),
 ):
-    user = require_module_access(current_user)
+    user = require_file_manager(current_user)
     uname = (user.get("name") or "").strip()
     pid = _normalize_parent_id(parent_id)
     _assert_parent_folder(pid)
+    _assert_folder_visible(user, pid)
 
-    raw_name = (file.filename or "").strip()
+    raw_name = os.path.basename((file.filename or "").replace("\\", "/").strip())
     if not raw_name:
         raise HTTPException(status_code=400, detail="名称不能为空")
-    # Use basename only; never trust path segments from client.
-    raw_name = os.path.basename(raw_name.replace("\\", "/"))
     ext = Path(raw_name).suffix.lower().lstrip(".")
     if ext not in ALLOWED_UPLOAD_EXT:
         raise HTTPException(status_code=400, detail="仅支持 Word/Excel/PPT 文件")
     display_name = _clean_name(raw_name)
     if _name_exists(pid, display_name):
         raise HTTPException(status_code=400, detail="同目录下已存在同名项目")
-
     content = await file.read()
     if not content:
         raise HTTPException(status_code=400, detail="文件内容为空")
@@ -468,9 +651,9 @@ async def upload_file(
     new_id = db.execute_insert(
         "INSERT INTO shared_files "
         "(name, file_type, mime_type, parent_id, storage_path, size, owner_id, "
-        " created_by, updated_by, version, is_folder, is_deleted, "
+        " created_by, updated_by, version, is_folder, is_deleted, visibility_type, "
         " last_saved_key, last_saved_url, created_at, updated_at) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,0,0,'','',%s,%s)",
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,0,0,'all','','',%s,%s)",
         (display_name, ext, mime, pid, rel, size, uname, uname, uname, now, now),
     )
     if not new_id:
@@ -479,21 +662,59 @@ async def upload_file(
         except Exception:
             pass
         raise HTTPException(status_code=500, detail="upload failed")
-    logger.info("shared upload id=%s user=%s name=%s size=%s", new_id, uname, display_name, size)
-    row = get_file_row(int(new_id))
-    return {"success": True, "message": "上传成功", "data": _serialize_item(row, uname)}
+    logger.info("collab upload id=%s user=%s name=%s", new_id, uname, display_name)
+    return {"success": True, "message": "上传成功", "data": _serialize_item(get_file_row(int(new_id)), user)}
+
+
+@router.post("/create-blank")
+def create_blank(req: BlankCreateRequest):
+    user = require_file_manager(req.current_user)
+    uname = (user.get("name") or "").strip()
+    ext = (req.file_type or "").lower().lstrip(".")
+    if ext not in BLANK_CREATE_EXT:
+        raise HTTPException(status_code=400, detail="不支持的文件类型")
+    name = _clean_name(req.name)
+    if not name.lower().endswith("." + ext):
+        name = f"{name}.{ext}"
+    pid = _normalize_parent_id(req.parent_id)
+    _assert_parent_folder(pid)
+    _assert_folder_visible(user, pid)
+    if _name_exists(pid, name):
+        raise HTTPException(status_code=400, detail="同目录下已存在同名项目")
+
+    content = _build_blank_bytes(ext)
+    rel = storage.build_storage_relpath(ext)
+    abs_path = storage.resolve_storage_path(rel)
+    size = storage.write_bytes_atomic(abs_path, content)
+    now = _now()
+    new_id = db.execute_insert(
+        "INSERT INTO shared_files "
+        "(name, file_type, mime_type, parent_id, storage_path, size, owner_id, "
+        " created_by, updated_by, version, is_folder, is_deleted, visibility_type, "
+        " last_saved_key, last_saved_url, created_at, updated_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,1,0,0,'all','','',%s,%s)",
+        (name, ext, MIME_BY_EXT.get(ext, ""), pid, rel, size, uname, uname, uname, now, now),
+    )
+    if not new_id:
+        raise HTTPException(status_code=500, detail="create blank failed")
+    logger.info("collab blank create id=%s user=%s name=%s", new_id, uname, name)
+    return {"success": True, "message": "已创建", "data": _serialize_item(get_file_row(int(new_id)), user)}
 
 
 @router.get("/{file_id}")
 def get_file_meta(file_id: int, current_user: str = Query(...)):
-    require_module_access(current_user)
+    user = require_module_access(current_user)
     row = get_file_row(file_id)
     if not row:
         raise HTTPException(status_code=404, detail="文件不存在或已删除")
+    parent_id = row.get("parent_id")
+    _assert_folder_visible(user, int(parent_id) if parent_id else None)
+    if row.get("is_folder") and not user_can_see_folder(user, row):
+        raise HTTPException(status_code=403, detail="无权访问该文件夹")
     return {
         "success": True,
-        "data": _serialize_item(row, current_user),
-        "breadcrumb": _breadcrumb(file_id if row.get("is_folder") else row.get("parent_id")),
+        "data": _serialize_item(row, user),
+        "breadcrumb": _breadcrumb(file_id if row.get("is_folder") else row.get("parent_id"), user),
     }
 
 
@@ -506,24 +727,21 @@ def download_file(
 ):
     row = get_file_row(file_id)
     if not row:
-        logger.warning("download missing file_id=%s", file_id)
         raise HTTPException(status_code=404, detail="文件不存在或已删除")
     if row.get("is_folder"):
         raise HTTPException(status_code=400, detail="文件夹不可下载")
 
     token_clean = (token or "").strip()
     user_clean = (current_user or "").strip()
-
     if token_clean:
         try:
             oo_sec.verify_onlyoffice_download_token(token_clean, expected_file_id=file_id)
         except Exception:
-            logger.warning("onlyoffice download token rejected file_id=%s", file_id)
             raise HTTPException(status_code=403, detail="下载凭证无效或已过期")
-        logger.info("shared download(onlyoffice) file_id=%s ok", file_id)
     elif user_clean:
-        require_module_access(user_clean)
-        logger.info("shared download(browser) file_id=%s user=%s ok", file_id, user_clean)
+        user = require_module_access(user_clean)
+        parent_id = row.get("parent_id")
+        _assert_folder_visible(user, int(parent_id) if parent_id else None)
     else:
         raise HTTPException(status_code=401, detail="缺少下载凭证")
 
@@ -532,17 +750,10 @@ def download_file(
     except ValueError:
         raise HTTPException(status_code=500, detail="文件路径无效")
     if not path.is_file():
-        logger.error("disk missing file_id=%s path=%s", file_id, path)
         raise HTTPException(status_code=404, detail="磁盘文件不存在")
-
     filename = (row.get("name") or path.name).strip() or path.name
     media = (row.get("mime_type") or "").strip() or mimetypes.guess_type(filename)[0] or "application/octet-stream"
-    return FileResponse(
-        path=str(path),
-        media_type=media,
-        filename=filename,
-        content_disposition_type="attachment",
-    )
+    return FileResponse(path=str(path), media_type=media, filename=filename, content_disposition_type="attachment")
 
 
 @router.patch("/{file_id}")
@@ -552,34 +763,24 @@ def rename_file(file_id: int, req: RenameRequest):
     row = get_file_row(file_id)
     if not row:
         raise HTTPException(status_code=404, detail="文件不存在或已删除")
-    if not can_mutate_meta(uname, row):
-        logger.warning("rename denied file_id=%s user=%s", file_id, uname)
-        raise HTTPException(status_code=403, detail="仅管理员或创建人可重命名")
-
+    flags = _perm_flags(user, row)
+    if not flags["can_rename"]:
+        raise HTTPException(status_code=403, detail="没有权限")
     new_name = _clean_name(req.name)
-    # Keep extension for files if user strips it accidentally.
     if not row.get("is_folder"):
         old_ext = Path(row.get("name") or "").suffix
-        new_ext = Path(new_name).suffix
-        if old_ext and not new_ext:
+        if old_ext and not Path(new_name).suffix:
             new_name = new_name + old_ext
-
     parent_id = row.get("parent_id")
     pid = int(parent_id) if parent_id else None
     if _name_exists(pid, new_name, exclude_id=file_id):
         raise HTTPException(status_code=400, detail="同目录下已存在同名项目")
-
     now = _now()
-    affected = db.execute_update(
-        "UPDATE shared_files SET name=%s, updated_by=%s, updated_at=%s "
-        "WHERE id=%s AND COALESCE(is_deleted,0)=0",
+    db.execute_update(
+        "UPDATE shared_files SET name=%s, updated_by=%s, updated_at=%s WHERE id=%s AND COALESCE(is_deleted,0)=0",
         (new_name, uname, now, file_id),
     )
-    if not affected:
-        raise HTTPException(status_code=500, detail="rename failed")
-    logger.info("shared rename file_id=%s user=%s name=%s", file_id, uname, new_name)
-    fresh = get_file_row(file_id)
-    return {"success": True, "message": "已重命名", "data": _serialize_item(fresh, uname)}
+    return {"success": True, "message": "已重命名", "data": _serialize_item(get_file_row(file_id), user)}
 
 
 @router.delete("/{file_id}")
@@ -589,12 +790,12 @@ def delete_file(file_id: int, current_user: str = Query(...)):
     row = get_file_row(file_id)
     if not row:
         raise HTTPException(status_code=404, detail="文件不存在或已删除")
-    if not can_mutate_meta(uname, row):
-        logger.warning("delete denied file_id=%s user=%s", file_id, uname)
-        raise HTTPException(status_code=403, detail="仅管理员或创建人可删除")
+    if row.get("is_folder"):
+        require_admin1(current_user)
+    else:
+        require_file_manager(current_user)
 
     now = _now()
-    # Soft-delete node + all descendants (folder tree).
     to_delete = [file_id]
     queue = [file_id]
     while queue:
@@ -607,13 +808,12 @@ def delete_file(file_id: int, current_user: str = Query(...)):
             kid = int(k["id"])
             to_delete.append(kid)
             queue.append(kid)
-
     for fid in to_delete:
         db.execute_update(
             "UPDATE shared_files SET is_deleted=1, updated_by=%s, updated_at=%s WHERE id=%s",
             (uname, now, fid),
         )
-    logger.info("shared soft-delete file_id=%s user=%s count=%s", file_id, uname, len(to_delete))
+    logger.info("collab soft-delete file_id=%s user=%s count=%s", file_id, uname, len(to_delete))
     return {"success": True, "message": "已删除", "deleted_count": len(to_delete)}
 
 
@@ -625,11 +825,12 @@ def get_editor_config(file_id: int, current_user: str = Query(...)):
         raise HTTPException(status_code=404, detail="文件不存在或已删除")
     if row.get("is_folder"):
         raise HTTPException(status_code=400, detail="文件夹无法在线编辑")
+    parent_id = row.get("parent_id")
+    _assert_folder_visible(user, int(parent_id) if parent_id else None)
 
     ext = (row.get("file_type") or Path(row.get("name") or "").suffix.lstrip(".")).lower()
     if ext not in DOC_TYPE_BY_EXT:
-        raise HTTPException(status_code=400, detail=f"不支持的文件类型: {ext}")
-
+        raise HTTPException(status_code=400, detail=f"{"不支持的文件类型"}: {ext}")
     try:
         path = storage.resolve_storage_path(row.get("storage_path") or "")
     except ValueError:
@@ -642,9 +843,7 @@ def get_editor_config(file_id: int, current_user: str = Query(...)):
         version = int(row.get("version") or 1)
         doc_key = oo_sec.build_document_key(file_id, version)
         download_token = oo_sec.issue_onlyoffice_download_token(
-            file_id=file_id,
-            version=version,
-            document_key=doc_key,
+            file_id=file_id, version=version, document_key=doc_key
         )
         user_payload = _editor_user_payload(user)
         config = {
@@ -653,13 +852,7 @@ def get_editor_config(file_id: int, current_user: str = Query(...)):
                 "key": doc_key,
                 "title": row.get("name") or f"file.{ext}",
                 "url": _public_download_url(file_id, download_token),
-                "permissions": {
-                    "edit": True,
-                    "download": True,
-                    "print": True,
-                    "review": True,
-                    "comment": True,
-                },
+                "permissions": {"edit": True, "download": True, "print": True, "review": True, "comment": True},
             },
             "documentType": DOC_TYPE_BY_EXT[ext],
             "editorConfig": {
@@ -667,36 +860,20 @@ def get_editor_config(file_id: int, current_user: str = Query(...)):
                 "mode": "edit",
                 "lang": "zh-CN",
                 "user": user_payload,
-                "customization": {
-                    "forcesave": True,
-                    "autosave": True,
-                },
+                "customization": {"forcesave": True, "autosave": True},
             },
         }
         config["token"] = oo_sec.sign_editor_config(config)
     except oo_sec.OnlyOfficeConfigError as e:
-        logger.error("editor-config config error file_id=%s: %s", file_id, e)
         raise HTTPException(status_code=503, detail=str(e))
     except Exception as e:
         logger.exception("editor-config failed file_id=%s", file_id)
-        raise HTTPException(status_code=500, detail=f"生成编辑配置失败: {e}")
+        raise HTTPException(status_code=500, detail=f"{"生成编辑配置失败"}: {e}")
 
-    logger.info(
-        "open editor file_id=%s user=%s user_id=%s key=%s version=%s",
-        file_id,
-        current_user,
-        user_payload.get("id"),
-        config["document"]["key"],
-        version,
-    )
+    logger.info("open editor file_id=%s user=%s key=%s v=%s", file_id, current_user, doc_key, version)
     return {
         "success": True,
         "documentServerUrl": document_server_url,
         "config": config,
-        "file": {
-            "id": file_id,
-            "name": row.get("name"),
-            "version": version,
-            "document_key": doc_key,
-        },
+        "file": {"id": file_id, "name": row.get("name"), "version": version, "document_key": doc_key},
     }

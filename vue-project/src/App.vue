@@ -104,6 +104,20 @@
             </svg>
             <span>员工信息</span>
           </router-link>
+          <router-link
+            v-if="!isOtherDeptUser"
+            to="/shared-files"
+            class="sidebar-item"
+            :class="{ 'sidebar-item-active': route.path.startsWith('/shared-files') }"
+          >
+            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+              <path d="M3 7h18" />
+              <path d="M3 12h18" />
+              <path d="M3 17h18" />
+              <path d="M8 7v10" />
+            </svg>
+            <span>协同办公</span>
+          </router-link>
             </div>
           </section>
 
@@ -377,20 +391,6 @@
               <polyline points="10 9 9 9 8 9" />
             </svg>
             <span>文件编号</span>
-          </router-link>
-          <router-link
-            v-if="!isOtherDeptUser"
-            to="/shared-files"
-            class="sidebar-item"
-            :class="{ 'sidebar-item-active': route.path.startsWith('/shared-files') }"
-          >
-            <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-              <path d="M3 7h18" />
-              <path d="M3 12h18" />
-              <path d="M3 17h18" />
-              <path d="M8 7v10" />
-            </svg>
-            <span>共享文档</span>
           </router-link>
           <router-link v-if="!isOtherDeptUser" to="/file/tech-problem" class="sidebar-item" active-class="sidebar-item-active">
             <svg class="sidebar-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -1370,6 +1370,7 @@ const sidebarMenuCatalog = computed(() => {
     add({ label: '管理驾驶舱', group: '常用入口', to: '/leader-dashboard', visible: canSeeLeaderDashboard.value, keywords: ['驾驶舱', '领导'] })
     add({ label: 'AI 助手', group: '常用入口', to: '/ai-assistant', visible: canUseAi.value, keywords: ['人工智能', '助手'] })
     add({ label: '员工信息', group: '常用入口', to: '/profile', keywords: ['个人', '档案'] })
+    add({ label: '协同办公', group: '常用入口', to: '/shared-files', keywords: ['协同', '办公', '共享', '文档', 'ONLYOFFICE', 'Excel', 'Word'] })
   }
 
   add({ label: '考勤智能填报', group: '考勤审批', to: '/attendance', visible: !isOtherDeptUser.value, keywords: ['考勤', '填报'] })
@@ -1408,7 +1409,6 @@ const sidebarMenuCatalog = computed(() => {
   add({ label: '低值易耗报销', group: '数字化办公', to: '/low-value-reimbursement', visible: !isOtherDeptUser.value, keywords: ['报销', '低值'] })
   add({ label: '保密审批台账', group: '数字化办公', to: '/confidentiality-ledger', keywords: ['保密', '台账'] })
   add({ label: '文件编号', group: '数字化办公', to: '/file/numbering', keywords: ['文件', '编号'] })
-  add({ label: '共享文档', group: '数字化办公', to: '/shared-files', visible: !isOtherDeptUser.value, keywords: ['共享', '文档', 'ONLYOFFICE', 'Excel', 'Word'] })
   add({ label: '技术问题手册', group: '数字化办公', to: '/file/tech-problem', visible: !isOtherDeptUser.value, keywords: ['技术', '问题', '手册'] })
   add({ label: '人事档案', group: '数字化办公', to: '/personnel-archive', visible: !isOtherDeptUser.value, keywords: ['人事', '档案'] })
   add({ label: '思想汇报管理', group: '数字化办公', action: 'sixianghuibao', visible: !isOtherDeptUser.value, keywords: ['思想', '汇报'] })

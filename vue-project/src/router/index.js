@@ -205,13 +205,13 @@ const routes = [
     path: '/shared-files/edit/:id',
     name: 'SharedFileEditor',
     component: () => import('../views/shared-files/DocumentEditor.vue'),
-    meta: { title: '共享文档编辑' }
+    meta: { title: '协同办公编辑' }
   },
   {
     path: '/shared-files',
     name: 'SharedFiles',
     component: () => import('../views/shared-files/SharedFiles.vue'),
-    meta: { title: '共享文档' }
+    meta: { title: '协同办公' }
   },
   {
     path: '/shared-files/test',

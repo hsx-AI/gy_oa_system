@@ -13,10 +13,15 @@ export function listSharedFiles(params = {}) {
   return request({
     url: '/shared-files',
     method: 'get',
-    params: {
-      current_user: currentUserName(),
-      parent_id: params.parent_id || undefined
-    }
+    params: { current_user: currentUserName(), parent_id: params.parent_id || undefined }
+  })
+}
+
+export function getSharedMetaOptions() {
+  return request({
+    url: '/shared-files/meta/options',
+    method: 'get',
+    params: { current_user: currentUserName() }
   })
 }
 
@@ -27,7 +32,23 @@ export function createSharedFolder(data) {
     data: {
       name: data.name,
       parent_id: data.parent_id || null,
-      current_user: currentUserName()
+      current_user: currentUserName(),
+      visibility_type: data.visibility_type || 'all',
+      visibility_depts: data.visibility_depts || [],
+      visibility_levels: data.visibility_levels || []
+    }
+  })
+}
+
+export function updateFolderVisibility(fileId, data) {
+  return request({
+    url: `/shared-files/${fileId}/visibility`,
+    method: 'patch',
+    data: {
+      current_user: currentUserName(),
+      visibility_type: data.visibility_type || 'all',
+      visibility_depts: data.visibility_depts || [],
+      visibility_levels: data.visibility_levels || []
     }
   })
 }
@@ -37,10 +58,19 @@ export function uploadSharedFile({ file, parent_id }) {
   form.append('current_user', currentUserName())
   if (parent_id) form.append('parent_id', String(parent_id))
   form.append('file', file)
+  return request({ url: '/shared-files/upload', method: 'post', data: form })
+}
+
+export function createBlankSharedFile(data) {
   return request({
-    url: '/shared-files/upload',
+    url: '/shared-files/create-blank',
     method: 'post',
-    data: form
+    data: {
+      name: data.name,
+      file_type: data.file_type,
+      parent_id: data.parent_id || null,
+      current_user: currentUserName()
+    }
   })
 }
 
@@ -71,14 +101,6 @@ export function getSharedFileMeta(fileId) {
 export function getEditorConfig(fileId) {
   return request({
     url: `/shared-files/${fileId}/editor-config`,
-    method: 'get',
-    params: { current_user: currentUserName() }
-  })
-}
-
-export function getPhase2TestInfo() {
-  return request({
-    url: '/shared-files/phase2-test-info',
     method: 'get',
     params: { current_user: currentUserName() }
   })

@@ -3,7 +3,7 @@
     <div class="oo-editor-toolbar">
       <button type="button" class="oo-back-btn" @click="goBack">返回列表</button>
       <div class="oo-editor-title">
-        <strong>{{ fileName || '共享文档编辑' }}</strong>
+        <strong>{{ fileName || '协同办公编辑' }}</strong>
         <span v-if="documentKey" class="oo-meta">key: {{ documentKey }}</span>
         <span v-if="version != null" class="oo-meta">v{{ version }}</span>
         <span class="oo-meta tip">多人打开同一文件将进入同一协同会话</span>
@@ -93,7 +93,7 @@ function humanizeError(err) {
     return `ONLYOFFICE 配置不完整：${msg}`
   }
   if (/403|没有权限|外部门/i.test(msg)) {
-    return '没有权限访问共享文档'
+    return '没有权限访问协同办公'
   }
   if (/404|不存在/i.test(msg)) {
     return '文件不存在或已删除'
