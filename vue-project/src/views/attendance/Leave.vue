@@ -975,9 +975,11 @@ const submitApplication = async () => {
   width: min(1180px, 96vw);
   max-width: 96vw;
   max-height: 90vh;
+  height: min(90vh, 900px);
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
 }
 
 .modal-split {
@@ -987,52 +989,45 @@ const submitApplication = async () => {
   min-height: 0;
   flex: 1;
   height: 100%;
-  max-height: calc(90vh - 2 * var(--spacing-xl));
   overflow: hidden;
 }
 
 .modal-split__main {
   min-width: 0;
   min-height: 0;
-  overflow-y: auto;
+  max-height: 100%;
   overflow-x: hidden;
-  padding-right: 4px;
+  overflow-y: auto;
+  padding-right: 6px;
+  overscroll-behavior: contain;
   -webkit-overflow-scrolling: touch;
 }
 
 .modal-split__side {
   min-width: 0;
   min-height: 0;
-  height: 100%;
   max-height: 100%;
   overflow: hidden;
-}
-
-.modal-split__main .form-actions {
-  position: sticky;
-  bottom: 0;
-  z-index: 2;
-  margin-bottom: 0;
-  padding-bottom: var(--spacing-sm);
-  background: linear-gradient(180deg, rgba(255, 255, 255, 0.85) 0%, #fff 28%);
+  display: flex;
+  flex-direction: column;
 }
 
 @media (max-width: 900px) {
   .modal-split {
     grid-template-columns: 1fr;
-    max-height: none;
-    overflow: visible;
+    overflow: auto;
   }
   .modal-content--split {
+    height: auto;
+    max-height: 90vh;
     overflow-y: auto;
   }
+  .modal-split__main,
   .modal-split__side {
-    height: auto;
-    max-height: 280px;
+    max-height: none;
   }
-  .modal-split__main .form-actions {
-    position: static;
-    background: transparent;
+  .modal-split__side {
+    height: 320px;
   }
 }
 
