@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, access_dashboard, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, action_items, print3d, mashangban, file_page_counter, travel_itinerary
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, access_dashboard, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, action_items, print3d, mashangban, file_page_counter, travel_itinerary, shared_files, onlyoffice
 import logging
 import time
 
@@ -99,6 +99,8 @@ app.include_router(print3d.router, prefix=settings.API_PREFIX)  # 3D打印委托
 app.include_router(mashangban.router, prefix=settings.API_PREFIX)  # 工艺码上办月报
 app.include_router(file_page_counter.router, prefix=settings.API_PREFIX)  # 文件页数统计
 app.include_router(travel_itinerary.router, prefix=settings.API_PREFIX)  # 差旅行程明细（pusher）
+app.include_router(shared_files.router, prefix=settings.API_PREFIX)  # 部门共享文档
+app.include_router(onlyoffice.router, prefix=settings.API_PREFIX)  # ONLYOFFICE callback
 
 @app.on_event("startup")
 async def startup_event():

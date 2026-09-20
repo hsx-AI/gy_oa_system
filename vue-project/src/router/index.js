@@ -202,6 +202,22 @@ const routes = [
     component: () => import('../views/EmployeeProfile.vue')
   },
   {
+    path: '/shared-files/edit/:id',
+    name: 'SharedFileEditor',
+    component: () => import('../views/shared-files/DocumentEditor.vue'),
+    meta: { title: '共享文档编辑' }
+  },
+  {
+    path: '/shared-files',
+    name: 'SharedFilesPhase2',
+    component: () => import('../views/shared-files/Phase2TestEntry.vue'),
+    meta: { title: '共享文档' }
+  },
+  {
+    path: '/shared-files/test',
+    redirect: '/shared-files'
+  },
+  {
     path: '/admin/employees',
     name: 'AdminEmployeeStatus',
     component: () => import('../views/AdminEmployeeStatus.vue')
@@ -558,7 +574,11 @@ router.beforeEach(async (to, _from, next) => {
     const lsys = (u.dept || u.lsys || '').trim()
     if (lsys === '其他部门成员') {
       const allowed = ['/file/numbering', '/file/tech-category', '/file/workno', '/attendance/personnel-visualization', '/confidentiality-ledger']
-      if (!allowed.includes(to.path)) {
+      if (!allowed.includes(to.path) && !to.path.startsWith('/shared-files')) {
+        next('/file/numbering')
+        return
+      }
+      if (to.path.startsWith('/shared-files')) {
         next('/file/numbering')
         return
       }
