@@ -820,6 +820,16 @@
             <router-link to="/info-feed" class="wall-preview-viewall">查看全部</router-link>
           </div>
         </header>
+        <a
+          v-if="canSeeIndustryInfoLink"
+          class="info-feed-industry-link"
+          href="http://10.42.60.230:18888"
+          target="_blank"
+          rel="noopener noreferrer"
+          @click.stop
+        >
+          国内工业与信息技术资讯
+        </a>
         <div class="info-feed-preview-body" @click="router.push('/info-feed')">
           <div v-if="infoFeedHomeLoading" class="dashboard-empty"><p>加载中...</p></div>
           <template v-else>
@@ -1178,6 +1188,8 @@ const canAccessInboxBoard = computed(() => {
   return isManagerLevel(userJb.value)
 })
 const canAccessPersonalInboxBoard = computed(() => canAccessDbManager.value || isMinisterOrDeptLeader(userJb.value))
+/** 国内工业与信息技术资讯外链：部门领导 + 各科室主任/副主任/班组长 */
+const canSeeIndustryInfoLink = computed(() => isMinisterOrDeptLeader(userJb.value))
 const personalInboxTasks = ref([])
 const personalInboxLoading = ref(false)
 const personalInboxSyncing = ref(false)
@@ -4736,6 +4748,29 @@ async function navigateTo(feature) {
 
 .info-feed-preview-card__header {
   align-items: center;
+}
+
+.info-feed-industry-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  align-self: flex-start;
+  margin: 0 16px 8px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #1890ff, #36cfc9);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.28);
+  transition: filter 0.15s, box-shadow 0.15s;
+}
+
+.info-feed-industry-link:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 3px 10px rgba(24, 144, 255, 0.36);
 }
 
 .info-feed-preview-body {

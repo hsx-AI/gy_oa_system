@@ -128,7 +128,9 @@
 
     <!-- 加班登记弹窗 -->
     <div v-if="showRegisterModal" class="modal-overlay" @click.self="showRegisterModal = false">
-      <div class="modal-content">
+      <div class="modal-content modal-content--split">
+        <div class="modal-split">
+          <div class="modal-split__main">
         <h2>{{ editingRejectedId ? '重新编辑加班' : '加班登记' }}</h2>
         <form @submit.prevent="submitRegister" class="application-form" autocomplete="on">
           <!-- 基础信息 -->
@@ -250,6 +252,14 @@
             <p v-if="consentError" class="consent-error-hint" role="alert">请勾选确认后方可提交</p>
           </div>
         </form>
+          </div>
+          <AttendanceRecordsSidePanel
+            class="modal-split__side"
+            :active="showRegisterModal"
+            :employee-name="form.name"
+            @fill-time="onAttendanceFillTime"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -262,6 +272,7 @@ import { getOvertimeList, submitOvertimeRegister, getApprovers, getOvertimeWebco
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
+import AttendanceRecordsSidePanel from '@/components/AttendanceRecordsSidePanel.vue'
 import { validateOvertimeShiftTicket } from '@/utils/overtimeShiftValidation'
 import { canChooseExchangeTicketWhenNormalOvertime, getOvertimeUserMeta, shouldLockExchangeTicketToYes } from '@/utils/overtimeLeaderRules'
 import {
@@ -714,6 +725,17 @@ function resetVoluntaryConsent() {
   consentShake.value = false
 }
 
+/** 右侧打卡时间一键填入：日期 + 开始/结束时刻 */
+function onAttendanceFillTime(payload) {
+  if (!payload?.date || !payload?.time) return
+  form.date = payload.date
+  if (!dateOptions.value.includes(payload.date)) {
+    dateOptions.value = [payload.date, ...dateOptions.value]
+  }
+  if (payload.field === 'end') form.endTime = payload.time
+  else form.startTime = payload.time
+}
+
 function onVoluntaryConsentChange() {
   if (voluntaryOvertimeConfirmed.value) consentError.value = false
 }
@@ -875,6 +897,47 @@ const submitRegister = async () => {
   max-width: 95%;
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.modal-content--split {
+  width: min(1180px, 96vw);
+  max-width: 96vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: var(--spacing-lg);
+  min-height: 0;
+  flex: 1;
+  max-height: calc(90vh - 2 * var(--spacing-xl));
+}
+
+.modal-split__main {
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.modal-split__side {
+  min-height: 360px;
+  max-height: 100%;
+}
+
+@media (max-width: 900px) {
+  .modal-split {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+  .modal-content--split {
+    overflow-y: auto;
+  }
+  .modal-split__side {
+    max-height: 320px;
+  }
 }
 
 .application-form {

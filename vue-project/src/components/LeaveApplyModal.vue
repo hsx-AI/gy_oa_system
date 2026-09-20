@@ -1,7 +1,9 @@
 <template>
   <div v-if="visible" class="modal-overlay">
-    <div class="modal-content">
+    <div class="modal-content modal-content--split">
       <button type="button" class="modal-close-btn" @click="$emit('close')">&times;</button>
+      <div class="modal-split">
+        <div class="modal-split__main">
       <h2>申请请假</h2>
       <p class="modal-hint">填报完成后可继续处理其他建议</p>
       <form @submit.prevent="handleSubmit" class="application-form" autocomplete="on">
@@ -104,6 +106,14 @@
           <button type="submit" class="btn-primary">提交</button>
         </div>
       </form>
+        </div>
+        <AttendanceRecordsSidePanel
+          class="modal-split__side"
+          :active="visible"
+          :employee-name="form.name"
+          @fill-time="onAttendanceFillTime"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -114,6 +124,7 @@ import { getApprovers, submitLeaveApplication, getEmployeeProfile, getHolidays }
 import { calcDurationFromTimes, normalizeDateKey } from '@/utils/leaveDuration'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
+import AttendanceRecordsSidePanel from '@/components/AttendanceRecordsSidePanel.vue'
 
 const props = defineProps({
   visible: Boolean,
@@ -215,6 +226,16 @@ function onMaterialFileChange(e) {
   const file = e.target.files?.[0]
   form.materialFile = file || null
   form.materialFileName = file ? file.name : ''
+}
+
+/** 右侧打卡时间一键填入开始/结束 */
+function onAttendanceFillTime(payload) {
+  if (!payload?.datetime) return
+  if (payload.field === 'end') {
+    form.endTime = payload.datetime
+  } else if (!timeLocked.value) {
+    form.startTime = payload.datetime
+  }
 }
 
 watch(() => props.visible, async (v) => {
@@ -364,6 +385,27 @@ async function handleSubmit() {
 <style scoped>
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal-content { position: relative; background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: min(960px, 96vw); max-width: 96vw; max-height: 90vh; overflow-y: auto; }
+.modal-content--split {
+  width: min(1180px, 96vw);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: var(--spacing-lg);
+  min-height: 0;
+  flex: 1;
+  max-height: calc(90vh - 2 * var(--spacing-xl));
+}
+.modal-split__main { min-width: 0; overflow-y: auto; padding-right: 4px; }
+.modal-split__side { min-height: 360px; max-height: 100%; }
+@media (max-width: 900px) {
+  .modal-split { grid-template-columns: 1fr; max-height: none; }
+  .modal-content--split { overflow-y: auto; }
+  .modal-split__side { max-height: 320px; }
+}
 .form-row:has(.dtp) { flex-wrap: wrap; }
 .form-group.half:has(.dtp) { flex: 1 1 min(100%, 440px); min-width: 0; }
 .modal-close-btn { position: absolute; top: 12px; right: 16px; background: none; border: none; font-size: 24px; color: var(--color-text-tertiary); cursor: pointer; line-height: 1; padding: 4px; z-index: 1; }

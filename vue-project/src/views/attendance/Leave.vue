@@ -147,7 +147,9 @@
 
     <!-- 申请弹窗 -->
     <div v-if="showApplyModal" class="modal-overlay" @click.self="showApplyModal = false">
-      <div class="modal-content">
+      <div class="modal-content modal-content--split">
+        <div class="modal-split">
+          <div class="modal-split__main">
         <h2>{{ editingRejectedId ? '重新编辑请假' : '申请请假' }}</h2>
         <form @submit.prevent="submitApplication" class="application-form" autocomplete="on">
           <!-- 基础信息 -->
@@ -267,6 +269,14 @@
             <button type="submit" class="btn-primary">提交</button>
           </div>
         </form>
+          </div>
+          <AttendanceRecordsSidePanel
+            class="modal-split__side"
+            :active="showApplyModal"
+            :employee-name="form.name"
+            @fill-time="onAttendanceFillTime"
+          />
+        </div>
       </div>
     </div>
   </div>
@@ -280,6 +290,7 @@ import { calcDurationFromTimes, normalizeDateKey, normalizeLeaveDaysForDisplay }
 import { keywordMatches, sortRecordRows } from '@/utils/recordTableHelpers'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
+import AttendanceRecordsSidePanel from '@/components/AttendanceRecordsSidePanel.vue'
 
 const router = useRouter()
 const route = useRoute()
@@ -536,6 +547,13 @@ function onMaterialFileChange(e) {
   const file = e.target.files?.[0]
   form.materialFile = file || null
   form.materialFileName = file ? file.name : ''
+}
+
+/** 右侧打卡时间一键填入开始/结束 */
+function onAttendanceFillTime(payload) {
+  if (!payload?.datetime) return
+  if (payload.field === 'end') form.endTime = payload.datetime
+  else form.startTime = payload.datetime
 }
 
 const resetForm = () => {
@@ -951,6 +969,47 @@ const submitApplication = async () => {
   max-width: 95%;
   max-height: 90vh;
   overflow-y: auto;
+}
+
+.modal-content--split {
+  width: min(1180px, 96vw);
+  max-width: 96vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: var(--spacing-lg);
+  min-height: 0;
+  flex: 1;
+  max-height: calc(90vh - 2 * var(--spacing-xl));
+}
+
+.modal-split__main {
+  min-width: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.modal-split__side {
+  min-height: 360px;
+  max-height: 100%;
+}
+
+@media (max-width: 900px) {
+  .modal-split {
+    grid-template-columns: 1fr;
+    max-height: none;
+  }
+  .modal-content--split {
+    overflow-y: auto;
+  }
+  .modal-split__side {
+    max-height: 320px;
+  }
 }
 
 .application-form {

@@ -1,7 +1,9 @@
 ﻿<template>
   <div v-if="visible" class="modal-overlay">
-    <div class="modal-content">
+    <div class="modal-content modal-content--split">
       <button type="button" class="modal-close-btn" @click="$emit('close')">&times;</button>
+      <div class="modal-split">
+        <div class="modal-split__main">
       <h2>加班登记</h2>
       <p class="modal-hint">填报完成后可继续处理其他建议</p>
       <form @submit.prevent="handleSubmit" class="application-form" autocomplete="on">
@@ -114,6 +116,14 @@
           <p v-if="consentError" class="consent-error-hint" role="alert">请勾选确认后方可提交</p>
         </div>
       </form>
+        </div>
+        <AttendanceRecordsSidePanel
+          class="modal-split__side"
+          :active="visible"
+          :employee-name="form.name"
+          @fill-time="onAttendanceFillTime"
+        />
+      </div>
     </div>
   </div>
 </template>
@@ -123,6 +133,7 @@ import { ref, reactive, computed, watch } from 'vue'
 import { getApprovers, getOvertimeWebconfig, submitOvertimeRegister, getHolidays } from '@/api/attendance'
 import RecentTextInput from '@/components/RecentTextInput.vue'
 import TimePicker from '@/components/TimePicker.vue'
+import AttendanceRecordsSidePanel from '@/components/AttendanceRecordsSidePanel.vue'
 import { validateOvertimeShiftTicket } from '@/utils/overtimeShiftValidation'
 import { canChooseExchangeTicketWhenNormalOvertime, getOvertimeUserMeta, shouldLockExchangeTicketToYes } from '@/utils/overtimeLeaderRules'
 import {
@@ -367,6 +378,22 @@ function resetVoluntaryConsent() {
   consentShake.value = false
 }
 
+/** 右侧打卡时间一键填入：日期 + 开始/结束时刻 */
+function onAttendanceFillTime(payload) {
+  if (!payload?.date || !payload?.time) return
+  if (!timeLocked.value) {
+    form.date = payload.date
+    if (!dateOptions.value.includes(payload.date)) {
+      dateOptions.value = [payload.date, ...dateOptions.value]
+    }
+  }
+  if (payload.field === 'end') {
+    if (!timeLocked.value) form.endTime = payload.time
+  } else if (!timeLocked.value) {
+    form.startTime = payload.time
+  }
+}
+
 function onVoluntaryConsentChange() {
   if (voluntaryOvertimeConfirmed.value) consentError.value = false
 }
@@ -441,6 +468,28 @@ async function handleSubmit() {
 <style scoped>
 .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: flex; align-items: center; justify-content: center; z-index: 100; }
 .modal-content { position: relative; background: white; padding: var(--spacing-xl); border-radius: var(--radius-md); width: 700px; max-width: 95%; max-height: 90vh; overflow-y: auto; }
+.modal-content--split {
+  width: min(1180px, 96vw);
+  max-width: 96vw;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+.modal-split {
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(300px, 0.85fr);
+  gap: var(--spacing-lg);
+  min-height: 0;
+  flex: 1;
+  max-height: calc(90vh - 2 * var(--spacing-xl));
+}
+.modal-split__main { min-width: 0; overflow-y: auto; padding-right: 4px; }
+.modal-split__side { min-height: 360px; max-height: 100%; }
+@media (max-width: 900px) {
+  .modal-split { grid-template-columns: 1fr; max-height: none; }
+  .modal-content--split { overflow-y: auto; }
+  .modal-split__side { max-height: 320px; }
+}
 .modal-close-btn { position: absolute; top: 12px; right: 16px; background: none; border: none; font-size: 24px; color: var(--color-text-tertiary); cursor: pointer; line-height: 1; padding: 4px; z-index: 1; }
 .modal-close-btn:hover { color: var(--color-text-primary); }
 .modal-hint { font-size: var(--font-size-sm); color: var(--color-text-secondary); margin: 0 0 var(--spacing-md); }

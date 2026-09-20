@@ -5,15 +5,26 @@
         <h1 class="page-title">天气新闻</h1>
         <p class="page-subtitle">来自公网中转电脑定时推送的实时天气、天气预报与国际新闻缓存</p>
       </div>
-      <button type="button" class="refresh-btn" :disabled="loading" @click="refreshAll">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <polyline points="23 4 23 10 17 10" />
-          <polyline points="1 20 1 14 7 14" />
-          <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
-          <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
-        </svg>
-        刷新
-      </button>
+      <div class="page-header-actions">
+        <a
+          v-if="canSeeIndustryInfoLink"
+          class="industry-info-link"
+          href="http://10.42.60.230:18888"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          国内工业与信息技术资讯
+        </a>
+        <button type="button" class="refresh-btn" :disabled="loading" @click="refreshAll">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <polyline points="23 4 23 10 17 10" />
+            <polyline points="1 20 1 14 7 14" />
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+            <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
+          </svg>
+          刷新
+        </button>
+      </div>
     </div>
 
     <div class="status-strip">
@@ -169,6 +180,19 @@ import {
   getWeatherNow,
 } from '@/api/infoFeed'
 import { DEFAULT_NEWS_TYPE, DEFAULT_WEATHER_LOCATION, cityOptions, weatherIcon } from '@/utils/infoFeedDisplay'
+import { isMinisterOrDeptLeader } from '@/utils/roleMatch'
+
+function getStoredUserJb() {
+  try {
+    const info = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    return (info.jb || '').trim()
+  } catch {
+    return ''
+  }
+}
+
+/** 国内工业与信息技术资讯外链：部门领导 + 各科室主任/副主任/班组长 */
+const canSeeIndustryInfoLink = isMinisterOrDeptLeader(getStoredUserJb())
 
 const newsTypes = [
   { label: '即时', value: 'scroll' },
@@ -304,6 +328,13 @@ onMounted(refreshAll)
   align-items: center;
   margin-bottom: 16px;
 }
+.page-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
 .page-title {
   margin: 0;
   font-size: 24px;
@@ -313,6 +344,26 @@ onMounted(refreshAll)
   margin: 6px 0 0;
   font-size: 13px;
   color: #64748b;
+}
+.industry-info-link {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 6px 12px;
+  border-radius: 6px;
+  background: linear-gradient(135deg, #1890ff, #36cfc9);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  text-decoration: none;
+  box-shadow: 0 2px 8px rgba(24, 144, 255, 0.28);
+  transition: filter 0.15s, box-shadow 0.15s;
+  white-space: nowrap;
+}
+.industry-info-link:hover {
+  filter: brightness(1.06);
+  box-shadow: 0 3px 10px rgba(24, 144, 255, 0.36);
 }
 .refresh-btn, .news-tabs button {
   border: 1px solid #cbd5e1;
