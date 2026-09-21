@@ -286,7 +286,26 @@
 
         <footer class="report-card__foot">
           <span class="permission-pill" :class="{ ok: report.canUse }">{{ report.canUse ? report.scopeText : '无权限' }}</span>
-          <button type="button" class="export-btn" :disabled="!report.canUse || activeExport === report.id" @click="runExport(report.id)">
+          <div v-if="report.id === 'overtime-pay'" class="export-choices" @click.stop>
+            <button
+              type="button"
+              class="export-btn"
+              :disabled="!report.canUse || activeExport === 'overtime-pay' || activeExport === 'overtime-pay-detail'"
+              @click="payMenuOpen = !payMenuOpen"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <path d="M7 10l5 5 5-5" />
+                <path d="M12 15V3" />
+              </svg>
+              {{ (activeExport === 'overtime-pay' || activeExport === 'overtime-pay-detail') ? '导出中' : '工资报表' }}
+            </button>
+            <div v-if="payMenuOpen" class="export-choices__list">
+              <button type="button" :disabled="activeExport === 'overtime-pay'" @click="runExport('overtime-pay')">其他绩效表</button>
+              <button type="button" :disabled="activeExport === 'overtime-pay-detail'" @click="runExport('overtime-pay-detail')">其他绩效激励明细</button>
+            </div>
+          </div>
+          <button v-else type="button" class="export-btn" :disabled="!report.canUse || activeExport === report.id" @click="runExport(report.id)">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
               <path d="M7 10l5 5 5-5" />
@@ -303,7 +322,7 @@
 </template>
 
 <script setup>
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, onUnmounted, reactive, ref } from 'vue'
 import * as XLSX from 'xlsx'
 import {
   downloadAttendanceReport,
@@ -318,6 +337,7 @@ import {
   getLeaveHoursExport,
   getOvertimeHoursExport,
   getOvertimePayExport,
+  getOvertimePayDetailExport,
   getLeaderWorkIntensity,
   getStatisticsPermission,
   getOvertimePayPermission,
@@ -334,6 +354,7 @@ const userDept = ref('')
 const userJb = ref('')
 const metaLoading = ref(false)
 const activeExport = ref('')
+const payMenuOpen = ref(false)
 const activeGroup = ref('all')
 const keyword = ref('')
 const lsysList = ref([])
@@ -719,6 +740,35 @@ function sheetFromPayList(list) {
   return XLSX.utils.aoa_to_sheet([['姓名', '本月其他绩效激励（元）'], ...rows])
 }
 
+function sheetFromPayDetailList(list) {
+  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否满8小时200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
+  const rows = (list || []).map((item) => [
+    item.lsys || '',
+    item.name || '',
+    item.date || '',
+    item.timeRange || '',
+    item.content || '',
+    item.hours ?? 0,
+    item.festival || '',
+    item.payType || '',
+    item.fixedReward ? '是' : '否',
+    item.fixedPay ?? 0,
+    item.hourlyPay ?? 0,
+    item.pay ?? 0,
+  ])
+  const sheet = XLSX.utils.aoa_to_sheet([header, ...rows])
+  sheet['!cols'] = [
+    { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 28 },
+    { wch: 10 }, { wch: 14 }, { wch: 42 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 },
+  ]
+  if (rows.length) {
+    sheet['!autofilter'] = {
+      ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: header.length - 1 } }),
+    }
+  }
+  return sheet
+}
+
 function sheetFromOvertimeHoursList(list) {
   const rows = (list || []).map((item) => [
     item.name || '',
@@ -977,7 +1027,21 @@ async function exportOvertimePay() {
   const wb = XLSX.utils.book_new()
   XLSX.utils.book_append_sheet(wb, sheetFromPayList(res.all || []), overtimePermission.value.scope === 'self' ? '本人' : '全员')
   appendDeptSheets(wb, res.byDept, sheetFromPayList)
-  XLSX.writeFile(wb, `其他绩效激励工资报表_${periodLabel()}.xlsx`)
+  XLSX.writeFile(wb, `其他绩效表_${periodLabel()}.xlsx`)
+}
+
+async function exportOvertimePayDetail() {
+  const res = await getOvertimePayDetailExport(buildPeriodParams({ requireMonth: true }))
+  if (!res?.success || res.all === undefined) throw new Error('获取明细数据失败')
+  const wb = XLSX.utils.book_new()
+  XLSX.utils.book_append_sheet(
+    wb,
+    sheetFromPayDetailList(res.all || []),
+    overtimePermission.value.scope === 'self' ? '本人明细' : '全员明细',
+  )
+  XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '满8小时200元')
+  appendDeptSheets(wb, res.byDept, sheetFromPayDetailList)
+  XLSX.writeFile(wb, `其他绩效激励明细_${periodLabel()}.xlsx`)
 }
 
 async function exportOvertimeHours() {
@@ -1103,8 +1167,10 @@ async function handleShiftFormatChange() {
 }
 
 async function runExport(id) {
-  const report = reports.value.find((r) => r.id === id)
+  const reportId = id === 'overtime-pay-detail' ? 'overtime-pay' : id
+  const report = reports.value.find((r) => r.id === reportId)
   if (!report?.canUse) return
+  payMenuOpen.value = false
   activeExport.value = id
   try {
     if (id === 'attendance-exceptions') {
@@ -1124,6 +1190,8 @@ async function runExport(id) {
       saveBlob(blob, `打卡与智能建议处理_${filters.suggestionStart}_${filters.suggestionEnd}.xlsx`)
     } else if (id === 'overtime-pay') {
       await exportOvertimePay()
+    } else if (id === 'overtime-pay-detail') {
+      await exportOvertimePayDetail()
     } else if (id === 'overtime-hours') {
       await exportOvertimeHours()
     } else if (id === 'leave-hours') {
@@ -1160,7 +1228,18 @@ async function runExport(id) {
   }
 }
 
-onMounted(reloadMeta)
+onMounted(() => {
+  document.addEventListener('click', closePayMenu)
+  reloadMeta()
+})
+
+function closePayMenu() {
+  payMenuOpen.value = false
+}
+
+onUnmounted(() => {
+  document.removeEventListener('click', closePayMenu)
+})
 </script>
 
 <style scoped>
@@ -1387,6 +1466,41 @@ onMounted(reloadMeta)
   padding: 12px 16px;
   background: #f8fafc;
   border-top: 1px solid #e5e7eb;
+}
+
+.export-choices {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  min-width: 168px;
+}
+
+.export-choices__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.export-choices__list button {
+  border: 1px solid #cbd5e1;
+  background: #fff;
+  color: #1f2937;
+  border-radius: 7px;
+  min-height: 32px;
+  padding: 0 10px;
+  text-align: left;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.export-choices__list button:hover:not(:disabled) {
+  background: #f1f5f9;
+}
+
+.export-choices__list button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .permission-pill {

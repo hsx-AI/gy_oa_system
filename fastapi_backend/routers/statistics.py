@@ -292,6 +292,119 @@ def _aggregate_overtime_with_incentive(
     return per_month, per_employee
 
 
+def _fmt_pay_num(n: float) -> str:
+    n = round(float(n), 2)
+    if abs(n - int(n)) < 1e-9:
+        return str(int(round(n)))
+    return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+def _clock_hm(v) -> str:
+    if v is None:
+        return ""
+    if hasattr(v, "strftime"):
+        try:
+            return v.strftime("%H:%M")
+        except Exception:
+            return ""
+    s = str(v).strip().replace("T", " ")
+    if len(s) >= 16 and s[10] == " ":
+        return s[11:16]
+    if len(s) >= 5 and s[2] == ":":
+        return s[:5]
+    return s
+
+
+def _build_overtime_pay_day_details(
+    rows: List[Dict],
+    holiday_festival_map: Dict[str, str],
+    zhibanfei: float,
+) -> List[Dict]:
+    """
+    按「人+日期」生成其他绩效激励明细。计酬规则与 _aggregate_overtime_with_incentive 一致，
+    额外标出满 8 小时固定 200 元的日期，供独立明细表使用。
+    """
+    grouped: Dict[tuple, Dict] = {}
+    for r in rows or []:
+        name = (r.get("emp_name") or r.get("name") or "").strip()
+        if not name:
+            continue
+        timedate = r.get("timedate")
+        if timedate is None:
+            continue
+        date_str = str(timedate)[:10]
+        if len(date_str) < 10:
+            continue
+        try:
+            hours = float(r.get("hours") if r.get("hours") is not None else r.get("jbf") or 0)
+        except (TypeError, ValueError):
+            hours = 0.0
+        if hours <= 0:
+            continue
+        key = (name, date_str)
+        bucket = grouped.get(key)
+        if bucket is None:
+            bucket = {"hours": 0.0, "lsys": "", "spans": [], "contents": []}
+            grouped[key] = bucket
+        bucket["hours"] += hours
+        lsys = (r.get("lsys") or "").strip()
+        if lsys:
+            bucket["lsys"] = lsys
+        start = _clock_hm(r.get("timefrom"))
+        end = _clock_hm(r.get("timeto"))
+        if start or end:
+            span = f"{start}-{end}" if start and end else (start or end)
+            if span not in bucket["spans"]:
+                bucket["spans"].append(span)
+        content = (r.get("content") or "").strip()
+        if content and content not in bucket["contents"]:
+            bucket["contents"].append(content)
+
+    rate_text = _fmt_pay_num(zhibanfei)
+    details: List[Dict] = []
+    for (name, date_str), bucket in grouped.items():
+        day_hours = float(bucket["hours"])
+        festival = holiday_festival_map.get(date_str, "") or ""
+        is_incentive = festival in INCENTIVE_FESTIVALS
+        if is_incentive and day_hours >= 8.0:
+            fixed_pay = 200.0
+            extra_hours = day_hours - 8.0
+            hourly_pay = extra_hours * zhibanfei
+            fixed_reward = True
+            fest_label = festival or "节日"
+            if extra_hours > 0:
+                pay_type = (
+                    f"{fest_label}满8小时固定奖励200元，"
+                    f"超出{_fmt_pay_num(extra_hours)}小时按{rate_text}元/小时"
+                )
+            else:
+                pay_type = f"{fest_label}满8小时固定奖励200元"
+        else:
+            fixed_pay = 0.0
+            hourly_pay = day_hours * zhibanfei
+            fixed_reward = False
+            if is_incentive:
+                pay_type = f"{festival or '节日'}不足8小时，按{rate_text}元/小时"
+            else:
+                pay_type = f"按{rate_text}元/小时"
+        details.append({
+            "lsys": bucket["lsys"],
+            "name": name,
+            "date": date_str,
+            "timeRange": "、".join(bucket["spans"]),
+            "content": "；".join(bucket["contents"]),
+            "hours": round(day_hours, 2),
+            "festival": festival,
+            "payType": pay_type,
+            "fixedReward": fixed_reward,
+            "fixedPay": round(fixed_pay, 2),
+            "hourlyPay": round(hourly_pay, 2),
+            "pay": round(fixed_pay + hourly_pay, 2),
+        })
+    details.sort(key=lambda x: (x.get("lsys") or "", x.get("name") or "", x.get("date") or ""))
+    return details
+
+
 def _parse_date(v) -> Optional[date]:
     """将 DB 返回的 datetime/str 转为 date"""
     if v is None:
@@ -1725,6 +1838,88 @@ def get_overtime_pay_export(
         return {"success": True, "zhibanfei": zhibanfei, "all": list_all, "byDept": by_dept}
     except Exception as e:
         logger.error(f"其他绩效激励按月导出失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/dept/overtime-pay-detail-export")
+def get_overtime_pay_detail_export(
+    year: Optional[int] = Query(None, description="年份（与 month 配合；自定义区间时可省略）"),
+    month: Optional[int] = Query(None, ge=1, le=12, description="月份；与 date_from/date_to 互斥"),
+    date_from: Optional[str] = Query(None, description="起始日期 YYYY-MM-DD"),
+    date_to: Optional[str] = Query(None, description="结束日期 YYYY-MM-DD"),
+    current_user: Optional[str] = Query(None, description="当前登录用户，与 scope 配合做权限过滤"),
+    scope: Optional[str] = Query(None, description="可见范围：self=本人, lsys=本室, all=全部门"),
+    scope_lsys: Optional[str] = Query(None, description="scope=lsys 时本室名称"),
+):
+    """
+    其他绩效激励明细（与工资汇总表独立）：每人每天一行。
+    含加班小时、计酬说明，以及春节/国庆节/高温防暑休假满 8 小时固定 200 元标记。
+    仅含审核通过且换休票为否、当日有激励小时的记录。
+    """
+    try:
+        if not ((date_from and date_to) or (year is not None and month is not None)):
+            raise HTTPException(
+                status_code=400,
+                detail="请指定 year+month，或同时传入 date_from 与 date_to",
+            )
+        date_cond, date_params, year, range_start, range_end = _resolve_jiaban_period_filter(
+            year, month, date_from, date_to
+        )
+
+        zhibanfei = 15.0
+        try:
+            wc = db.execute_query("SELECT zhibanfei FROM webconfig WHERE id = 1 LIMIT 1")
+            if wc and wc[0].get("zhibanfei") is not None:
+                zhibanfei = float(wc[0]["zhibanfei"])
+        except Exception:
+            pass
+
+        q_rows = f"""
+            SELECT jiaban.xm AS emp_name,
+                   TRIM(yggl.lsys) AS lsys,
+                   jiaban.timedate,
+                   jiaban.timefrom,
+                   jiaban.timeto,
+                   jiaban.content,
+                   CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
+            FROM jiaban
+            INNER JOIN yggl ON jiaban.xm = yggl.name
+            WHERE jiaban.jiabanzt = 4
+              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
+              AND RIGHT(TRIM(yggl.name), 1) != '1'
+              AND RIGHT(TRIM(yggl.lsys), 1) != '1'
+              AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
+              AND NOT (TRIM(yggl.lsys) = '部办' AND TRIM(COALESCE(yggl.jb,'')) IN ('经理','副经理'))
+              AND (COALESCE(yggl.zaizhi,0)=0)
+        """
+        rows = db.execute_query(q_rows, date_params)
+        holiday_map = _load_holiday_festival_map_span(year, range_start, range_end)
+        details = _build_overtime_pay_day_details(rows, holiday_map, zhibanfei)
+
+        if current_user and scope == "self":
+            uname = (current_user or "").strip()
+            details = [x for x in details if (x.get("name") or "") == uname]
+        elif scope == "lsys" and scope_lsys:
+            lsys_val = (scope_lsys or "").strip()
+            details = [x for x in details if (x.get("lsys") or "") == lsys_val]
+
+        dept_map: Dict[str, List[Dict]] = defaultdict(list)
+        for item in details:
+            dept_map[item.get("lsys") or "未分科室"].append(item)
+        by_dept = [{"lsys": lsys, "list": dept_map[lsys]} for lsys in sorted(dept_map.keys())]
+        fixed200 = [x for x in details if x.get("fixedReward")]
+
+        return {
+            "success": True,
+            "zhibanfei": zhibanfei,
+            "all": details,
+            "fixed200": fixed200,
+            "byDept": by_dept,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"其他绩效激励明细导出失败: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
 
 

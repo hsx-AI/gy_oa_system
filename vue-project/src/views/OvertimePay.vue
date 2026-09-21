@@ -63,15 +63,21 @@
               </button>
               <div class="filter-toolbar-exports">
                 <span class="toolbar-exports-label">导出</span>
-                <button
-                  type="button"
-                  class="btn btn-outline"
-                  :disabled="(!filterMonth && !isDateRangeMode) || exportLoading"
-                  @click="downloadExcel"
-                >
-                  <span v-if="exportLoading">生成中...</span>
-                  <span v-else>工资报表</span>
-                </button>
+                <div class="pay-export-menu" @click.stop>
+                  <button
+                    type="button"
+                    class="btn btn-outline"
+                    :disabled="(!filterMonth && !isDateRangeMode) || exportLoading || detailExportLoading"
+                    @click="payExportMenuOpen = !payExportMenuOpen"
+                  >
+                    <span v-if="exportLoading || detailExportLoading">生成中...</span>
+                    <span v-else>工资报表</span>
+                  </button>
+                  <div v-if="payExportMenuOpen" class="pay-export-menu__panel">
+                    <button type="button" :disabled="exportLoading" @click="downloadExcel">其他绩效表</button>
+                    <button type="button" :disabled="detailExportLoading" @click="downloadDetailExcel">其他绩效激励明细</button>
+                  </div>
+                </div>
                 <button
                   type="button"
                   class="btn btn-outline"
@@ -104,7 +110,7 @@
               </div>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「下载 Excel 工资报表」「导出全部加班时长」均支持时间段；工资报表需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
+          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「全部加班时长」均支持时间段。点击「工资报表」可分别下载「其他绩效表」（每人汇总金额）或「其他绩效激励明细」（每人每天加班及满8小时200元），需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -183,10 +189,10 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useRouter } from 'vue-router'
 import * as XLSX from 'xlsx'
-import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getOvertimeHoursExport, getFullAttendanceExport, downloadAttendanceReport } from '@/api/attendance'
+import { getOvertimePayPermission, getDeptLsysList, getDeptOvertimePayByMonth, getDeptOvertimePayByEmployee, getOvertimePayExport, getOvertimePayDetailExport, getOvertimeHoursExport, getFullAttendanceExport, downloadAttendanceReport } from '@/api/attendance'
 
 const router = useRouter()
 const canView = ref(false)
@@ -201,6 +207,8 @@ const dateFrom = ref('')
 const dateTo = ref('')
 const loading = ref(false)
 const exportLoading = ref(false)
+const detailExportLoading = ref(false)
+const payExportMenuOpen = ref(false)
 const overtimeHoursExportLoading = ref(false)
 const fullAttendanceExportLoading = ref(false)
 const attendanceReportLoading = ref(false)
@@ -283,6 +291,35 @@ function sheetFromList(list) {
   return XLSX.utils.aoa_to_sheet([header, ...rows])
 }
 
+function sheetFromPayDetailList(list) {
+  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否满8小时200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
+  const rows = (list || []).map((item) => [
+    item.lsys || '',
+    item.name || '',
+    item.date || '',
+    item.timeRange || '',
+    item.content || '',
+    item.hours ?? 0,
+    item.festival || '',
+    item.payType || '',
+    item.fixedReward ? '是' : '否',
+    item.fixedPay ?? 0,
+    item.hourlyPay ?? 0,
+    item.pay ?? 0
+  ])
+  const sheet = XLSX.utils.aoa_to_sheet([header, ...rows])
+  sheet['!cols'] = [
+    { wch: 16 }, { wch: 10 }, { wch: 12 }, { wch: 18 }, { wch: 28 },
+    { wch: 10 }, { wch: 14 }, { wch: 42 }, { wch: 16 }, { wch: 14 }, { wch: 12 }, { wch: 14 }
+  ]
+  if (rows.length) {
+    sheet['!autofilter'] = {
+      ref: XLSX.utils.encode_range({ s: { r: 0, c: 0 }, e: { r: rows.length, c: header.length - 1 } })
+    }
+  }
+  return sheet
+}
+
 function overtimeHoursSheetFromList(list) {
   const header = ['姓名', '加班总时长(小时)', '其他绩效激励时长(小时)', '换休票时长(小时)', '加班次数']
   const rows = (list || []).map((item) => [
@@ -323,6 +360,7 @@ async function downloadOvertimeHoursExcel() {
 }
 
 async function downloadExcel() {
+  payExportMenuOpen.value = false
   if (!filterMonth.value && !isDateRangeMode.value) {
     alert('请先选择月份，或填写开始/结束日期后再下载报表')
     return
@@ -343,13 +381,46 @@ async function downloadExcel() {
       const sheet = sheetFromList(dept.list || [])
       XLSX.utils.book_append_sheet(wb, sheet, sheetName)
     }
-    const fileName = `其他绩效激励工资报表_${exportPeriodLabel()}.xlsx`
+    const fileName = `其他绩效表_${exportPeriodLabel()}.xlsx`
     XLSX.writeFile(wb, fileName)
   } catch (e) {
     console.error(e)
     alert(e.message || e.response?.data?.detail || '下载失败，请稍后重试')
   } finally {
     exportLoading.value = false
+  }
+}
+
+async function downloadDetailExcel() {
+  payExportMenuOpen.value = false
+  if (!filterMonth.value && !isDateRangeMode.value) {
+    alert('请先选择月份，或填写开始/结束日期后再下载报表')
+    return
+  }
+  detailExportLoading.value = true
+  try {
+    const res = await getOvertimePayDetailExport(buildPeriodParams())
+    if (!res?.success || res.all === undefined) {
+      alert('获取明细数据失败')
+      return
+    }
+    const wb = XLSX.utils.book_new()
+    XLSX.utils.book_append_sheet(
+      wb,
+      sheetFromPayDetailList(res.all || []),
+      scope.value === 'self' ? '本人明细' : '全员明细'
+    )
+    XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '满8小时200元')
+    for (const dept of res.byDept || []) {
+      const sheetName = (dept.lsys || '科室').slice(0, 31)
+      XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(dept.list || []), sheetName)
+    }
+    XLSX.writeFile(wb, `其他绩效激励明细_${exportPeriodLabel()}.xlsx`)
+  } catch (e) {
+    console.error(e)
+    alert(e.message || e.response?.data?.detail || '下载失败，请稍后重试')
+  } finally {
+    detailExportLoading.value = false
   }
 }
 
@@ -433,6 +504,7 @@ async function downloadFullAttendanceExcel() {
 }
 
 onMounted(async () => {
+  document.addEventListener('click', closePayExportMenu)
   const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
   const name = (user.name || user.userName || '').trim()
   if (!name) {
@@ -460,6 +532,14 @@ onMounted(async () => {
   } catch (e) {
     canView.value = false
   }
+})
+
+function closePayExportMenu() {
+  payExportMenuOpen.value = false
+}
+
+onUnmounted(() => {
+  document.removeEventListener('click', closePayExportMenu)
 })
 </script>
 
@@ -582,6 +662,42 @@ onMounted(async () => {
   color: var(--color-primary);
 }
 .btn-outline:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.pay-export-menu {
+  position: relative;
+}
+.pay-export-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 168px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #fff;
+  border: 1px solid var(--color-border-base);
+  border-radius: var(--radius-base);
+  box-shadow: var(--shadow-card);
+}
+.pay-export-menu__panel button {
+  border: none;
+  background: transparent;
+  text-align: left;
+  padding: 8px 10px;
+  border-radius: 6px;
+  cursor: pointer;
+  color: var(--color-text-primary);
+  font-size: var(--font-size-sm);
+  white-space: nowrap;
+}
+.pay-export-menu__panel button:hover:not(:disabled) {
+  background: var(--color-bg-layout);
+}
+.pay-export-menu__panel button:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }

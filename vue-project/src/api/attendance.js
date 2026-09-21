@@ -443,6 +443,11 @@ export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })
 }
 
+/** 其他绩效激励按天明细（谁哪天加班、哪天满8小时固定200元） */
+export function getOvertimePayDetailExport(params) {
+  return request({ url: '/dept/overtime-pay-detail-export', method: 'get', params })
+}
+
 /** 全部加班时长导出（含其他绩效激励与换休票，全员+各科室） */
 export function getOvertimeHoursExport(params) {
   return request({ url: '/dept/overtime-hours-export', method: 'get', params })
