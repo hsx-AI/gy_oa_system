@@ -90,6 +90,12 @@ const routes = [
     meta: { title: '绩效统计' }
   },
   {
+    path: '/performance/edit',
+    name: 'PerformanceEditor',
+    component: () => import('../views/PerformanceEditor.vue'),
+    meta: { title: '绩效填报' }
+  },
+  {
     path: '/attendance/manual',
     name: 'ManualEntry',
     component: () => import('../views/attendance/ManualEntry.vue'),

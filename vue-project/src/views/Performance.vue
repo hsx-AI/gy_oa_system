@@ -1,81 +1,153 @@
 <template>
-  <div class="performance-page">
-    <div class="page-header">
-      <div><h1>绩效统计</h1><p>按姓名首字母排序录入；可直接从 Excel 复制一列得分后粘贴到任一得分格。</p></div>
-      <div class="header-actions"><button class="btn btn-secondary" @click="activeTab = 'history'">查看往期统计</button></div>
-    </div>
+  <div class="perf-page">
+    <header class="perf-head">
+      <div>
+        <h1>绩效统计</h1>
+        <p>智能制造技术室按月在线填报。每人只填自己的绩效行和会议纪实，科室汇总后按合计排名。</p>
+      </div>
+      <label class="month-box">考核月份
+        <input v-model="month" type="month" @change="load">
+      </label>
+    </header>
 
-    <div v-if="loadingPermission" class="card empty">正在加载权限…</div>
-    <template v-else-if="permission.can_edit">
-      <div class="tabs"><button :class="{ active: activeTab === 'entry' }" @click="activeTab = 'entry'">月度绩效录入</button><button v-if="permission.can_quarterly" :class="{ active: activeTab === 'quarterly' }" @click="activeTab = 'quarterly'">季度绩效录入</button><button :class="{ active: activeTab === 'history' }" @click="activeTab = 'history'">往期统计</button></div>
-      <section v-if="activeTab === 'entry'" class="card">
-        <div class="toolbar">
-          <label>考核月份 <input v-model="month" type="month" @change="loadRoster" /></label>
-          <span class="dept-name">班组：{{ permission.department }}</span>
-          <span class="entry-hint">标记“总师 / 新入职”的人员不参与排名，排名与百分比自动置空。</span>
-          <button class="btn btn-primary" :disabled="loading || saving" @click="save">{{ saving ? '保存中…' : '保存并计算排名' }}</button>
-        </div>
-        <div v-if="loading" class="empty">正在加载人员…</div>
-        <div v-else class="table-wrap">
-          <table class="performance-table"><thead><tr><th>#</th><th>班组</th><th>姓名</th><th>绩效得分</th><th>职级</th><th>标记</th><th>排名百分比</th><th>排名</th><th>绩效等级</th></tr></thead>
-            <tbody><tr v-for="(row, index) in roster" :key="row.employee_name"><td>{{ index + 1 }}</td><td>{{ row.department }}</td><td class="name">{{ row.employee_name }}</td>
-              <td><input v-model="row.score" inputmode="decimal" class="score-input" placeholder="粘贴得分" @paste="pasteScores(index, $event)" /></td><td>{{ row.job_level || '—' }}</td>
-              <td><select v-model="row.marker"><option value="">无</option><option value="总师">总师</option><option value="新入职">新入职</option></select></td>
-              <td>{{ formatPercent(row.rank_percent) }}</td><td>{{ row.rank_no ?? '—' }}</td><td><select v-model="row.gradeValue" @change="row.grade_manual = !!row.gradeValue"><option value="">自动（{{ row.auto_grade || '待计算' }}）</option><option value="A">A</option><option value="B+">B+</option><option value="B">B</option><option value="C">C</option></select></td></tr></tbody>
-          </table>
-          <p v-if="!roster.length" class="empty">该班组暂无在职人员。</p>
-        </div>
+    <div v-if="loading" class="panel muted">正在加载…</div>
+    <div v-else-if="errorText" class="panel error">{{ errorText }}</div>
+    <div v-else-if="!access.can_fill && !access.can_summary" class="panel">
+      <h2>该科室尚未开放</h2>
+      <p>目前只开放智能制造技术室。其他科室暂不做线上填报。</p>
+    </div>
+    <template v-else>
+      <section class="rules">
+        <h2>填报规则</h2>
+        <ol>
+          <li>第一张表是绩效填报表，表头以下每人一行。你只能看到并填写自己那一行。</li>
+          <li>第二张表是你自己的会议纪实，按月记录。</li>
+          <li>科室主任、副主任和班组长打开汇总表，能看到全员数据，但只能改自己的行和自己的会议纪实。</li>
+          <li>科室主任可以更新模板。模板仍然是第一页绩效表、第二页会议纪实，姓名列不变。</li>
+        </ol>
       </section>
-      <QuarterlyPerformanceEntry v-else-if="activeTab === 'quarterly'" />
-      <PerformanceHistoryPanel v-else />
+
+      <section class="actions">
+        <button v-if="access.can_fill" type="button" class="btn primary" :disabled="opening" @click="openDoc('mine')">填写我的绩效</button>
+        <button v-if="access.can_summary" type="button" class="btn" :disabled="opening" @click="openDoc('summary')">打开科室汇总</button>
+        <label v-if="access.can_update_template" class="btn">
+          更新科室模板
+          <input type="file" hidden accept=".xlsx" @change="onTemplate">
+        </label>
+        <span v-if="access.can_fill" class="status" :class="{ on: mineFilled }">{{ mineFilled ? '本月已有填报' : '本月尚未填报' }}</span>
+      </section>
+
+      <section v-if="access.can_summary" class="panel">
+        <h2>本月填报情况</h2>
+        <table>
+          <thead><tr><th>姓名</th><th>状态</th></tr></thead>
+          <tbody>
+            <tr v-for="person in people" :key="person.name">
+              <td>{{ person.name }}</td>
+              <td><span class="pill" :class="{ on: person.filled }">{{ person.filled ? '已填写' : '未填写' }}</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <p v-if="!people.length" class="muted">暂无科室人员</p>
+      </section>
     </template>
-    <div v-else class="card empty">仅班组长、主任或副主任可录入绩效。</div>
   </div>
 </template>
 
 <script setup>
 import { computed, onMounted, ref } from 'vue'
-import { getPerformancePermission, getPerformanceRoster, savePerformance } from '@/api/performance'
-import PerformanceHistoryPanel from '@/components/PerformanceHistoryPanel.vue'
-import QuarterlyPerformanceEntry from '@/components/QuarterlyPerformanceEntry.vue'
+import { useRouter } from 'vue-router'
+import { getPerformanceOnlineContext, openPerformanceOnline, uploadPerformanceTemplate } from '@/api/performance'
 
-const now = new Date()
-const month = ref(`${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`)
-const activeTab = ref('entry')
-const permission = ref({ can_edit: false, department: '' })
-const roster = ref([])
-const loadingPermission = ref(true), loading = ref(false), saving = ref(false)
-const currentUser = computed(() => { try { const u = JSON.parse(localStorage.getItem('userInfo') || '{}'); return (u.name || u.userName || '').trim() } catch { return '' } })
-const collator = new Intl.Collator('zh-Hans-CN', { sensitivity: 'base' })
-const formatPercent = (value) => value == null ? '—' : `${(Number(value) * 100).toFixed(1)}%`
+const router = useRouter()
+const loading = ref(true)
+const opening = ref(false)
+const errorText = ref('')
+const month = ref(new Date().toISOString().slice(0, 7))
+const access = ref({ can_fill: false, can_summary: false, can_update_template: false, department: '' })
+const people = ref([])
+const mineFilled = ref(false)
+const pilot = ref('智能制造技术室')
 
-async function loadRoster () {
-  if (!permission.value.can_edit) return
+const currentUser = computed(() => {
+  try {
+    const user = JSON.parse(localStorage.getItem('userInfo') || '{}')
+    return (user.name || user.userName || '').trim()
+  } catch (e) {
+    return ''
+  }
+})
+
+function detailOf(err) {
+  const detail = err && err.response && err.response.data && err.response.data.detail
+  return (typeof detail === 'string' && detail) || (err && err.message) || '操作失败'
+}
+
+async function load() {
   loading.value = true
+  errorText.value = ''
   try {
-    const res = await getPerformanceRoster({ current_user: currentUser.value, month: month.value })
-    roster.value = (res.list || []).map(row => ({ ...row, gradeValue: row.grade_manual ? row.performance_grade : '', auto_grade: row.performance_grade || '' })).sort((a, b) => collator.compare(a.employee_name, b.employee_name))
-  } catch (error) { alert(error?.response?.data?.detail || '加载绩效人员失败') } finally { loading.value = false }
+    const res = await getPerformanceOnlineContext({ current_user: currentUser.value, month: month.value })
+    access.value = res.access || access.value
+    people.value = res.people || []
+    mineFilled.value = !!res.mine_filled
+    pilot.value = res.pilot_department || pilot.value
+    if (res.month) month.value = res.month
+  } catch (err) {
+    errorText.value = detailOf(err)
+  } finally {
+    loading.value = false
+  }
 }
-function pasteScores (startIndex, event) {
-  const text = event.clipboardData?.getData('text/plain') || ''
-  const values = text.replace(/\r/g, '').split('\n').map(v => v.trim()).filter(v => v !== '')
-  if (values.length < 2) return
-  event.preventDefault()
-  values.forEach((value, offset) => { if (roster.value[startIndex + offset]) roster.value[startIndex + offset].score = value })
-}
-async function save () {
-  saving.value = true
+
+async function openDoc(scope) {
+  opening.value = true
   try {
-    await savePerformance({ current_user: currentUser.value, month: month.value, entries: roster.value.map(row => ({ employee_name: row.employee_name, score: row.score === '' || row.score == null ? null : Number(row.score), marker: row.marker || '', job_level: row.job_level, performance_grade: row.gradeValue || '', grade_manual: !!row.gradeValue })) })
-    await loadRoster()
-    alert('已保存，并按科室有效得分重新计算排名。')
-  } catch (error) { alert(error?.response?.data?.detail || '保存失败，请检查得分格式') } finally { saving.value = false }
+    const res = await openPerformanceOnline({ current_user: currentUser.value, month: month.value, scope })
+    router.push({ path: '/performance/edit', query: { docId: res.doc_id, scope: res.scope || scope } })
+  } catch (err) {
+    window.alert(detailOf(err))
+  } finally {
+    opening.value = false
+  }
 }
-onMounted(async () => { try { permission.value = await getPerformancePermission({ current_user: currentUser.value }); await loadRoster() } catch (error) { alert('获取绩效权限失败') } finally { loadingPermission.value = false } })
+
+async function onTemplate(ev) {
+  const input = ev.target
+  const file = input.files && input.files[0]
+  input.value = ''
+  if (!file) return
+  const form = new FormData()
+  form.append('file', file)
+  try {
+    await uploadPerformanceTemplate({ current_user: currentUser.value }, form)
+    window.alert('模板已更新。下次打开填报或汇总时会按新模板生成。')
+    await load()
+  } catch (err) {
+    window.alert(detailOf(err))
+  }
+}
+
+onMounted(load)
 </script>
 
 <style scoped>
-.performance-page{padding:24px;max-width:1440px;margin:auto}.page-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}.page-header h1{margin:0 0 8px;font-size:26px}.page-header p,.entry-hint{color:#6b7280;margin:0}.card{background:#fff;border-radius:12px;box-shadow:0 2px 12px #0f172a0d;padding:20px}.tabs{display:flex;gap:4px;margin-bottom:16px}.tabs button{border:0;background:#eaf0f7;padding:9px 18px;border-radius:7px;cursor:pointer}.tabs .active{background:#1677ff;color:#fff}.toolbar{display:flex;align-items:center;gap:16px;flex-wrap:wrap;margin-bottom:16px}.toolbar label{font-weight:600}.toolbar input,.toolbar select,select,.score-input{height:34px;border:1px solid #d7dce5;border-radius:5px;padding:0 9px;background:#fff}.dept-name{font-weight:600;color:#1d4ed8}.entry-hint{flex:1;min-width:230px;font-size:13px}.table-wrap{overflow:auto}.performance-table{width:100%;border-collapse:collapse;min-width:840px}.performance-table th{background:#f4f7fb;color:#475569;text-align:left}.performance-table th,.performance-table td{border-bottom:1px solid #e9edf3;padding:10px 12px}.performance-table .name{font-weight:600}.score-input{width:112px;text-align:right}.empty{text-align:center;color:#64748b;padding:40px}.btn{border:0;border-radius:6px;padding:9px 15px;cursor:pointer}.btn-primary{background:#1677ff;color:#fff}.btn-secondary{background:#e8eef6;color:#334155}@media(max-width:700px){.performance-page{padding:14px}.page-header{align-items:flex-start;gap:10px;flex-direction:column}}
-.grade{display:inline-block;background:#e8f3ff;color:#145bb6;font-weight:700;border-radius:10px;padding:2px 8px}
+.perf-page { padding: 24px; max-width: 1080px; margin: 0 auto; color: #1e293b; }
+.perf-head { display: flex; justify-content: space-between; gap: 16px; align-items: flex-end; margin-bottom: 18px; }
+.perf-head h1 { margin: 0 0 6px; font-size: 26px; }
+.perf-head p { margin: 0; color: #64748b; }
+.month-box { display: flex; align-items: center; gap: 8px; font-weight: 600; }
+.month-box input { height: 36px; border: 1px solid #d7dce5; border-radius: 8px; padding: 0 10px; }
+.rules, .panel, .actions { background: #fff; border: 1px solid #e2e8f0; border-radius: 14px; padding: 16px 18px; margin-bottom: 14px; }
+.rules h2, .panel h2 { margin: 0 0 8px; font-size: 16px; }
+.rules ol { margin: 0; padding-left: 18px; color: #334155; line-height: 1.7; }
+.actions { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.btn { border: 1px solid #d7dce5; background: #fff; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+.btn.primary { background: #1890ff; border-color: #1890ff; color: #fff; }
+.status, .pill { font-size: 12px; padding: 2px 8px; border-radius: 999px; background: #f1f5f9; color: #64748b; }
+.status.on, .pill.on { background: #ecfdf3; color: #047857; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { text-align: left; padding: 8px 6px; border-bottom: 1px solid #f1f5f9; }
+.muted { color: #64748b; }
+.error { color: #b91c1c; background: #fef2f2; }
 </style>

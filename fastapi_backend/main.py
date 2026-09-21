@@ -9,7 +9,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from routers.business_trip_map import router as map_router
 from config import settings
-from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, access_dashboard, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, action_items, print3d, mashangban, file_page_counter, travel_itinerary, shared_files, onlyoffice
+from routers import holiday, suggestions, auth, attendance, report, leave_overtime, approvers, business_trip, approval, statistics, file_numbering, department_policy, admin, db_manager, health_monitor, access_dashboard, sso, email_sender, shift_schedule, holiday_exchange, tech_problem, bid_template, inbox_email, feedback, contacts, seal_apply, confidentiality_ledger, attendance_exception, rotor_blade_balance, personnel_visualization, info_feed, ai_assistant, massage_chair, low_value_reimbursement, performance, performance_online, action_items, print3d, mashangban, file_page_counter, travel_itinerary, shared_files, onlyoffice
 import logging
 import time
 
@@ -94,6 +94,7 @@ app.include_router(ai_assistant.router, prefix=settings.API_PREFIX)  # 智能制
 app.include_router(massage_chair.router, prefix=settings.API_PREFIX)  # 休闲角预约
 app.include_router(low_value_reimbursement.router, prefix=settings.API_PREFIX)  # 低值易耗报销
 app.include_router(performance.router, prefix=settings.API_PREFIX)  # 月度绩效
+app.include_router(performance_online.router, prefix=settings.API_PREFIX)  # 智能室绩效线上填报
 app.include_router(action_items.router, prefix=settings.API_PREFIX)  # 行动项督办
 app.include_router(print3d.router, prefix=settings.API_PREFIX)  # 3D打印委托管理
 app.include_router(mashangban.router, prefix=settings.API_PREFIX)  # 工艺码上办月报
