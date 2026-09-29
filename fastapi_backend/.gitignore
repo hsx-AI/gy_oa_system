@@ -51,3 +51,7 @@ Thumbs.db
 # local secrets
 config.py
 data/auth_rsa_private.pem
+
+# 绩效线上填报运行时数据（由 seed 在首次使用时复制生成）
+data/performance_online/templates/
+data/performance_online/docs/
