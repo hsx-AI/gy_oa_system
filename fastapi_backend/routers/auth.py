@@ -13,7 +13,6 @@ import random
 import re
 import secrets
 import smtplib
-import threading
 import time
 from email.header import Header as MimeHeader
 from email.mime.text import MIMEText
@@ -48,17 +47,29 @@ _WEAK_PASSWORDS = {
     "changeme", "default", "system", "login", "pass123", "pass1234",
 }
 _FORCE_RESET_TTL_SECONDS = 600
-_force_reset_tokens = {}  # name -> {"token": str, "expires": float}
 CAPTCHA_FAIL_THRESHOLD = 3  # 连续失败达到该次数后需输入图片验证码
 CAPTCHA_TTL_SECONDS = 300
 LOGIN_FAIL_TTL_SECONDS = 1800
 _CAPTCHA_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
 
-_verification_codes = {}
-_verification_lock = threading.Lock()
-_login_failures = {}  # ip -> {"count": int, "expires": float}
-_captchas = {}  # captcha_id -> {"code": str, "expires": float}
-_captcha_lock = threading.Lock()
+# 多 worker 下进程内存不共享：验证码/验证票/失败计数走 MySQL ephemeral store
+from utils.ephemeral_store import delete_item, get_item, mutate_item, set_item
+
+
+def _vc_key(name: str, purpose: str) -> str:
+    return f"vc:{(purpose or '').strip().lower()}:{(name or '').strip()}"
+
+
+def _fr_key(name: str) -> str:
+    return f"fr:{(name or '').strip()}"
+
+
+def _cap_key(captcha_id: str) -> str:
+    return f"cap:{(captcha_id or '').strip()}"
+
+
+def _lf_key(ip: str) -> str:
+    return f"lf:{(ip or '').strip() or 'unknown'}"
 
 
 def _client_ip(http_request: Request) -> str:
@@ -70,43 +81,34 @@ def _client_ip(http_request: Request) -> str:
     return "unknown"
 
 
-def _prune_login_failures(now: float | None = None) -> None:
-    now = time.time() if now is None else now
-    expired = [k for k, v in _login_failures.items() if v.get("expires", 0) < now]
-    for k in expired:
-        _login_failures.pop(k, None)
-
-
 def _get_fail_count(ip: str) -> int:
-    now = time.time()
-    with _captcha_lock:
-        _prune_login_failures(now)
-        item = _login_failures.get(ip)
-        if not item or item.get("expires", 0) < now:
-            _login_failures.pop(ip, None)
-            return 0
-        return int(item.get("count") or 0)
+    item = get_item(_lf_key(ip))
+    if not item:
+        return 0
+    return int(item.get("count") or 0)
 
 
 def _inc_fail_count(ip: str) -> int:
     now = time.time()
-    with _captcha_lock:
-        _prune_login_failures(now)
-        item = _login_failures.get(ip)
-        if not item or item.get("expires", 0) < now:
+    box = {"count": 1}
+
+    def _mut(cur):
+        if not cur or float(cur.get("expires") or 0) < now:
             count = 1
         else:
-            count = int(item.get("count") or 0) + 1
-        _login_failures[ip] = {
+            count = int(cur.get("count") or 0) + 1
+        box["count"] = count
+        return {
             "count": count,
             "expires": now + LOGIN_FAIL_TTL_SECONDS,
         }
-        return count
+
+    mutate_item(_lf_key(ip), _mut, default_ttl=LOGIN_FAIL_TTL_SECONDS)
+    return int(box["count"])
 
 
 def _clear_fail_count(ip: str) -> None:
-    with _captcha_lock:
-        _login_failures.pop(ip, None)
+    delete_item(_lf_key(ip))
 
 
 def _need_captcha(ip: str) -> bool:
@@ -150,11 +152,11 @@ def _create_captcha() -> dict:
     code = "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(4))
     captcha_id = secrets.token_urlsafe(16)
     now = time.time()
-    with _captcha_lock:
-        expired = [k for k, v in _captchas.items() if v.get("expires", 0) < now]
-        for k in expired:
-            _captchas.pop(k, None)
-        _captchas[captcha_id] = {"code": code.lower(), "expires": now + CAPTCHA_TTL_SECONDS}
+    set_item(
+        _cap_key(captcha_id),
+        {"code": code.lower(), "expires": now + CAPTCHA_TTL_SECONDS},
+        now + CAPTCHA_TTL_SECONDS,
+    )
     return {
         "captchaId": captcha_id,
         "image": _make_captcha_image(code),
@@ -167,11 +169,20 @@ def _verify_and_consume_captcha(captcha_id: str, captcha_code: str) -> bool:
     if not cid or not code:
         return False
     now = time.time()
-    with _captcha_lock:
-        item = _captchas.pop(cid, None)
-        if not item or item.get("expires", 0) < now:
-            return False
-        return secrets.compare_digest(item.get("code") or "", code)
+    box = {"ok": False}
+
+    def _mut(item):
+        if not item or float(item.get("expires") or 0) < now:
+            return None
+        try:
+            ok = secrets.compare_digest(str(item.get("code") or ""), code)
+        except Exception:
+            ok = False
+        box["ok"] = bool(ok)
+        return None  # one-time use
+
+    mutate_item(_cap_key(cid), _mut, default_ttl=CAPTCHA_TTL_SECONDS)
+    return bool(box["ok"])
 
 
 def _ensure_session_ver_column():
@@ -351,11 +362,11 @@ def _issue_force_reset_token(name: str) -> str:
     clean = (name or "").strip()
     token = secrets.token_urlsafe(24)
     now = time.time()
-    with _verification_lock:
-        expired = [k for k, v in _force_reset_tokens.items() if v.get("expires", 0) < now]
-        for k in expired:
-            _force_reset_tokens.pop(k, None)
-        _force_reset_tokens[clean] = {"token": token, "expires": now + _FORCE_RESET_TTL_SECONDS}
+    set_item(
+        _fr_key(clean),
+        {"token": token, "expires": now + _FORCE_RESET_TTL_SECONDS},
+        now + _FORCE_RESET_TTL_SECONDS,
+    )
     return token
 
 
@@ -365,15 +376,22 @@ def _consume_force_reset_token(name: str, token: str) -> bool:
     if not clean or not raw:
         return False
     now = time.time()
-    with _verification_lock:
-        item = _force_reset_tokens.get(clean)
-        if not item or item.get("expires", 0) < now:
-            _force_reset_tokens.pop(clean, None)
-            return False
-        if not secrets.compare_digest(item.get("token") or "", raw):
-            return False
-        _force_reset_tokens.pop(clean, None)
-        return True
+    box = {"ok": False}
+
+    def _mut(item):
+        if not item or float(item.get("expires") or 0) < now:
+            return None
+        try:
+            ok = secrets.compare_digest(str(item.get("token") or ""), raw)
+        except Exception:
+            ok = False
+        if not ok:
+            return item
+        box["ok"] = True
+        return None
+
+    mutate_item(_fr_key(clean), _mut, default_ttl=_FORCE_RESET_TTL_SECONDS)
+    return bool(box["ok"])
 
 
 def _masked_email(address: str) -> str:
@@ -1032,18 +1050,27 @@ class ResetPasswordByCodeRequest(BaseModel):
 
 
 def _consume_code(name: str, purpose: str, code: str) -> bool:
-    key = (name, purpose)
+    key = _vc_key(name, purpose)
     now = time.time()
-    with _verification_lock:
-        item = _verification_codes.get(key)
-        if not item or item["expires"] < now or item["attempts"] >= 5:
-            _verification_codes.pop(key, None)
-            return False
-        item["attempts"] += 1
-        if not secrets.compare_digest(item["code"], (code or "").strip()):
-            return False
-        _verification_codes.pop(key, None)
-        return True
+    entered = (code or "").strip()
+    box = {"ok": False}
+
+    def _mut(item):
+        if not item or float(item.get("expires") or 0) < now or int(item.get("attempts") or 0) >= 5:
+            return None
+        nxt = dict(item)
+        nxt["attempts"] = int(nxt.get("attempts") or 0) + 1
+        try:
+            matched = secrets.compare_digest(str(nxt.get("code") or ""), entered)
+        except Exception:
+            matched = False
+        if not matched:
+            return nxt
+        box["ok"] = True
+        return None
+
+    mutate_item(key, _mut, default_ttl=300)
+    return bool(box["ok"])
 
 
 @router.post("/send-verification-code")
@@ -1063,12 +1090,11 @@ def send_verification_code(req: VerificationCodeRequest):
         cfg = _get_email_config()
         if not cfg["address"] or not cfg["auth_code"]:
             return {"success": False, "message": "系统发信邮箱尚未配置，请联系管理员"}
-        key = (name, purpose)
+        key = _vc_key(name, purpose)
         now = time.time()
-        with _verification_lock:
-            previous = _verification_codes.get(key)
-            if previous and now - previous["sent_at"] < 60:
-                return {"success": False, "message": "验证码发送过于频繁，请60秒后再试"}
+        previous = get_item(key)
+        if previous and now - float(previous.get("sent_at") or 0) < 60:
+            return {"success": False, "message": "验证码发送过于频繁，请60秒后再试"}
         code = f"{secrets.randbelow(1000000):06d}"
         action = "登录" if purpose == "login" else "修改密码"
         message = MIMEText(f"您好，{name}：\n\n您正在通过邮箱验证码{action}，验证码为：{code}\n\n验证码5分钟内有效，请勿转发给他人。", "plain", "utf-8")
@@ -1078,8 +1104,11 @@ def send_verification_code(req: VerificationCodeRequest):
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=15) as smtp:
             smtp.login(cfg["address"], cfg["auth_code"])
             smtp.sendmail(cfg["address"], [recipient], message.as_string())
-        with _verification_lock:
-            _verification_codes[key] = {"code": code, "expires": now + 300, "sent_at": now, "attempts": 0}
+        set_item(
+            key,
+            {"code": code, "expires": now + 300, "sent_at": now, "attempts": 0},
+            now + 300,
+        )
         return {"success": True, "message": f"验证码已发送至 {_masked_email(recipient)}"}
     except Exception as e:
         logger.error("发送登录验证码失败: %s", e)
