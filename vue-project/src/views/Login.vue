@@ -103,6 +103,18 @@
               </button>
             </div>
 
+            <div v-if="loginMode === 'password' && requireCaptcha" class="captcha-row">
+              <div class="field-group" :class="{ focused: focusField === 'captcha', filled: form.captchaCode }">
+                <input v-model="form.captchaCode" type="text" maxlength="6" autocomplete="off"
+                       placeholder="请输入右侧验证码" required
+                       @focus="focusField = 'captcha'" @blur="focusField = ''" />
+              </div>
+              <button type="button" class="captcha-img-btn" title="看不清？点击刷新" :disabled="captchaLoading" @click="loadCaptcha">
+                <img v-if="captchaImage" :src="captchaImage" alt="验证码" class="captcha-img" />
+                <span v-else>{{ captchaLoading ? '加载中' : '点击获取' }}</span>
+              </button>
+            </div>
+
             <div class="form-options">
               <label class="remember-check">
                 <input type="checkbox" v-model="form.remember" />
@@ -112,7 +124,7 @@
               <button type="button" class="text-link" @click="openReset">忘记密码？邮箱验证码修改</button>
             </div>
 
-            <p class="security-tip">密码须至少6位，并包含数字、字母、特殊符号中的至少两类；简单密码登录后将强制修改。</p>
+            <p class="security-tip">密码经浏览器加密后传输；须至少6位，并包含数字、字母、特殊符号中的至少两类；常见弱口令或与用户名相同将被拦截，登录后强制修改。</p>
 
             <button type="submit" class="login-btn" :disabled="loading" :class="{ loading: loading }">
               <span class="btn-bg"></span>
@@ -144,6 +156,7 @@
           <strong>密码设置规则</strong>
           <span>• 密码长度至少6位</span>
           <span>• 数字、字母、特殊符号至少包含两类</span>
+          <span>• 不得使用常见弱口令，且不能与用户名相同</span>
         </div>
         <input v-if="!forcedChange" v-model="resetForm.name" placeholder="请输入用户名（汉字姓名）" />
         <div v-if="!forcedChange" class="reset-code-row">
@@ -170,9 +183,10 @@
 </template>
 
 <script setup>
-import { ref, reactive, onMounted, onBeforeUnmount, computed } from 'vue'
+import { ref, reactive, onMounted, onBeforeUnmount } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { login, loginByCode, sendVerificationCode, changePassword, resetPasswordByCode } from '@/api/attendance'
+import { login, loginByCode, sendVerificationCode, changePassword, resetPasswordByCode, getLoginCaptcha, getCaptchaRequired } from '@/api/attendance'
+import { encryptPasswordForTransport } from '@/utils/passwordCrypto'
 import logoUrl from '@/assets/changbiao.png'
 
 const router = useRouter()
@@ -187,17 +201,105 @@ const countdown = ref(0)
 const resetCountdown = ref(0)
 const passwordDialog = ref(false)
 const forcedChange = ref(false)
+const requireCaptcha = ref(false)
+const captchaLoading = ref(false)
+const captchaImage = ref('')
+const captchaId = ref('')
 let pendingUserInfo = null
+let pendingForceResetToken = ''
 
 const form = reactive({
   username: '',
   password: '',
   code: '',
+  captchaCode: '',
   remember: false
 })
 const resetForm = reactive({ name: '', code: '', newPassword: '', confirmPassword: '' })
 
-const passwordStrong = value => value.length >= 6 && [/[A-Za-z]/.test(value), /\d/.test(value), /[^A-Za-z0-9]/.test(value)].filter(Boolean).length >= 2
+const WEAK_PASSWORDS = new Set([
+  '123456', '1234567', '12345678', '123456789', '1234567890',
+  '111111', '11111111', '000000', '00000000', '666666', '888888', '88888888',
+  '123123', '112233', '121212', '123321', '654321',
+  'password', 'password1', 'password123', 'passw0rd', 'p@ssw0rd', 'p@ssword',
+  'admin', 'admin1', 'admin12', 'admin123', 'admin888', 'admin666', 'root', 'root123',
+  'qwerty', 'qwerty123', 'qwer1234', '1qaz2wsx', '1q2w3e4r', 'qazwsx',
+  'abc123', 'abcd1234', 'a123456', 'a1234567', 'aa123456', 'abc12345',
+  '123456a', '123456aa', '1234abcd', 'abcdef', 'abcdefg',
+  'iloveyou', 'woaini', 'woaini123', '5201314', '1314520',
+  'letmein', 'welcome', 'welcome1', 'monkey', 'dragon', 'master',
+  'test', 'test123', 'guest', 'user', 'user123', 'oa123456', 'oaadmin',
+  'changeme', 'default', 'system', 'login', 'pass123', 'pass1234',
+])
+
+function passwordStrong(value, username = '') {
+  const pwd = (value || '').trim()
+  if (pwd.length < 6) return false
+  const lower = pwd.toLowerCase()
+  const name = (username || '').trim().toLowerCase()
+  if (name && lower === name) return false
+  if (WEAK_PASSWORDS.has(lower)) return false
+  if (new Set(pwd).size === 1) return false
+  if (/^\d{6,}$/.test(pwd)) {
+    let asc = true
+    let desc = true
+    for (let i = 1; i < pwd.length; i++) {
+      const d = Number(pwd[i]) - Number(pwd[i - 1])
+      if (d !== 1) asc = false
+      if (d !== -1) desc = false
+    }
+    if (asc || desc) return false
+  }
+  return [/[A-Za-z]/.test(pwd), /\d/.test(pwd), /[^A-Za-z0-9]/.test(pwd)].filter(Boolean).length >= 2
+}
+
+function passwordRuleMessage() {
+  return '密码至少6位，须包含数字、字母、特殊符号中的至少两类，且不能是常见弱口令或与用户名相同'
+}
+
+function markCaptchaRequired() {
+  requireCaptcha.value = true
+  sessionStorage.setItem('loginRequireCaptcha', '1')
+}
+
+function clearCaptchaRequired() {
+  requireCaptcha.value = false
+  captchaImage.value = ''
+  captchaId.value = ''
+  form.captchaCode = ''
+  sessionStorage.removeItem('loginRequireCaptcha')
+}
+
+async function loadCaptcha() {
+  captchaLoading.value = true
+  try {
+    const res = await getLoginCaptcha()
+    captchaId.value = res.captchaId || ''
+    captchaImage.value = res.image || ''
+    form.captchaCode = ''
+  } catch (e) {
+    captchaImage.value = ''
+    captchaId.value = ''
+    alert(e.message || '验证码加载失败')
+  } finally {
+    captchaLoading.value = false
+  }
+}
+
+async function ensureCaptchaState() {
+  if (sessionStorage.getItem('loginRequireCaptcha') === '1') {
+    markCaptchaRequired()
+  }
+  try {
+    const res = await getCaptchaRequired()
+    if (res.requireCaptcha) {
+      markCaptchaRequired()
+    }
+  } catch (_) { /* 忽略查询失败，仍以后端登录校验为准 */ }
+  if (requireCaptcha.value) {
+    await loadCaptcha()
+  }
+}
 
 function startCountdown(target) {
   target.value = 60
@@ -227,17 +329,44 @@ function openReset() {
 function closePasswordDialog() { passwordDialog.value = false }
 
 async function submitPasswordChange() {
-  if (!passwordStrong(resetForm.newPassword)) return alert('密码至少6位，且须包含数字、字母、特殊符号中的至少两类')
+  const nameForRule = forcedChange.value ? form.username : resetForm.name
+  if (!passwordStrong(resetForm.newPassword, nameForRule)) return alert(passwordRuleMessage())
   if (resetForm.newPassword !== resetForm.confirmPassword) return alert('两次输入的新密码不一致')
   loading.value = true
   try {
     if (forcedChange.value) {
-      const res = await changePassword({ name: form.username, oldPassword: form.password, newPassword: resetForm.newPassword })
+      const newEnc = await encryptPasswordForTransport(resetForm.newPassword)
+      const payload = {
+        name: form.username,
+        newPassword: '',
+        newPasswordCipher: newEnc.passwordCipher,
+        keyId: newEnc.keyId,
+      }
+      if (pendingForceResetToken) {
+        payload.forceResetToken = pendingForceResetToken
+        payload.oldPassword = ''
+      } else {
+        const oldEnc = await encryptPasswordForTransport(form.password)
+        payload.oldPassword = ''
+        payload.oldPasswordCipher = oldEnc.passwordCipher
+        payload.keyId = oldEnc.keyId
+      }
+      const res = await changePassword(payload)
       pendingUserInfo.mustChangePassword = false
+      delete pendingUserInfo.forceResetToken
       if (res?.sessionVer != null) pendingUserInfo.sessionVer = res.sessionVer
+      if (res?.accessToken) pendingUserInfo.accessToken = res.accessToken
+      pendingForceResetToken = ''
       finishLogin(pendingUserInfo)
     } else {
-      const res = await resetPasswordByCode({ name: resetForm.name, code: resetForm.code, newPassword: resetForm.newPassword })
+      const newEnc = await encryptPasswordForTransport(resetForm.newPassword)
+      const res = await resetPasswordByCode({
+        name: resetForm.name,
+        code: resetForm.code,
+        newPassword: '',
+        newPasswordCipher: newEnc.passwordCipher,
+        keyId: newEnc.keyId,
+      })
       alert(res.message)
       closePasswordDialog()
       loginMode.value = 'password'
@@ -501,6 +630,7 @@ onMounted(() => {
   if (particleCanvas.value) initCanvas(particleCanvas.value)
   setTimeout(typeSlogan, 600)
   setTimeout(animateStats, 800)
+  ensureCaptchaState()
   const upgradeName = sessionStorage.getItem('forcePasswordChangeName') || ''
   if (upgradeName) {
     form.username = upgradeName
@@ -518,11 +648,33 @@ onBeforeUnmount(() => {
 })
 
 const handleLogin = async () => {
+  if (loginMode.value === 'password' && requireCaptcha.value) {
+    if (!form.captchaCode.trim()) {
+      alert('请输入图片验证码')
+      return
+    }
+    if (!captchaId.value) {
+      alert('验证码已失效，请点击图片刷新后重试')
+      await loadCaptcha()
+      return
+    }
+  }
   loading.value = true
   try {
     const response = loginMode.value === 'password'
-      ? await login({ admin: form.username, password: form.password })
+      ? await (async () => {
+          const enc = await encryptPasswordForTransport(form.password)
+          return login({
+            admin: form.username,
+            password: '',
+            passwordCipher: enc.passwordCipher,
+            keyId: enc.keyId,
+            captchaId: requireCaptcha.value ? captchaId.value : '',
+            captchaCode: requireCaptcha.value ? form.captchaCode.trim() : '',
+          })
+        })()
       : await loginByCode({ name: form.username, code: form.code })
+    clearCaptchaRequired()
     const userInfo = {
       name: response.data.name || form.username,
       dept: response.data.dept || '未分配部门',
@@ -532,15 +684,21 @@ const handleLogin = async () => {
     }
     if (response.data.mustChangePassword) {
       pendingUserInfo = userInfo
+      pendingForceResetToken = response.data.forceResetToken || ''
       forcedChange.value = true
       resetForm.newPassword = ''
       resetForm.confirmPassword = ''
       passwordDialog.value = true
       return
     }
+    pendingForceResetToken = ''
     finishLogin(userInfo)
   } catch (error) {
     console.error('登录错误:', error)
+    if (error.biz?.requireCaptcha) {
+      markCaptchaRequired()
+      await loadCaptcha()
+    }
     if (error.response) {
       alert('服务器错误（' + error.response.status + '），请联系管理员')
     } else if (error.message === 'Network Error') {
@@ -863,6 +1021,23 @@ const handleLogin = async () => {
 .security-tip { margin: -6px 0 0; font-size: 11px; line-height: 1.5; color: rgba(255,255,255,.42); }
 .code-row, .reset-code-row { display: grid; grid-template-columns: 1fr auto; gap: 8px; }
 .code-btn, .reset-code-row button { border: 1px solid rgba(24,144,255,.35); border-radius: 10px; background: rgba(24,144,255,.12); color: #69c0ff; padding: 0 12px; cursor: pointer; }
+.captcha-row { display: grid; grid-template-columns: 1fr 130px; gap: 8px; align-items: stretch; }
+.captcha-img-btn {
+  height: 48px;
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.92);
+  padding: 0;
+  overflow: hidden;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: #597ef7;
+  font-size: 12px;
+}
+.captcha-img-btn:disabled { opacity: 0.7; cursor: wait; }
+.captcha-img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .modal-overlay { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(2,8,20,.72); backdrop-filter: blur(6px); }
 .password-dialog { width: min(420px, calc(100vw - 32px)); padding: 28px; border-radius: 16px; color: #fff; background: #10243e; border: 1px solid rgba(105,192,255,.25); box-shadow: 0 20px 60px rgba(0,0,0,.45); }
 .password-dialog h3 { margin: 0 0 8px; }

@@ -10,12 +10,28 @@ const request = axios.create({
   }
 })
 
+function readAccessToken() {
+  try {
+    const raw = localStorage.getItem('userInfo')
+    if (!raw) return ''
+    const u = JSON.parse(raw)
+    return (u.accessToken || '').trim()
+  } catch {
+    return ''
+  }
+}
+
 // 请求拦截器
 request.interceptors.request.use(
   config => {
     // FormData 提交时不要设置 Content-Type，让浏览器自动带上 multipart boundary
     if (config.data instanceof FormData) {
       delete config.headers['Content-Type']
+    }
+    const token = readAccessToken()
+    if (token) {
+      config.headers['X-OA-Token'] = token
+      config.headers.Authorization = `Bearer ${token}`
     }
     return config
   },
@@ -33,7 +49,9 @@ request.interceptors.response.use(
     // 假设返回 { success: true, data: ... }
     if (res.success === false) {
       console.error('业务错误:', res.message || '请求失败')
-      return Promise.reject(new Error(res.message || '请求失败'))
+      const err = new Error(res.message || '请求失败')
+      err.biz = res
+      return Promise.reject(err)
     }
     
     return res
@@ -46,7 +64,12 @@ request.interceptors.response.use(
       switch (error.response.status) {
         case 401:
           console.error('未授权，请重新登录')
-          // 可以在这里跳转到登录页
+          try {
+            localStorage.removeItem('userInfo')
+          } catch { /* ignore */ }
+          if (typeof window !== 'undefined' && !window.location.pathname.includes('/login')) {
+            window.location.href = '/login?sessionExpired=1'
+          }
           break
         case 403:
           console.error('拒绝访问')
@@ -69,7 +92,3 @@ request.interceptors.response.use(
 )
 
 export default request
-
-
-
-

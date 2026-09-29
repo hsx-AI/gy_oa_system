@@ -5,13 +5,14 @@
 - 各科室主任：仅可管理本室（lsys）员工
 利用 yggl.zaizhi：0=在职，1=离职；离职人员不参与统计与显示，且不可登录。
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 from database import db
 from routers.db_manager import _get_admin1
 from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
+from utils.session_auth import require_login_user
 from io import BytesIO
 from datetime import datetime, date
 import uuid
@@ -135,7 +136,7 @@ def _assert_can_manage_employee(scope: Dict[str, Any], employee_name: str) -> No
 
 @router.get("/employees")
 def list_employees(
-    current_user: str = Query(..., description="当前登录用户姓名，用于权限校验"),
+    current_user: str = Depends(require_login_user),
     zaizhi: Optional[str] = Query("0", description="在职状态：0=在职 1=离职 all=全部"),
     lsys: Optional[str] = Query(None, description="按科室筛选"),
     q: Optional[str] = Query(None, description="按姓名模糊搜索"),
@@ -217,13 +218,13 @@ class AddEmployeeRequest(BaseModel):
 
 
 @router.post("/employee")
-def add_employee(req: AddEmployeeRequest):
+def add_employee(req: AddEmployeeRequest, current_user: str = Depends(require_login_user)):
     """
     添丁：在 yggl 主表新增员工。仅部长/副部长/人事管理员(admin2)/系统管理员(admin1)可添加。
     科室主任/副主任/组长不可添丁。
     必填：姓名、初始密码（至少4位）。
     """
-    scope = _get_admin_scope(req.current_user)
+    scope = _get_admin_scope(current_user)
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/人事管理员可添加员工")
     if scope.get("role") != "full":
@@ -287,11 +288,11 @@ class UpdateEmployeeEmailRequest(BaseModel):
 
 
 @router.post("/employee-update-dept-level")
-def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
+def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest, current_user: str = Depends(require_login_user)):
     """
     更新员工科室、级别。仅部长/副部长可操作；主任不可改科室与级别。
     """
-    scope = _get_admin_scope(req.current_user)
+    scope = _get_admin_scope(current_user)
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可访问")
     if scope["role"] == "dept":
@@ -327,9 +328,9 @@ def update_employee_dept_level(req: UpdateEmployeeDeptLevelRequest):
 
 
 @router.post("/employee-update-email")
-def update_employee_email(req: UpdateEmployeeEmailRequest):
+def update_employee_email(req: UpdateEmployeeEmailRequest, current_user: str = Depends(require_login_user)):
     """更新员工企业邮箱和 IMAP 授权码；授权码未传时保留原值。"""
-    scope = _get_admin_scope(req.current_user)
+    scope = _get_admin_scope(current_user)
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可访问")
     _ensure_yggl_email_columns()
@@ -372,9 +373,9 @@ def update_employee_email(req: UpdateEmployeeEmailRequest):
 
 
 @router.post("/employee-status")
-def set_employee_status(req: SetEmployeeStatusRequest):
+def set_employee_status(req: SetEmployeeStatusRequest, current_user: str = Depends(require_login_user)):
     """设置员工在职状态（0=在职 1=离职）。部长/副部长可操作全部；主任仅可操作本室员工。"""
-    scope = _get_admin_scope(req.current_user)
+    scope = _get_admin_scope(current_user)
     if not scope:
         raise HTTPException(status_code=403, detail="仅部长/副部长/科室主任可操作员工在职状态")
     if req.zaizhi not in (0, 1):
@@ -412,7 +413,7 @@ def set_employee_status(req: SetEmployeeStatusRequest):
 
 @router.get("/dept-list")
 def admin_dept_list(
-    current_user: str = Query(..., description="当前登录用户，用于权限校验")
+    current_user: str = Depends(require_login_user),
 ):
     """管理员页获取科室列表。部长/副部长获全部；主任仅获本室。"""
     scope = _get_admin_scope(current_user)
@@ -447,7 +448,7 @@ def admin_dept_list(
 
 @router.get("/export-employees")
 def export_employees_excel(
-    current_user: str = Query(..., description="当前登录用户，用于权限校验")
+    current_user: str = Depends(require_login_user),
 ):
     """
     导出在职员工表格（按科室排序）。部长/副部长导出全部；主任仅导出本室。
@@ -511,13 +512,13 @@ class HxpBatchRequest(BaseModel):
 
 
 @router.post("/hxp/batch")
-def hxp_batch(req: HxpBatchRequest):
+def hxp_batch(req: HxpBatchRequest, current_user: str = Depends(require_login_user)):
     """
     批量增减换休票。系统管理员、人事管理员或 yggl 部长/副部长可操作。
     add：为每人新增一条 hxp 记录，sj=当前时间。
     subtract：按过期日期从早到晚扣减，不足则跳过。
     """
-    name = (req.current_user or "").strip()
+    name = (current_user or "").strip()
     if not name:
         raise HTTPException(status_code=403, detail="未登录")
     if not _can_manage_hxp_batch(name):
@@ -614,7 +615,7 @@ def hxp_batch(req: HxpBatchRequest):
 
 @router.get("/hxp/summary")
 def hxp_summary(
-    current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
+    current_user: str = Depends(require_login_user),
     keyword: Optional[str] = Query(None, description="姓名关键字"),
     lsys: Optional[str] = Query(None, description="隶属室筛选"),
 ):
@@ -670,7 +671,7 @@ def hxp_summary(
 
 @router.get("/hxp/detail")
 def hxp_detail(
-    current_user: str = Query(..., description="当前用户姓名，用于权限校验"),
+    current_user: str = Depends(require_login_user),
     name: str = Query(..., description="员工姓名"),
 ):
     """查询指定员工的全部换休票获取记录（系统管理员、人事管理员、部长/副部长或综合技术室主任/副主任）"""
@@ -745,9 +746,9 @@ class HxpApplyRequest(BaseModel):
 
 
 @router.post("/hxp/apply")
-def hxp_apply(req: HxpApplyRequest):
+def hxp_apply(req: HxpApplyRequest, current_user: str = Depends(require_login_user)):
     """提交换休票增减审批申请。系统管理员、人事管理员、yggl 部长/副部长或综合技术室主任/副主任可操作。"""
-    name = (req.current_user or "").strip()
+    name = (current_user or "").strip()
     if not name:
         raise HTTPException(status_code=403, detail="未登录")
     if not _can_manage_hxp_batch(name):
@@ -788,7 +789,7 @@ def hxp_apply(req: HxpApplyRequest):
 
 
 @router.get("/hxp/pending-approvals")
-def hxp_pending_approvals(approver: str = Query(..., description="审批人姓名")):
+def hxp_pending_approvals(approver: str = Depends(require_login_user)):
     """查询待审批的换休票申请（status=0 且 approver 匹配）。"""
     rows = db.execute_query(
         "SELECT id, applicant, action, amount, ly, names_json, approver, status, apply_time "
@@ -827,9 +828,13 @@ class HxpApprovalActionRequest(BaseModel):
 
 
 @router.post("/hxp/approval/{approval_id}/action")
-def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
+def hxp_approval_action(
+    approval_id: str,
+    req: HxpApprovalActionRequest,
+    login_user: str = Depends(require_login_user),
+):
     """审批换休票申请：通过 / 驳回。"""
-    approver = (req.approver or "").strip()
+    approver = (login_user or "").strip()
     if not approver:
         raise HTTPException(status_code=400, detail="审批人不能为空")
 
@@ -945,7 +950,11 @@ def hxp_approval_action(approval_id: str, req: HxpApprovalActionRequest):
 
 
 @router.post("/hxp/approval/{approval_id}/resubmit")
-def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
+def resubmit_hxp_approval(
+    approval_id: str,
+    req: HxpApplyRequest,
+    current_user: str = Depends(require_login_user),
+):
     """修改并重新提交已驳回的换休票管理申请（status 22→0，更新字段）"""
     rows = db.execute_query(
         "SELECT id, applicant, status FROM hxp_approval WHERE id = %s LIMIT 1",
@@ -956,7 +965,7 @@ def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
     r = rows[0]
     if r.get("status") != 22:
         raise HTTPException(status_code=400, detail="仅可重新提交已驳回的申请")
-    applicant = (req.current_user or "").strip()
+    applicant = (current_user or "").strip()
     if (r.get("applicant") or "").strip() != applicant:
         raise HTTPException(status_code=403, detail="只能重新提交本人的申请")
 
@@ -987,7 +996,7 @@ def resubmit_hxp_approval(approval_id: str, req: HxpApplyRequest):
 
 
 @router.get("/hxp/my-requests")
-def hxp_my_requests(applicant: str = Query(..., description="申请人姓名")):
+def hxp_my_requests(applicant: str = Depends(require_login_user)):
     """查询自己提交的换休票审批申请。"""
     rows = db.execute_query(
         "SELECT id, applicant, action, amount, ly, names_json, approver, status, reject_reason, apply_time, approve_time "

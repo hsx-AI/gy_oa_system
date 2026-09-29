@@ -6,7 +6,7 @@
 - 自动计算换休票数量 = 加班天数 / 4
 - 二级审批：一级(科室主任) -> 二级(部长/副部长) -> 通过; 驳回=22
 """
-from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Query, UploadFile, File, Form, Depends
 from fastapi.responses import FileResponse
 from typing import Optional, List, Dict, Tuple
 from collections import Counter
@@ -14,6 +14,7 @@ from pydantic import BaseModel
 from datetime import datetime, date, timedelta
 from database import db
 from utils.holiday_loader import load_holidays_for_year
+from utils.session_auth import require_login_user
 from config import settings
 from pathlib import Path
 import uuid
@@ -815,7 +816,7 @@ def download_material(filename: str):
 
 
 @router.get("/approval/pending/holiday-exchange")
-def get_pending_holiday_exchange(approver: str = Query(...)):
+def get_pending_holiday_exchange(approver: str = Depends(require_login_user)):
     """获取待审批列表"""
     try:
         query = """
@@ -916,16 +917,30 @@ class _ApproveReq(BaseModel):
 
 
 @router.post("/approval/holiday-exchange/{item_id}/action")
-def holiday_exchange_approve(item_id: str, req: _ApproveReq):
+def holiday_exchange_approve(
+    item_id: str,
+    req: _ApproveReq,
+    login_user: str = Depends(require_login_user),
+):
     """单条审批"""
+    actor = (login_user or "").strip()
     rows = db.execute_query(
-        "SELECT id, status, xm, hxp_count, date_from, date_to FROM holiday_exchange WHERE id = %s",
+        "SELECT id, status, xm, hxp_count, date_from, date_to, spr, spr2 FROM holiday_exchange WHERE id = %s",
         (item_id,),
     )
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     row = rows[0]
     sv = row.get("status") or 0
+
+    if sv == 0:
+        if (row.get("spr") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该申请")
+    elif sv == 1:
+        if (row.get("spr2") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该申请")
+    else:
+        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     if req.action == "reject":
         reason = (req.reason or "").strip()
@@ -965,14 +980,15 @@ class _BatchReq(BaseModel):
 
 
 @router.post("/approval/holiday-exchange/batch")
-async def holiday_exchange_batch(req: _BatchReq):
+async def holiday_exchange_batch(req: _BatchReq, login_user: str = Depends(require_login_user)):
     """批量审批"""
     ok, fail = 0, 0
     for iid in req.ids:
         try:
-            await holiday_exchange_approve(
+            holiday_exchange_approve(
                 iid,
-                _ApproveReq(action=req.action, reason=req.reason, approver=req.approver),
+                _ApproveReq(action=req.action, reason=req.reason),
+                login_user,
             )
             ok += 1
         except Exception:

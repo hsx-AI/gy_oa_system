@@ -6,7 +6,7 @@
   spr=第一审批人,2j=二级审批,spr2=第二审批人,qjzt=状态)
 - 加班登记: 插入 jiaban 表
 """
-from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Depends
 from fastapi.responses import FileResponse
 from typing import Optional, List
 from pydantic import BaseModel
@@ -15,6 +15,7 @@ from pathlib import Path
 from database import db
 from config import settings
 from utils.helpers import format_datetime_plain, normalize_datetime_for_db, normalize_qj_tian_days
+from utils.session_auth import require_login_user
 import logging
 import math
 import uuid
@@ -318,7 +319,7 @@ def _record_scope_xm_clause(viewer_name: str, scope: str, resource: str, target_
 
 @router.get("/leave/list")
 def get_leave_list(
-    name: str,
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按请假开始时间所在年月筛选"),
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
@@ -328,8 +329,10 @@ def get_leave_list(
 ):
     """
     获取请假记录列表。默认仅本人；主任/副主任可选 lsys；部长等可选 all 查看全员或 target_lsys 查看指定专业。
+    身份以登录令牌为准，忽略客户端伪造的 name。
     """
     try:
+        name = (login_user or "").strip()
         if year is None and not all_years:
             year = datetime.now().year
 
@@ -418,7 +421,7 @@ def get_leave_list(
 
 @router.get("/leave/all-records")
 def get_leave_all_records(
-    name: str = Query(..., description="当前用户姓名"),
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
     month: Optional[int] = Query(None, description="按月份筛选，不传则全年"),
 ):
@@ -430,10 +433,11 @@ def get_leave_all_records(
     from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
     from routers.db_manager import _get_admin1
     try:
+        name = (login_user or "").strip()
         user = _get_user_info(name)
         if not user:
             return {"success": True, "data": [], "total": 0, "scope": "none"}
-        name_stripped = (name or "").strip()
+        name_stripped = name
         admin1 = _get_admin1()
         # 打卡管理员同等权限
         try:
@@ -594,18 +598,19 @@ async def resubmit_leave(
 
 
 @router.delete("/leave/{item_id}")
-def delete_leave_rejected(item_id: str, name: str):
+def delete_leave_rejected(item_id: str, login_user: str = Depends(require_login_user)):
     """删除本人已驳回的请假记录（仅 qjzt=22 可删），数据库物理删除"""
     try:
+        name = (login_user or "").strip()
         rows = db.execute_query("SELECT id, qjzt, xm FROM qj WHERE id = %s", (item_id,))
         if not rows:
             raise HTTPException(status_code=404, detail="记录不存在")
         r = rows[0]
         if (r.get("qjzt") or 0) != 22:
             raise HTTPException(status_code=400, detail="仅可删除已驳回的请假记录")
-        if (r.get("xm") or "").strip() != (name or "").strip():
+        if (r.get("xm") or "").strip() != name:
             raise HTTPException(status_code=403, detail="只能删除本人的记录")
-        n = db.execute_update("DELETE FROM qj WHERE id = %s AND qjzt = 22 AND xm = %s", (item_id, name.strip()))
+        n = db.execute_update("DELETE FROM qj WHERE id = %s AND qjzt = 22 AND xm = %s", (item_id, name))
         if n <= 0:
             raise HTTPException(status_code=500, detail="删除未生效")
         return {"success": True, "message": "已删除"}
@@ -830,7 +835,7 @@ def register_overtime(req: OvertimeRegisterRequest):
 
 @router.get("/overtime/list")
 def get_overtime_list(
-    name: str,
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = None,
     month: Optional[int] = None,
     status: Optional[str] = Query("processing", description="processing=审核中, approved=已通过, all=全部"),
@@ -840,8 +845,10 @@ def get_overtime_list(
 ):
     """
     获取加班记录列表。默认仅本人；主任/副主任可选 lsys；部长等可选 all 查看全员或 target_lsys 查看指定专业。
+    身份以登录令牌为准，忽略客户端伪造的 name。
     """
     try:
+        name = (login_user or "").strip()
         if year is None and not all_years:
             year = datetime.now().year
 
@@ -1016,18 +1023,19 @@ def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
 
 
 @router.delete("/overtime/{item_id}")
-def delete_overtime_rejected(item_id: str, name: str):
+def delete_overtime_rejected(item_id: str, login_user: str = Depends(require_login_user)):
     """删除本人已驳回的加班记录（仅 jiabanzt=22 可删），数据库物理删除"""
     try:
+        name = (login_user or "").strip()
         rows = db.execute_query("SELECT id, jiabanzt, xm FROM jiaban WHERE id = %s", (item_id,))
         if not rows:
             raise HTTPException(status_code=404, detail="记录不存在")
         r = rows[0]
         if (r.get("jiabanzt") or 0) != 22:
             raise HTTPException(status_code=400, detail="仅可删除已驳回的加班记录")
-        if (r.get("xm") or "").strip() != (name or "").strip():
+        if (r.get("xm") or "").strip() != name:
             raise HTTPException(status_code=403, detail="只能删除本人的记录")
-        n = db.execute_update("DELETE FROM jiaban WHERE id = %s AND jiabanzt = 22 AND xm = %s", (item_id, name.strip()))
+        n = db.execute_update("DELETE FROM jiaban WHERE id = %s AND jiabanzt = 22 AND xm = %s", (item_id, name))
         if n <= 0:
             raise HTTPException(status_code=500, detail="删除未生效")
         return {"success": True, "message": "已删除"}

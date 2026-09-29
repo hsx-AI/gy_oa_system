@@ -91,6 +91,7 @@
           <strong>密码设置规则</strong>
           <span>• 密码长度至少6位</span>
           <span>• 数字、字母、特殊符号至少包含两类</span>
+          <span>• 不得使用常见弱口令，且不能与用户名相同</span>
         </div>
         <form @submit.prevent="handleChangePassword" class="password-form" autocomplete="on">
           <div class="form-group">
@@ -119,6 +120,7 @@
 <script setup>
 import { ref, onMounted } from 'vue'
 import { getEmployeeProfile, changePassword } from '@/api/attendance'
+import { encryptPasswordForTransport } from '@/utils/passwordCrypto'
 import { formatHxpAmount } from '@/utils/formatHxp'
 
 const profile = ref(null)
@@ -158,18 +160,26 @@ const handleChangePassword = async () => {
     return
   }
   const p = passwordForm.value.newPassword
+  const userInfoPreview = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const namePreview = (userInfoPreview.name || userInfoPreview.userName || '').trim()
   const categories = [/[A-Za-z]/.test(p), /\d/.test(p), /[^A-Za-z0-9]/.test(p)].filter(Boolean).length
-  if (p.length < 6 || categories < 2) {
-    passwordError.value = '密码至少6位，且须包含数字、字母、特殊符号中的至少两类'
+  const weakSet = new Set(['123456','12345678','123456789','111111','000000','666666','888888','password','admin','admin123','abc123','qwerty','a123456','123456a','654321','123123'])
+  if (p.length < 6 || categories < 2 || weakSet.has(p.toLowerCase()) || (namePreview && p.toLowerCase() === namePreview.toLowerCase())) {
+    passwordError.value = '密码至少6位，须含数字/字母/特殊符号至少两类，且不能是弱口令或与用户名相同'
     return
   }
   try {
     const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
     const name = userInfo.name || userInfo.userName
+    const oldEnc = await encryptPasswordForTransport(passwordForm.value.oldPassword)
+    const newEnc = await encryptPasswordForTransport(passwordForm.value.newPassword)
     const res = await changePassword({
       name,
-      oldPassword: passwordForm.value.oldPassword,
-      newPassword: passwordForm.value.newPassword
+      oldPassword: '',
+      newPassword: '',
+      oldPasswordCipher: oldEnc.passwordCipher,
+      newPasswordCipher: newEnc.passwordCipher,
+      keyId: newEnc.keyId,
     })
     if (res.success) {
       alert(res.message || '密码修改成功，其它已登录设备需重新登录')
@@ -182,6 +192,7 @@ const handleChangePassword = async () => {
           if (raw) {
             const u = JSON.parse(raw)
             u.sessionVer = res.sessionVer
+            if (res.accessToken) u.accessToken = res.accessToken
             localStorage.setItem('userInfo', JSON.stringify(u))
           }
         } catch { /* ignore */ }

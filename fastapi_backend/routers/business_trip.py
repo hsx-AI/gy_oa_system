@@ -9,13 +9,14 @@
   bldzt=部领导状态, szrzt=室主任状态, gcr=公出人(申请人)
   lsysjm=隶属于室简称
 """
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 from typing import Optional, List, Any
 from pydantic import BaseModel
 from datetime import datetime
 from database import db
 from routers.approvers import _get_user_info, _jb_match, is_zonghe_tech_director
 from routers.db_manager import _get_admin1
+from utils.session_auth import require_login_user
 import logging
 import uuid
 
@@ -392,7 +393,7 @@ def _business_trip_list_gcr_clause(
 
 @router.get("/list")
 def get_business_trip_list(
-    name: str,
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = None,
     month: Optional[int] = Query(None, ge=1, le=12, description="与 year 同时使用时按自然月过滤"),
     all_years: Optional[bool] = Query(False, description="为 true 时不过滤年份，返回全部"),
@@ -405,9 +406,10 @@ def get_business_trip_list(
         description="scope=all 时可选，按 yggl.lsys 仅看该科室",
     ),
 ):
-    """获取公出记录列表。部长/副部长或综合技术室主任等可选 all，并可 filter_lsys 指定科室。"""
+    """获取公出记录列表。部长/副部长或综合技术室主任等可选 all，并可 filter_lsys 指定科室。身份以登录令牌为准。"""
     try:
         ensure_gcsqb_extend_columns()
+        name = (login_user or "").strip()
         if year is None and not all_years:
             year = datetime.now().year
 
@@ -629,7 +631,7 @@ def _all_records_visibility_clause(viewer_name: str) -> tuple:
 @router.get("/{item_id}/detail")
 def get_business_trip_detail(
     item_id: str,
-    name: str = Query(..., description="当前用户姓名"),
+    login_user: str = Depends(require_login_user),
     scope: str = Query(
         "self",
         description="与 /list 一致：self|lsys|all",
@@ -642,6 +644,7 @@ def get_business_trip_detail(
 ):
     """单条公出数据库详情（仅当前用户对记录可见时）。"""
     try:
+        name = (login_user or "").strip()
         if list_source.strip().lower() == "all_records":
             vis_sql, vis_params = _all_records_visibility_clause(name)
         else:
@@ -682,7 +685,7 @@ def get_business_trip_detail(
 
 @router.get("/all-records")
 def get_business_trip_all_records(
-    name: str = Query(..., description="当前用户姓名"),
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = Query(None, description="按年份筛选，不传则全部"),
     month: Optional[int] = Query(None, ge=1, le=12, description="按月份筛选，须与 year 同时传入"),
 ):
@@ -693,10 +696,11 @@ def get_business_trip_all_records(
     按委派时间/公出时间倒序。
     """
     try:
+        name = (login_user or "").strip()
         user = _get_user_info(name)
         if not user:
             return {"success": True, "data": [], "total": 0, "scope": "none"}
-        name_stripped = (name or "").strip()
+        name_stripped = name
         admin1 = _get_admin1()
         try:
             _dk_rows = db.execute_query("SELECT dakaman FROM webconfig WHERE id = %s LIMIT 1", ("1",))
@@ -1076,7 +1080,7 @@ def _extendable_scope_where(
 
 @router.get("/extendable-list")
 def get_extendable_business_trips(
-    name: str = Query(..., description="当前用户姓名"),
+    login_user: str = Depends(require_login_user),
     year: Optional[int] = Query(None, description="公历年度：列出与该年有交集的公出；不传则近15年"),
     person: Optional[str] = Query(None, description="公出人姓名（精确匹配，可选）"),
 ):
@@ -1084,7 +1088,7 @@ def get_extendable_business_trips(
     可延长公出列表（已通过且未返回登记）。
     本人可见自己的记录；班组长/主任/副主任可见本科室；管理员可见全部。
     """
-    viewer = (name or "").strip()
+    viewer = (login_user or "").strip()
     if not viewer:
         raise HTTPException(status_code=400, detail="姓名不能为空")
     user = _get_user_info(viewer)
@@ -1217,9 +1221,10 @@ def resubmit_business_trip(item_id: str, req: BusinessTripApplyRequest):
 
 
 @router.delete("/{item_id}")
-def delete_business_trip_rejected(item_id: str, name: str):
+def delete_business_trip_rejected(item_id: str, login_user: str = Depends(require_login_user)):
     """删除本人已驳回的公出记录（仅 bldzt=22 或 szrzt=22 可删），数据库物理删除"""
     try:
+        name = (login_user or "").strip()
         rows = db.execute_query("SELECT id, bldzt, szrzt, gcr FROM gcsqb WHERE id = %s", (item_id,))
         if not rows:
             raise HTTPException(status_code=404, detail="记录不存在")
@@ -1228,11 +1233,11 @@ def delete_business_trip_rejected(item_id: str, name: str):
         szrzt = int(r.get("szrzt") or 0)
         if bldzt != 22 and szrzt != 22:
             raise HTTPException(status_code=400, detail="仅可删除已驳回的公出记录")
-        if (r.get("gcr") or "").strip() != (name or "").strip():
+        if (r.get("gcr") or "").strip() != name:
             raise HTTPException(status_code=403, detail="只能删除本人的记录")
         n = db.execute_update(
             "DELETE FROM gcsqb WHERE id = %s AND gcr = %s AND (bldzt = 22 OR szrzt = 22)",
-            (item_id, name.strip()),
+            (item_id, name),
         )
         if n <= 0:
             raise HTTPException(status_code=500, detail="删除未生效")

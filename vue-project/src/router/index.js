@@ -495,6 +495,12 @@ router.beforeEach(async (to, _from, next) => {
     const cachedUser = JSON.parse(raw)
     const cachedName = (cachedUser.name || cachedUser.userName || '').trim()
     if (!cachedName) throw new Error('登录用户无效')
+    // 无访问令牌的旧登录态无法调用敏感接口，强制重新登录
+    if (!(cachedUser.accessToken || '').trim()) {
+      localStorage.removeItem('userInfo')
+      next({ path: '/login', query: { sessionExpired: '1' } })
+      return
+    }
     const passwordState = await getPasswordStatus({ name: cachedName })
     if (!passwordState || passwordState.success === false) {
       throw new Error(passwordState?.message || '登录状态无效')

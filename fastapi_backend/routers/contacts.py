@@ -7,9 +7,10 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Optional
-from fastapi import APIRouter, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile, Depends
 from openpyxl import load_workbook
 from database import db, db_demo
+from utils.session_auth import require_login_user
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contacts", tags=["通讯录"])
@@ -162,11 +163,13 @@ def _jb_sort_key(jb: str) -> int:
 
 @router.get("/list")
 def get_contacts(
+    login_user: str = Depends(require_login_user),
     department: Optional[str] = Query(None, description="筛选科室"),
     keyword: Optional[str] = Query(None, description="搜索关键字（姓名/工号/手机/座机）"),
     source: str = Query("department", description="department=部门通讯录，company=公司通讯录"),
 ):
-    """按科室分组返回通讯录，领导优先排序"""
+    """按科室分组返回通讯录，领导优先排序。必须登录。"""
+    _ = login_user
     if (source or "department").strip().lower() == "company":
         return _get_company_contacts(department, keyword)
     try:
@@ -332,17 +335,17 @@ def _get_company_contacts(organization: Optional[str], keyword: Optional[str]) -
 
 
 @router.get("/can-manage-company")
-def can_manage_company_contacts(name: str = Query("", description="当前用户名")):
-    return {"success": True, "canManage": _can_manage_company_contacts((name or "").strip())}
+def can_manage_company_contacts(login_user: str = Depends(require_login_user)):
+    return {"success": True, "canManage": _can_manage_company_contacts((login_user or "").strip())}
 
 
 @router.post("/company/import")
 async def import_company_contacts(
-    name: str = Query("", description="当前用户名"),
+    login_user: str = Depends(require_login_user),
     file: UploadFile = File(...),
 ):
     """Replace the company directory with a new version of the standard Excel workbook."""
-    operator = (name or "").strip()
+    operator = (login_user or "").strip()
     if not _can_manage_company_contacts(operator):
         raise HTTPException(status_code=403, detail="仅系统管理员或人事管理员可更新公司通讯录")
     filename = (file.filename or "").strip()

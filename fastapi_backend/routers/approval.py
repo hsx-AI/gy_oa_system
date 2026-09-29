@@ -6,7 +6,7 @@
 - 加班: jiabanzt=0(室主任spr) -> [有spr2时 1->3] -> 上级审批通过后智能校验 -> 通过则 4，否则 5(打卡管理员) -> 4; 驳回 22
 - 公出: 两级固定。室主任(szr)先批 szrzt=1->2; 部领导(bld)再批 bldzt=1->2; 驳回 22
 """
-from fastapi import APIRouter, HTTPException, Query, Body
+from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from typing import Optional, List, Any
 from pydantic import BaseModel
 from datetime import datetime
@@ -22,6 +22,7 @@ from routers.leave_overtime import (
 )
 from routers.suggestions import collect_valid_times_with_marks, build_intervals_from_marks
 from utils.helpers import format_datetime_plain
+from utils.session_auth import require_login_user
 import logging
 
 logger = logging.getLogger(__name__)
@@ -62,9 +63,9 @@ def _fmt_dt(d):
 # ==================== 权限检查 ====================
 
 @router.get("/can-approve")
-def can_approve(name: str = Query(...)):
+def can_approve(login_user: str = Depends(require_login_user)):
     """检查当前用户是否有审批权限（员工无权限；部长/主任等及 dakaman 有审批权限；admin1 等同部长但不含打卡管理员最终审批）"""
-    name_stripped = (name or "").strip()
+    name_stripped = (login_user or "").strip()
     admin1 = _get_admin1()
     if admin1 and name_stripped == admin1:
         return {"success": True, "canApprove": True, "jb": "系统管理员", "reason": "系统管理员等同部长权限（不含打卡管理员最终审批加班）"}
@@ -72,7 +73,7 @@ def can_approve(name: str = Query(...)):
     if dakaman and name_stripped == dakaman:
         return {"success": True, "canApprove": True, "jb": "打卡管理员", "reason": "打卡管理员可审批加班最后一环"}
 
-    user = _get_user_info(name)
+    user = _get_user_info(name_stripped)
     if not user:
         return {"success": True, "canApprove": False, "reason": "用户不存在"}
     jb = (user.get("jb") or "").strip()
@@ -84,7 +85,7 @@ def can_approve(name: str = Query(...)):
 # ==================== 请假审批 ====================
 
 @router.get("/pending/leave")
-def get_pending_leave(approver: str = Query(..., description="当前审批人姓名")):
+def get_pending_leave(approver: str = Depends(require_login_user)):
     """获取待当前用户审批的请假列表"""
     try:
         # qjzt=1: spr 审批; qjzt=3: spr2 审批
@@ -247,14 +248,32 @@ def _deduct_exchange_tickets(name: str, consume: float):
 
 
 @router.post("/leave/{item_id}/action")
-def leave_approve_action(item_id: str, req: ApproveRequest):
+def leave_approve_action(
+    item_id: str,
+    req: ApproveRequest,
+    login_user: str = Depends(require_login_user),
+):
     """请假单条审批"""
+    return _leave_approve_core(item_id, req, login_user)
+
+
+def _leave_approve_core(item_id: str, req: ApproveRequest, actor: str):
     rows = db.execute_query("SELECT id, qjzt, `2j`, spr, spr2, xm, qjfs, hxpxh, tian FROM qj WHERE id = %s", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
     row = rows[0]
     qjzt = row.get("qjzt")
     need_2j = (row.get("2j") or 0) == 1
+    actor = (actor or "").strip()
+
+    if qjzt == 1:
+        if (row.get("spr") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该请假单")
+    elif qjzt == 3:
+        if (row.get("spr2") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该请假单")
+    else:
+        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     if req.action == "reject":
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -282,8 +301,6 @@ def leave_approve_action(item_id: str, req: ApproveRequest):
         db.execute_update("UPDATE qj SET qjzt = 4, sp2time = %s, sctime = %s WHERE id = %s",
                           (now, now, item_id))
         final_approved = True
-    else:
-        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     # 换休/员工换休票最终审批通过时，从 hxp 表扣减换休票（优先消耗最先过期的）
     if final_approved:
@@ -310,11 +327,11 @@ class BatchApproveRequest(BaseModel):
     ids: List[str]  # 请假 id 支持 UUID 字符串
     action: str
     reason: Optional[str] = ""
-    approver: Optional[str] = None  # 加班批量审批时传当前审批人，用于 jiabanzt=5 仅 dakaman 校验
+    approver: Optional[str] = None  # 已废弃：身份以登录令牌为准
 
 
 @router.post("/leave/batch")
-async def leave_batch_approve(req: BatchApproveRequest):
+async def leave_batch_approve(req: BatchApproveRequest, login_user: str = Depends(require_login_user)):
     """请假批量审批（批量 SQL 优化）"""
     ids = [str(i).strip() for i in req.ids if str(i).strip()]
     if not ids:
@@ -324,7 +341,7 @@ async def leave_batch_approve(req: BatchApproveRequest):
         ok, fail = 0, 0
         for iid in ids:
             try:
-                await leave_approve_action(iid, ApproveRequest(action="reject", reason=req.reason))
+                _leave_approve_core(iid, ApproveRequest(action="reject", reason=req.reason), login_user)
                 ok += 1
             except Exception:
                 fail += 1
@@ -351,7 +368,11 @@ async def leave_batch_approve(req: BatchApproveRequest):
             continue
         qjzt = r.get("qjzt")
         need_2j = (r.get("2j") or 0) == 1
+        actor = (login_user or "").strip()
         if qjzt == 1:
+            if (r.get("spr") or "").strip() != actor:
+                fail += 1
+                continue
             if need_2j:
                 ids_to_3.append(iid)
             else:
@@ -359,6 +380,9 @@ async def leave_batch_approve(req: BatchApproveRequest):
                 final_rows.append(r)
             ok += 1
         elif qjzt == 3:
+            if (r.get("spr2") or "").strip() != actor:
+                fail += 1
+                continue
             ids_to_4_from_3.append(iid)
             final_rows.append(r)
             ok += 1
@@ -401,7 +425,7 @@ async def leave_batch_approve(req: BatchApproveRequest):
 # ==================== 加班审批 ====================
 
 @router.get("/pending/overtime")
-def get_pending_overtime(approver: str = Query(...)):
+def get_pending_overtime(approver: str = Depends(require_login_user)):
     """获取待当前用户审批的加班列表（含打卡管理员：jiabanzt=5 时仅 webconfig.dakaman 可见）"""
     try:
         # jiabanzt=0 或 1: spr 审批; jiabanzt=3: spr2 审批; jiabanzt=5: 打卡管理员审批
@@ -604,11 +628,16 @@ def get_overtime_detail(item_id: str):
 
 
 @router.post("/overtime/{item_id}/action")
-def overtime_approve_action(item_id: str, req: ApproveRequest):
+def overtime_approve_action(
+    item_id: str,
+    req: ApproveRequest,
+    login_user: str = Depends(require_login_user),
+):
     """加班单条审批。item_id 为 jiaban 表 id（UUID 字符串）。"""
     item_id = str(item_id).strip()
+    actor = (login_user or "").strip()
     rows = db.execute_query(
-        "SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id = %s",
+        "SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id = %s",
         (item_id,)
     )
     if not rows:
@@ -616,6 +645,23 @@ def overtime_approve_action(item_id: str, req: ApproveRequest):
     row = rows[0]
     jiabanzt = row.get("jiabanzt") or 0
     has_spr2 = bool(row.get("spr2"))
+
+    if jiabanzt in (0, 1):
+        if (row.get("spr") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该加班单")
+    elif jiabanzt == 3:
+        if (row.get("spr2") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该加班单")
+    elif jiabanzt == 5:
+        dakaman = _get_dakaman()
+        admin1 = _get_admin1()
+        if not dakaman or actor != dakaman or (admin1 and actor == admin1):
+            raise HTTPException(
+                status_code=403,
+                detail="加班最终审批仅限打卡管理员（webconfig.dakaman），系统管理员无权操作",
+            )
+    else:
+        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     if req.action == "reject":
         reason = (req.reason or "").strip()
@@ -648,20 +694,9 @@ def overtime_approve_action(item_id: str, req: ApproveRequest):
         final_approved, message = _after_supervisor_approve(row, item_id)
         auto_validated = True
     elif jiabanzt == 5:
-        # 仅 webconfig.dakaman 可做最终审批，admin1 不充当 dakaman
-        dakaman = _get_dakaman()
-        admin1 = _get_admin1()
-        cur_approver = (req.approver or "").strip()
-        if not dakaman or cur_approver != dakaman or (admin1 and cur_approver == admin1):
-            raise HTTPException(
-                status_code=403,
-                detail="加班最终审批仅限打卡管理员（webconfig.dakaman），系统管理员无权操作",
-            )
         # 打卡管理员通过后流程结束
         db.execute_update("UPDATE jiaban SET jiabanzt = 4 WHERE id = %s", (item_id,))
         final_approved = True
-    else:
-        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     # 打卡管理员最终审批通过时写入 jbf/hxp（自动校验通过路径已在 _after_supervisor_approve 内处理）
     if final_approved and jiabanzt == 5:
@@ -676,17 +711,18 @@ def overtime_approve_action(item_id: str, req: ApproveRequest):
 
 
 @router.post("/overtime/batch")
-async def overtime_batch_approve(req: BatchApproveRequest):
+async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Depends(require_login_user)):
     """加班批量审批（批量 SQL 优化）"""
     ids = [str(i).strip() for i in req.ids if str(i).strip()]
     if not ids:
         return {"success": True, "passed": 0, "failed": 0, "message": "无有效ID"}
 
+    actor = (login_user or "").strip()
     if req.action == "reject":
         ok, fail = 0, 0
         for iid in ids:
             try:
-                await overtime_approve_action(iid, ApproveRequest(action="reject", reason=req.reason, approver=req.approver))
+                overtime_approve_action(iid, ApproveRequest(action="reject", reason=req.reason), login_user)
                 ok += 1
             except Exception:
                 fail += 1
@@ -694,14 +730,14 @@ async def overtime_batch_approve(req: BatchApproveRequest):
 
     ph = ",".join(["%s"] * len(ids))
     rows = db.execute_query(
-        f"SELECT id, jiabanzt, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id IN ({ph})",
+        f"SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
 
     dakaman = _get_dakaman()
     admin1 = _get_admin1()
-    cur_approver = (req.approver or "").strip()
+    cur_approver = actor
 
     ids_to_3 = []
     ids_auto_validate = []
@@ -719,12 +755,18 @@ async def overtime_batch_approve(req: BatchApproveRequest):
         has_spr2 = bool(r.get("spr2"))
 
         if jiabanzt in (0, 1):
+            if (r.get("spr") or "").strip() != actor:
+                fail += 1
+                continue
             if has_spr2:
                 ids_to_3.append(iid)
             else:
                 ids_auto_validate.append(iid)
             ok += 1
         elif jiabanzt == 3:
+            if (r.get("spr2") or "").strip() != actor:
+                fail += 1
+                continue
             ids_auto_validate.append(iid)
             ok += 1
         elif jiabanzt == 5:
@@ -1007,7 +1049,7 @@ def overtime_validate(req: OvertimeValidateRequest):
 #
 
 @router.get("/pending/business-trip")
-def get_pending_business_trip(approver: str = Query(...)):
+def get_pending_business_trip(approver: str = Depends(require_login_user)):
     """
     获取待当前用户审批的公出列表（按登记时选择的 szr/室主任、bld/部领导 匹配当前用户）
     - 室主任待办: bldzt=1, szrzt=1, szr=当前用户
@@ -1134,7 +1176,11 @@ def get_business_trip_detail(item_id: str):
 
 
 @router.post("/business-trip/{item_id}/action")
-def business_trip_approve_action(item_id: str, req: ApproveRequest):
+def business_trip_approve_action(
+    item_id: str,
+    req: ApproveRequest,
+    login_user: str = Depends(require_login_user),
+):
     """
     公出单条审批。使用 bldzt/szrzt 状态与 szrpztime/bldpztime 时间。
     - 室主任通过: szrzt=2, szrpztime=now；驳回: szrzt=22, szrpztime=now
@@ -1144,6 +1190,7 @@ def business_trip_approve_action(item_id: str, req: ApproveRequest):
     """
     from routers.business_trip import ensure_gcsqb_extend_columns
     ensure_gcsqb_extend_columns()
+    actor = (login_user or "").strip()
 
     rows = db.execute_query(
         "SELECT id, szrzt, bldzt, szr, bld, pending_yjfhsj, yjfhsj, gcrw FROM gcsqb WHERE id = %s",
@@ -1164,6 +1211,15 @@ def business_trip_approve_action(item_id: str, req: ApproveRequest):
     has_backup = backup is not None and str(backup).strip() not in ("", "None")
     is_extend = has_backup or "[公出延长" in (row.get("gcrw") or "")
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    if szrzt == 1 and bldzt == 1:
+        if (row.get("szr") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该公出单")
+    elif szrzt == 2 and bldzt == 1:
+        if (row.get("bld") or "").strip() != actor:
+            raise HTTPException(status_code=403, detail="无权审批该公出单")
+    else:
+        raise HTTPException(status_code=400, detail="当前状态无法审批")
 
     if req.action == "reject":
         reason = (req.reason or "").strip()
@@ -1243,7 +1299,10 @@ class BatchBusinessTripRequest(BaseModel):
 
 
 @router.post("/business-trip/batch")
-async def business_trip_batch_approve(req: BatchBusinessTripRequest):
+async def business_trip_batch_approve(
+    req: BatchBusinessTripRequest,
+    login_user: str = Depends(require_login_user),
+):
     """公出批量审批（批量 SQL 优化）"""
     ids = [str(i).strip() for i in req.ids if str(i).strip()]
     if not ids:
@@ -1253,7 +1312,7 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
         ok, fail = 0, 0
         for iid in ids:
             try:
-                await business_trip_approve_action(iid, ApproveRequest(action="reject", reason=req.reason))
+                business_trip_approve_action(iid, ApproveRequest(action="reject", reason=req.reason), login_user)
                 ok += 1
             except Exception:
                 fail += 1
@@ -1263,11 +1322,12 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
     from routers.business_trip import ensure_gcsqb_extend_columns
     ensure_gcsqb_extend_columns()
     rows = db.execute_query(
-        f"SELECT id, szrzt, bldzt, pending_yjfhsj FROM gcsqb WHERE id IN ({ph})",
+        f"SELECT id, szrzt, bldzt, szr, bld, pending_yjfhsj FROM gcsqb WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
     now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    actor = (login_user or "").strip()
 
     ids_szr_approve = []
     ids_bld_approve_normal = []
@@ -1284,9 +1344,15 @@ async def business_trip_batch_approve(req: BatchBusinessTripRequest):
         pending = r.get("pending_yjfhsj")
         is_extend = pending is not None and str(pending).strip() not in ("", "None")
         if szrzt == 1 and bldzt == 1:
+            if (r.get("szr") or "").strip() != actor:
+                fail += 1
+                continue
             ids_szr_approve.append(iid)
             ok += 1
         elif szrzt == 2 and bldzt == 1:
+            if (r.get("bld") or "").strip() != actor:
+                fail += 1
+                continue
             if is_extend:
                 ids_bld_approve_extend.append(iid)
             else:
@@ -1351,7 +1417,7 @@ _ensure_hxp_sl_precision()
 
 
 @router.get("/hxp/unread")
-def get_unread_hxp(name: str = Query(..., description="员工姓名")):
+def get_unread_hxp(name: str = Depends(require_login_user)):
     """获取指定员工的未读换休票记录（新增的换休票通知）"""
     rows = db.execute_query(
         "SELECT id, name, sl, sj, ly FROM hxp "

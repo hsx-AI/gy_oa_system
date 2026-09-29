@@ -2,26 +2,176 @@
 """
 登录认证API路由
 """
+import base64
+import html
+import json
 import math
 import logging
+import hmac
+import hashlib
+import random
 import re
 import secrets
 import smtplib
 import threading
 import time
-from email.header import Header
+from email.header import Header as MimeHeader
 from email.mime.text import MIMEText
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request, Header, HTTPException
 from pydantic import BaseModel
+from typing import Optional
 from database import db, db_demo
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["认证"])
 
-PASSWORD_RULE_MESSAGE = "密码至少6位，且须包含数字、字母、特殊符号中的至少两类"
+PASSWORD_RULE_MESSAGE = (
+    "密码至少6位，须包含数字、字母、特殊符号中的至少两类，"
+    "且不能是常见弱口令或与用户名相同"
+)
+ACCESS_TOKEN_TTL_SECONDS = 12 * 3600
+ACCESS_TOKEN_TYP = "oa_access"
+# 常见弱口令（统一小写比对）；复杂度通过但仍属高风险口令一并拦截
+_WEAK_PASSWORDS = {
+    "123456", "1234567", "12345678", "123456789", "1234567890",
+    "111111", "11111111", "000000", "00000000", "666666", "888888", "88888888",
+    "123123", "112233", "121212", "123321", "654321",
+    "password", "password1", "password123", "passw0rd", "p@ssw0rd", "p@ssword",
+    "admin", "admin1", "admin12", "admin123", "admin888", "admin666", "root", "root123",
+    "qwerty", "qwerty123", "qwer1234", "1qaz2wsx", "1q2w3e4r", "qazwsx",
+    "abc123", "abcd1234", "a123456", "a1234567", "aa123456", "abc12345",
+    "123456a", "123456aa", "1234abcd", "abcdef", "abcdefg",
+    "iloveyou", "woaini", "woaini123", "5201314", "1314520",
+    "letmein", "welcome", "welcome1", "monkey", "dragon", "master",
+    "test", "test123", "guest", "user", "user123", "oa123456", "oaadmin",
+    "changeme", "default", "system", "login", "pass123", "pass1234",
+}
+_FORCE_RESET_TTL_SECONDS = 600
+_force_reset_tokens = {}  # name -> {"token": str, "expires": float}
+CAPTCHA_FAIL_THRESHOLD = 3  # 连续失败达到该次数后需输入图片验证码
+CAPTCHA_TTL_SECONDS = 300
+LOGIN_FAIL_TTL_SECONDS = 1800
+_CAPTCHA_CHARS = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
+
 _verification_codes = {}
 _verification_lock = threading.Lock()
+_login_failures = {}  # ip -> {"count": int, "expires": float}
+_captchas = {}  # captcha_id -> {"code": str, "expires": float}
+_captcha_lock = threading.Lock()
+
+
+def _client_ip(http_request: Request) -> str:
+    forwarded = (http_request.headers.get("x-forwarded-for") or "").strip()
+    if forwarded:
+        return forwarded.split(",")[0].strip() or "unknown"
+    if http_request.client and http_request.client.host:
+        return http_request.client.host
+    return "unknown"
+
+
+def _prune_login_failures(now: float | None = None) -> None:
+    now = time.time() if now is None else now
+    expired = [k for k, v in _login_failures.items() if v.get("expires", 0) < now]
+    for k in expired:
+        _login_failures.pop(k, None)
+
+
+def _get_fail_count(ip: str) -> int:
+    now = time.time()
+    with _captcha_lock:
+        _prune_login_failures(now)
+        item = _login_failures.get(ip)
+        if not item or item.get("expires", 0) < now:
+            _login_failures.pop(ip, None)
+            return 0
+        return int(item.get("count") or 0)
+
+
+def _inc_fail_count(ip: str) -> int:
+    now = time.time()
+    with _captcha_lock:
+        _prune_login_failures(now)
+        item = _login_failures.get(ip)
+        if not item or item.get("expires", 0) < now:
+            count = 1
+        else:
+            count = int(item.get("count") or 0) + 1
+        _login_failures[ip] = {
+            "count": count,
+            "expires": now + LOGIN_FAIL_TTL_SECONDS,
+        }
+        return count
+
+
+def _clear_fail_count(ip: str) -> None:
+    with _captcha_lock:
+        _login_failures.pop(ip, None)
+
+
+def _need_captcha(ip: str) -> bool:
+    return _get_fail_count(ip) >= CAPTCHA_FAIL_THRESHOLD
+
+
+def _make_captcha_image(code: str) -> str:
+    """生成带干扰线的 SVG 图片验证码（data URL）。"""
+    width, height = 130, 44
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}">',
+        '<rect width="100%" height="100%" fill="#eef5ff"/>',
+    ]
+    for _ in range(5):
+        x1, y1 = random.randint(0, width), random.randint(0, height)
+        x2, y2 = random.randint(0, width), random.randint(0, height)
+        color = f"rgb({random.randint(120, 190)},{random.randint(120, 190)},{random.randint(120, 190)})"
+        parts.append(
+            f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{color}" stroke-width="1.2"/>'
+        )
+    for _ in range(28):
+        cx, cy = random.randint(0, width), random.randint(0, height)
+        color = f"rgb({random.randint(150, 210)},{random.randint(150, 210)},{random.randint(150, 210)})"
+        parts.append(f'<circle cx="{cx}" cy="{cy}" r="1.2" fill="{color}"/>')
+    for i, ch in enumerate(code):
+        x = 14 + i * 28 + random.randint(-3, 3)
+        y = 30 + random.randint(-5, 5)
+        rot = random.randint(-28, 28)
+        color = f"rgb({random.randint(20, 70)},{random.randint(40, 100)},{random.randint(120, 190)})"
+        parts.append(
+            f'<text x="{x}" y="{y}" fill="{color}" font-size="26" font-weight="700" '
+            f'font-family="Arial,Helvetica,sans-serif" '
+            f'transform="rotate({rot} {x} {y})">{html.escape(ch)}</text>'
+        )
+    parts.append("</svg>")
+    svg = "".join(parts)
+    return "data:image/svg+xml;base64," + base64.b64encode(svg.encode("utf-8")).decode("ascii")
+
+
+def _create_captcha() -> dict:
+    code = "".join(secrets.choice(_CAPTCHA_CHARS) for _ in range(4))
+    captcha_id = secrets.token_urlsafe(16)
+    now = time.time()
+    with _captcha_lock:
+        expired = [k for k, v in _captchas.items() if v.get("expires", 0) < now]
+        for k in expired:
+            _captchas.pop(k, None)
+        _captchas[captcha_id] = {"code": code.lower(), "expires": now + CAPTCHA_TTL_SECONDS}
+    return {
+        "captchaId": captcha_id,
+        "image": _make_captcha_image(code),
+    }
+
+
+def _verify_and_consume_captcha(captcha_id: str, captcha_code: str) -> bool:
+    cid = (captcha_id or "").strip()
+    code = (captcha_code or "").strip().lower()
+    if not cid or not code:
+        return False
+    now = time.time()
+    with _captcha_lock:
+        item = _captchas.pop(cid, None)
+        if not item or item.get("expires", 0) < now:
+            return False
+        return secrets.compare_digest(item.get("code") or "", code)
 
 
 def _ensure_session_ver_column():
@@ -62,6 +212,95 @@ def _read_session_ver(row_or_name) -> int:
         return 1
 
 
+def _auth_signing_secret() -> str:
+    """访问令牌签名密钥：优先 AUTH_ACCESS_SECRET，其次 SSO / OnlyOffice 密钥。"""
+    try:
+        from config import settings
+        for attr in ("AUTH_ACCESS_SECRET", "SSO_SECRET", "ONLYOFFICE_JWT_SECRET", "SHARED_FILES_SIGNING_SECRET"):
+            val = (getattr(settings, attr, None) or "").strip()
+            if val:
+                return val
+    except Exception:
+        pass
+    return "oa-auth-dev-fallback-change-me"
+
+
+def _make_access_token(name: str, session_ver: int) -> str:
+    secret = _auth_signing_secret()
+    payload = {
+        "name": (name or "").strip(),
+        "sv": max(1, int(session_ver or 1)),
+        "exp": int(time.time()) + ACCESS_TOKEN_TTL_SECONDS,
+        "typ": ACCESS_TOKEN_TYP,
+    }
+    payload_b64 = base64.urlsafe_b64encode(
+        json.dumps(payload, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    ).decode("ascii").rstrip("=")
+    sig = hmac.new(secret.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    return f"{payload_b64}.{sig}"
+
+
+def _parse_access_token(token: str) -> Optional[dict]:
+    raw = (token or "").strip()
+    if not raw or "." not in raw:
+        return None
+    payload_b64, sig = raw.rsplit(".", 1)
+    if not payload_b64 or not sig:
+        return None
+    secret = _auth_signing_secret()
+    expect = hmac.new(secret.encode("utf-8"), payload_b64.encode("utf-8"), hashlib.sha256).hexdigest()
+    if not secrets.compare_digest(expect, sig):
+        return None
+    try:
+        pad = "=" * (-len(payload_b64) % 4)
+        payload = json.loads(base64.urlsafe_b64decode((payload_b64 + pad).encode("ascii")).decode("utf-8"))
+    except Exception:
+        return None
+    if not isinstance(payload, dict) or payload.get("typ") != ACCESS_TOKEN_TYP:
+        return None
+    try:
+        if int(payload.get("exp") or 0) < int(time.time()):
+            return None
+    except (TypeError, ValueError):
+        return None
+    name = (payload.get("name") or "").strip()
+    if not name:
+        return None
+    try:
+        sv = max(1, int(payload.get("sv") or 1))
+    except (TypeError, ValueError):
+        return None
+    if _read_session_ver(name) != sv:
+        return None
+    return {"name": name, "sessionVer": sv}
+
+
+def _extract_bearer_token(authorization: Optional[str], x_oa_token: Optional[str]) -> str:
+    auth = (authorization or "").strip()
+    if auth.lower().startswith("bearer "):
+        return auth[7:].strip()
+    return (x_oa_token or "").strip()
+
+
+def _require_access_user(
+    authorization: Optional[str] = None,
+    x_oa_token: Optional[str] = None,
+) -> str:
+    token = _extract_bearer_token(authorization, x_oa_token)
+    payload = _parse_access_token(token)
+    if not payload:
+        raise HTTPException(status_code=401, detail="未登录或登录已失效，请重新登录")
+    return payload["name"]
+
+
+def _attach_access_token(user_info: dict) -> dict:
+    data = dict(user_info or {})
+    name = (data.get("name") or "").strip()
+    if name:
+        data["accessToken"] = _make_access_token(name, data.get("sessionVer") or 1)
+    return data
+
+
 def _bump_session_ver(name: str) -> int:
     """密码变更后递增会话版本，返回新版本号。"""
     clean = (name or "").strip()
@@ -80,15 +319,61 @@ def _bump_session_ver(name: str) -> int:
     return _read_session_ver(clean)
 
 
-def _password_is_strong(password: str) -> bool:
-    if len(password or "") < 6:
+def _password_is_strong(password: str, username: str = "") -> bool:
+    """复杂度 + 弱口令库校验；不通过则登录后强制改密。"""
+    pwd = (password or "").strip()
+    if len(pwd) < 6:
         return False
+    lower = pwd.lower()
+    name = (username or "").strip().lower()
+    if name and lower == name:
+        return False
+    if lower in _WEAK_PASSWORDS:
+        return False
+    # 同一字符重复（如 aaaaaa / 111111）
+    if len(set(pwd)) == 1:
+        return False
+    # 纯连续升/降序数字（长度>=6）
+    if pwd.isdigit() and len(pwd) >= 6:
+        asc = all(int(pwd[i]) - int(pwd[i - 1]) == 1 for i in range(1, len(pwd)))
+        desc = all(int(pwd[i - 1]) - int(pwd[i]) == 1 for i in range(1, len(pwd)))
+        if asc or desc:
+            return False
     categories = sum((
-        bool(re.search(r"[A-Za-z]", password)),
-        bool(re.search(r"\d", password)),
-        bool(re.search(r"[^A-Za-z0-9]", password)),
+        bool(re.search(r"[A-Za-z]", pwd)),
+        bool(re.search(r"\d", pwd)),
+        bool(re.search(r"[^A-Za-z0-9]", pwd)),
     ))
     return categories >= 2
+
+
+def _issue_force_reset_token(name: str) -> str:
+    clean = (name or "").strip()
+    token = secrets.token_urlsafe(24)
+    now = time.time()
+    with _verification_lock:
+        expired = [k for k, v in _force_reset_tokens.items() if v.get("expires", 0) < now]
+        for k in expired:
+            _force_reset_tokens.pop(k, None)
+        _force_reset_tokens[clean] = {"token": token, "expires": now + _FORCE_RESET_TTL_SECONDS}
+    return token
+
+
+def _consume_force_reset_token(name: str, token: str) -> bool:
+    clean = (name or "").strip()
+    raw = (token or "").strip()
+    if not clean or not raw:
+        return False
+    now = time.time()
+    with _verification_lock:
+        item = _force_reset_tokens.get(clean)
+        if not item or item.get("expires", 0) < now:
+            _force_reset_tokens.pop(clean, None)
+            return False
+        if not secrets.compare_digest(item.get("token") or "", raw):
+            return False
+        _force_reset_tokens.pop(clean, None)
+        return True
 
 
 def _masked_email(address: str) -> str:
@@ -116,7 +401,7 @@ def _get_login_user(name: str):
 def _user_info(user_data: dict) -> dict:
     denglu_zt = user_data.get("denglu_zt")
     show_intro = denglu_zt is None or (isinstance(denglu_zt, str) and not denglu_zt.strip())
-    return {
+    info = {
         "name": (user_data.get("name") or "").strip(),
         "dept": (user_data.get("lsys") or "").strip(),
         "jb": (user_data.get("jb") or "").strip(),
@@ -124,9 +409,13 @@ def _user_info(user_data: dict) -> dict:
         "xbie": (user_data.get("xbie") or "").strip(),
         "showIntro": show_intro,
         "unreadNotifications": [],
-        "mustChangePassword": not _password_is_strong((user_data.get("pass") or "").strip()),
+        "mustChangePassword": not _password_is_strong(
+            (user_data.get("pass") or "").strip(),
+            (user_data.get("name") or "").strip(),
+        ),
         "sessionVer": _read_session_ver(user_data),
     }
+    return _attach_access_token(info)
 
 
 def _format_entry_date(value) -> str:
@@ -200,7 +489,11 @@ def _paid_leave_entitlement_by_months(service_months: int) -> int:
 class LoginRequest(BaseModel):
     """登录请求模型"""
     admin: str  # 用户名（姓名）
-    password: str  # 密码
+    password: str = ""  # 明文密码（仅 ALLOW_PLAINTEXT_PASSWORD 时可用）
+    passwordCipher: str = ""  # RSA-OAEP 加密后的密码（Base64）
+    keyId: str = ""
+    captchaId: str = ""
+    captchaCode: str = ""
 
 
 class LoginResponse(BaseModel):
@@ -208,11 +501,47 @@ class LoginResponse(BaseModel):
     success: bool
     message: str = ""
     data: dict = {}
+    requireCaptcha: bool = False
+    failCount: int = 0
 
 
 class SetLoginStatusRequest(BaseModel):
     """设置登录状态（已读首次登录介绍）"""
     name: str  # 员工姓名
+
+
+@router.get("/public-key")
+def get_login_public_key():
+    """下发登录/改密用 RSA 公钥，供前端加密密码后再传输。"""
+    try:
+        from utils.password_crypto import get_public_key_payload
+        return get_public_key_payload()
+    except Exception as e:
+        logger.error("获取登录公钥失败: %s", e)
+        return {"success": False, "message": "获取加密公钥失败"}
+
+
+@router.get("/captcha")
+def get_captcha():
+    """获取登录图片验证码。"""
+    try:
+        data = _create_captcha()
+        return {"success": True, **data}
+    except Exception as e:
+        logger.error("生成验证码失败: %s", e)
+        return {"success": False, "message": "验证码生成失败，请稍后重试"}
+
+
+@router.get("/captcha-required")
+def captcha_required(http_request: Request):
+    """查询当前客户端是否因连续登录失败而需要图片验证码。"""
+    ip = _client_ip(http_request)
+    count = _get_fail_count(ip)
+    return {
+        "success": True,
+        "requireCaptcha": count >= CAPTCHA_FAIL_THRESHOLD,
+        "failCount": count,
+    }
 
 
 @router.get("/password-status")
@@ -236,7 +565,7 @@ async def password_status(name: str = Query(..., description="员工姓名")):
             return {"success": False, "message": "用户不存在或已离职"}
         return {
             "success": True,
-            "mustChangePassword": not _password_is_strong((rows[0].get("pass") or "").strip()),
+            "mustChangePassword": not _password_is_strong((rows[0].get("pass") or "").strip(), clean_name),
             "sessionVer": _read_session_ver(rows[0]),
         }
     except Exception as e:
@@ -245,20 +574,44 @@ async def password_status(name: str = Query(..., description="员工姓名")):
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(request: LoginRequest):
+def login(request: LoginRequest, http_request: Request):
     """
     用户登录接口
     
-    验证用户名和密码，返回用户信息
+    验证用户名和密码，返回用户信息。
+    同一客户端连续失败达到阈值后，必须先通过图片验证码。
     """
-    
+    ip = _client_ip(http_request)
+    fail_count = _get_fail_count(ip)
+    require_captcha = fail_count >= CAPTCHA_FAIL_THRESHOLD
+
+    def _fail(message: str, *, bump: bool = True) -> LoginResponse:
+        count = _inc_fail_count(ip) if bump else _get_fail_count(ip)
+        return LoginResponse(
+            success=False,
+            message=message,
+            requireCaptcha=count >= CAPTCHA_FAIL_THRESHOLD,
+            failCount=count,
+        )
+
     try:
-        # 验证参数
-        if not request.admin or not request.password:
-            return LoginResponse(
-                success=False,
-                message="请输入用户名和密码"
+        from utils.password_crypto import resolve_password
+        try:
+            password = resolve_password(
+                plaintext=request.password,
+                cipher=request.passwordCipher,
+                key_id=request.keyId,
+                field_label="登录密码",
             )
+        except HTTPException as he:
+            return _fail(he.detail if isinstance(he.detail, str) else "密码传输不安全，请刷新后重试", bump=False)
+
+        # 验证参数
+        if not request.admin or not password:
+            return _fail("请输入用户名和密码", bump=False)
+
+        if require_captcha and not _verify_and_consume_captcha(request.captchaId, request.captchaCode):
+            return _fail("验证码错误或已过期，请重新输入", bump=False)
         
         # 先查是否存在该用户（在职），再校验密码，便于区分「无此用户」与「密码错误」
         check_user_sql = (
@@ -281,17 +634,11 @@ def login(request: LoginRequest):
                 )
                 user_rows = db.execute_query(check_user_sql, (request.admin,))
         if not user_rows or len(user_rows) == 0:
-            return LoginResponse(
-                success=False,
-                message="没有该用户，请检查用户名或联系管理员"
-            )
+            return _fail("没有该用户，请检查用户名或联系管理员")
         user_data = user_rows[0]
         db_pass = (user_data.get("pass") or "").strip()
-        if db_pass != request.password:
-            return LoginResponse(
-                success=False,
-                message="密码错误，请重新输入"
-            )
+        if db_pass != password:
+            return _fail("密码错误，请重新输入")
         # 密码正确，构建返回数据；denglu_zt 为空表示未看过首次登录介绍
         denglu_zt = user_data.get("denglu_zt")
         show_intro = denglu_zt is None or (isinstance(denglu_zt, str) and denglu_zt.strip() == "")
@@ -326,20 +673,23 @@ def login(request: LoginRequest):
             "xbie": (user_data.get("xbie") or "").strip(),
             "showIntro": show_intro,
             "unreadNotifications": unread_notifications,
-            "mustChangePassword": not _password_is_strong(db_pass),
+            "mustChangePassword": not _password_is_strong(db_pass, (user_data.get("name") or "").strip()),
             "sessionVer": _read_session_ver(user_data),
         }
+        _clear_fail_count(ip)
         return LoginResponse(
             success=True,
             message="登录成功",
-            data=user_info
+            data=_attach_access_token(user_info),
         )
             
     except Exception as e:
         logger.error(f"登录失败: {str(e)}")
         return LoginResponse(
             success=False,
-            message=f"登录失败: {str(e)}"
+            message=f"登录失败: {str(e)}",
+            requireCaptcha=_need_captcha(ip),
+            failCount=_get_fail_count(ip),
         )
 
 
@@ -452,20 +802,31 @@ def delete_notification(req: dict):
 
 
 @router.get("/profile")
-def get_profile(name: str = Query(..., description="员工姓名")):
-    """获取员工信息：用户名、工号、科室、级别、身份证号、参加工作时间、换休票总数及明细（按过期日分组）"""
+def get_profile(
+    name: str = Query(..., description="员工姓名"),
+    authorization: Optional[str] = Header(None),
+    x_oa_token: Optional[str] = Header(None, alias="X-OA-Token"),
+):
+    """获取本人员工信息。必须携带登录访问令牌，且仅允许查询当前登录用户自己的资料。"""
+    actor = _require_access_user(authorization, x_oa_token)
+    target = (name or "").strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="用户名为空")
+    if actor != target:
+        # 禁止通过改 name 参数读取他人身份证号/手机号等敏感资料
+        raise HTTPException(status_code=403, detail="无权查看他人资料")
     try:
         from utils.hxp_helper import compute_expire_date, parse_expire_for_sort
         sql = (
             "SELECT name, gh, lsys, jb, sfzh, rcnf FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1"
         )
         try:
-            rows = db.execute_query(sql, (name,))
+            rows = db.execute_query(sql, (target,))
         except Exception:
             # 兼容无 sfzh/rcnf 列：仅查基础字段
             rows = db.execute_query(
                 "SELECT name, gh, lsys, jb FROM yggl WHERE name=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
-                (name,),
+                (target,),
             )
         if not rows:
             return {"success": False, "message": "用户不存在或已离职"}
@@ -474,7 +835,7 @@ def get_profile(name: str = Query(..., description="员工姓名")):
         from datetime import date
         today = date.today().strftime("%Y-%m-%d")
         hxp_rows = db.execute_query(
-            "SELECT id, sl, sj FROM hxp WHERE name = %s AND sl > 0", (name,)
+            "SELECT id, sl, sj FROM hxp WHERE name = %s AND sl > 0", (target,)
         )
         total = 0.0
         expire_groups = {}
@@ -500,7 +861,7 @@ def get_profile(name: str = Query(..., description="员工姓名")):
         try:
             pending_rows = db.execute_query(
                 "SELECT COALESCE(SUM(CAST(COALESCE(hxpxh, tian * 2) AS DECIMAL(10,4))), 0) AS s FROM qj WHERE xm = %s AND qjzt IN (0, 1, 3) AND (TRIM(COALESCE(qjfs,'')) = %s OR TRIM(COALESCE(qjfs,'')) = %s)",
-                (name, "换休", "员工换休票"),
+                (target, "换休", "员工换休票"),
             )
             if pending_rows and pending_rows[0].get("s") is not None:
                 hxp_pending = float(pending_rows[0]["s"])
@@ -543,7 +904,7 @@ def get_profile(name: str = Query(..., description="员工姓名")):
                 current_year = today.year
                 qj_rows = db.execute_query(
                     "SELECT COALESCE(SUM(CAST(tian AS DECIMAL(10,4))), 0) AS total FROM qj WHERE xm = %s AND qjzt = 4 AND YEAR(timefrom) = %s AND (TRIM(COALESCE(qjfs,'')) LIKE %s OR TRIM(COALESCE(qjfs,'')) LIKE %s OR TRIM(COALESCE(qjfs,'')) = %s OR TRIM(COALESCE(qjfs,'')) = %s)",
-                    (name, current_year, "%带薪%", "%年休假%", "带薪休假", "年休假"),
+                    (target, current_year, "%带薪%", "%年休假%", "带薪休假", "年休假"),
                 )
                 used_raw = float(qj_rows[0]["total"]) if qj_rows and qj_rows[0].get("total") is not None else 0.0
                 used_rounded = math.ceil(used_raw / 0.25) * 0.25
@@ -559,6 +920,7 @@ def get_profile(name: str = Query(..., description="员工姓名")):
                 }
         except Exception as e:
             logger.debug(f"带薪休假计算失败: {e}")
+        # 仅本人令牌可通过；身份证/手机仍按本人完整返回，供个人中心与请假联系方式使用
         return {
             "success": True,
             "data": {
@@ -577,6 +939,8 @@ def get_profile(name: str = Query(..., description="员工姓名")):
                 "paidLeaveDetail": paid_leave_detail,
             }
         }
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error(f"获取员工信息失败: {str(e)}")
         return {"success": False, "message": str(e)}
@@ -584,31 +948,65 @@ def get_profile(name: str = Query(..., description="员工姓名")):
 
 class ChangePasswordRequest(BaseModel):
     name: str
-    oldPassword: str
-    newPassword: str
+    oldPassword: str = ""
+    newPassword: str = ""
+    forceResetToken: str = ""
+    oldPasswordCipher: str = ""
+    newPasswordCipher: str = ""
+    keyId: str = ""
 
 
 @router.post("/change-password")
 def change_password(req: ChangePasswordRequest):
-    """修改密码；成功后递增 session_ver，使其它已登录浏览器的本地态失效。"""
+    """修改密码；成功后递增 session_ver，使其它已登录浏览器的本地态失效。
+    强制改密场景可凭 forceResetToken（邮箱验证码登录后下发）免原密码。
+    密码字段支持 RSA 密文传输。
+    """
     try:
-        if not _password_is_strong(req.newPassword):
+        from utils.password_crypto import resolve_password
+        name = (req.name or "").strip()
+        try:
+            old_password = resolve_password(
+                plaintext=req.oldPassword,
+                cipher=req.oldPasswordCipher,
+                key_id=req.keyId,
+                field_label="原密码",
+            ) if ((req.oldPassword or "").strip() or (req.oldPasswordCipher or "").strip()) else ""
+            new_password = resolve_password(
+                plaintext=req.newPassword,
+                cipher=req.newPasswordCipher,
+                key_id=req.keyId,
+                field_label="新密码",
+            )
+        except HTTPException as he:
+            return {"success": False, "message": he.detail if isinstance(he.detail, str) else "密码传输不安全"}
+
+        if not _password_is_strong(new_password, name):
             return {"success": False, "message": PASSWORD_RULE_MESSAGE}
-        check = db.execute_query(
-            "SELECT 1 FROM yggl WHERE name=%s AND `pass`=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
-            (req.name, req.oldPassword)
-        )
-        if not check:
-            return {"success": False, "message": "原密码错误"}
+        if old_password and secrets.compare_digest(old_password, new_password):
+            return {"success": False, "message": "新密码不能与原密码相同"}
+
+        token = (req.forceResetToken or "").strip()
+        if token:
+            if not _consume_force_reset_token(name, token):
+                return {"success": False, "message": "强制改密凭证无效或已过期，请重新登录后再改"}
+        else:
+            check = db.execute_query(
+                "SELECT 1 FROM yggl WHERE name=%s AND `pass`=%s AND (COALESCE(zaizhi,0)=0) LIMIT 1",
+                (name, old_password),
+            )
+            if not check:
+                return {"success": False, "message": "原密码错误"}
         db.execute_update(
             "UPDATE yggl SET `pass`=%s WHERE name=%s",
-            (req.newPassword, req.name)
+            (new_password, name),
         )
-        session_ver = _bump_session_ver(req.name)
+        session_ver = _bump_session_ver(name)
         return {
             "success": True,
             "message": "密码修改成功，其它已登录设备需重新登录",
             "sessionVer": session_ver,
+            "accessToken": _make_access_token(name, session_ver),
         }
     except Exception as e:
         logger.error(f"修改密码失败: {str(e)}")
@@ -628,7 +1026,9 @@ class CodeLoginRequest(BaseModel):
 class ResetPasswordByCodeRequest(BaseModel):
     name: str
     code: str
-    newPassword: str
+    newPassword: str = ""
+    newPasswordCipher: str = ""
+    keyId: str = ""
 
 
 def _consume_code(name: str, purpose: str, code: str) -> bool:
@@ -674,7 +1074,7 @@ def send_verification_code(req: VerificationCodeRequest):
         message = MIMEText(f"您好，{name}：\n\n您正在通过邮箱验证码{action}，验证码为：{code}\n\n验证码5分钟内有效，请勿转发给他人。", "plain", "utf-8")
         message["From"] = cfg["address"]
         message["To"] = recipient
-        message["Subject"] = Header(f"集成办公平台{action}验证码", "utf-8")
+        message["Subject"] = MimeHeader(f"集成办公平台{action}验证码", "utf-8")
         with smtplib.SMTP_SSL(SMTP_SERVER, SMTP_PORT_SSL, timeout=15) as smtp:
             smtp.login(cfg["address"], cfg["auth_code"])
             smtp.sendmail(cfg["address"], [recipient], message.as_string())
@@ -696,8 +1096,9 @@ def login_by_code(req: CodeLoginRequest):
         if not user:
             return LoginResponse(success=False, message="用户不存在或已离职")
         data = _user_info(user)
-        # 邮箱验证码已完成身份校验，不因历史弱密码阻断该登录方式。
-        data["mustChangePassword"] = False
+        if data.get("mustChangePassword"):
+            # 邮箱登录已通过身份校验，下发短期凭证供强制改密（无需原密码）
+            data["forceResetToken"] = _issue_force_reset_token(name)
         return LoginResponse(success=True, message="登录成功", data=data)
     except Exception as e:
         logger.error("验证码登录失败: %s", e)
@@ -707,14 +1108,24 @@ def login_by_code(req: CodeLoginRequest):
 @router.post("/reset-password-by-code")
 def reset_password_by_code(req: ResetPasswordByCodeRequest):
     name = (req.name or "").strip()
-    if not _password_is_strong(req.newPassword):
+    try:
+        from utils.password_crypto import resolve_password
+        new_password = resolve_password(
+            plaintext=req.newPassword,
+            cipher=req.newPasswordCipher,
+            key_id=req.keyId,
+            field_label="新密码",
+        )
+    except HTTPException as he:
+        return {"success": False, "message": he.detail if isinstance(he.detail, str) else "密码传输不安全"}
+    if not _password_is_strong(new_password, name):
         return {"success": False, "message": PASSWORD_RULE_MESSAGE}
     if not _consume_code(name, "reset", req.code):
         return {"success": False, "message": "验证码错误、已过期或尝试次数过多"}
     try:
         updated = db.execute_update(
             "UPDATE yggl SET `pass`=%s WHERE name=%s AND COALESCE(zaizhi,0)=0",
-            (req.newPassword, name),
+            (new_password, name),
         )
         if not updated:
             return {"success": False, "message": "用户不存在或已离职"}
@@ -723,6 +1134,7 @@ def reset_password_by_code(req: ResetPasswordByCodeRequest):
             "success": True,
             "message": "密码修改成功，请使用新密码登录",
             "sessionVer": session_ver,
+            "accessToken": _make_access_token(name, session_ver),
         }
     except Exception as e:
         logger.error("验证码修改密码失败: %s", e)

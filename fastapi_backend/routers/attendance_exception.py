@@ -13,11 +13,12 @@
 
 字段含义参见 _ensure_table()。
 """
-from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Form, File, UploadFile, Depends
 from fastapi.responses import FileResponse
 from typing import Optional, List
 from datetime import datetime
 from pathlib import Path
+from utils.session_auth import require_login_user
 from database import db
 from config import settings
 from routers.approvers import (
@@ -436,7 +437,7 @@ async def submit_kqyc_apply(
 # ==================== 待审批列表 ====================
 
 @router.get("/pending")
-def get_pending_kqyc(approver: str = Query(..., description="审批人姓名")):
+def get_pending_kqyc(approver: str = Depends(require_login_user)):
     """获取审批人的待审批列表（自动区分一级/二级）"""
     _ensure_table()
     approver = (approver or "").strip()
@@ -466,9 +467,10 @@ def get_pending_kqyc(approver: str = Query(..., description="审批人姓名")):
 @router.post("/approve")
 def approve_kqyc(
     id: int = Form(...),
-    approver: str = Form(...),
     action: str = Form(...),
     reject_reason: str = Form(""),
+    approver: str = Form(""),  # 已废弃，身份以登录令牌为准
+    login_user: str = Depends(require_login_user),
 ):
     """审批: action=approve/reject。审批人需匹配当前节点。
     二级通过后:
@@ -477,7 +479,7 @@ def approve_kqyc(
     """
     _ensure_table()
     action = (action or "").strip().lower()
-    approver = (approver or "").strip()
+    approver = (login_user or "").strip()
     if action not in ("approve", "reject"):
         raise HTTPException(status_code=400, detail="无效操作")
     if not approver:

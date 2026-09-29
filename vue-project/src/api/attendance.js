@@ -20,6 +20,16 @@ export function login(data) {
   })
 }
 
+/** 获取登录图片验证码 */
+export function getLoginCaptcha() {
+  return request({ url: '/auth/captcha', method: 'get' })
+}
+
+/** 查询当前是否需要图片验证码 */
+export function getCaptchaRequired() {
+  return request({ url: '/auth/captcha-required', method: 'get' })
+}
+
 export function getPasswordStatus(params) {
   return request({ url: '/auth/password-status', method: 'get', params })
 }
