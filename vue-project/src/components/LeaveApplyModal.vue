@@ -91,7 +91,7 @@
               <input type="checkbox" v-model="form.needSecondApproval" :disabled="secondApprovalAutoRequired">
               需要二级审批
             </label>
-            <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">换休超过2天自动需要二级审批</p>
+            <p v-if="secondApprovalAutoRequired" class="hint-text" style="color: var(--color-primary);">请假超过4小时须二级审批（班组长/主任/副主任仅可审批4小时及以内）</p>
           </div>
         </div>
         <div class="form-group" v-if="form.needSecondApproval">
@@ -175,7 +175,7 @@ const approvers2 = ref([])
 const loadingApprovers = ref(false)
 const materialFileRef = ref(null)
 
-const secondApprovalAutoRequired = computed(() => form.type === '换休' && (form.duration || 0) > 2)
+const secondApprovalAutoRequired = computed(() => Number(form.duration || 0) * 8 > 4)
 
 watch(secondApprovalAutoRequired, (required) => {
   if (required) form.needSecondApproval = true
@@ -348,7 +348,10 @@ async function handleSubmit() {
     }
   }
   if (!form.approver1) { alert('请选择第一审批人'); return }
-  if (form.needSecondApproval && !form.approver2) { alert('需要二级审批时请选择第二审批人'); return }
+  if ((form.needSecondApproval || secondApprovalAutoRequired.value) && !form.approver2) {
+    alert('请假超过4小时须二级审批，请选择第二审批人')
+    return
+  }
   try {
     const toDt = (s) => s ? s.replace('T', ' ') + (s.length <= 16 ? ':00' : '') : ''
     const payload = {

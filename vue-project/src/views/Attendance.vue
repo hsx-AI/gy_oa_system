@@ -77,6 +77,9 @@
                 <line x1="12" y1="9" x2="12" y2="13" />
                 <line x1="12" y1="17" x2="12.01" y2="17" />
               </svg>
+              <svg v-else-if="suggestion.type === 'overnight'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z" />
+              </svg>
               <svg v-else-if="suggestion.type === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M12 16v-4" />
@@ -95,10 +98,29 @@
               </div>
               <div class="suggestion-desc">{{ suggestion.message }}</div>
             </div>
+            <!-- 疑似跨夜加班：先确认，不直接当缺勤 -->
+            <div v-if="suggestion.type === 'overnight'" class="button-group">
+              <button
+                class="auto-fill-btn btn-overnight-yes"
+                :disabled="overnightConfirming"
+                @click.stop="confirmOvernight(suggestion, 'yes')"
+                title="按跨夜加班处理：当天记到 24:00，次日从 0:00 记到凌晨离开"
+              >
+                是
+              </button>
+              <button
+                class="auto-fill-btn btn-overnight-no"
+                :disabled="overnightConfirming"
+                @click.stop="confirmOvernight(suggestion, 'no')"
+                title="不是跨夜加班，按缺少离开记录处理为考勤异常"
+              >
+                不是
+              </button>
+            </div>
             <!-- 自动填报按钮 - 处理完成(绿)/正在审核(橙)/未处理显示操作按钮 -->
             <!-- 加班建议：本月有未处理红色考勤异常时不可填报 -->
             <button 
-              v-if="suggestion.message && suggestion.message.includes('加班')"
+              v-else-if="suggestion.message && suggestion.message.includes('加班')"
               class="auto-fill-btn btn-overtime"
               :class="{
                 'btn-handled': suggestion.handled,
@@ -459,7 +481,7 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers, getPersonFullAttendance } from '@/api/attendance'
+import { getSuggestions, confirmOvernightOvertime, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers, getPersonFullAttendance } from '@/api/attendance'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
@@ -807,6 +829,32 @@ const loadFullAttendance = async () => {
 
 // 智能建议
 const suggestions = ref([])
+const overnightConfirming = ref(false)
+
+const confirmOvernight = async (suggestion, choice) => {
+  if (!suggestion || overnightConfirming.value) return
+  const userInfo = JSON.parse(localStorage.getItem('userInfo') || '{}')
+  const name = (userInfo.name || userInfo.userName || '').trim()
+  if (!name) {
+    alert('请先登录')
+    return
+  }
+  overnightConfirming.value = true
+  try {
+    const res = await confirmOvernightOvertime({
+      name,
+      work_date: (suggestion.date || '').slice(0, 10),
+      choice,
+      department: (userInfo.dept || userInfo.department || '').trim()
+    })
+    await loadSuggestions()
+    if (res?.message) alert(res.message)
+  } catch (error) {
+    alert(error?.message || '确认失败，请稍后重试')
+  } finally {
+    overnightConfirming.value = false
+  }
+}
 
 // 本月是否存在未处理的红色考勤异常（缺勤/迟到等）；仅 handled 或 under_review 后才允许智能填报加班
 const hasUnresolvedAttendanceExceptions = computed(() =>
@@ -840,10 +888,11 @@ const loadSuggestions = async () => {
       const list = response.suggestions.map(item => {
         let type = 'info'
         const msg = item.suggestion || ''
-        if (msg.includes('缺勤') || msg.includes('迟到') || msg.includes('打卡数据异常')) type = 'warning'
+        if (item.status === 2 || msg.includes('【跨夜确认】')) type = 'overnight'
+        else if (msg.includes('缺勤') || msg.includes('迟到') || msg.includes('打卡数据异常')) type = 'warning'
         return {
           type,
-          typeLabel: item.dayType || '',
+          typeLabel: type === 'overnight' ? `${item.dayType || '工作日'} · 待确认` : (item.dayType || ''),
           date: item.date || '',
           message: item.suggestion || '',
           status: item.status ?? 0,
@@ -1347,6 +1396,12 @@ watch(selectedMonth, () => {
   border-left-color: #e57373;
 }
 
+/* 疑似跨夜加班：青色，区别于缺勤红、加班蓝、已处理绿、审核橙 */
+.suggestion-overnight {
+  background: #e6fffb;
+  border-left-color: #13a8a8;
+}
+
 .suggestion-info {
   background: var(--color-info-bg);
   border-left-color: var(--color-info);
@@ -1382,6 +1437,11 @@ watch(selectedMonth, () => {
 .suggestion-warning .suggestion-icon {
   background: white;
   color: #c62828;
+}
+
+.suggestion-overnight .suggestion-icon {
+  background: white;
+  color: #0f766e;
 }
 
 .suggestion-info .suggestion-icon {
@@ -1430,6 +1490,11 @@ watch(selectedMonth, () => {
 
 .badge-info {
   background: var(--color-info);
+  color: white;
+}
+
+.badge-overnight {
+  background: #0f766e;
   color: white;
 }
 
@@ -1512,6 +1577,30 @@ watch(selectedMonth, () => {
 .btn-business-trip:hover {
   box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
   transform: translateY(-2px);
+}
+
+.btn-overnight-yes {
+  background: #0f766e;
+}
+
+.btn-overnight-yes:hover:not(:disabled) {
+  background: #115e59;
+  transform: translateY(-2px);
+}
+
+.btn-overnight-no {
+  background: #475569;
+}
+
+.btn-overnight-no:hover:not(:disabled) {
+  background: #334155;
+  transform: translateY(-2px);
+}
+
+.btn-overnight-yes:disabled,
+.btn-overnight-no:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
 }
 
 /* 打卡异常申请按钮 - 紫色渐变 */

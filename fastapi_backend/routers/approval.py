@@ -31,7 +31,7 @@ router = APIRouter(prefix="/approval", tags=["审批"])
 
 
 def _recalc_overtime_hours(row: dict) -> float:
-    """从 timefrom/timeto 重新计算加班时长（0.5h 向下取整），用于 tian1/jbf。"""
+    """从 timefrom/timeto 重新计算加班时长（按申请时间区分半小时/分钟取整），用于 tian1/jbf。"""
     return _recalc_overtime_hours_from_row(row)
 
 
@@ -539,10 +539,11 @@ def _format_overtime_time(val) -> str:
 
 def _finalize_overtime_record(row: dict, item_id: str) -> None:
     """加班最终审批通过：重算时长 → hx=是 写 hxp 表；hx=否 写 jbf。"""
+    from routers.leave_overtime import format_overtime_hours_storage
     hx = (row.get("hx") or row.get("HX") or "").strip()
     need_exchange = hx and str(hx) in ("是", "1", "true", "yes")
     hours = _recalc_overtime_hours(row)
-    tian1_new = str(int(hours)) if hours == int(hours) else str(hours)
+    tian1_new = format_overtime_hours_storage(hours)
     try:
         db.execute_update("UPDATE jiaban SET tian1 = %s WHERE id = %s", (tian1_new, item_id))
     except Exception:

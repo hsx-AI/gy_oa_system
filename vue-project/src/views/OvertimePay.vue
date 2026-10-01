@@ -110,7 +110,7 @@
               </div>
             </div>
           </div>
-          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「全部加班时长」均支持时间段。点击「工资报表」可分别下载「其他绩效表」（每人汇总金额）或「其他绩效激励明细」（每人每天加班及满8小时200元），需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
+          <p v-if="canView" class="filter-hint">筛选方式二选一：① 年份+月份（或全年）；② 同时填写开始、结束日期（自定义时间段，此时年月选择失效）。查询与「全部加班时长」均支持时间段。点击「工资报表」可分别下载「其他绩效表」（每人汇总金额）或「其他绩效激励明细」（每人每天加班及覆盖标准班段固定200元），需选定单月或自定义区间。满勤名单、考勤表(Word) 仅支持按年月，自定义时间段时请改回年月筛选。科室选「全员」时，考勤表按科室分别生成 Word 并打包为 zip。</p>
         </div>
 
         <div v-if="hasFetched" class="section card overtime-pay-section">
@@ -123,7 +123,7 @@
           </h2>
           <p class="section-desc">
             {{ scope === 'self' ? '本人' : (selectedLsys || '全员') }} {{ periodLabel }}
-            （单价 {{ overtimePayZhibanfei }} 元/小时，十一、高温假、春节三个假期单日值班满8小时固定奖励200元/天，超出8小时不额外奖励）
+            （单价 {{ overtimePayZhibanfei }} 元/小时；十一、高温假、春节须 8 点前到、17 点后走才固定奖励200元/天，未覆盖标准班段则按小时计）
           </p>
           <div v-if="overtimePayByMonth.length > 0" class="table-wrap">
             <h3 class="subsection-title">按月份</h3>
@@ -292,7 +292,7 @@ function sheetFromList(list) {
 }
 
 function sheetFromPayDetailList(list) {
-  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否满8小时200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
+  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否覆盖标准班段固定200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
   const rows = (list || []).map((item) => [
     item.lsys || '',
     item.name || '',
@@ -410,7 +410,7 @@ async function downloadDetailExcel() {
       sheetFromPayDetailList(res.all || []),
       scope.value === 'self' ? '本人明细' : '全员明细'
     )
-    XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '满8小时200元')
+    XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '覆盖标准班段固定200')
     for (const dept of res.byDept || []) {
       const sheetName = (dept.lsys || '科室').slice(0, 31)
       XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(dept.list || []), sheetName)

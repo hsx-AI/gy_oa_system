@@ -3,7 +3,7 @@
 辅助函数
 """
 import math
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from typing import Any, Optional
 
 
@@ -66,6 +66,12 @@ def normalize_datetime_for_db(val: Any) -> str:
         m = segs[1].zfill(2) if len(segs) > 1 else "00"
         sec = segs[2].zfill(2) if len(segs) > 2 else "00"
         time_part = f"{h}:{m}:{sec}"
+    if time_part.startswith("24:"):
+        try:
+            nxt = datetime.strptime(date_part, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            nxt = datetime.now() + timedelta(days=1)
+        return nxt.strftime("%Y-%m-%d") + " 00:00:00"
     return f"{date_part} {time_part}"
 
 

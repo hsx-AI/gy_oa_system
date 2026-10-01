@@ -206,6 +206,16 @@ def _work_intensity_scope(current_user: Optional[str], requested_lsys: Optional[
 
 
 INCENTIVE_FESTIVALS = {"春节", "国庆节", "高温防暑休假"}
+INCENTIVE_FIXED_PAY = 200.0
+
+
+def _is_strict_standard_duty_span(timefrom, timeto) -> bool:
+    """指定假期固定 200 元：须 8 点前到、17 点后走（覆盖标准班段，中间不离岗）。"""
+    start = _clock_hm(timefrom)
+    end = _clock_hm(timeto)
+    if not start or not end:
+        return False
+    return start <= "08:00" and end >= "17:00"
 
 
 def _load_holiday_festival_map(year: int) -> Dict[str, str]:
@@ -235,15 +245,18 @@ def _aggregate_overtime_with_incentive(
 ):
     """
     对原始加班记录按「人+日期」聚合，并按节日激励规则计算：
-    - 春节/国庆节/高温防暑休假 这三类节日当天：若当日加班时长(已扣午休) >= 8 小时，则固定奖励 200 元；
-      超过 8 小时的部分按 zhibanfei 元/小时额外计算。
-    - 其他日期或不足 8 小时的节日，其他绩效激励按 zhibanfei 元/小时计算。
+    - 春节/国庆节/高温防暑休假：当天存在严格 08:00–17:00 的填报记录，才给固定 200 元；
+      当日其余/超出部分按 zhibanfei 元/小时计算。
+    - 指定假期但未按早8晚17填报：不发 200，全部按小时费。
+    - 其他日期：按 zhibanfei 元/小时计算。
     返回:
     - per_month: { "YYYY-MM": {"hours": 总小时数, "pay": 总金额} }
     - per_employee: { name: {"hours": 总小时数, "pay": 总金额} }
     """
-    # 先按 (name, date_str) 聚合每天的小时数
-    per_day: Dict[tuple, float] = defaultdict(float)
+    # 先按 (name, date_str) 聚合每天的小时数，并标记是否有严格标准时段记录
+    per_day: Dict[tuple, Dict[str, float]] = defaultdict(
+        lambda: {"hours": 0.0, "has_strict": 0.0}
+    )
     for r in rows or []:
         name = (r.get("emp_name") or r.get("name") or "").strip()
         if not name:
@@ -260,22 +273,27 @@ def _aggregate_overtime_with_incentive(
             hours = 0.0
         if hours <= 0:
             continue
-        per_day[(name, date_str)] += hours
+        bucket = per_day[(name, date_str)]
+        bucket["hours"] += hours
+        if _is_strict_standard_duty_span(r.get("timefrom"), r.get("timeto")):
+            bucket["has_strict"] = 1.0
 
     per_month: Dict[str, Dict[str, float]] = defaultdict(lambda: {"hours": 0.0, "pay": 0.0})
     per_employee: Dict[str, Dict[str, float]] = defaultdict(lambda: {"hours": 0.0, "pay": 0.0})
 
-    for (name, date_str), day_hours in per_day.items():
+    for (name, date_str), day_info in per_day.items():
+        day_hours = float(day_info["hours"])
         month_key = date_str[:7]
         festival = holiday_festival_map.get(date_str, "")
         is_incentive = festival in INCENTIVE_FESTIVALS
+        has_strict = bool(day_info.get("has_strict"))
 
         incentive_pay = 0.0
         normal_hours = 0.0
 
-        if is_incentive and day_hours >= 8.0:
-            incentive_pay = 200.0
-            normal_hours = day_hours - 8.0
+        if is_incentive and has_strict:
+            incentive_pay = INCENTIVE_FIXED_PAY
+            normal_hours = max(0.0, day_hours - 8.0)
         else:
             normal_hours = day_hours
 
@@ -322,7 +340,7 @@ def _build_overtime_pay_day_details(
 ) -> List[Dict]:
     """
     按「人+日期」生成其他绩效激励明细。计酬规则与 _aggregate_overtime_with_incentive 一致，
-    额外标出满 8 小时固定 200 元的日期，供独立明细表使用。
+    额外标出「严格 08:00–17:00」固定 200 元的日期，供独立明细表使用。
     """
     grouped: Dict[tuple, Dict] = {}
     for r in rows or []:
@@ -344,9 +362,11 @@ def _build_overtime_pay_day_details(
         key = (name, date_str)
         bucket = grouped.get(key)
         if bucket is None:
-            bucket = {"hours": 0.0, "lsys": "", "spans": [], "contents": []}
+            bucket = {"hours": 0.0, "lsys": "", "spans": [], "contents": [], "has_strict": False}
             grouped[key] = bucket
         bucket["hours"] += hours
+        if _is_strict_standard_duty_span(r.get("timefrom"), r.get("timeto")):
+            bucket["has_strict"] = True
         lsys = (r.get("lsys") or "").strip()
         if lsys:
             bucket["lsys"] = lsys
@@ -366,25 +386,26 @@ def _build_overtime_pay_day_details(
         day_hours = float(bucket["hours"])
         festival = holiday_festival_map.get(date_str, "") or ""
         is_incentive = festival in INCENTIVE_FESTIVALS
-        if is_incentive and day_hours >= 8.0:
-            fixed_pay = 200.0
-            extra_hours = day_hours - 8.0
+        has_strict = bool(bucket.get("has_strict"))
+        if is_incentive and has_strict:
+            fixed_pay = INCENTIVE_FIXED_PAY
+            extra_hours = max(0.0, day_hours - 8.0)
             hourly_pay = extra_hours * zhibanfei
             fixed_reward = True
             fest_label = festival or "节日"
             if extra_hours > 0:
                 pay_type = (
-                    f"{fest_label}满8小时固定奖励200元，"
+                    f"{fest_label}覆盖标准班段(≤08:00–≥17:00)固定奖励200元，"
                     f"超出{_fmt_pay_num(extra_hours)}小时按{rate_text}元/小时"
                 )
             else:
-                pay_type = f"{fest_label}满8小时固定奖励200元"
+                pay_type = f"{fest_label}覆盖标准班段(≤08:00–≥17:00)固定奖励200元"
         else:
             fixed_pay = 0.0
             hourly_pay = day_hours * zhibanfei
             fixed_reward = False
             if is_incentive:
-                pay_type = f"{festival or '节日'}不足8小时，按{rate_text}元/小时"
+                pay_type = f"{festival or '节日'}未按早8晚17填报，按{rate_text}元/小时"
             else:
                 pay_type = f"按{rate_text}元/小时"
         details.append({
@@ -1582,9 +1603,10 @@ def get_dept_overtime_pay_by_month(
     """
     其他绩效激励按月份统计。仅统计 jiaban 审核完成(jiabanzt=4)、换休票为否(hx 非「是」)，
     激励规则：
-    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天加班时长(已扣午休) >= 8 小时，则固定奖励 200 元，
-      超出 8 小时部分按 zhibanfei 元/小时额外计算；
-    - 其他日期或不足 8 小时部分，按 webconfig.zhibanfei（默认 15 元/小时）计算；
+    - 若某天是假期表中节日为 春节/国庆节/高温防暑休假，且当天存在严格 08:00–17:00 的填报，
+      则固定奖励 200 元；超出部分按 zhibanfei 元/小时额外计算；
+    - 指定假期但未按早8晚17填报：不发 200，全部按小时费；
+    - 其他日期按 webconfig.zhibanfei（默认 15 元/小时）计算；
     支持 name=某人 仅查本人；month=1~12 仅查该月。
     当传入 current_user+scope 时按权限强制过滤：self 仅本人，lsys 仅本室，all 不限制。
     返回: { success, zhibanfei, list: [{ month, monthLabel, hours, pay }] }
@@ -1632,6 +1654,8 @@ def get_dept_overtime_pay_by_month(
         query = f"""
             SELECT jiaban.xm AS emp_name,
                    jiaban.timedate,
+                   jiaban.timefrom,
+                   jiaban.timeto,
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
@@ -1715,6 +1739,8 @@ def get_dept_overtime_pay_by_employee(
         query = f"""
             SELECT jiaban.xm AS emp_name,
                    jiaban.timedate,
+                   jiaban.timefrom,
+                   jiaban.timeto,
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
@@ -1776,6 +1802,8 @@ def get_overtime_pay_export(
         q_rows = f"""
             SELECT jiaban.xm AS emp_name,
                    jiaban.timedate,
+                   jiaban.timefrom,
+                   jiaban.timeto,
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban
             INNER JOIN yggl ON jiaban.xm = yggl.name
@@ -1853,7 +1881,7 @@ def get_overtime_pay_detail_export(
 ):
     """
     其他绩效激励明细（与工资汇总表独立）：每人每天一行。
-    含加班小时、计酬说明，以及春节/国庆节/高温防暑休假满 8 小时固定 200 元标记。
+    含加班小时、计酬说明，以及春节/国庆节/高温防暑休假覆盖标准班段(≤08:00–≥17:00)固定200元标记。
     仅含审核通过且换休票为否、当日有激励小时的记录。
     """
     try:

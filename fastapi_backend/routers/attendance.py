@@ -318,6 +318,8 @@ class UploadResponse(BaseModel):
     records_count: int = 0
     success_count: int = 0
     fail_count: int = 0
+    # 自动拉取时缺勤建议增量过大，本次数据已放弃并保留上一次
+    rejected: bool = False
 
 
 # ==================== API 路由 ====================
@@ -359,6 +361,11 @@ def get_upload_config():
 
 _EXCLUDED_LSYS_FOR_ATTENDANCE = {"其他部门员工", "其他部门成员"}
 
+# 自动拉取的源数据若不完整，重算后的缺勤建议会突然变多。
+# 新增条数大于在职人数的 40% 时，放弃本次更新，继续使用上一次数据。
+ABSENCE_SUGGESTION_SPIKE_RATIO_NUMERATOR = 2
+ABSENCE_SUGGESTION_SPIKE_RATIO_DENOMINATOR = 5
+
 
 def _yggl_employees_for_suggestions() -> List[tuple]:
     """在职、有姓名与隶属科室的员工，与打卡入库时 department=lsys 一致。
@@ -384,17 +391,105 @@ def _yggl_employees_for_suggestions() -> List[tuple]:
     return out
 
 
-def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
-    """后台任务：上传打卡后，按涉及月份为全员（yggl 在职）重算智能建议，不阻塞上传响应。
+def _attendance_date_key(value) -> str:
+    if value is None or value == "":
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%Y-%m-%d")
+    if isinstance(value, date_type):
+        return value.strftime("%Y-%m-%d")
+    text = str(value).strip().replace("/", "-")
+    return text[:10]
+
+
+def _record_year_month(record: dict):
+    key = _attendance_date_key(record.get("attendance_date"))
+    parts = key.split("-")
+    if len(parts) < 2:
+        return None
+    try:
+        return int(parts[0]), int(parts[1])
+    except ValueError:
+        return None
+
+
+def _month_date_range(year: int, month: int):
+    start_date = f"{year}-{month:02d}-01"
+    if month == 12:
+        end_date = f"{year}-12-31"
+    else:
+        last = date_type(year, month + 1, 1) - timedelta(days=1)
+        end_date = last.strftime("%Y-%m-%d")
+    return start_date, end_date
+
+
+def _suggestion_record_range(year: int, month: int):
+    """建议生成用的打卡范围：多取次月 1 日，供跨夜离开判断。"""
+    start_date, end_date = _month_date_range(year, month)
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)
+    return start_date, end_dt.strftime("%Y-%m-%d")
+
+
+def _merge_month_records_by_name(existing_rows, new_rows) -> dict:
+    """按工号+日期用新打卡覆盖旧打卡，再按姓名聚合。未出现在新文件里的旧记录保留。"""
+    from collections import defaultdict
+    merged = {}
+    for row in list(existing_rows or []) + list(new_rows or []):
+        raw_id = row.get("employee_id")
+        employee_id = "" if raw_id is None else str(raw_id).strip()
+        day = _attendance_date_key(row.get("attendance_date"))
+        if not employee_id or not day:
+            continue
+        merged[(employee_id, day)] = row
+    grouped = defaultdict(list)
+    for row in merged.values():
+        name = (row.get("employee_name") or "").strip()
+        if name:
+            grouped[name].append(row)
+    return grouped
+
+
+def _absence_increase_too_large(old_count: int, new_count: int, headcount: int) -> bool:
+    """新增缺勤建议条数大于在职人数的 40% 时返回 True。"""
+    if headcount <= 0:
+        return False
+    delta = new_count - old_count
+    if delta <= 0:
+        return False
+    return delta * ABSENCE_SUGGESTION_SPIKE_RATIO_DENOMINATOR > headcount * ABSENCE_SUGGESTION_SPIKE_RATIO_NUMERATOR
+
+
+def _format_spike_reject_message(spikes, headcount: int) -> str:
+    allowed = headcount * ABSENCE_SUGGESTION_SPIKE_RATIO_NUMERATOR // ABSENCE_SUGGESTION_SPIKE_RATIO_DENOMINATOR
+    parts = []
+    for (year, month), old_count, new_count, delta in spikes:
+        parts.append(
+            f"{year}年{month}月缺勤建议由 {old_count} 条变为 {new_count} 条"
+            f"（新增 {delta} 条，在职 {headcount} 人，超过 40% 即 {allowed} 条）"
+        )
+    return (
+        "本次自动获取的打卡数据未采用："
+        + "；".join(parts)
+        + "。已保留上一次打卡数据和智能建议。"
+    )
+
+
+def _generate_suggestions_bg(records: list, cutoff_date_str: str = None,
+                             month_records_by_name: dict = None, persist: bool = True) -> dict:
+    """上传打卡后，按涉及月份为全员（yggl 在职）重算智能建议。
     当月库中无打卡记录的人也会生成建议（如工作日全天缺勤），避免仅处理「本次文件里出现过的员工」。
     cutoff_date_str: 'YYYY-MM-DD'，当月仅生成截止到此日期的建议。
-    优化：按月份批量查询考勤记录（1条SQL/月），缓存假期数据，批量写入建议。"""
+    month_records_by_name: 预演时传入「旧打卡被新文件覆盖后」的按月按姓名记录，不再读库。
+    persist=False 时只统计缺勤建议条数，不删不写。
+    返回 {"ok": bool, "absence_counts": {(year, month): 缺勤条数}, "error": str}
+    """
     import time as _time
     from collections import defaultdict
     t0 = _time.time()
+    empty = {"ok": True, "absence_counts": {}, "error": ""}
     try:
         from routers.suggestions import (generate_suggestions_for_month_with_records,
-                                         load_holidays, _load_holiday_festival_map, _parse_record_date)
+                                         load_holidays, _load_holiday_festival_map)
         attendance_db.ensure_suggestions_table()
 
         seen = set()
@@ -404,31 +499,15 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
             ad = rec.get("attendance_date")
             if not name or not dept or not ad:
                 continue
-            y, m = None, None
-            if isinstance(ad, datetime):
-                y, m = ad.year, ad.month
-            elif isinstance(ad, date_type):
-                y, m = ad.year, ad.month
-            elif isinstance(ad, str):
-                parts = ad.replace("/", "-").split("-")
-                if len(parts) >= 2:
-                    try:
-                        y, m = int(parts[0]), int(parts[1])
-                    except (ValueError, IndexError):
-                        continue
-                else:
-                    continue
-            else:
+            ym = _record_year_month(rec)
+            if not ym:
                 continue
-            seen.add((name, dept, y, m))
+            seen.add((name, dept, ym[0], ym[1]))
 
         if not seen:
-            return
+            return empty
 
-        months = set()
-        for (_, _, y, m) in seen:
-            months.add((y, m))
-
+        months = {(y, m) for (_, _, y, m) in seen}
         employees = _yggl_employees_for_suggestions()
         keys_to_process = set()
         for y, m in months:
@@ -436,67 +515,88 @@ def _generate_suggestions_bg(records: list, cutoff_date_str: str = None):
                 keys_to_process.add((name, dept, y, m))
 
         if not keys_to_process:
-            return
+            return empty
 
-        # 按姓名+年月删除（不限科室），避免科室变更后旧科室建议残留导致重复
-        name_month_keys = list({(name, y, m) for (name, _dept, y, m) in keys_to_process})
-        _chunk = 400
-        for i in range(0, len(name_month_keys), _chunk):
-            attendance_db.delete_suggestions_by_name_months(name_month_keys[i : i + _chunk])
+        if persist:
+            # 按姓名+年月删除（不限科室），避免科室变更后旧科室建议残留导致重复
+            name_month_keys = list({(name, y, m) for (name, _dept, y, m) in keys_to_process})
+            _chunk = 400
+            for i in range(0, len(name_month_keys), _chunk):
+                attendance_db.delete_suggestions_by_name_months(name_month_keys[i : i + _chunk])
 
         holidays_cache: dict = {}
         holiday_festival_cache: dict = {}
-        # 按姓名聚合打卡：科室变更后历史记录仍挂在旧 department 上
-        month_records_by_name: dict = {}
-        for (y, m) in months:
-            start_date = f"{y}-{m:02d}-01"
-            if m == 12:
-                end_date = f"{y}-12-31"
-            else:
-                last = (date_type(y, m + 1, 1) - timedelta(days=1))
-                end_date = last.strftime("%Y-%m-%d")
-            all_recs = attendance_db.get_all_records_by_date_range(start_date, end_date)
-            grouped = defaultdict(list)
-            for r in all_recs:
-                emp_name = (r.get("employee_name") or "").strip()
-                if emp_name:
-                    grouped[emp_name].append(r)
-            month_records_by_name[(y, m)] = grouped
+        loaded_by_name = month_records_by_name
+        if loaded_by_name is None:
+            loaded_by_name = {}
+            for (y, m) in months:
+                start_date, end_date = _suggestion_record_range(y, m)
+                all_recs = attendance_db.get_all_records_by_date_range(start_date, end_date)
+                grouped = defaultdict(list)
+                for r in all_recs:
+                    emp_name = (r.get("employee_name") or "").strip()
+                    if emp_name:
+                        grouped[emp_name].append(r)
+                loaded_by_name[(y, m)] = grouped
 
+        for (y, m) in months:
             year_str = str(y)
             if year_str not in holidays_cache:
                 holidays_cache[year_str] = load_holidays(year_str)
             if year_str not in holiday_festival_cache:
                 holiday_festival_cache[year_str] = _load_holiday_festival_map(y)
 
+        absence_counts = defaultdict(int)
         for (name, dept, y, m) in keys_to_process:
             try:
-                person_records = month_records_by_name.get((y, m), {}).get(name, [])
+                person_records = loaded_by_name.get((y, m), {}).get(name, [])
                 holidays = holidays_cache[str(y)]
                 holiday_festival_map = holiday_festival_cache[str(y)]
                 suggestions_list = generate_suggestions_for_month_with_records(
                     name, dept, y, m, person_records, holidays,
                     cutoff_date_str=cutoff_date_str,
                     holiday_festival_map=holiday_festival_map)
-                attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
+                for item in suggestions_list or []:
+                    try:
+                        status = int(item.get("status") or 0)
+                    except (TypeError, ValueError):
+                        status = 0
+                    if status == 1:
+                        absence_counts[(y, m)] += 1
+                if persist:
+                    attendance_db.insert_suggestions(name, dept, y, m, suggestions_list)
             except Exception as e:
                 logger.warning(f"[后台] 生成智能建议失败 {(name, dept, y, m)}: {e}")
 
         elapsed = round(_time.time() - t0, 1)
-        logger.info(f"[后台] 智能建议生成完成，共处理 {len(keys_to_process)} 个人月组合，耗时 {elapsed}s")
+        action = "预演" if not persist else "生成"
+        logger.info(f"[后台] 智能建议{action}完成，共处理 {len(keys_to_process)} 个人月组合，耗时 {elapsed}s")
+        return {"ok": True, "absence_counts": dict(absence_counts), "error": ""}
     except Exception as e:
         logger.warning(f"[后台] 上传后生成智能建议失败: {e}")
+        return {"ok": False, "absence_counts": {}, "error": str(e)}
 
 
-def _process_attendance_file_path(temp_file_path: str, filename: str):
-    """
-    处理考勤文件（Excel），返回 (success, message, records_count, success_count, fail_count, mapped_records)。
-    不负责 log_upload、background_tasks、临时文件删除。
-    """
+def _format_attendance_import_message(merged_count: int, skipped_gh: list, success_count: int, fail_count: int) -> str:
+    parts = [f"文件处理完成！Excel 合并后 {merged_count} 人天"]
+    if skipped_gh:
+        parts.append(
+            f"跳过未匹配工号 {len(skipped_gh)} 条（涉及 {len(set(skipped_gh))} 个工号: "
+            f"{', '.join(sorted(set(skipped_gh))[:20])}）"
+        )
+    parts.append(f"入库成功 {success_count} 条")
+    if fail_count:
+        parts.append(f"入库失败 {fail_count} 条（详见服务器日志）")
+    return "，".join(parts)
+
+
+def _parse_and_map_attendance_file(temp_file_path: str):
+    """解析 Excel 并按工号映射姓名、科室，不写库。
+    返回 (success, error_msg, mapped_records, skipped_gh, merged_count)。"""
     processor = ExcelProcessor(temp_file_path)
     success, merged_records, error_msg = processor.process_file(start_row=6)
     if not success:
-        return False, error_msg, 0, 0, 0, []
+        return False, error_msg, [], [], 0
 
     mapped_records = []
     skipped_gh = []
@@ -515,16 +615,92 @@ def _process_attendance_file_path(temp_file_path: str, filename: str):
             f"上传跳过未在 yggl 中匹配到的工号，共 {len(skipped_gh)} 条记录涉及 {len(unique_gh)} 个工号。"
             f"未匹配工号完整列表: {unique_gh}"
         )
+    return True, "", mapped_records, skipped_gh, len(merged_records)
+
+
+def _process_attendance_file_path(temp_file_path: str, filename: str):
+    """
+    处理考勤文件（Excel），返回 (success, message, records_count, success_count, fail_count, mapped_records)。
+    不负责 log_upload、background_tasks、临时文件删除。手工上传不走缺勤增量校验。
+    """
+    parsed_ok, error_msg, mapped_records, skipped_gh, merged_count = _parse_and_map_attendance_file(temp_file_path)
+    if not parsed_ok:
+        return False, error_msg, 0, 0, 0, []
 
     success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
-    parts = [f"文件处理完成！Excel 合并后 {len(merged_records)} 人天"]
-    if skipped_gh:
-        parts.append(f"跳过未匹配工号 {len(skipped_gh)} 条（涉及 {len(set(skipped_gh))} 个工号: {', '.join(sorted(set(skipped_gh))[:20])}）")
-    parts.append(f"入库成功 {success_count} 条")
-    if fail_count:
-        parts.append(f"入库失败 {fail_count} 条（详见服务器日志）")
-    msg = "，".join(parts)
+    msg = _format_attendance_import_message(merged_count, skipped_gh, success_count, fail_count)
     return True, msg, len(mapped_records), success_count, fail_count, mapped_records
+
+
+def _commit_fetched_attendance(mapped_records: list, filename: str, cutoff_date_str: str,
+                               merged_count: int, skipped_gh: list, write_suggestions: bool = True):
+    """自动拉取专用：先预演智能建议。缺勤建议增量超过在职人数 40% 则不写库。
+    返回 (status, message, records_count, success_count, fail_count)。
+    status: ok / rejected / error。rejected 不重试；error 可由定时任务重试。"""
+    employees = _yggl_employees_for_suggestions()
+    names = sorted({name for name, _dept in employees})
+    headcount = len(names)
+    months = set()
+    for rec in mapped_records:
+        ym = _record_year_month(rec)
+        if ym:
+            months.add(ym)
+
+    if headcount > 0 and months:
+        old_counts = {}
+        for year, month in months:
+            old_count = attendance_db.count_absence_suggestions(year, month, names)
+            if old_count is None:
+                msg = "缺勤建议校验失败：无法统计现有缺勤建议，本次数据未写入"
+                attendance_db.log_upload(filename, len(mapped_records), "异常", msg)
+                return "error", msg, 0, 0, 0
+            old_counts[(year, month)] = old_count
+
+        grouped = {}
+        for year, month in months:
+            start_date, end_date = _suggestion_record_range(year, month)
+            existing = attendance_db.get_all_records_by_date_range(start_date, end_date)
+            new_rows = [rec for rec in mapped_records if _record_year_month(rec) == (year, month)]
+            grouped[(year, month)] = _merge_month_records_by_name(existing, new_rows)
+
+        preview = _generate_suggestions_bg(
+            list(mapped_records),
+            cutoff_date_str,
+            month_records_by_name=grouped,
+            persist=False,
+        )
+        if not preview.get("ok"):
+            msg = f"缺勤建议校验失败，未写入本次数据: {preview.get('error') or '未知错误'}"
+            attendance_db.log_upload(filename, len(mapped_records), "异常", msg)
+            return "error", msg, 0, 0, 0
+
+        new_counts = preview.get("absence_counts") or {}
+        spikes = []
+        allowed = headcount * ABSENCE_SUGGESTION_SPIKE_RATIO_NUMERATOR // ABSENCE_SUGGESTION_SPIKE_RATIO_DENOMINATOR
+        for year, month in sorted(months):
+            old_count = int(old_counts.get((year, month)) or 0)
+            new_count = int(new_counts.get((year, month)) or 0)
+            delta = new_count - old_count
+            logger.info(
+                "[缺勤校验] %04d-%02d 旧缺勤建议=%s 预览缺勤建议=%s 增量=%s 在职=%s 允许新增不超过=%s",
+                year, month, old_count, new_count, delta, headcount, allowed,
+            )
+            if _absence_increase_too_large(old_count, new_count, headcount):
+                spikes.append(((year, month), old_count, new_count, delta))
+        if spikes:
+            msg = _format_spike_reject_message(spikes, headcount)
+            logger.warning("[缺勤校验] %s", msg)
+            attendance_db.log_upload(filename, len(mapped_records), "已放弃", msg)
+            return "rejected", msg, 0, 0, 0
+    elif headcount <= 0:
+        logger.warning("[缺勤校验] 未统计到在职员工，跳过缺勤增量校验")
+
+    success_count, fail_count = attendance_db.batch_insert_records(mapped_records)
+    msg = _format_attendance_import_message(merged_count, skipped_gh, success_count, fail_count)
+    attendance_db.log_upload(filename, len(mapped_records), "成功", f"成功: {success_count}, 失败: {fail_count}")
+    if write_suggestions:
+        _generate_suggestions_bg(list(mapped_records), cutoff_date_str)
+    return "ok", msg, len(mapped_records), success_count, fail_count
 
 
 @router.post("/upload", response_model=UploadResponse)
@@ -605,6 +781,7 @@ async def fetch_and_upload(
     """
     从打卡服务器 GET 拉取最新报表并导入。仅 dakaman 可操作。
     需在 config 或 .env 中配置 ATTENDANCE_REPORT_FETCH_URL；远端响应可能很慢，服务端 HTTP 读超时约 20 分钟。
+    写入前预演智能建议：本月缺勤建议增量超过在职人数 40% 时放弃本次数据，保留上一次。
     """
     dakaman = _get_dakaman()
     admin1 = _get_admin1()
@@ -642,13 +819,35 @@ async def fetch_and_upload(
             tmp.write(content)
             temp_file_path = tmp.name
         filename = "report" + suffix
-        success, message, records_count, success_count, fail_count, mapped_records = _process_attendance_file_path(temp_file_path, filename)
-        if not success:
-            attendance_db.log_upload(filename, 0, "失败", message)
-            return UploadResponse(success=False, message=message, records_count=0)
-        attendance_db.log_upload(filename, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
-        background_tasks.add_task(_generate_suggestions_bg, list(mapped_records), cutoff)
-        return UploadResponse(success=True, message=message, records_count=records_count, success_count=success_count, fail_count=fail_count)
+        parsed_ok, error_msg, mapped_records, skipped_gh, merged_count = _parse_and_map_attendance_file(temp_file_path)
+        if not parsed_ok:
+            attendance_db.log_upload(filename, 0, "失败", error_msg)
+            return UploadResponse(success=False, message=error_msg, records_count=0)
+        import asyncio
+        import functools
+        loop = asyncio.get_running_loop()
+        status, message, records_count, success_count, fail_count = await loop.run_in_executor(
+            None,
+            functools.partial(
+                _commit_fetched_attendance,
+                list(mapped_records),
+                filename,
+                cutoff,
+                merged_count,
+                list(skipped_gh),
+                False,
+            ),
+        )
+        if status == "ok":
+            background_tasks.add_task(_generate_suggestions_bg, list(mapped_records), cutoff)
+        return UploadResponse(
+            success=status == "ok",
+            message=message,
+            records_count=records_count,
+            success_count=success_count,
+            fail_count=fail_count,
+            rejected=status == "rejected",
+        )
     except httpx.HTTPStatusError as e:
         attendance_db.log_upload("report", 0, "失败", str(e.response.status_code))
         raise HTTPException(status_code=502, detail=f"拉取失败: {e.response.status_code}")
@@ -667,7 +866,9 @@ async def run_fetch_and_upload_report(
     suggestion_cutoff: Optional[str] = None,
     report_month: Optional[str] = None,
 ):
-    """供定时任务调用：拉取报表并导入；每条任务的 suggestion_cutoff 决定智能建议截止日。失败时最多重试 3 次。"""
+    """供定时任务调用：拉取报表并导入；每条任务的 suggestion_cutoff 决定智能建议截止日。
+    缺勤建议增量超过在职人数 40% 时放弃本次数据并保留上一次，不再重试。
+    其他失败最多重试 3 次。"""
     import asyncio
     import httpx
     fetch_url = (getattr(settings, "ATTENDANCE_REPORT_FETCH_URL", None) or "").strip()
@@ -727,24 +928,43 @@ async def run_fetch_and_upload_report(
                 tmp.write(content)
                 temp_file_path = tmp.name
             report_name = "report" + suffix
-            success, message, records_count, success_count, fail_count, mapped_records = _process_attendance_file_path(temp_file_path, report_name)
-            if not success:
-                last_error = message
-                attendance_db.log_upload(report_name, 0, "失败", message)
-                logger.warning("[定时] 第 %d 次 处理失败: %s", attempt, message)
+            parsed_ok, error_msg, mapped_records, skipped_gh, merged_count = _parse_and_map_attendance_file(temp_file_path)
+            if not parsed_ok:
+                last_error = error_msg
+                attendance_db.log_upload(report_name, 0, "失败", error_msg)
+                logger.warning("[定时] 第 %d 次 处理失败: %s", attempt, error_msg)
                 if attempt < max_attempts:
                     await asyncio.sleep(retry_delay_seconds)
                 continue
-            attendance_db.log_upload(report_name, records_count, "成功", f"成功: {success_count}, 失败: {fail_count}")
             from routers.attendance_scheduler_config import resolve_suggestion_cutoff_date
+            import functools
             cutoff_str = resolve_suggestion_cutoff_date(suggestion_cutoff)
-            records_copy = list(mapped_records)
-            loop = asyncio.get_event_loop()
-            loop.run_in_executor(
+            loop = asyncio.get_running_loop()
+            status, message, _records_count, success_count, fail_count = await loop.run_in_executor(
                 None,
-                lambda rec=records_copy, cut=cutoff_str: _generate_suggestions_bg(rec, cut),
+                functools.partial(
+                    _commit_fetched_attendance,
+                    list(mapped_records),
+                    report_name,
+                    cutoff_str,
+                    merged_count,
+                    list(skipped_gh),
+                    True,
+                ),
             )
-            logger.info("[定时] 拉取上传完成（第 %d 次）: %s", attempt, message)
+            if status == "rejected":
+                logger.warning("[定时] 已放弃本次打卡更新（保留上一次数据）: %s", message)
+                return
+            if status != "ok":
+                last_error = message
+                logger.warning("[定时] 第 %d 次 未写入: %s", attempt, message)
+                if attempt < max_attempts:
+                    await asyncio.sleep(retry_delay_seconds)
+                continue
+            logger.info(
+                "[定时] 拉取上传完成（第 %d 次）: %s（成功 %s 条，失败 %s 条）",
+                attempt, message, success_count, fail_count,
+            )
             return
         except Exception as e:
             last_error = str(e)

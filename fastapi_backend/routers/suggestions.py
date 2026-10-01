@@ -4,6 +4,7 @@
 使用新的 SQLite 数据库
 """
 from fastapi import APIRouter, Query
+from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
 from models import SuggestionResponse, Suggestion
 from attendance_db import attendance_db
@@ -118,17 +119,23 @@ def _is_march8_pm_interval(date_str: Any, start_time: Any, end_time: Any) -> boo
     return s_dec >= 13.0 and e_dec <= 17.0
 
 
-def _floor_half_hours(h: float) -> float:
-    """按 0.5 小时向下取整，不满 0.5 舍去。如 4.4 -> 4.0"""
-    return math.floor(h * 2) / 2
+def _floor_to_minutes(h: float) -> float:
+    """按分钟向下取整，不足 1 分钟舍去。返回小时小数。如 5.828 → 5.8166…（5小时49分）"""
+    if h <= 0:
+        return 0.0
+    return math.floor(h * 60 + 1e-9) / 60.0
 
 
 def _format_hours_display(h: float) -> str:
-    """格式化加班小时显示：先按 0.5 向下取整，整数显示为「4小时」，否则「4.5小时」"""
-    h = _floor_half_hours(h)
-    if h == int(h):
-        return f"{int(h)}小时"
-    return f"{h:.1f}小时"
+    """格式化加班时长显示：先按分钟向下取整。如「5小时」「5小时49分钟」「40分钟」"""
+    h = _floor_to_minutes(h)
+    total_mins = int(round(h * 60))
+    hours, mins = divmod(total_mins, 60)
+    if hours and mins:
+        return f"{hours}小时{mins}分钟"
+    if hours:
+        return f"{hours}小时"
+    return f"{mins}分钟"
 
 
 def _to_comparable_dt(val: Any) -> Optional[str]:
@@ -701,22 +708,54 @@ def build_intervals_from_marks(time_mark_pairs: List[tuple]) -> List[tuple]:
     return intervals
 
 
+def trailing_unclosed_entry(time_mark_pairs: List[tuple]):
+    """当日最后一次「进」没有配到「出」时，返回这次进入时间；打卡已闭环则返回 None。"""
+    if not time_mark_pairs:
+        return None
+    has_any_mark = any(m is not None for _, m in time_mark_pairs)
+    if not has_any_mark:
+        if len(time_mark_pairs) % 2 == 1:
+            return time_mark_pairs[-1][0]
+        return None
+    current_in = None
+    for t, mark in time_mark_pairs:
+        if mark == 0:
+            current_in = t
+        elif mark == 1:
+            if current_in is not None:
+                current_in = None
+        else:
+            if current_in is None:
+                current_in = t
+            else:
+                current_in = None
+    return current_in
+
+
 def _sugg(start_time: str, end_time: str, status: int, message: str) -> dict:
     """构造一条建议（含开始/结束时间与状态码 0=加班 1=缺勤）"""
     return {"start_time": start_time, "end_time": end_time, "status": status, "message": message}
 
 
 def _time_to_datetime(date_str: str, time_str: str) -> str:
-    """将日期 YYYY-MM-DD 与时间 HH:MM 或 HH:MM:SS 拼成 YYYY-MM-DD HH:MM:SS，供 DATETIME(0) 写入"""
+    """将日期 YYYY-MM-DD 与时间 HH:MM 或 HH:MM:SS 拼成 YYYY-MM-DD HH:MM:SS，供 DATETIME(0) 写入。
+    24:00 表示当天结束，落成次日 00:00:00。"""
     if not date_str or not time_str:
         return ""
     t = time_str.strip()
     if len(t) == 5 and ":" in t:  # HH:MM
         t = t + ":00"
-    return f"{date_str.strip()[:10]} {t}"
+    day = date_str.strip()[:10]
+    if t.startswith("24:"):
+        try:
+            nxt = datetime.strptime(day, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            return ""
+        return nxt.strftime("%Y-%m-%d") + " 00:00:00"
+    return f"{day} {t}"
 
 
-def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
+def analyze_workday(record: dict, date_obj: datetime, suppress_unclosed_absence: bool = False) -> List[dict]:
     """分析工作日打卡记录，生成建议（按进/出标记配对区间）。返回 List[dict] 含 start_time, end_time, status, message。"""
     suggestions: List[dict] = []
 
@@ -730,9 +769,12 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
     WORK_AM_END = 12       # 上午下班
     WORK_PM_START = 13     # 下午上班开始
     WORK_PM_END = 17       # 正常下班
-    OVERTIME_START = 17    # 工作日加班起点
-    OVERTIME_END = 24      # 统计到 24:00
-    OVERTIME_MIN_HOURS = 1 # 加班至少 1 小时
+    EARLY_ENTRY_CUTOFF = 7.5  # 须早于 7:30 入厂才计早到加班
+    EARLY_OT_END = 8.0        # 早到加班计至 8:00
+    LATE_LEAVE_CUTOFF = 17.5  # 须晚于 17:30 离厂才计晚走加班
+    OVERTIME_START = 17       # 晚走加班起点（17:00→离厂）
+    OVERTIME_END = 24         # 统计到 24:00
+    OVERTIME_MIN_MINUTES = 1  # 至少 1 分钟才出建议
 
     def decimal_to_dt(base_date: datetime, h: float) -> datetime:
         """将小时时间(如 17.5) 转为 datetime，含秒，与 time_to_decimal 精度一致"""
@@ -798,6 +840,8 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
         has_entry_mark = any(m == 0 for _, m in time_mark_pairs)
         all_marks_unknown = not any(m is not None for _, m in time_mark_pairs)
         if has_entry_mark or all_marks_unknown:
+            if suppress_unclosed_absence:
+                return suggestions
             return [_sugg(
                 "08:00:00", "17:00:00", 1,
                 "【考勤建议】检测到打卡数据异常（仅有进入记录，缺少离开记录），建议补录 8:00 到 17:00 的考勤（全天）"
@@ -823,10 +867,11 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
                 break
 
         if eff_work_start is None:
-            suggestions.append(_sugg(
-                "08:00:00", "17:00:00", 1,
-                "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）"
-            ))
+            if not suppress_unclosed_absence:
+                suggestions.append(_sugg(
+                    "08:00:00", "17:00:00", 1,
+                    "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）"
+                ))
         elif eff_work_start > WORK_AM_START:
             eff_dt = decimal_to_dt(date_obj, eff_work_start)
             if eff_work_start < WORK_AM_END:
@@ -888,6 +933,9 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
                     f"【考勤建议】检测到缺勤，建议补录 {format_time(gap_start)} 到 {format_time(gap_end)} 的考勤"
                 ))
         else:
+            # 当天以未配对的「进」结束时，这段到 17:00 的缺勤改由跨夜确认处理
+            if suppress_unclosed_absence:
+                continue
             # 午休内离开且是最后一个区间：缺勤从 13:00 开始到 17:00
             if gap_start_val >= WORK_AM_END and gap_start_val < WORK_PM_START:
                 gap_start = gap_start.replace(hour=WORK_PM_START, minute=0, second=0, microsecond=0)
@@ -902,32 +950,46 @@ def analyze_workday(record: dict, date_obj: datetime) -> List[dict]:
 
     # -------------------------------------------------
     # 5. 工作日加班检测：
-    #    检查每个（刷入，刷离）区间与 [17:00, 24:00] 的交集，
-    #    交集时长 ≥ 1 小时则提示加班。
-    #    （工作日加班都在 17:00 之后，因此无需处理中午 12–13）
+    #    a) 早到：入厂早于 7:30 → 计 [入厂, min(离厂, 8:00)]
+    #    b) 晚走：离厂晚于 17:30 → 计 [max(入厂, 17:00), 离厂]
+    #       （17:30 及以前离厂不计加班；如 17:31 离厂可计 17:00–17:31）
+    #    时长按分钟向下取整，至少 1 分钟才出建议。
     # -------------------------------------------------
     for t_in, t_out in intervals:
         a = time_to_decimal(t_in)
         b = time_to_decimal(t_out)
+        if b <= a:
+            continue
 
-        # 区间与 [17, 24] 求交集
-        inter_start = max(a, OVERTIME_START)
-        inter_end = min(b, OVERTIME_END)
+        # 早到加班
+        if a < EARLY_ENTRY_CUTOFF:
+            early_start = a
+            early_end = min(b, EARLY_OT_END)
+            if early_end > early_start:
+                duration = early_end - early_start
+                if _floor_to_minutes(duration) * 60 >= OVERTIME_MIN_MINUTES:
+                    start_dt = decimal_to_dt(date_obj, early_start)
+                    end_dt = decimal_to_dt(date_obj, early_end)
+                    st_str, et_str = format_time(start_dt), format_time(end_dt)
+                    suggestions.append(_sugg(
+                        st_str, et_str, 0,
+                        f"【加班建议】检测到早到 {st_str} 到 {et_str} 的加班（约{_format_hours_display(duration)}）"
+                    ))
 
-        if inter_end <= inter_start:
-            continue  # 没有加班交集
-
-        duration = inter_end - inter_start
-        if duration < OVERTIME_MIN_HOURS:
-            continue  # 未达到 1 小时，不提示
-
-        start_dt = decimal_to_dt(date_obj, inter_start)
-        end_dt = decimal_to_dt(date_obj, inter_end)
-        st_str, et_str = format_time(start_dt), format_time(end_dt)
-        suggestions.append(_sugg(
-            st_str, et_str, 0,
-            f"【加班建议】检测到 {st_str} 到 {et_str} 的加班（约{_format_hours_display(duration)}）"
-        ))
+        # 晚走加班：须离厂晚于 17:30
+        if b > LATE_LEAVE_CUTOFF:
+            inter_start = max(a, OVERTIME_START)
+            inter_end = min(b, OVERTIME_END)
+            if inter_end > inter_start:
+                duration = inter_end - inter_start
+                if _floor_to_minutes(duration) * 60 >= OVERTIME_MIN_MINUTES:
+                    start_dt = decimal_to_dt(date_obj, inter_start)
+                    end_dt = decimal_to_dt(date_obj, inter_end)
+                    st_str, et_str = format_time(start_dt), format_time(end_dt)
+                    suggestions.append(_sugg(
+                        st_str, et_str, 0,
+                        f"【加班建议】检测到 {st_str} 到 {et_str} 的加班（约{_format_hours_display(duration)}）"
+                    ))
 
     return suggestions
 
@@ -1087,11 +1149,171 @@ def analyze_restday(record: dict, date_obj: datetime, is_incentive_holiday: bool
     return suggestions
 
 
-# ---------- 考勤智能建议「加班建议」：工作日 17:00 后且单段≥1h（analyze_workday） ----------
+OVERNIGHT_CONFIRM_STATUS = 2
+OVERNIGHT_EXIT_END_HOUR = 6.0
+EVENING_EXIT_HOUR = 17.0
 
+
+def workday_missing_evening_exit(record: dict) -> bool:
+    """当天有进入，且没有 17:00 及以后的离开，打卡停在未闭环的「进」。"""
+    if not record:
+        return False
+    pairs = collect_valid_times_with_marks(record)
+    if trailing_unclosed_entry(pairs) is None:
+        return False
+    for punch_time, mark in pairs:
+        if mark == 1 and time_to_decimal(punch_time) >= EVENING_EXIT_HOUR:
+            return False
+    return True
+
+
+def earliest_overnight_exit(record: dict):
+    """次日 00:00–06:00 内、且出现在当天第一次「进」之前的离开打卡。"""
+    if not record:
+        return None
+    for punch_time, mark in collect_valid_times_with_marks(record):
+        value = time_to_decimal(punch_time)
+        if value > OVERNIGHT_EXIT_END_HOUR:
+            break
+        if mark == 1:
+            return punch_time
+        if mark == 0 or mark is None:
+            return None
+    return None
+
+
+def _cn_month_day(day: datetime) -> str:
+    return f"{day.month}月{day.day}日"
+
+
+def _overnight_question(work_day: datetime, next_day: datetime, exit_time) -> dict:
+    exit_txt = format_time(exit_time)
+    message = (
+        f"【跨夜确认】检测到您{_cn_month_day(work_day)}17:00后没有离开的记录，"
+        f"{_cn_month_day(next_day)}有早早的离开记录（{exit_txt}）。请问您是否跨夜加班了？"
+    )
+    return _sugg("17:00:00", "17:00:00", OVERNIGHT_CONFIRM_STATUS, message)
+
+
+def _evening_overtime_until_midnight(record: dict) -> Optional[dict]:
+    """当天加班记到 24:00。人还在厂内时，从 17:00 起；若 17:00 之后才进入，从进入时间起。"""
+    open_entry = trailing_unclosed_entry(collect_valid_times_with_marks(record))
+    start_hour = EVENING_EXIT_HOUR
+    start_txt = "17:00:00"
+    if open_entry is not None:
+        entered = time_to_decimal(open_entry)
+        if entered > EVENING_EXIT_HOUR:
+            start_hour = entered
+            start_txt = format_time(open_entry)
+    hours = 24 - start_hour
+    if hours <= 0:
+        return None
+    return _sugg(
+        start_txt,
+        "24:00:00",
+        0,
+        f"【加班建议】检测到 {start_txt} 到 24:00:00 的加班（约{_format_hours_display(hours)}）",
+    )
+
+
+def _morning_overtime(exit_time) -> dict:
+    exit_txt = format_time(exit_time)
+    hours = time_to_decimal(exit_time)
+    return _sugg(
+        "00:00:00",
+        exit_txt,
+        0,
+        f"【加班建议】检测到 00:00:00 到 {exit_txt} 的加班（约{_format_hours_display(hours)}）",
+    )
+
+
+def _index_records_by_date(records: List[Dict]) -> Dict[str, Dict]:
+    indexed: Dict[str, Dict] = {}
+    for record in records or []:
+        parsed = _parse_record_date(record.get("attendance_date"))
+        if parsed:
+            indexed[parsed.strftime("%Y-%m-%d")] = record
+    return indexed
+
+
+def _record_for_date(name: str, day_str: str, records_by_date: Dict[str, Dict]) -> Optional[Dict]:
+    if day_str in records_by_date:
+        return records_by_date[day_str]
+    if not name:
+        return None
+    try:
+        rows = attendance_db.query_by_date_range(day_str, day_str, name=name, dept=None)
+    except Exception as e:
+        logger.warning(f"查询跨夜次日打卡失败 {name} {day_str}: {e}")
+        return None
+    if not rows:
+        return None
+    records_by_date[day_str] = rows[0]
+    return rows[0]
+
+
+def _load_overnight_choices(name: str, start_day: datetime, end_day: datetime) -> Dict[str, str]:
+    try:
+        return attendance_db.get_overnight_choices(
+            name,
+            start_day.strftime("%Y-%m-%d"),
+            end_day.strftime("%Y-%m-%d"),
+        )
+    except Exception as e:
+        logger.warning(f"读取跨夜加班确认失败 {name}: {e}")
+        return {}
+
+
+def collect_day_punch_suggestions(
+    name: str,
+    record: dict,
+    date_obj: datetime,
+    is_work: bool,
+    holiday_festival_map: Optional[Dict[str, str]],
+    records_by_date: Dict[str, Dict],
+    choices: Dict[str, str],
+) -> List[dict]:
+    """单日打卡建议。疑似跨夜时先问用户，不直接当成缺勤。"""
+    date_str = date_obj.strftime("%Y-%m-%d")
+    choice = (choices or {}).get(date_str)
+    items: List[dict] = []
+    if is_work and record:
+        next_day = date_obj + timedelta(days=1)
+        next_rec = _record_for_date(name, next_day.strftime("%Y-%m-%d"), records_by_date)
+        next_exit = earliest_overnight_exit(next_rec)
+        suspect = workday_missing_evening_exit(record) and next_exit is not None
+        if suspect and choice != "no":
+            items = analyze_workday(record, date_obj, suppress_unclosed_absence=True)
+            if choice == "yes":
+                evening = _evening_overtime_until_midnight(record)
+                if evening:
+                    items.append(evening)
+            else:
+                items.append(_overnight_question(date_obj, next_day, next_exit))
+        else:
+            items = analyze_workday(record, date_obj)
+    elif record:
+        items = analyze_restday(
+            record,
+            date_obj,
+            is_incentive_holiday=_is_incentive_festival(date_obj, holiday_festival_map),
+        )
+    yesterday = (date_obj - timedelta(days=1)).strftime("%Y-%m-%d")
+    if (choices or {}).get(yesterday) == "yes" and record:
+        morning_exit = earliest_overnight_exit(record)
+        if morning_exit is not None and time_to_decimal(morning_exit) > 0:
+            items.append(_morning_overtime(morning_exit))
+    return items
+
+
+# ---------- 考勤智能建议「加班建议」：工作日早到(7:30前入厂→8:00) + 晚走(须晚于17:30离厂，自17:00起算)，按分钟 ----------
+
+WORKDAY_EARLY_ENTRY_CUTOFF = 7.5  # 须早于 7:30 入厂
+WORKDAY_EARLY_OT_END = 8.0        # 早到计至 8:00
+WORKDAY_LATE_LEAVE_CUTOFF = 17.5  # 须晚于 17:30 离厂
 WORKDAY_OVERTIME_START_HOUR = 17.0
 WORKDAY_OVERTIME_END_HOUR = 24.0
-WORKDAY_OVERTIME_MIN_HOURS = 1.0
+WORKDAY_OVERTIME_MIN_MINUTES = 1
 RESTDAY_NOON_START = 12.0
 RESTDAY_NOON_END = 13.0
 RESTDAY_OT_START_HOUR = 8.0
@@ -1113,18 +1335,33 @@ def _decimal_to_dt_on_date(base_date: datetime, h: float) -> datetime:
     return base_date.replace(hour=hour, minute=minute, second=second, microsecond=0)
 
 
-def _workday_overtime_interval_hours(t_in, t_out) -> float:
-    """单段进出与 [17:00, 24:00] 交集，满 1 小时计入（同 analyze_workday 第 5 步）。"""
+def _workday_overtime_parts(t_in, t_out) -> List[tuple]:
+    """
+    单段进出拆成早到/晚走加班片段。
+    返回 [(start_h, end_h, kind), ...]，kind 为「早到」或「晚走」。
+    """
     a = time_to_decimal(t_in)
     b = time_to_decimal(t_out)
-    inter_start = max(a, WORKDAY_OVERTIME_START_HOUR)
-    inter_end = min(b, WORKDAY_OVERTIME_END_HOUR)
-    if inter_end <= inter_start:
-        return 0.0
-    duration = inter_end - inter_start
-    if duration < WORKDAY_OVERTIME_MIN_HOURS:
-        return 0.0
-    return duration
+    if b <= a:
+        return []
+    parts: List[tuple] = []
+    if a < WORKDAY_EARLY_ENTRY_CUTOFF:
+        early_start = a
+        early_end = min(b, WORKDAY_EARLY_OT_END)
+        if early_end > early_start and _floor_to_minutes(early_end - early_start) * 60 >= WORKDAY_OVERTIME_MIN_MINUTES:
+            parts.append((early_start, early_end, "早到"))
+    # 晚走：须离厂晚于 17:30，才自 17:00 起算
+    if b > WORKDAY_LATE_LEAVE_CUTOFF:
+        late_start = max(a, WORKDAY_OVERTIME_START_HOUR)
+        late_end = min(b, WORKDAY_OVERTIME_END_HOUR)
+        if late_end > late_start and _floor_to_minutes(late_end - late_start) * 60 >= WORKDAY_OVERTIME_MIN_MINUTES:
+            parts.append((late_start, late_end, "晚走"))
+    return parts
+
+
+def _workday_overtime_interval_hours(t_in, t_out) -> float:
+    """单段进出加班时长合计（早到+晚走，同 analyze_workday 第 5 步，未再按分钟截断合计）。"""
+    return sum(end - start for start, end, _ in _workday_overtime_parts(t_in, t_out))
 
 
 def calc_workday_overtime_hours(record: dict, date_obj: datetime) -> float:
@@ -1147,21 +1384,16 @@ def _workday_overtime_segments(record: dict, date_obj: datetime) -> List[dict]:
     intervals = build_intervals_from_marks(time_mark_pairs)
     segments: List[dict] = []
     for t_in, t_out in intervals:
-        h = _workday_overtime_interval_hours(t_in, t_out)
-        if h <= 0:
-            continue
-        a = time_to_decimal(t_in)
-        b = time_to_decimal(t_out)
-        inter_start = max(a, WORKDAY_OVERTIME_START_HOUR)
-        inter_end = min(b, WORKDAY_OVERTIME_END_HOUR)
-        start_dt = _decimal_to_dt_on_date(date_obj, inter_start)
-        end_dt = _decimal_to_dt_on_date(date_obj, inter_end)
-        segments.append({
-            "start": format_time(start_dt),
-            "end": format_time(end_dt),
-            "hours": round(h, 1),
-            "type": "加班",
-        })
+        for start_h, end_h, kind in _workday_overtime_parts(t_in, t_out):
+            h = end_h - start_h
+            start_dt = _decimal_to_dt_on_date(date_obj, start_h)
+            end_dt = _decimal_to_dt_on_date(date_obj, end_h)
+            segments.append({
+                "start": format_time(start_dt),
+                "end": format_time(end_dt),
+                "hours": round(_floor_to_minutes(h), 4),
+                "type": kind,
+            })
     return segments
 
 
@@ -1508,6 +1740,12 @@ def generate_suggestions_for_month_with_records(
                 "status": 1,
             })
         check_date += timedelta(days=1)
+    records_by_date = _index_records_by_date(records)
+    choices = _load_overnight_choices(
+        name,
+        first_day_of_month - timedelta(days=1),
+        check_end_date + timedelta(days=1),
+    )
     for record in records:
         date_obj = _parse_record_date(record.get("attendance_date"))
         if not date_obj:
@@ -1515,14 +1753,8 @@ def generate_suggestions_for_month_with_records(
         if date_obj > check_end_date:
             continue
         is_work, is_weekend, is_hol, holiday_type = is_workday(date_obj, holidays)
-        record_suggestions = (
-            analyze_workday(record, date_obj)
-            if is_work
-            else analyze_restday(
-                record,
-                date_obj,
-                is_incentive_holiday=_is_incentive_festival(date_obj, holiday_festival_map),
-            )
+        record_suggestions = collect_day_punch_suggestions(
+            name, record, date_obj, is_work, holiday_festival_map, records_by_date, choices,
         )
         day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
         date_str = date_obj.strftime("%Y-%m-%d")
@@ -1554,7 +1786,8 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
     else:
         last = (date(year, month + 1, 1) - timedelta(days=1))
         end_date = last.strftime("%Y-%m-%d")
-    records = attendance_db.query_by_date_range(start_date, end_date, name=name, dept=None)
+    query_end = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    records = attendance_db.query_by_date_range(start_date, query_end, name=name, dept=None)
     existing_dates = set()
     for record in records:
         dt = _parse_record_date(record.get("attendance_date"))
@@ -1601,6 +1834,12 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
                 "status": 1,
             })
         check_date += timedelta(days=1)
+    records_by_date = _index_records_by_date(records)
+    choices = _load_overnight_choices(
+        name,
+        first_day_of_month - timedelta(days=1),
+        check_end_date + timedelta(days=1),
+    )
     for record in records:
         date_obj = _parse_record_date(record.get("attendance_date"))
         if not date_obj:
@@ -1608,14 +1847,8 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
         if date_obj > check_end_date:
             continue
         is_work, is_weekend, is_holiday, holiday_type = is_workday(date_obj, holidays)
-        record_suggestions = (
-            analyze_workday(record, date_obj)
-            if is_work
-            else analyze_restday(
-                record,
-                date_obj,
-                is_incentive_holiday=_is_incentive_festival(date_obj, holiday_festival_map),
-            )
+        record_suggestions = collect_day_punch_suggestions(
+            name, record, date_obj, is_work, holiday_festival_map, records_by_date, choices,
         )
         day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
         date_str = date_obj.strftime("%Y-%m-%d")
@@ -1631,6 +1864,151 @@ def generate_suggestions_for_month(name: str, dept: str, year: int, month: int,
                 "status": item.get("status", 0),
             })
     return suggestions_list
+
+
+def _attendance_dept(name: str, fallback: str = "") -> str:
+    fb = (fallback or "").strip()
+    try:
+        rows = db.execute_query(
+            "SELECT TRIM(lsys) AS lsys FROM yggl WHERE TRIM(name) = %s AND COALESCE(zaizhi, 0) = 0 LIMIT 1",
+            (name,),
+        )
+        if rows and (rows[0].get("lsys") or "").strip():
+            return (rows[0].get("lsys") or "").strip()
+    except Exception as e:
+        logger.warning(f"查询员工科室失败 {name}: {e}")
+    return fb or "未知"
+
+
+def rebuild_employee_suggestion_day(name: str, dept: str, day: datetime) -> bool:
+    """按当前打卡和跨夜确认，重写某人某一天的智能建议。"""
+    date_str = day.strftime("%Y-%m-%d")
+    holidays = load_holidays(str(day.year))
+    festival_map = _load_holiday_festival_map(day.year)
+    window_start = (day - timedelta(days=1)).strftime("%Y-%m-%d")
+    window_end = (day + timedelta(days=1)).strftime("%Y-%m-%d")
+    rows = attendance_db.query_by_date_range(window_start, window_end, name=name, dept=None)
+    records_by_date = _index_records_by_date(rows)
+    choices = _load_overnight_choices(name, day - timedelta(days=1), day + timedelta(days=1))
+    is_work, is_weekend, _, _ = is_workday(day, holidays)
+    record = records_by_date.get(date_str)
+    day_type = "工作日" if is_work else ("周末" if is_weekend else "假期日")
+    if record is None:
+        items = []
+        if is_work:
+            items = [_sugg(
+                "08:00:00", "17:00:00", 1,
+                "【考勤建议】检测到全天缺勤，建议补录 8:00 到 17:00 的考勤（全天）",
+            )]
+    else:
+        items = collect_day_punch_suggestions(
+            name, record, day, is_work, festival_map, records_by_date, choices,
+        )
+    wrapped = []
+    for item in items:
+        message = (item.get("message") or "").strip()
+        if not message:
+            continue
+        wrapped.append({
+            "suggestion": message,
+            "dayType": day_type,
+            "start_time": _time_to_datetime(date_str, item.get("start_time") or ""),
+            "end_time": _time_to_datetime(date_str, item.get("end_time") or ""),
+            "status": item.get("status", 0),
+        })
+    deleted = attendance_db.delete_suggestions_on_date(name, date_str)
+    if deleted < 0:
+        return False
+    if wrapped:
+        attendance_db.insert_suggestions(name, dept, day.year, day.month, wrapped)
+    return True
+
+
+class OvernightConfirmBody(BaseModel):
+    name: str
+    work_date: str
+    choice: str
+    department: Optional[str] = None
+
+
+@router.post("/overnight-confirm")
+def confirm_overnight_overtime(body: OvernightConfirmBody):
+    """疑似跨夜加班：是则生成两段加班建议，不是则恢复为缺少离开记录的考勤异常。"""
+    name = (body.name or "").strip()
+    work_date = (body.work_date or "").strip()[:10]
+    choice = (body.choice or "").strip().lower()
+    if not name or not work_date:
+        return {"success": False, "message": "缺少姓名或日期"}
+    if choice not in ("yes", "no"):
+        return {"success": False, "message": "请选择是或不是"}
+    try:
+        work_day = datetime.strptime(work_date, "%Y-%m-%d")
+    except ValueError:
+        return {"success": False, "message": "日期格式不正确"}
+    today_rows = attendance_db.query_by_date_range(work_date, work_date, name=name, dept=None)
+    next_day = work_day + timedelta(days=1)
+    next_str = next_day.strftime("%Y-%m-%d")
+    next_rows = attendance_db.query_by_date_range(next_str, next_str, name=name, dept=None)
+    record = today_rows[0] if today_rows else None
+    next_rec = next_rows[0] if next_rows else None
+    if not workday_missing_evening_exit(record) or earliest_overnight_exit(next_rec) is None:
+        return {"success": False, "message": "没有发现可确认的跨夜打卡，请刷新后再试"}
+    if not attendance_db.save_overnight_choice(name, work_date, choice):
+        return {"success": False, "message": "保存选择失败"}
+    dept = _attendance_dept(name, body.department or "")
+    if not rebuild_employee_suggestion_day(name, dept, work_day):
+        return {"success": False, "message": "选择已保存，但更新当天智能建议失败"}
+    if not rebuild_employee_suggestion_day(name, dept, next_day):
+        return {"success": False, "message": "选择已保存，但更新次日智能建议失败"}
+    if choice == "yes":
+        return {
+            "success": True,
+            "message": "已按跨夜加班生成建议：当天 17:00 至 24:00，以及次日 0:00 至凌晨离开时间。",
+        }
+    return {"success": True, "message": "已按缺少离开记录，处理为考勤异常。"}
+
+
+def reconcile_open_overnight_questions(name: str, year: int, month: int) -> None:
+    """打开建议页时，把尚未确认的疑似跨夜从缺勤改成待确认，不必等下次上传。"""
+    if month == 12:
+        month_end = f"{year}-12-31"
+    else:
+        month_end = (date(year, month + 1, 1) - timedelta(days=1)).strftime("%Y-%m-%d")
+    query_end = (datetime.strptime(month_end, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    records = attendance_db.query_by_date_range(f"{year}-{month:02d}-01", query_end, name=name, dept=None)
+    records_by_date = _index_records_by_date(records)
+    if not records_by_date:
+        return
+    existing = attendance_db.get_suggestions(name, None, year, month)
+    pending_dates = set()
+    for row in existing or []:
+        try:
+            status = int(row.get("status") if row.get("status") is not None else 0)
+        except (TypeError, ValueError):
+            status = 0
+        if status == OVERNIGHT_CONFIRM_STATUS:
+            pending_dates.add(str(row.get("date") or "")[:10])
+    choices = _load_overnight_choices(
+        name,
+        datetime(year, month, 1) - timedelta(days=1),
+        datetime.strptime(query_end, "%Y-%m-%d"),
+    )
+    holidays = load_holidays(str(year))
+    dept = _attendance_dept(name)
+    prefix = f"{year}-{month:02d}"
+    for date_str, record in records_by_date.items():
+        if not date_str.startswith(prefix) or date_str in pending_dates:
+            continue
+        if choices.get(date_str) in ("yes", "no"):
+            continue
+        day = datetime.strptime(date_str, "%Y-%m-%d")
+        is_work, _, _, _ = is_workday(day, holidays)
+        if not is_work or not workday_missing_evening_exit(record):
+            continue
+        next_day = (day + timedelta(days=1)).strftime("%Y-%m-%d")
+        if earliest_overnight_exit(_record_for_date(name, next_day, records_by_date)) is None:
+            continue
+        rebuild_employee_suggestion_day(name, dept, day)
 
 
 @router.get("", response_model=SuggestionResponse)
@@ -1652,6 +2030,10 @@ def get_suggestions(
         is_female = _is_female_employee(name)
         if year is not None and month is not None and 1 <= month <= 12:
             attendance_db.ensure_suggestions_table()
+            try:
+                reconcile_open_overnight_questions(name, year, month)
+            except Exception as e:
+                logger.warning(f"同步跨夜加班确认失败 {name} {year}-{month}: {e}")
             # dept 有值时仍可按科室精确查（管理端）；为空则按姓名跨科室
             rows = attendance_db.get_suggestions(name, (dept or None), year, month)
             jiaban_rows, qj_rows, gcsqb_rows = [], [], []

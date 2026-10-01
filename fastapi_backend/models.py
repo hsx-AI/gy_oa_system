@@ -50,7 +50,7 @@ class Suggestion(BaseModel):
     date: str
     dayType: str
     suggestion: str
-    status: int = 0  # 0=加班 1=缺勤
+    status: int = 0  # 0=加班 1=缺勤 2=跨夜加班待确认
     handled: bool = False  # 是否已处理完成（已审批通过并覆盖该建议区间）
     under_review: bool = False  # 是否正在审核（已提交但未审批通过）
 

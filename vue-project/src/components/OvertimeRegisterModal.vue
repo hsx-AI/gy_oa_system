@@ -60,14 +60,11 @@
             获得换休票：{{ overtimeExchangeTickets }} 张（{{ exchangeTicketHintText }}）
           </p>
           <p v-if="form.needExchangeTicket === '否'" class="hint-text ticket-hint">
-            <template v-if="isSpecialHoliday && overtimePayBillableHours >= 8 && overtimePayBillableHours > 8">
-              本次其他绩效激励：{{ specialHolidayName }}固定奖励{{ SPECIAL_DAY_PAY }}元 + 超出部分{{ overtimePayBillableHours - 8 }}×{{ zhibanfei }}={{ overtimePay }} 元
-            </template>
-            <template v-else-if="isSpecialHoliday && overtimePayBillableHours >= 8">
-              本次其他绩效激励：{{ specialHolidayName }}严格按照上下班打卡满8小时，固定奖励 {{ SPECIAL_DAY_PAY }} 元
+            <template v-if="isSpecialHoliday && isStrictDutyTime">
+              本次其他绩效激励：{{ specialHolidayName }}（8点前到、17点后走）固定奖励 {{ SPECIAL_DAY_PAY }} 元<span v-if="overtimePayBillableHours > 8">，超出 {{ (overtimePayBillableHours - 8).toFixed(4).replace(/\.?0+$/, '') }} 小时按小时计，合计 {{ overtimePay }} 元</span>
             </template>
             <template v-else-if="isSpecialHoliday">
-              本次其他绩效激励：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}严格按照上下班打卡满8小时可获固定200元奖励）
+              本次其他绩效激励：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元（{{ specialHolidayName }}须 8 点前到、17 点后走才可获固定{{ SPECIAL_DAY_PAY }}元；未覆盖标准班段则按小时计）
             </template>
             <template v-else>
               本次其他绩效激励：{{ overtimePayBillableHours }}×{{ zhibanfei }}={{ overtimePay }} 元
@@ -140,6 +137,12 @@ import {
   calcOvertimeExchangeTicketsFromTimes,
   overtimeExchangeTicketHint
 } from '@/utils/overtimeExchangeTickets'
+import {
+  SPECIAL_FESTIVALS,
+  SPECIAL_DAY_PAY,
+  isStrictStandardDutyTime,
+  calcSpecialHolidayIncentivePay
+} from '@/utils/specialHolidayOvertimePay'
 
 const props = defineProps({
   visible: Boolean,
@@ -189,8 +192,6 @@ function applyExchangeTicketRoleRule() {
   }
 }
 
-const SPECIAL_FESTIVALS = new Set(['春节', '国庆节', '高温防暑休假'])
-const SPECIAL_DAY_PAY = 200
 const holidayMap = ref({})
 
 function normalizeDate(d) {
@@ -231,7 +232,7 @@ const overtimeExchangeTickets = computed(() =>
     : 0
 )
 
-// 其他绩效激励计算用工作时长：早八晚五，午休 12:00-13:00 不计入，再按 0.5 时为单位
+// 其他绩效激励计算用工作时长：扣除午休后，按分钟向下取整
 function calcOvertimeWorkHours(st, et) {
   if (!st || !et) return 0
   const toMins = (t) => {
@@ -258,14 +259,24 @@ function calcOvertimeWorkHours(st, et) {
 const overtimePayBillableHours = computed(() => {
   if (form.needExchangeTicket !== '否') return 0
   const h = calcOvertimeWorkHours(form.startTime, form.endTime)
-  return Math.floor(h * 2) / 2
+  // 不足 1 分钟舍去；展示保留最多 4 位小数
+  const floored = Math.floor(h * 60 + 1e-9) / 60
+  return Math.round(floored * 10000) / 10000
 })
+
+const isStrictDutyTime = computed(() =>
+  isStrictStandardDutyTime(form.startTime, form.endTime)
+)
 
 const overtimePay = computed(() => {
   if (form.needExchangeTicket !== '否') return '0.00'
-  if (isSpecialHoliday.value && overtimePayBillableHours.value >= 8) {
-    const extraHours = overtimePayBillableHours.value - 8
-    return (SPECIAL_DAY_PAY + extraHours * zhibanfei.value).toFixed(2)
+  if (isSpecialHoliday.value) {
+    return calcSpecialHolidayIncentivePay(
+      overtimePayBillableHours.value,
+      zhibanfei.value,
+      form.startTime,
+      form.endTime
+    ).toFixed(2)
   }
   return (overtimePayBillableHours.value * zhibanfei.value).toFixed(2)
 })

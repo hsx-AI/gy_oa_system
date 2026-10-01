@@ -741,7 +741,7 @@ function sheetFromPayList(list) {
 }
 
 function sheetFromPayDetailList(list) {
-  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否满8小时200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
+  const header = ['科室', '姓名', '日期', '加班时段', '加班内容', '加班小时', '节日', '计酬说明', '是否覆盖标准班段固定200元', '固定奖励（元）', '小时费（元）', '当日金额（元）']
   const rows = (list || []).map((item) => [
     item.lsys || '',
     item.name || '',
@@ -1039,7 +1039,7 @@ async function exportOvertimePayDetail() {
     sheetFromPayDetailList(res.all || []),
     overtimePermission.value.scope === 'self' ? '本人明细' : '全员明细',
   )
-  XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '满8小时200元')
+  XLSX.utils.book_append_sheet(wb, sheetFromPayDetailList(res.fixed200 || []), '覆盖标准班段固定200')
   appendDeptSheets(wb, res.byDept, sheetFromPayDetailList)
   XLSX.writeFile(wb, `其他绩效激励明细_${periodLabel()}.xlsx`)
 }

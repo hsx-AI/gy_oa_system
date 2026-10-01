@@ -186,6 +186,7 @@
                 <li>无进出标识的重复刷卡（间隔很短）会自动过滤；有进/出标记的不合并</li>
                 <li>上传后可在记录页面查看</li>
                 <li>服务端可按配置时刻自动拉取打卡报表，导入<strong>当天</strong>数据并重算智能建议（建议在当日 24 点前执行）</li>
+                <li>自动拉取和「上传最新数据」会先预演缺勤建议。若某月缺勤建议比上次多出的条数超过在职人数的 40%，则放弃本次数据，继续使用上一次的打卡和智能建议</li>
               </ul>
             </div>
           </div>
@@ -435,16 +436,18 @@ const handleFetchAndUpload = async () => {
     })
     alert(`上传成功！\n${response.message}\n成功: ${response.success_count || 0} 条\n失败: ${response.fail_count || 0} 条`)
   } catch (error) {
-    const msg = error.response?.data?.detail || error.message || '拉取或上传失败'
+    const biz = error.biz || {}
+    const msg = error.response?.data?.detail || biz.message || error.message || '拉取或上传失败'
+    const rejected = !!biz.rejected
     uploadHistory.value.unshift({
       id: Date.now(),
       filename: '最新报表(拉取)',
       date: new Date().toLocaleString('zh-CN'),
       records: 0,
-      status: '失败',
+      status: rejected ? '已放弃，保留上次数据' : '失败',
       statusType: 'error'
     })
-    alert(`上传失败: ${msg}`)
+    alert(rejected ? msg : `上传失败: ${msg}`)
   } finally {
     fetching.value = false
   }

@@ -477,6 +477,113 @@ class AttendanceDatabase:
             logger.error(f"插入智能建议失败: {str(e)}")
             return 0
 
+    def ensure_overnight_choice_table(self) -> bool:
+        """跨夜加班确认：员工对「疑似跨夜」选择是或不是，重算建议时沿用。"""
+        try:
+            db.execute_update(
+                """
+                CREATE TABLE IF NOT EXISTS overnight_overtime_choice (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    employee_name VARCHAR(100) NOT NULL,
+                    work_date DATE NOT NULL,
+                    choice VARCHAR(8) NOT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uk_overnight_emp_date (employee_name, work_date)
+                )
+                """,
+                (),
+            )
+            return True
+        except Exception as e:
+            logger.error(f"创建跨夜加班确认表失败: {e}")
+            return False
+
+    def get_overnight_choices(self, employee_name: str, start_date: str, end_date: str) -> Dict[str, str]:
+        """返回 {YYYY-MM-DD: 'yes'|'no'}。"""
+        name = (employee_name or "").strip()
+        if not name:
+            return {}
+        if not self.ensure_overnight_choice_table():
+            return {}
+        try:
+            rows = db.execute_query(
+                """
+                SELECT work_date, choice FROM overnight_overtime_choice
+                WHERE employee_name = %s AND work_date >= %s AND work_date <= %s
+                """,
+                (name, start_date, end_date),
+            )
+        except Exception as e:
+            logger.error(f"查询跨夜加班确认失败: {e}")
+            return {}
+        out: Dict[str, str] = {}
+        for row in rows or []:
+            raw_date = row.get("work_date")
+            if hasattr(raw_date, "strftime"):
+                key = raw_date.strftime("%Y-%m-%d")
+            else:
+                key = str(raw_date or "")[:10]
+            choice = (row.get("choice") or "").strip().lower()
+            if key and choice in ("yes", "no"):
+                out[key] = choice
+        return out
+
+    def save_overnight_choice(self, employee_name: str, work_date: str, choice: str) -> bool:
+        name = (employee_name or "").strip()
+        day = (work_date or "").strip()[:10]
+        picked = (choice or "").strip().lower()
+        if not name or not day or picked not in ("yes", "no"):
+            return False
+        if not self.ensure_overnight_choice_table():
+            return False
+        try:
+            n = db.execute_update(
+                """
+                INSERT INTO overnight_overtime_choice (employee_name, work_date, choice)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE choice = VALUES(choice), updated_at = CURRENT_TIMESTAMP
+                """,
+                (name, day, picked),
+            )
+            return n >= 0
+        except Exception as e:
+            logger.error(f"保存跨夜加班确认失败: {e}")
+            return False
+
+    def delete_suggestions_on_date(self, employee_name: str, date_str: str) -> int:
+        """删除某人某一天的智能建议（按开始时间的日期）。"""
+        try:
+            return db.execute_update(
+                "DELETE FROM attendance_suggestions WHERE employee_name = %s AND DATE(start_time) = %s",
+                ((employee_name or "").strip(), (date_str or "").strip()[:10]),
+            )
+        except Exception as e:
+            logger.error(f"按日删除智能建议失败: {e}")
+            return -1
+
+    def count_absence_suggestions(self, year: int, month: int, names: List[str]) -> Optional[int]:
+        """统计指定年月、指定姓名的缺勤建议条数（status=1）。查询失败返回 None。"""
+        if not names:
+            return 0
+        total = 0
+        chunk_size = 400
+        try:
+            for i in range(0, len(names), chunk_size):
+                part = names[i : i + chunk_size]
+                placeholders = ", ".join(["%s"] * len(part))
+                sql = (
+                    "SELECT COUNT(*) AS c FROM attendance_suggestions "
+                    f"WHERE year = %s AND month = %s AND status = 1 AND employee_name IN ({placeholders})"
+                )
+                value = db.execute_scalar(sql, tuple([year, month, *part]))
+                if value is None:
+                    return None
+                total += int(value)
+            return total
+        except Exception as e:
+            logger.error(f"统计缺勤建议失败: {str(e)}")
+            return None
+
     def get_suggestions(self, employee_name: str, department: str = None, year: int = None, month: int = None) -> List[Dict]:
         """按人、年月查询已存储的智能建议。
         department 为空时按姓名查全部科室（兼容 yggl.lsys 变更后的历史建议），并去重。"""

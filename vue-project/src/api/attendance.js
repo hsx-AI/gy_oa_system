@@ -91,6 +91,15 @@ export function getSuggestions(params) {
   })
 }
 
+/** 疑似跨夜加班确认。choice: yes | no */
+export function confirmOvernightOvertime(data) {
+  return request({
+    url: '/suggestions/overnight-confirm',
+    method: 'post',
+    data
+  })
+}
+
 /**
  * 获取假期数据
  */
@@ -453,7 +462,7 @@ export function getOvertimePayExport(params) {
   return request({ url: '/dept/overtime-pay-export', method: 'get', params })
 }
 
-/** 其他绩效激励按天明细（谁哪天加班、哪天满8小时固定200元） */
+/** 其他绩效激励按天明细（谁哪天加班、哪天覆盖标准班段固定200元） */
 export function getOvertimePayDetailExport(params) {
   return request({ url: '/dept/overtime-pay-detail-export', method: 'get', params })
 }

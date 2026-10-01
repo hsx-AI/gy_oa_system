@@ -24,6 +24,32 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["请假与加班"])
 
+# 班组长/主任/副主任仅可审批 4 小时及以内；超过则必须二级审批（部长/副部长）
+FIRST_LEVEL_LEAVE_MAX_HOURS = 4.0
+
+
+def _leave_hours_from_days(dur_days: float) -> float:
+    return round(float(dur_days or 0) * 8, 2)
+
+
+def _leave_requires_second_approval(dur_days: float) -> bool:
+    return _leave_hours_from_days(dur_days) > FIRST_LEVEL_LEAVE_MAX_HOURS + 1e-9
+
+
+def _resolve_leave_second_approval(need_2j_val: bool, approver2: Optional[str], dur_days: float) -> tuple:
+    """超过 4 小时强制二级审批；勾选或强制时必须有第二审批人。"""
+    forced = _leave_requires_second_approval(dur_days)
+    need = bool(need_2j_val) or forced
+    spr2 = (approver2 or "").strip()
+    if need and not spr2:
+        raise HTTPException(
+            status_code=400,
+            detail="请假超过4小时须二级审批，请选择第二审批人（班组长/主任/副主任仅可审批4小时及以内）"
+            if forced
+            else "需要二级审批时请选择第二审批人",
+        )
+    return (1 if need and spr2 else 0), (spr2 if need else "")
+
 
 def _safe_float(val, default: float = 0.0) -> float:
     """避免历史脏数据导致 float() 抛错进而 500"""
@@ -88,20 +114,17 @@ async def apply_leave(
     """
     try:
         need_2j_val = str(needSecondApproval).lower() in ("true", "1", "yes")
-        if need_2j_val and not (approver2 or "").strip():
-            raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
 
         raw_dur = float(duration) if duration else 0
         dur = normalize_qj_tian_days(raw_dur)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        xiaoshi = str(round(dur * 8, 2))
+        xiaoshi = str(_leave_hours_from_days(dur))
         # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5（基于已规范化的 dur）
         hxpxh = round(round(dur * 4) / 2, 2) if type in ("员工换休票", "换休") and dur > 0 else 0
-        need_2j = 1 if need_2j_val and approver2 else 0
+        need_2j, spr2_val = _resolve_leave_second_approval(need_2j_val, approver2, dur)
 
         rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s AND (COALESCE(zaizhi,0)=0) LIMIT 1", (name,))
         lsys = (rows[0]["lsys"] or "").strip() if rows else ""
-        spr2_val = (approver2 or "") if need_2j else ""
         hxps_val = 0
 
         smcl_text = (material or "").strip() or "无"
@@ -184,17 +207,14 @@ def apply_leave_json(req: LeaveApplyRequest):
     申请请假（JSON 方式，兼容无文件上传的客户端）
     """
     try:
-        if req.needSecondApproval and not (req.approver2 or "").strip():
-            raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         dur = normalize_qj_tian_days(req.duration)
-        xiaoshi = str(round(dur * 8, 2))
+        xiaoshi = str(_leave_hours_from_days(dur))
         # 1天=2张，最小0.5张(0.25天)，四舍五入到0.5（基于已规范化的 dur）
         hxpxh = round(round(dur * 4) / 2, 2) if req.type in ("员工换休票", "换休") and dur > 0 else 0
-        need_2j = 1 if req.needSecondApproval and req.approver2 else 0
+        need_2j, spr2_val = _resolve_leave_second_approval(req.needSecondApproval, req.approver2, dur)
         rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s AND (COALESCE(zaizhi,0)=0) LIMIT 1", (req.name,))
         lsys = (rows[0]["lsys"] or "").strip() if rows else ""
-        spr2_val = (req.approver2 or "") if need_2j else ""
         smcl_text = (req.material or "").strip() or "无"
         # qj.timefrom/timeto 为 DATETIME(0)，写入须为 YYYY-MM-DD HH:MM:SS
         start_time_norm = normalize_datetime_for_db(req.startTime)
@@ -538,16 +558,13 @@ async def resubmit_leave(
             raise HTTPException(status_code=403, detail="只能重新提交本人的记录")
 
         need_2j_val = str(needSecondApproval).lower() in ("true", "1", "yes")
-        if need_2j_val and not (approver2 or "").strip():
-            raise HTTPException(status_code=400, detail="需要二级审批时请选择第二审批人")
 
         raw_dur = float(duration) if duration else 0
         dur = normalize_qj_tian_days(raw_dur)
         now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        xiaoshi = str(round(dur * 8, 2))
+        xiaoshi = str(_leave_hours_from_days(dur))
         hxpxh = round(round(dur * 4) / 2, 2) if type in ("员工换休票", "换休") and dur > 0 else 0
-        need_2j = 1 if need_2j_val and approver2 else 0
-        spr2_val = (approver2 or "") if need_2j else ""
+        need_2j, spr2_val = _resolve_leave_second_approval(need_2j_val, approver2, dur)
         smcl_text = (material or "").strip() or "无"
         start_time_norm = normalize_datetime_for_db(startTime)
         end_time_norm = normalize_datetime_for_db(endTime)
@@ -679,10 +696,11 @@ def _raw_overtime_hours_from_row(row: dict) -> float:
 
 
 def _recalc_overtime_hours_from_row(row: dict) -> float:
-    """从 timefrom/timeto 重新计算加班时长，避免依赖旧算法写入的 tian1/jbf。"""
+    """从 timefrom/timeto 重新计算加班时长；取整规则按 jiabantime（申请时间）区分新旧口径。"""
     tf = row.get("timefrom")
     tt = row.get("timeto")
     date_val = row.get("timedate")
+    applied_at = _parse_overtime_applied_at(row.get("jiabantime"))
     if not tf or not tt:
         raw = row.get("tian1")
         if raw is None or raw == "" or raw == 0:
@@ -708,7 +726,7 @@ def _recalc_overtime_hours_from_row(row: dict) -> float:
             if " " in tt_str:
                 tt_str = tt_str.split(" ", 1)[1]
         hours = _calc_hours(tf_str, tt_str, date_str)
-        return round_overtime_hours_down(hours)
+        return round_overtime_hours_down(hours, applied_at)
     except Exception:
         raw = row.get("tian1")
         if raw is None or raw == "" or raw == 0:
@@ -719,21 +737,26 @@ def _recalc_overtime_hours_from_row(row: dict) -> float:
             return 0.0
 
 
+def _clock_minutes(clock: str) -> float:
+    """时钟转分钟。24:00 表示当天结束，按 24 小时计，不当成次日 0 点的 0 分钟。"""
+    text = (clock or "").strip().replace("T", " ")
+    if " " in text:
+        text = text.split(" ")[-1]
+    parts = text.split(":")
+    hour = int(parts[0] or 0)
+    minute = int(parts[1] or 0) if len(parts) > 1 else 0
+    second = int(parts[2] or 0) if len(parts) > 2 else 0
+    return hour * 60 + minute + second / 60.0
+
+
 def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
     """计算加班时长(小时)，扣除午休 12:00-13:00 实际重叠部分，原始值（未取整）。"""
     try:
-        start_str = f"{date_str} {start_time}" if len(start_time) <= 8 else start_time
-        end_str = f"{date_str} {end_time}" if len(end_time) <= 8 else end_time
-        start_str = start_str.replace(" ", "T")[:19]
-        end_str = end_str.replace(" ", "T")[:19]
-        from datetime import datetime as dt
-        t1 = dt.strptime(start_str.replace("T", " "), "%Y-%m-%d %H:%M:%S")
-        t2 = dt.strptime(end_str.replace("T", " "), "%Y-%m-%d %H:%M:%S")
-        total_mins = (t2 - t1).total_seconds() / 60
+        start_mins = _clock_minutes(start_time)
+        end_mins = _clock_minutes(end_time)
+        total_mins = end_mins - start_mins
         if total_mins <= 0:
             return 0.0
-        start_mins = t1.hour * 60 + t1.minute + t1.second / 60
-        end_mins = t2.hour * 60 + t2.minute + t2.second / 60
         lunch_start = 12 * 60
         lunch_end = 13 * 60
         if start_mins < lunch_end and end_mins > lunch_start:
@@ -744,14 +767,52 @@ def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
         return 0.0
 
 
-def round_overtime_hours_down(hours: float) -> float:
+def _parse_overtime_applied_at(val) -> Optional[datetime]:
+    """解析加班申请时间 jiabantime；无法解析时返回 None（视为新规则）。"""
+    if val is None or val == "":
+        return None
+    if isinstance(val, datetime):
+        return val
+    s = str(val).strip().replace("T", " ")
+    if "." in s:
+        s = s.split(".")[0]
+    for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(s[:19] if len(s) >= 19 else s, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+# 2026-10-01 起：加班时长按分钟向下取整；此前申请仍按 0.5 小时，避免历史数据展示被改写
+OVERTIME_MINUTE_ROUNDING_SINCE = datetime(2026, 10, 1, 0, 0, 0)
+
+
+def round_overtime_hours_down(hours: float, applied_at: Optional[datetime] = None) -> float:
     """
-    加班时长向下取整到 0.5 小时。
-    最小单位 0.5 小时，如 3.22 -> 3.0，3.7 -> 3.5。
+    加班时长向下取整。
+    - 申请时间 >= 2026-10-01：按分钟，不足 1 分钟舍去
+    - 更早申请，或无法解析申请时间：仍按 0.5 小时，保护历史口径
+    新登记请显式传入 applied_at=datetime.now()。
     """
     if hours <= 0:
         return 0.0
+    use_minutes = applied_at is not None and applied_at >= OVERTIME_MINUTE_ROUNDING_SINCE
+    if use_minutes:
+        return math.floor(hours * 60 + 1e-9) / 60.0
     return math.floor(hours * 2) / 2.0
+
+
+def format_overtime_hours_storage(hours: float) -> str:
+    """写入 tian1 的字符串：整小时写整数，否则去掉多余尾零。"""
+    if hours <= 0:
+        return "0"
+    total_mins = int(round(hours * 60))
+    if total_mins % 60 == 0:
+        return str(total_mins // 60)
+    # 分钟/60 可能是无限小数，保留最多 4 位去尾零
+    s = f"{(total_mins / 60.0):.4f}".rstrip("0").rstrip(".")
+    return s or "0"
 
 
 @router.post("/overtime/register")
@@ -773,10 +834,10 @@ def register_overtime(req: OvertimeRegisterRequest):
         date_part = (req.date or "").strip()[:10]
         if len(date_part) < 10:
             date_part = datetime.now().strftime("%Y-%m-%d")
-        time_from = f"{date_part} {st}"
-        time_to = f"{date_part} {et}"
-        hours = _calc_hours(st, et, req.date)
-        hours = round_overtime_hours_down(hours)
+        time_from = normalize_datetime_for_db(f"{date_part} {st}")
+        time_to = normalize_datetime_for_db(f"{date_part} {et}")
+        hours = _calc_hours(st, et, date_part)
+        hours = round_overtime_hours_down(hours, datetime.now())
 
         # 部门 bz 为空时从 yggl 按姓名补全，避免审批详情显示空
         bz = (req.department or "").strip()
@@ -794,7 +855,7 @@ def register_overtime(req: OvertimeRegisterRequest):
         need_exchange = str(hx_raw).lower() in ("是", "1", "true", "yes")
         jbf_val = 0.0 if need_exchange else float(hours)
         hxp_val = 0.0  # 登记时为 0，审批通过且 hx=是 时再写入张数
-        tian1_str = str(int(hours)) if hours == int(hours) else str(hours)
+        tian1_str = format_overtime_hours_storage(hours)
 
         new_id = uuid.uuid4().hex  # jiaban.id 为 VARCHAR(36)，需在插入时提供
         sql = """
@@ -983,10 +1044,10 @@ def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
         date_part = (req.date or "").strip()[:10]
         if len(date_part) < 10:
             date_part = datetime.now().strftime("%Y-%m-%d")
-        time_from = f"{date_part} {st}"
-        time_to = f"{date_part} {et}"
-        hours = _calc_hours(st, et, req.date)
-        hours = round_overtime_hours_down(hours)
+        time_from = normalize_datetime_for_db(f"{date_part} {st}")
+        time_to = normalize_datetime_for_db(f"{date_part} {et}")
+        hours = _calc_hours(st, et, date_part)
+        hours = round_overtime_hours_down(hours, datetime.now())
 
         bz = (req.department or "").strip()
         if not bz and (req.name or "").strip():
@@ -1001,7 +1062,7 @@ def resubmit_overtime(item_id: str, req: OvertimeRegisterRequest):
         hx_raw = (req.needExchangeTicket or "是").strip()
         need_exchange = str(hx_raw).lower() in ("是", "1", "true", "yes")
         jbf_val = 0.0 if need_exchange else float(hours)
-        tian1_str = str(int(hours)) if hours == int(hours) else str(hours)
+        tian1_str = format_overtime_hours_storage(hours)
 
         db.execute_update(
             """UPDATE jiaban SET bz=%s, jb=%s, jiabanfs=%s, hx=%s, timedate=%s,
