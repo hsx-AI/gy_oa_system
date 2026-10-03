@@ -100,7 +100,7 @@
                   <th>级别</th>
                   <th>加班日期</th>
                   <th>开始-结束时间</th>
-                  <th>时长(小时)</th>
+                  <th>时长</th>
                   <th>换休票</th>
                   <th>申请时间</th>
                   <th>校验通过</th>
@@ -112,13 +112,26 @@
                   <td><input type="checkbox" :value="item.id" v-model="selectedOvertimeIds"></td>
                   <td>{{ item.applicant }}</td>
                   <td>{{ item.level }}</td>
-                  <td>{{ item.date }}</td>
+                  <td>
+                    {{ item.date }}
+                    <div v-if="item.overnightSegment" class="overnight-row-note">
+                      {{ item.needCityTrip
+                        ? `跨夜凌晨段，通过后自动补 ${item.prevAttendanceDate} 全天市内公出`
+                        : `跨夜凌晨段，前一天不是工作日，不补市内公出` }}
+                    </div>
+                  </td>
                   <td>{{ item.startTime }} - {{ item.endTime }}</td>
-                  <td>{{ item.hours }}</td>
-                  <td>{{ item.needExchangeTicket || '否' }}</td>
+                  <td>{{ formatHoursAsHm(item.hours) }}</td>
+                  <td>
+                    <template v-if="item.overnightSegment">
+                      {{ item.rewardMode === 'ticket_and_pay' ? '换休票+加班费' : '双倍绩效' }}
+                    </template>
+                    <template v-else>{{ item.needExchangeTicket || '否' }}</template>
+                  </td>
                   <td>{{ item.applyTime }}</td>
                   <td class="validation-cell">
-                    <span v-if="overtimeValidation[item.id] === undefined" class="validation-empty">—</span>
+                    <span v-if="item.overnightSegment" class="overnight-row-note">{{ item.needCityTrip ? '不校验打卡。通过后发放所选奖励，并自动补前一天市内公出。' : '不校验打卡。通过后发放所选奖励，前一天不是工作日，不补市内公出。' }}</span>
+                    <span v-else-if="overtimeValidation[item.id] === undefined" class="validation-empty">—</span>
                     <template v-else>
                       <span class="validation-box" :class="{ 'validation-pass': overtimeValidation[item.id].pass, 'validation-fail': !overtimeValidation[item.id].pass }">
                         <span v-if="overtimeValidation[item.id].pass" class="validation-check">✓</span>
@@ -453,29 +466,37 @@
               <p><strong>加班日期：</strong>{{ detailData.date }}</p>
               <p><strong>开始时间：</strong>{{ detailData.startTime }}</p>
               <p><strong>结束时间：</strong>{{ detailData.endTime }}</p>
-              <p><strong>时长：</strong>{{ detailData.hours }} 小时</p>
-              <p><strong>换休票：</strong>{{ detailData.needExchangeTicket || '否' }}</p>
+              <p><strong>时长：</strong>{{ formatHoursAsHm(detailData.hours) }}</p>
+              <p><strong>换休票：</strong>{{ detailData.overnightSegment ? (detailData.rewardMode === 'ticket_and_pay' ? '是（同时发加班费，不加倍）' : '否（改为双倍其他绩效激励）') : (detailData.needExchangeTicket || '否') }}</p>
+              <p v-if="detailData.overnightSegment"><strong>奖励：</strong>{{ detailData.rewardLabel }}</p>
               <p><strong>加班内容：</strong>{{ detailData.content || '-' }}</p>
+              <div v-if="detailData.overnightSegment" class="overnight-approve-note">
+                <p><strong>本次审批包含</strong></p>
+                <p>{{ detailData.overnightNote }}</p>
+              </div>
               <p><strong>申请时间：</strong>{{ detailData.applyTime }}</p>
-              <p><strong>审批人：</strong>{{ detailData.spr }}</p>
+              <p><strong>审批人：</strong>{{ detailData.spr }}<template v-if="detailData.spr2">；部门领导 {{ detailData.spr2 }}</template></p>
               <div class="detail-attendance-section">
-                <p><strong>当日打卡记录：</strong></p>
+                <p><strong>打卡记录：</strong></p>
                 <p v-if="overtimeDetailAttendanceLoading" class="detail-attendance-loading">加载中…</p>
-                <p v-else-if="!overtimeDetailAttendance.length" class="detail-attendance-empty">暂无该日打卡记录</p>
+                <p v-else-if="!overtimeDetailAttendance.length" class="detail-attendance-empty">暂无打卡记录</p>
                 <ul v-else class="detail-attendance-list">
                   <li v-for="(rec, idx) in overtimeDetailAttendance" :key="idx">
-                    <span v-if="rec.attendance_date">{{ rec.attendance_date }}</span>
+                    <span v-if="rec.attendance_date">{{ rec.dayLabel }} {{ rec.attendance_date }}</span>
                     <span class="detail-attendance-times">
-                      <template v-for="slot in 10" :key="slot">
-                        <span v-if="rec[`time_${slot}`] && String(rec[`time_${slot}`]).trim()" class="detail-time-item">
-                          <span
-                            v-if="hasAttendanceTimeMark(rec, slot)"
-                            class="inout-chip"
-                            :class="isOutAttendanceMark(rec, slot) ? 'inout-chip-out' : 'inout-chip-in'"
-                          >{{ isOutAttendanceMark(rec, slot) ? '出' : '进' }}</span>
-                          <span>{{ String(rec[`time_${slot}`]).trim() }}</span>
-                        </span>
+                      <template v-if="hasPunchTimes(rec)">
+                        <template v-for="slot in 10" :key="slot">
+                          <span v-if="rec[`time_${slot}`] && String(rec[`time_${slot}`]).trim()" class="detail-time-item">
+                            <span
+                              v-if="hasAttendanceTimeMark(rec, slot)"
+                              class="inout-chip"
+                              :class="isOutAttendanceMark(rec, slot) ? 'inout-chip-out' : 'inout-chip-in'"
+                            >{{ isOutAttendanceMark(rec, slot) ? '出' : '进' }}</span>
+                            <span>{{ String(rec[`time_${slot}`]).trim() }}</span>
+                          </span>
+                        </template>
                       </template>
+                      <span v-else class="detail-attendance-empty">暂无打卡</span>
                     </span>
                   </li>
                 </ul>
@@ -914,13 +935,14 @@ async function runOvertimeValidate() {
   overtimeValidateLoading.value = true
   overtimeValidation.value = {}
   try {
-    const items = overtimeList.value.map(it => ({
+    const items = overtimeList.value.filter(it => !it.overnightSegment).map(it => ({
       id: it.id,
       applicant: it.applicant,
       date: String(it.date || '').slice(0, 10),
       startTime: it.startTime || '',
       endTime: it.endTime || ''
     }))
+    if (!items.length) return
     const res = await validateOvertimeApproval({ items })
     const map = {}
     ;(res.results || []).forEach(r => {
@@ -934,19 +956,71 @@ async function runOvertimeValidate() {
   }
 }
 
+function shiftCalendarDate(dateStr, days) {
+  const s = String(dateStr || '').slice(0, 10)
+  const d = new Date(`${s}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return ''
+  d.setDate(d.getDate() + days)
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+function formatHoursAsHm(hours) {
+  const totalMins = Math.round((Number(hours) || 0) * 60)
+  if (totalMins <= 0) return '0分钟'
+  const h = Math.floor(totalMins / 60)
+  const m = totalMins % 60
+  if (h <= 0) return `${m}分钟`
+  if (m <= 0) return `${h}小时`
+  return `${h}小时${m}分钟`
+}
+
+function hasPunchTimes(rec) {
+  if (!rec) return false
+  for (let i = 1; i <= 10; i++) {
+    const t = rec[`time_${i}`]
+    if (t != null && String(t).trim()) return true
+  }
+  return false
+}
+
+function pickAttendanceRecord(rows, dateStr) {
+  const target = String(dateStr || '').slice(0, 10)
+  return (rows || []).find((rec) => String(rec?.attendance_date || '').slice(0, 10) === target) || null
+}
+
+function buildAttendanceDay(rec, dateStr, label) {
+  return {
+    ...(rec || {}),
+    attendance_date: dateStr,
+    dayLabel: label
+  }
+}
+
 async function fetchOvertimeDetailAttendance() {
   const d = detailData.value
   if (!d?.applicant || !d?.date) return
   const dateStr = String(d.date).trim().slice(0, 10)
   if (!dateStr) return
+  const prevDate = shiftCalendarDate(dateStr, -1)
+  const nextDate = shiftCalendarDate(dateStr, 1)
   overtimeDetailAttendanceLoading.value = true
   try {
     const res = await queryAttendance({
       name: d.applicant,
-      start_date: dateStr,
-      end_date: dateStr
+      start_date: prevDate || dateStr,
+      end_date: nextDate || dateStr
     })
-    overtimeDetailAttendance.value = (res.data || []).filter(Boolean)
+    const rows = (res.data || []).filter(Boolean)
+    const prevRec = prevDate ? pickAttendanceRecord(rows, prevDate) : null
+    const curRec = pickAttendanceRecord(rows, dateStr)
+    const nextRec = nextDate ? pickAttendanceRecord(rows, nextDate) : null
+    const list = []
+    if (prevRec || d.overnightSegment) list.push(buildAttendanceDay(prevRec, prevDate, '前一天'))
+    list.push(buildAttendanceDay(curRec, dateStr, '当日'))
+    if (nextRec) list.push(buildAttendanceDay(nextRec, nextDate, '后一天'))
+    overtimeDetailAttendance.value = list
   } catch {
     overtimeDetailAttendance.value = []
   } finally {
@@ -964,6 +1038,15 @@ function formatAttendanceTimes(rec) {
 }
 
 async function handleApprove(type, item) {
+  if (type === 'overtime' && item?.overnightSegment) {
+    const reward = item.rewardLabel || (item.rewardMode === 'ticket_and_pay' ? '换休票和加班费' : '双倍其他绩效激励')
+    const prev = item.prevAttendanceDate || '前一天'
+    const extra = item.needCityTrip
+      ? `2. 自动为 ${prev} 补记全天市内公出（08:00-17:00），事由「跨夜加班处理」。`
+      : `2. 前一天不是工作日，不补市内公出。`
+    const ok = confirm(`这是跨夜加班凌晨段，通过后将：\n1. ${reward}\n${extra}\n\n确认通过？`)
+    if (!ok) return
+  }
   try {
     let fn, payload
     if (type === 'leave') { fn = leaveApproveAction; payload = { action: 'approve' } }
@@ -1061,7 +1144,16 @@ async function batchApprove(type) {
     : extendCount > 0
       ? `公出（含 ${extendCount} 条延长）`
       : typeName
-  if (!confirm(`确认批量通过选中的 ${ids.length} 条${confirmLabel}申请？`)) return
+  const overnightRows = type === 'overtime'
+    ? overtimeList.value.filter((r) => ids.includes(r.id) && r.overnightSegment)
+    : []
+  const overnightCount = overnightRows.length
+  const tripCount = overnightRows.filter((r) => r.needCityTrip).length
+  const overnightTip = overnightCount
+    ? `\n其中 ${overnightCount} 条为跨夜加班凌晨段：通过后发放所选奖励。` +
+      (tripCount ? `${tripCount} 条前一天是工作日，将补记市内公出。` : '前一天不是工作日的不补市内公出。')
+    : ''
+  if (!confirm(`确认批量通过选中的 ${ids.length} 条${confirmLabel}申请？${overnightTip}`)) return
   try {
     let fn, payload
     if (type === 'leave') { fn = leaveBatchApprove; payload = { ids, action: 'approve' } }
@@ -1625,4 +1717,22 @@ async function batchApprove(type) {
 .detail-range-item { font-size: var(--font-size-sm); line-height: 1.7; color: var(--color-text-primary); }
 .detail-range-idx { font-weight: 600; color: var(--color-text-secondary); margin-right: 4px; }
 .cell-range-seg { font-size: var(--font-size-xs); line-height: 1.6; }
+.overnight-row-note {
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: #3730a3;
+}
+.overnight-approve-note {
+  margin: 8px 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #eef2ff;
+  border: 1px solid #c7d2fe;
+  color: #312e81;
+  font-size: 13px;
+  line-height: 1.6;
+}
+.overnight-approve-note p { margin: 0 0 6px; }
+.overnight-approve-note p:last-child { margin-bottom: 0; }
 </style>

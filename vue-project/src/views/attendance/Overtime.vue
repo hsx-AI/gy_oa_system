@@ -254,6 +254,7 @@
             class="modal-split__side"
             :active="showRegisterModal"
             :employee-name="form.name"
+            :reference-date="form.date"
             @fill-time="onAttendanceFillTime"
           />
         </div>

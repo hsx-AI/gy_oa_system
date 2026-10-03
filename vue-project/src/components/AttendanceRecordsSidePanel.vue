@@ -71,6 +71,8 @@ const props = defineProps({
   active: { type: Boolean, default: false },
   /** 员工姓名；为空时从 localStorage 读取 */
   employeeName: { type: String, default: '' },
+  /** 加班/请假登记日期，侧栏月份默认跟这条日期走 */
+  referenceDate: { type: String, default: '' },
 })
 
 const emit = defineEmits(['fill-time'])
@@ -80,6 +82,17 @@ const TIME_SLOTS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 function defaultMonth() {
   const now = new Date()
   return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+}
+
+function monthFromDate(raw) {
+  const s = String(raw || '').trim().replace(/\//g, '-')
+  const m = s.match(/(\d{4})-(\d{1,2})/)
+  if (!m) return ''
+  return `${m[1]}-${String(m[2]).padStart(2, '0')}`
+}
+
+function monthForPanel() {
+  return monthFromDate(props.referenceDate) || defaultMonth()
 }
 
 const selectedMonth = ref(defaultMonth())
@@ -203,12 +216,12 @@ async function loadRecords() {
 }
 
 watch(
-  () => [props.active, props.employeeName],
+  () => [props.active, props.employeeName, props.referenceDate],
   ([active]) => {
-    if (active) {
-      if (!selectedMonth.value) selectedMonth.value = defaultMonth()
-      loadRecords()
-    }
+    if (!active) return
+    const target = monthForPanel()
+    if (selectedMonth.value !== target) selectedMonth.value = target
+    loadRecords()
   },
   { immediate: true }
 )

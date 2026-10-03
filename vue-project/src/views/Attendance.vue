@@ -80,6 +80,10 @@
               <svg v-else-if="suggestion.type === 'overnight'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <path d="M21 14.5A8.5 8.5 0 1 1 9.5 3 7 7 0 0 0 21 14.5z" />
               </svg>
+              <svg v-else-if="suggestion.type === 'overnight-fill'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="9" />
+                <path d="M12 7v5l3 2" />
+              </svg>
               <svg v-else-if="suggestion.type === 'info'" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                 <circle cx="12" cy="12" r="10" />
                 <path d="M12 16v-4" />
@@ -97,6 +101,15 @@
                 </span>
               </div>
               <div class="suggestion-desc">{{ suggestion.message }}</div>
+              <p v-if="suggestion.type === 'overnight-fill' && !suggestion.handled" class="overnight-fill-hint">
+                可选双倍其他绩效激励，或同时领取换休票和加班费。
+                <template v-if="overnightPrevNeedsCityTrip(suggestion.date)">
+                  主任/班组长和部门领导通过后，自动为 {{ prevCalendarDate(suggestion.date) }} 补记全天市内公出，事由「跨夜加班处理」，用来补上跨夜导致的少一次打卡。
+                </template>
+                <template v-else>
+                  前一天不是工作日，没有考勤异常，审批通过后不补市内公出。
+                </template>
+              </p>
             </div>
             <!-- 疑似跨夜加班：先确认，不直接当缺勤 -->
             <div v-if="suggestion.type === 'overnight'" class="button-group">
@@ -117,6 +130,34 @@
                 不是
               </button>
             </div>
+            <button
+              v-else-if="suggestion.type === 'overnight-fill'"
+              class="auto-fill-btn btn-overnight-fill"
+              :class="{
+                'btn-handled': suggestion.handled,
+                'btn-under-review': suggestion.under_review,
+                'btn-overtime-locked': !suggestion.handled && !suggestion.under_review && hasUnresolvedAttendanceExceptions
+              }"
+              :disabled="suggestion.handled || suggestion.under_review"
+              @click.stop="!suggestion.handled && !suggestion.under_review && handleOvernightFill(suggestion)"
+              :title="overnightFillTitle(suggestion)"
+            >
+              <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <template v-if="suggestion.handled">
+                  <path d="M9 11l3 3L22 4"/>
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
+                </template>
+                <template v-else-if="suggestion.under_review">
+                  <circle cx="12" cy="12" r="10"/>
+                  <path d="M12 6v6l4 2"/>
+                </template>
+                <template v-else>
+                  <circle cx="12" cy="12" r="9"/>
+                  <path d="M12 7v5l3 2"/>
+                </template>
+              </svg>
+              {{ suggestion.handled ? '处理完成' : suggestion.under_review ? '正在审核' : '填报跨夜加班' }}
+            </button>
             <!-- 自动填报按钮 - 处理完成(绿)/正在审核(橙)/未处理显示操作按钮 -->
             <!-- 加班建议：本月有未处理红色考勤异常时不可填报 -->
             <button 
@@ -277,6 +318,12 @@
       :visible="overtimeModalVisible"
       :prefill="overtimePrefill"
       @close="overtimeModalVisible = false"
+      @submitted="loadSuggestions"
+    />
+    <OvernightOvertimeModal
+      :visible="overnightFillVisible"
+      :prefill="overnightFillPrefill"
+      @close="overnightFillVisible = false"
       @submitted="loadSuggestions"
     />
 
@@ -481,14 +528,16 @@
 <script setup>
 import { ref, reactive, computed, onMounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { getSuggestions, confirmOvernightOvertime, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers, getPersonFullAttendance } from '@/api/attendance'
+import { getSuggestions, confirmOvernightOvertime, queryAttendance, getAttendanceDates, checkCanApprove, submitBusinessTripApply, getApprovers, getPersonFullAttendance, getHolidays } from '@/api/attendance'
 import { fetchProfileMobile } from '@/utils/employeeMobile'
 import OvertimeRegisterModal from '@/components/OvertimeRegisterModal.vue'
+import OvernightOvertimeModal from '@/components/OvernightOvertimeModal.vue'
 import LeaveApplyModal from '@/components/LeaveApplyModal.vue'
 import DateTimePicker from '@/components/DateTimePicker.vue'
 import LocationPicker from '@/components/LocationPicker.vue'
 import AttendanceExceptionApplyModal from '@/components/AttendanceExceptionApplyModal.vue'
 import { hasAttendanceTimeMark, isOutAttendanceMark } from '@/utils/attendanceTimeMark'
+import { isWorkday } from '@/utils/leaveDuration'
 
 const router = useRouter()
 const timeSlots = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
@@ -497,6 +546,9 @@ const canApprove = ref(false)
 
 const overtimeModalVisible = ref(false)
 const overtimePrefill = ref({})
+const overnightFillVisible = ref(false)
+const overnightFillPrefill = ref({})
+const holidayMap = ref({})
 const leaveModalVisible = ref(false)
 const leavePrefill = ref({})
 const kqycModalVisible = ref(false)
@@ -574,6 +626,24 @@ const toTimeValue = (t) => {
   return `${h}:${m}:${s}`
 }
 
+const prevCalendarDate = (dateStr) => {
+  const s = String(dateStr || '').slice(0, 10)
+  const d = new Date(`${s}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return '前一天'
+  d.setDate(d.getDate() - 1)
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  return `${d.getFullYear()}-${m}-${day}`
+}
+
+const overnightPrevNeedsCityTrip = (dateStr) => {
+  const prev = prevCalendarDate(dateStr)
+  if (!prev || prev === '前一天') return false
+  const d = new Date(`${prev}T00:00:00`)
+  if (Number.isNaN(d.getTime())) return false
+  return isWorkday(d, holidayMap.value)
+}
+
 // 处理加班自动填报：本页弹窗，无需跳转，可连续填报
 const handleOvertimeFill = (suggestion) => {
   if (!suggestion) return
@@ -593,6 +663,32 @@ const handleOvertimeFill = (suggestion) => {
     locked: true  // 从智能建议入口进入时锁定日期与时间，不可修改
   }
   overtimeModalVisible.value = true
+}
+
+const overnightFillTitle = (suggestion) => {
+  if (suggestion?.handled) return '已处理完成'
+  if (suggestion?.under_review) return '已提交，正在审核'
+  if (hasUnresolvedAttendanceExceptions.value) {
+    return '请先处理本月考勤异常（红色），进入审核流程后才可填报跨夜加班'
+  }
+  return overnightPrevNeedsCityTrip(suggestion.date)
+    ? '填报跨夜加班：可选双倍绩效或换休票+加班费，工作日前一天将自动补市内公出'
+    : '填报跨夜加班：可选双倍绩效或换休票+加班费；前一天不是工作日，不补市内公出'
+}
+
+const handleOvernightFill = (suggestion) => {
+  if (!suggestion) return
+  if (hasUnresolvedAttendanceExceptions.value) {
+    alert('请先处理本月考勤异常（红色）。完成请假/公出/打卡异常申请并进入审核流程后，才可填报跨夜加班。')
+    return
+  }
+  const timeMatch = (suggestion.message || '').match(/(\d{1,2}:\d{2}(?::\d{2})?)\s*到\s*(\d{1,2}:\d{2}(?::\d{2})?)/)
+  overnightFillPrefill.value = {
+    date: suggestion.date ? suggestion.date.slice(0, 10) : '',
+    startTime: timeMatch ? toTimeValue(timeMatch[1]) : '00:00:00',
+    endTime: timeMatch ? toTimeValue(timeMatch[2]) : '06:00:00'
+  }
+  overnightFillVisible.value = true
 }
 
 // 处理请假自动填报：本页弹窗，无需跳转，可连续填报
@@ -879,6 +975,20 @@ const loadSuggestions = async () => {
     if (!userInfo.name) return
     const [year, month] = selectedMonth.value.split('-')
     if (!year || !month) return
+    try {
+      const hol = await getHolidays(year)
+      if (hol?.success && hol.holidays) {
+        const map = {}
+        for (const h of hol.holidays) {
+          const key = String(h.date || '').slice(0, 10)
+          const typ = h.type || h.festival || ''
+          if (key && typ) map[key] = typ
+        }
+        holidayMap.value = map
+      }
+    } catch {
+      holidayMap.value = {}
+    }
     const response = await getSuggestions({
       name: userInfo.name,
       year: parseInt(year, 10),
@@ -888,11 +998,17 @@ const loadSuggestions = async () => {
       const list = response.suggestions.map(item => {
         let type = 'info'
         const msg = item.suggestion || ''
+        const isOvernightFill = msg.includes('【跨夜加班】') || /检测到\s*00:00(?::00)?\s*到/.test(msg)
         if (item.status === 2 || msg.includes('【跨夜确认】')) type = 'overnight'
+        else if (isOvernightFill) type = 'overnight-fill'
         else if (msg.includes('缺勤') || msg.includes('迟到') || msg.includes('打卡数据异常')) type = 'warning'
         return {
           type,
-          typeLabel: type === 'overnight' ? `${item.dayType || '工作日'} · 待确认` : (item.dayType || ''),
+          typeLabel: type === 'overnight'
+            ? `${item.dayType || '工作日'} · 待确认`
+            : type === 'overnight-fill'
+              ? `${item.dayType || '工作日'} · 跨夜加班`
+              : (item.dayType || ''),
           date: item.date || '',
           message: item.suggestion || '',
           status: item.status ?? 0,
@@ -1402,6 +1518,12 @@ watch(selectedMonth, () => {
   border-left-color: #13a8a8;
 }
 
+/* 跨夜凌晨段填报：靛色，区别于确认卡青色、平时加班蓝色 */
+.suggestion-overnight-fill {
+  background: #eef2ff;
+  border-left-color: #4f46e5;
+}
+
 .suggestion-info {
   background: var(--color-info-bg);
   border-left-color: var(--color-info);
@@ -1442,6 +1564,11 @@ watch(selectedMonth, () => {
 .suggestion-overnight .suggestion-icon {
   background: white;
   color: #0f766e;
+}
+
+.suggestion-overnight-fill .suggestion-icon {
+  background: white;
+  color: #4338ca;
 }
 
 .suggestion-info .suggestion-icon {
@@ -1496,6 +1623,18 @@ watch(selectedMonth, () => {
 .badge-overnight {
   background: #0f766e;
   color: white;
+}
+
+.badge-overnight-fill {
+  background: #4338ca;
+  color: white;
+}
+
+.overnight-fill-hint {
+  margin: 6px 0 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: #3730a3;
 }
 
 .suggestion-title {
@@ -1577,6 +1716,24 @@ watch(selectedMonth, () => {
 .btn-business-trip:hover {
   box-shadow: 0 4px 12px rgba(79, 172, 254, 0.4);
   transform: translateY(-2px);
+}
+
+.btn-overnight-fill {
+  background: #4338ca;
+}
+
+.btn-overnight-fill:hover {
+  background: #3730a3;
+  box-shadow: 0 4px 12px rgba(67, 56, 202, 0.35);
+  transform: translateY(-2px);
+}
+
+.btn-overnight-fill.btn-overtime-locked,
+.btn-overnight-fill.btn-overtime-locked:hover {
+  background: linear-gradient(135deg, #9ca3af 0%, #6b7280 100%);
+  box-shadow: none;
+  transform: none;
+  opacity: 0.85;
 }
 
 .btn-overnight-yes {

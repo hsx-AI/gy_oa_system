@@ -172,6 +172,15 @@ export function submitOvertimeRegister(data) {
   })
 }
 
+/** 跨夜加班凌晨段：双倍绩效，或换休票+加班费；两级审批通过后补前一天市内公出 */
+export function submitOvernightOvertime(data) {
+  return request({
+    url: '/overtime/register-overnight',
+    method: 'post',
+    data
+  })
+}
+
 /**
  * 提交请假申请（支持可选文件上传）
  * @param {Object} data - 请假申请数据

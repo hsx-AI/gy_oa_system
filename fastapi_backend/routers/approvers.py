@@ -284,6 +284,36 @@ def _get_dept_leaders() -> List[dict]:
     return [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
 
 
+def _get_overnight_first_approvers(name: str) -> List[dict]:
+    """跨夜凌晨段第一审批人：同室主任/副主任/班组长，排除本人。没有则退回部领导。"""
+    user = _get_user_info(name)
+    lsys = (user.get("lsys") or "").strip() if user else ""
+    zr_cond, zr_p = _jb_sql_conditions("主任")
+    fzr_cond, fzr_p = _jb_sql_conditions("副主任")
+    zz_cond, zz_p = _jb_sql_conditions("组长")
+    cond = f"({zr_cond[1:-1]} OR {fzr_cond[1:-1]} OR {zz_cond[1:-1]})"
+    role_params = zr_p + fzr_p + zz_p
+    applicant = (name or "").strip()
+    if lsys:
+        rows = db.execute_query(
+            f"SELECT name, jb, lsys FROM yggl WHERE lsys = %s AND {cond} "
+            "AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) "
+            "ORDER BY jb, name",
+            (lsys,) + tuple(role_params) + (applicant,),
+        ) or []
+    else:
+        rows = db.execute_query(
+            f"SELECT name, jb, lsys FROM yggl WHERE {cond} "
+            "AND name IS NOT NULL AND name != '' AND name != %s AND (COALESCE(zaizhi,0)=0) "
+            "ORDER BY jb, name",
+            tuple(role_params) + (applicant,),
+        ) or []
+    result = [{"name": r["name"], "jb": r.get("jb"), "lsys": r.get("lsys")} for r in rows]
+    if result:
+        return result
+    return [a for a in _get_dept_leaders() if (a.get("name") or "").strip() != applicant]
+
+
 def _get_room_directors(name: str) -> List[dict]:
     """室主任 -> 同 lsys 的 jb(主任/副主任)"""
     user = _get_user_info(name)
@@ -305,7 +335,7 @@ def _get_room_directors(name: str) -> List[dict]:
 @router.get("", response_model=dict)
 def get_approvers(
     name: str = Query(..., description="申请人姓名"),
-    level: str = Query("first", description="first=第一审批人, second=第二审批人, dept_leader=部领导, room_director=室主任")
+    level: str = Query("first", description="first=第一审批人, second=第二审批人, dept_leader=部领导, room_director=室主任, overnight_first=跨夜加班主任/班组长")
 ):
     """
     根据审批规则返回可选审批人列表
@@ -313,6 +343,7 @@ def get_approvers(
     - level=second: 第二审批人（部长/副部长）
     - level=dept_leader: 部领导（部长/副部长）
     - level=room_director: 室主任（同 lsys 的主任）
+    - level=overnight_first: 跨夜凌晨段第一审批人（同室主任/副主任/班组长）
     """
     try:
         level = (level or "first").lower().strip()
@@ -322,6 +353,8 @@ def get_approvers(
             approvers = _get_dept_leaders()
         elif level == "room_director":
             approvers = _get_room_directors(name)
+        elif level == "overnight_first":
+            approvers = _get_overnight_first_approvers(name)
         else:
             approvers = _get_approvers_first(name)
 

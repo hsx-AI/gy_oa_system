@@ -1495,6 +1495,20 @@ def _apply_overtime_pay_scope(
     return lsys, name
 
 
+def _overtime_pay_hx_sql() -> str:
+    """其他绩效激励：换休票为否才计费；跨夜「换休票+加班费」两条都发，需要计入。"""
+    try:
+        from routers.leave_overtime import ensure_jiaban_overnight_columns
+        ensure_jiaban_overnight_columns()
+    except Exception as e:
+        logger.warning("跨夜加班字段检查失败，绩效统计仍按换休票互斥: %s", e)
+        return "(jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是')"
+    return (
+        "(jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是' "
+        "OR (COALESCE(jiaban.overnight_segment, 0) = 1 AND jiaban.reward_mode = 'ticket_and_pay'))"
+    )
+
+
 def _resolve_jiaban_period_filter(
     year: Optional[int],
     month: Optional[int],
@@ -1659,7 +1673,7 @@ def get_dept_overtime_pay_by_month(
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
+              AND {_overtime_pay_hx_sql()}{date_cond}
         """
         rows = db.execute_query(query, join_param + date_params)
 
@@ -1744,7 +1758,7 @@ def get_dept_overtime_pay_by_employee(
                    CAST(COALESCE(jiaban.jbf, 0) AS DECIMAL(10,2)) AS hours
             FROM jiaban {join_cond}
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
+              AND {_overtime_pay_hx_sql()}{date_cond}
         """
         rows = db.execute_query(query, params)
 
@@ -1808,7 +1822,7 @@ def get_overtime_pay_export(
             FROM jiaban
             INNER JOIN yggl ON jiaban.xm = yggl.name
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
+              AND {_overtime_pay_hx_sql()}{date_cond}
               AND RIGHT(TRIM(yggl.name), 1) != '1'
               AND RIGHT(TRIM(yggl.lsys), 1) != '1'
               AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')
@@ -1913,7 +1927,7 @@ def get_overtime_pay_detail_export(
             FROM jiaban
             INNER JOIN yggl ON jiaban.xm = yggl.name
             WHERE jiaban.jiabanzt = 4
-              AND (jiaban.hx IS NULL OR TRIM(jiaban.hx) != '是'){date_cond}
+              AND {_overtime_pay_hx_sql()}{date_cond}
               AND RIGHT(TRIM(yggl.name), 1) != '1'
               AND RIGHT(TRIM(yggl.lsys), 1) != '1'
               AND TRIM(yggl.lsys) NOT IN ('其他部门员工','其他部门成员')

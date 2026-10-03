@@ -655,6 +655,21 @@ class OvertimeRegisterRequest(BaseModel):
     approver: str  # 审批人 spr
 
 
+class OvernightOvertimeRegisterRequest(BaseModel):
+    """跨夜加班凌晨段。奖励二选一：双倍其他绩效激励，或换休票+加班费（换休票不加倍）。"""
+    department: str
+    name: str
+    gender: str = "男"
+    registerMethod: str = "补报"
+    date: str
+    startTime: str
+    endTime: str
+    content: str
+    approver: str  # 主任/班组长
+    approver2: str  # 部门领导
+    rewardMode: str  # double_pay | ticket_and_pay
+
+
 def _raw_overtime_hours_from_row(row: dict) -> float:
     """从 timefrom/timeto 计算原始加班时长（不取整），与前端换休票预览一致。"""
     tf = row.get("timefrom")
@@ -726,6 +741,12 @@ def _recalc_overtime_hours_from_row(row: dict) -> float:
             if " " in tt_str:
                 tt_str = tt_str.split(" ", 1)[1]
         hours = _calc_hours(tf_str, tt_str, date_str)
+        try:
+            overnight = int(row.get("overnight_segment") or 0) == 1
+        except (TypeError, ValueError):
+            overnight = False
+        if overnight:
+            return round_overnight_hours_down(hours)
         return round_overtime_hours_down(hours, applied_at)
     except Exception:
         raw = row.get("tian1")
@@ -750,17 +771,22 @@ def _clock_minutes(clock: str) -> float:
 
 
 def _calc_hours(start_time: str, end_time: str, date_str: str) -> float:
-    """计算加班时长(小时)，扣除午休 12:00-13:00 实际重叠部分，原始值（未取整）。"""
+    """计算加班时长(小时)，扣除午休 12:00-13:00 实际重叠部分，原始值（未取整）。
+    结束时钟不晚于开始（如 17:00 到次日 00:00）按跨夜加 24 小时，避免 24:00 落库成 00:00 后算成 0。
+    """
     try:
         start_mins = _clock_minutes(start_time)
         end_mins = _clock_minutes(end_time)
         total_mins = end_mins - start_mins
+        if total_mins < 0:
+            total_mins += 24 * 60
         if total_mins <= 0:
             return 0.0
         lunch_start = 12 * 60
         lunch_end = 13 * 60
-        if start_mins < lunch_end and end_mins > lunch_start:
-            overlap = min(end_mins, lunch_end) - max(start_mins, lunch_start)
+        lunch_end_cmp = end_mins if end_mins > start_mins else end_mins + 24 * 60
+        if start_mins < lunch_end and lunch_end_cmp > lunch_start:
+            overlap = min(lunch_end_cmp, lunch_end) - max(start_mins, lunch_start)
             total_mins = max(0, total_mins - overlap)
         return round(total_mins / 60, 4)
     except Exception:
@@ -788,6 +814,13 @@ def _parse_overtime_applied_at(val) -> Optional[datetime]:
 OVERTIME_MINUTE_ROUNDING_SINCE = datetime(2026, 10, 1, 0, 0, 0)
 
 
+def round_overnight_hours_down(hours: float) -> float:
+    """跨夜凌晨段按分钟向下取整，不受 2026-10-01 前半小时口径影响。"""
+    if hours <= 0:
+        return 0.0
+    return math.floor(hours * 60 + 1e-9) / 60.0
+
+
 def round_overtime_hours_down(hours: float, applied_at: Optional[datetime] = None) -> float:
     """
     加班时长向下取整。
@@ -801,6 +834,40 @@ def round_overtime_hours_down(hours: float, applied_at: Optional[datetime] = Non
     if use_minutes:
         return math.floor(hours * 60 + 1e-9) / 60.0
     return math.floor(hours * 2) / 2.0
+
+
+def ensure_jiaban_overnight_columns() -> None:
+    """跨夜凌晨段：标记、奖励方式、通过后写入的市内公出 id。"""
+    try:
+        rows = db.execute_query(
+            "SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'jiaban'"
+        ) or []
+        existing = {(r.get("name") or r.get("COLUMN_NAME") or "") for r in rows}
+    except Exception as e:
+        logger.warning("检查 jiaban 跨夜字段失败: %s", e)
+        return
+    alters = []
+    if "overnight_segment" not in existing:
+        alters.append(
+            "ALTER TABLE jiaban ADD COLUMN overnight_segment TINYINT NOT NULL DEFAULT 0 "
+            "COMMENT '1=跨夜加班凌晨段'"
+        )
+    if "reward_mode" not in existing:
+        alters.append(
+            "ALTER TABLE jiaban ADD COLUMN reward_mode VARCHAR(32) NULL "
+            "COMMENT 'double_pay|ticket_and_pay'"
+        )
+    if "gcsqb_id" not in existing:
+        alters.append(
+            "ALTER TABLE jiaban ADD COLUMN gcsqb_id VARCHAR(64) NULL "
+            "COMMENT '跨夜审批写入的市内公出'"
+        )
+    for sql in alters:
+        try:
+            db.execute_update(sql, ())
+        except Exception as e:
+            logger.warning("增加 jiaban 跨夜字段失败: %s", e)
 
 
 def format_overtime_hours_storage(hours: float) -> str:
@@ -891,6 +958,96 @@ def register_overtime(req: OvertimeRegisterRequest):
         raise
     except Exception as e:
         logger.error(f"加班登记失败: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"登记失败: {str(e)}")
+
+
+@router.post("/overtime/register-overnight")
+def register_overnight_overtime(req: OvernightOvertimeRegisterRequest):
+    """
+    跨夜加班凌晨段登记。
+    奖励：double_pay=双倍其他绩效激励；ticket_and_pay=换休票+加班费（换休票不加倍）。
+    审批：主任/班组长 → 部门领导。最终通过时再发奖励，并强制补前一天全天市内公出。
+    """
+    try:
+        ensure_jiaban_overnight_columns()
+        mode = (req.rewardMode or "").strip()
+        if mode not in ("double_pay", "ticket_and_pay"):
+            raise HTTPException(status_code=400, detail="请选择双倍其他绩效激励，或换休票与加班费同时领取")
+        approver = (req.approver or "").strip()
+        approver2 = (req.approver2 or "").strip()
+        applicant = (req.name or "").strip()
+        if not approver or not approver2:
+            raise HTTPException(status_code=400, detail="请选择主任/班组长和部门领导")
+        if approver == approver2:
+            raise HTTPException(status_code=400, detail="两级审批人不能是同一人")
+        if applicant and applicant in (approver, approver2):
+            raise HTTPException(status_code=400, detail="不能选择自己作为审批人")
+        if not (req.content or "").strip():
+            raise HTTPException(status_code=400, detail="请输入加班内容")
+
+        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        st = req.startTime if ":" in req.startTime else req.startTime + ":00"
+        et = req.endTime if ":" in req.endTime else req.endTime + ":00"
+        if st.count(":") == 1:
+            st += ":00"
+        if et.count(":") == 1:
+            et += ":00"
+        date_part = (req.date or "").strip()[:10]
+        if len(date_part) < 10:
+            raise HTTPException(status_code=400, detail="加班日期无效")
+        time_from = normalize_datetime_for_db(f"{date_part} {st}")
+        time_to = normalize_datetime_for_db(f"{date_part} {et}")
+        hours = round_overnight_hours_down(_calc_hours(st, et, date_part))
+        if hours <= 0:
+            raise HTTPException(status_code=400, detail="加班时长无效")
+
+        bz = (req.department or "").strip()
+        if not bz and applicant:
+            try:
+                rows = db.execute_query("SELECT lsys FROM yggl WHERE name = %s LIMIT 1", (applicant,))
+                if rows and (rows[0].get("lsys") or "").strip():
+                    bz = (rows[0].get("lsys") or "").strip()
+            except Exception:
+                pass
+        if not bz:
+            bz = "未知"
+
+        need_exchange = mode == "ticket_and_pay"
+        tian1_str = format_overtime_hours_storage(hours)
+        new_id = uuid.uuid4().hex
+        sql = """
+            INSERT INTO jiaban (
+                id, bz, xm, xb, jb, jiabanfs, timedate, timefrom, timeto, content,
+                spr, spr2, jiabantime, jiabanzt, hx, tian1, jbf, hxp, overnight_segment, reward_mode
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 0, %s, %s, 0, 0, 1, %s)
+        """
+        params = (
+            new_id,
+            bz,
+            applicant,
+            req.gender or "男",
+            "跨夜加班",
+            req.registerMethod or "补报",
+            date_part,
+            time_from,
+            time_to,
+            (req.content or "").strip(),
+            approver,
+            approver2,
+            now,
+            "是" if need_exchange else "否",
+            tian1_str,
+            mode,
+        )
+        affected = db.execute_update(sql, params)
+        if affected < 0:
+            raise HTTPException(status_code=500, detail="登记失败")
+        return {"success": True, "message": "跨夜加班已提交，等待主任/班组长和部门领导审批", "id": new_id}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"跨夜加班登记失败: {str(e)}")
         raise HTTPException(status_code=500, detail=f"登记失败: {str(e)}")
 
 

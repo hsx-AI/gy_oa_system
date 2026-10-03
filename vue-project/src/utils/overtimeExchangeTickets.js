@@ -13,11 +13,13 @@ export function overtimeWorkMinutesBetween(st, et) {
   const startMins = toMins(st)
   const endMins = toMins(et)
   let mins = endMins - startMins
+  if (mins < 0) mins += 24 * 60
   if (mins <= 0) return 0
   const lunchStart = 12 * 60
   const lunchEnd = 13 * 60
-  if (startMins < lunchEnd && endMins > lunchStart) {
-    const overlap = Math.min(endMins, lunchEnd) - Math.max(startMins, lunchStart)
+  const endCmp = endMins >= startMins ? endMins : endMins + 24 * 60
+  if (startMins < lunchEnd && endCmp > lunchStart) {
+    const overlap = Math.min(endCmp, lunchEnd) - Math.max(startMins, lunchStart)
     mins = Math.max(0, mins - overlap)
   }
   return mins

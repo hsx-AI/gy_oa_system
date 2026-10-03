@@ -274,6 +274,7 @@
             class="modal-split__side"
             :active="showApplyModal"
             :employee-name="form.name"
+            :reference-date="form.startTime"
             @fill-time="onAttendanceFillTime"
           />
         </div>

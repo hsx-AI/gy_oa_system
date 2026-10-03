@@ -4,12 +4,13 @@
 - 员工无审批权限
 - 请假: qjzt=1(室主任spr) -> qjzt=3(部长spr2) -> qjzt=4; 驳回 qjzt=22
 - 加班: jiabanzt=0(室主任spr) -> [有spr2时 1->3] -> 上级审批通过后智能校验 -> 通过则 4，否则 5(打卡管理员) -> 4; 驳回 22
+- 跨夜凌晨段: 主任/班组长(spr) -> 部门领导(spr2) -> 直接完结并发放奖励，同时强制补前一天全天市内公出
 - 公出: 两级固定。室主任(szr)先批 szrzt=1->2; 部领导(bld)再批 bldzt=1->2; 驳回 22
 """
 from fastapi import APIRouter, HTTPException, Query, Body, Depends
 from typing import Optional, List, Any
 from pydantic import BaseModel
-from datetime import datetime
+from datetime import datetime, timedelta
 from database import db
 from attendance_db import attendance_db
 import math
@@ -19,8 +20,17 @@ from routers.db_manager import _get_admin1
 from routers.leave_overtime import (
     _raw_overtime_hours_from_row,
     _recalc_overtime_hours_from_row,
+    ensure_jiaban_overnight_columns,
+    format_overtime_hours_storage,
 )
-from routers.suggestions import collect_valid_times_with_marks, build_intervals_from_marks
+from routers.suggestions import (
+    collect_valid_times_with_marks,
+    build_intervals_from_marks,
+    trailing_unclosed_entry,
+    earliest_overnight_exit,
+    is_workday,
+    load_holidays,
+)
 from utils.helpers import format_datetime_plain
 from utils.session_auth import require_login_user
 import logging
@@ -428,9 +438,14 @@ async def leave_batch_approve(req: BatchApproveRequest, login_user: str = Depend
 def get_pending_overtime(approver: str = Depends(require_login_user)):
     """获取待当前用户审批的加班列表（含打卡管理员：jiabanzt=5 时仅 webconfig.dakaman 可见）"""
     try:
+        ensure_jiaban_overnight_columns()
         # jiabanzt=0 或 1: spr 审批; jiabanzt=3: spr2 审批; jiabanzt=5: 打卡管理员审批
-        query = """
-            SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, content, spr, spr2, hx
+        overtime_cols = (
+            "id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, content, spr, spr2, hx, "
+            "overnight_segment, reward_mode"
+        )
+        query = f"""
+            SELECT {overtime_cols}
             FROM jiaban
             WHERE (jiabanzt IN (0, 1) AND spr = %s) OR (jiabanzt = 3 AND spr2 = %s)
             ORDER BY jiabantime DESC
@@ -441,7 +456,7 @@ def get_pending_overtime(approver: str = Depends(require_login_user)):
         if dakaman and (approver or "").strip() == dakaman:
             try:
                 rows_dk = db.execute_query(
-                    """SELECT id, bz, xm, jb, timedate, timefrom, timeto, jiabantime, tian1, jbf, content, spr, spr2, hx
+                    f"""SELECT {overtime_cols}
                        FROM jiaban WHERE jiabanzt = 5 ORDER BY jiabantime DESC"""
                 ) or []
                 seen = {str(r.get("id") or "") for r in rows}
@@ -482,13 +497,23 @@ def get_pending_overtime(approver: str = Depends(require_login_user)):
                 if tt and len(tt) == 5 and ":" in tt:
                     tt = tt + ":00"
                 tt = (tt or "")[:8] if tt else ""
+            raw_to = r.get("timeto")
+            date_s = str(r.get("timedate") or "")[:10]
+            if (
+                tt in ("00:00:00", "00:00")
+                and date_s
+                and isinstance(raw_to, datetime)
+                and raw_to.strftime("%Y-%m-%d") > date_s
+            ):
+                tt = "24:00:00"
             hours = _recalc_overtime_hours(r)
             hx_val = (r.get("hx") or "").strip()
             need_exchange_ticket = "是" if hx_val and str(hx_val) in ("是", "1", "true", "yes") else "否"
+            overnight = _overnight_view(r)
             items.append({
                 "id": str(r.get("id") or ""),
                 "applicant": str(r.get("xm") or ""),
-                "level": str(r.get("jb") or ""),
+                "level": "跨夜加班" if overnight["overnightSegment"] else str(r.get("jb") or ""),
                 "department": _get_department_from_row(r),
                 "date": str(r.get("timedate") or "")[:10],
                 "startTime": tf,
@@ -499,6 +524,7 @@ def get_pending_overtime(approver: str = Depends(require_login_user)):
                 "content": str(r.get("content") or ""),
                 "spr": str(r.get("spr") or ""),
                 "spr2": str(r.get("spr2") or ""),
+                **overnight,
             })
         return {"success": True, "data": items}
     except Exception as e:
@@ -535,6 +561,195 @@ def _format_overtime_time(val) -> str:
             t = t + ":00"
         t = (t or "")[:8] if t else ""
     return t
+
+
+def _fmt_hour_num(hours: float) -> str:
+    if abs(hours - round(hours)) < 1e-6:
+        return str(int(round(hours)))
+    text = f"{hours:.2f}".rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _fmt_hours_hm(hours: float) -> str:
+    total_mins = int(round((hours or 0) * 60 + 1e-9))
+    if total_mins < 0:
+        total_mins = 0
+    h, m = divmod(total_mins, 60)
+    if h <= 0:
+        return f"{m}分钟"
+    if m <= 0:
+        return f"{h}小时"
+    return f"{h}小时{m}分钟"
+
+
+def _is_overnight_overtime(row: dict) -> bool:
+    try:
+        return int(row.get("overnight_segment") or 0) == 1
+    except (TypeError, ValueError):
+        return False
+
+
+def _prev_attendance_date(row: dict) -> str:
+    date_s = str(row.get("timedate") or "")[:10]
+    try:
+        return (datetime.strptime(date_s, "%Y-%m-%d") - timedelta(days=1)).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def _overnight_reward_text(row: dict) -> str:
+    mode = (row.get("reward_mode") or "").strip()
+    hours = _recalc_overtime_hours(row)
+    hours_txt = _fmt_hours_hm(hours)
+    if mode == "ticket_and_pay":
+        tickets = _overtime_exchange_tickets_from_row(row)
+        ticket_txt = _fmt_hour_num(tickets)
+        return f"同时发放换休票 {ticket_txt} 张，以及其他绩效激励 {hours_txt}"
+    doubled = _fmt_hours_hm(hours * 2)
+    return f"双倍其他绩效激励：实际 {hours_txt}，按 {doubled} 计入"
+
+
+def _prev_day_needs_city_trip(prev: str) -> bool:
+    """前一天是工作日才补市内公出（周末/节假日不上班，没有缺卡异常）。"""
+    if not prev:
+        return False
+    try:
+        day = datetime.strptime(prev[:10], "%Y-%m-%d")
+    except ValueError:
+        return False
+    is_work, _, _, _ = is_workday(day, load_holidays(str(day.year)))
+    return bool(is_work)
+
+
+def _overnight_view(row: dict) -> dict:
+    flag = _is_overnight_overtime(row)
+    prev = _prev_attendance_date(row) if flag else ""
+    reward = _overnight_reward_text(row) if flag else ""
+    need_trip = bool(flag and _prev_day_needs_city_trip(prev))
+    note = ""
+    if flag:
+        if need_trip:
+            note = (
+                f"这是跨夜加班的凌晨段。"
+                f"一、奖励：{reward}。"
+                f"二、通过后为前一天（{prev}）补记全天市内公出"
+                f"（08:00-17:00），事由「跨夜加班处理」，用来处理前一天少一次打卡。"
+                f"审批：主任/班组长 → 部门领导。"
+            )
+        else:
+            note = (
+                f"这是跨夜加班的凌晨段。"
+                f"奖励：{reward}。"
+                f"前一天（{prev or '加班日前一天'}）不是工作日，没有考勤异常，通过后不补市内公出。"
+                f"审批：主任/班组长 → 部门领导。"
+            )
+    return {
+        "overnightSegment": flag,
+        "rewardMode": (row.get("reward_mode") or "").strip() if flag else "",
+        "rewardLabel": reward,
+        "prevAttendanceDate": prev,
+        "needCityTrip": need_trip,
+        "overnightNote": note,
+    }
+
+
+def _insert_overnight_city_trip(row: dict, item_id: str) -> str:
+    """强制写入前一天 08:00-17:00 市内公出，不检查重叠，并直接完成返回登记。"""
+    existing = str(row.get("gcsqb_id") or "").strip()
+    if not existing:
+        found = db.execute_query("SELECT gcsqb_id FROM jiaban WHERE id = %s", (item_id,)) or []
+        if found:
+            existing = str(found[0].get("gcsqb_id") or "").strip()
+    if existing:
+        return existing
+    prev = _prev_attendance_date(row)
+    if not prev:
+        raise HTTPException(status_code=500, detail="无法确定前一天日期，市内公出未写入")
+    yjcfsj = f"{prev} 08:00:00"
+    yjfhsj = f"{prev} 17:00:00"
+    rid = uuid.uuid4().hex
+    dept = _get_department_from_row(row)
+    if dept == "-":
+        dept = ""
+    sql = """
+        INSERT INTO gcsqb (id, gclx, wpdw, gcr, gzh, gcdw, lxdh, wpsj, yjfhsj, yjcfsj, xmmc,
+            tzdbh, bcgczrs, gcdd, qkje, gcrw, szr, bld, gcsj, sjfhtime, bldzt, szrzt, fhdj_status)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """
+    params = (
+        rid,
+        "市内公出",
+        "",
+        (row.get("xm") or "").strip(),
+        "无",
+        dept,
+        "",
+        None,
+        yjfhsj,
+        yjcfsj,
+        "无",
+        "",
+        "1",
+        "市内",
+        "无",
+        "跨夜加班处理",
+        (row.get("spr") or "").strip(),
+        (row.get("spr2") or "").strip(),
+        yjcfsj,
+        yjfhsj,
+        2,
+        2,
+        1,
+    )
+    inserted = db.execute_update(sql, params)
+    if inserted < 0:
+        raise HTTPException(status_code=500, detail="市内公出写入失败")
+    db.execute_update("UPDATE jiaban SET gcsqb_id = %s WHERE id = %s", (rid, item_id))
+    return rid
+
+
+def _complete_overnight_overtime(row: dict, item_id: str) -> None:
+    """部门领导通过：发放所选奖励，并强制补前一天全天市内公出，然后完结。"""
+    ensure_jiaban_overnight_columns()
+    cur_rows = db.execute_query(
+        "SELECT hxp, jbf, gcsqb_id, hx, reward_mode, xm, timedate, jb, timefrom, timeto, bz, spr, spr2, overnight_segment, jiabantime "
+        "FROM jiaban WHERE id = %s",
+        (item_id,),
+    ) or []
+    merged = dict(row)
+    if cur_rows:
+        for key, value in cur_rows[0].items():
+            if value is not None:
+                merged[key] = value
+    mode = (merged.get("reward_mode") or "").strip() or "double_pay"
+    hours = _recalc_overtime_hours(merged)
+    try:
+        hxp_now = float(merged.get("hxp") or 0)
+    except (TypeError, ValueError):
+        hxp_now = 0.0
+    try:
+        jbf_now = float(merged.get("jbf") or 0)
+    except (TypeError, ValueError):
+        jbf_now = 0.0
+    tian1_new = format_overtime_hours_storage(hours)
+    xm = (merged.get("xm") or "").strip()
+    if mode == "ticket_and_pay":
+        tickets = _overtime_exchange_tickets_from_row(merged)
+        if hxp_now <= 0 or jbf_now <= 0:
+            if hxp_now <= 0 and tickets > 0 and xm:
+                _add_exchange_tickets(xm, tickets, ly="加班换休", sj=str(merged.get("timedate") or "")[:10])
+            db.execute_update(
+                "UPDATE jiaban SET tian1 = %s, hxp = %s, jbf = %s, hx = %s WHERE id = %s",
+                (tian1_new, tickets if hxp_now <= 0 else hxp_now, hours, "是", item_id),
+            )
+    elif jbf_now <= 0:
+        db.execute_update(
+            "UPDATE jiaban SET tian1 = %s, hxp = 0, jbf = %s, hx = %s WHERE id = %s",
+            (tian1_new, hours * 2, "否", item_id),
+        )
+    if _prev_day_needs_city_trip(_prev_attendance_date(merged)):
+        _insert_overnight_city_trip(merged, item_id)
+    db.execute_update("UPDATE jiaban SET jiabanzt = 4 WHERE id = %s", (item_id,))
 
 
 def _finalize_overtime_record(row: dict, item_id: str) -> None:
@@ -600,6 +815,7 @@ def _after_supervisor_approve(row: dict, item_id: str) -> tuple:
 def get_overtime_detail(item_id: str):
     """加班详情（item_id 为 jiaban 表 id，支持 UUID 字符串）"""
     item_id = str(item_id).strip()
+    ensure_jiaban_overnight_columns()
     rows = db.execute_query("SELECT * FROM jiaban WHERE id = %s", (item_id,))
     if not rows:
         raise HTTPException(status_code=404, detail="记录不存在")
@@ -607,12 +823,13 @@ def get_overtime_detail(item_id: str):
     department_display = _get_department_from_row(r)
     hx_val = (r.get("hx") or "").strip()
     need_exchange_ticket = "是" if hx_val and str(hx_val) in ("是", "1", "true", "yes") else "否"
+    overnight = _overnight_view(r)
     return {
         "success": True,
         "data": {
             "id": r["id"],
             "applicant": r.get("xm") or "",
-            "level": r.get("jb") or "",
+            "level": "跨夜加班" if overnight["overnightSegment"] else (r.get("jb") or ""),
             "department": department_display,
             "date": str(r.get("timedate") or "")[:10],
             "startTime": _fmt_dt(r.get("timefrom")),
@@ -624,6 +841,7 @@ def get_overtime_detail(item_id: str):
             "spr": r.get("spr"),
             "spr2": r.get("spr2"),
             "rejectReason": (r.get("bhyy") or "").strip(),
+            **overnight,
         }
     }
 
@@ -637,8 +855,10 @@ def overtime_approve_action(
     """加班单条审批。item_id 为 jiaban 表 id（UUID 字符串）。"""
     item_id = str(item_id).strip()
     actor = (login_user or "").strip()
+    ensure_jiaban_overnight_columns()
     rows = db.execute_query(
-        "SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id = %s",
+        "SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto, bz, "
+        "overnight_segment, reward_mode, gcsqb_id FROM jiaban WHERE id = %s",
         (item_id,)
     )
     if not rows:
@@ -683,7 +903,22 @@ def overtime_approve_action(
     final_approved = False
     auto_validated = False
     message = "已通过"
-    if jiabanzt in (0, 1):
+    if _is_overnight_overtime(row):
+        if jiabanzt in (0, 1):
+            if not has_spr2:
+                raise HTTPException(status_code=400, detail="跨夜加班须由部门领导二级审批")
+            db.execute_update("UPDATE jiaban SET jiabanzt = 3 WHERE id = %s", (item_id,))
+            message = "已通过，等待部门领导审批"
+        elif jiabanzt == 3:
+            _complete_overnight_overtime(row, item_id)
+            final_approved = True
+            if _prev_day_needs_city_trip(_prev_attendance_date(row)):
+                message = "已通过。已按所选方式发放奖励，并为前一天补记全天市内公出（事由：跨夜加班处理）。"
+            else:
+                message = "已通过。已按所选方式发放奖励。前一天不是工作日，未补市内公出。"
+        else:
+            raise HTTPException(status_code=400, detail="当前状态无法审批")
+    elif jiabanzt in (0, 1):
         if has_spr2:
             db.execute_update("UPDATE jiaban SET jiabanzt = 3 WHERE id = %s", (item_id,))
         else:
@@ -719,6 +954,7 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
         return {"success": True, "passed": 0, "failed": 0, "message": "无有效ID"}
 
     actor = (login_user or "").strip()
+    ensure_jiaban_overnight_columns()
     if req.action == "reject":
         ok, fail = 0, 0
         for iid in ids:
@@ -731,7 +967,8 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
 
     ph = ",".join(["%s"] * len(ids))
     rows = db.execute_query(
-        f"SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto FROM jiaban WHERE id IN ({ph})",
+        f"SELECT id, jiabanzt, spr, spr2, xm, hx, tian1, jbf, timedate, jb, timefrom, timeto, bz, "
+        f"overnight_segment, reward_mode, gcsqb_id FROM jiaban WHERE id IN ({ph})",
         tuple(ids),
     ) or []
     row_map = {str(r["id"]): r for r in rows}
@@ -745,6 +982,7 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
     ids_to_5 = []
     ids_to_4 = []
     final_rows = []
+    overnight_final_rows = []
     ok, fail = 0, 0
 
     for iid in ids:
@@ -759,6 +997,13 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
             if (r.get("spr") or "").strip() != actor:
                 fail += 1
                 continue
+            if _is_overnight_overtime(r):
+                if not has_spr2:
+                    fail += 1
+                    continue
+                ids_to_3.append(iid)
+                ok += 1
+                continue
             if has_spr2:
                 ids_to_3.append(iid)
             else:
@@ -767,6 +1012,10 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
         elif jiabanzt == 3:
             if (r.get("spr2") or "").strip() != actor:
                 fail += 1
+                continue
+            if _is_overnight_overtime(r):
+                overnight_final_rows.append(r)
+                ok += 1
                 continue
             ids_auto_validate.append(iid)
             ok += 1
@@ -817,14 +1066,27 @@ async def overtime_batch_approve(req: BatchApproveRequest, login_user: str = Dep
         except Exception as e:
             logger.warning(f"加班批量审批完结失败 id={rid}: {e}")
 
+    overnight_done = 0
+    for r in overnight_final_rows:
+        rid = str(r["id"])
+        try:
+            _complete_overnight_overtime(r, rid)
+            overnight_done += 1
+        except Exception as e:
+            logger.warning(f"跨夜加班批量完结失败 id={rid}: {e}")
+            ok -= 1
+            fail += 1
+
     msg = f"成功{ok}条，失败{fail}条"
     if ids_auto_validate:
         msg += f"（智能校验通过直接完成{len(ids_to_4_auto)}条，未通过流转打卡管理员{len(ids_to_5)}条）"
+    if overnight_final_rows:
+        msg += f"（跨夜加班完成{overnight_done}条；仅工作日前一天会补市内公出）"
     return {"success": True, "passed": ok, "failed": fail, "message": msg}
 
 
 def _parse_overtime_datetime(date_str: str, time_str: str) -> Optional[str]:
-    """将加班日期 + 开始/结束时间 转为可比较的 YYYY-MM-DD HH:MM:SS"""
+    """将加班日期 + 开始/结束时间 转为可比较的 YYYY-MM-DD HH:MM:SS。24:00 记为次日 00:00。"""
     if not date_str or not time_str:
         return None
     d = str(date_str).strip()[:10]
@@ -835,14 +1097,93 @@ def _parse_overtime_datetime(date_str: str, time_str: str) -> Optional[str]:
         t = t + ":00"
     if len(t) < 8:
         return None
-    return f"{d} {t[:8]}"
+    t = t[:8]
+    try:
+        hour = int(t.split(":")[0])
+    except (TypeError, ValueError):
+        return None
+    if hour >= 24:
+        try:
+            next_day = datetime.strptime(d, "%Y-%m-%d") + timedelta(days=1)
+        except ValueError:
+            return None
+        t = f"{hour - 24:02d}{t[2:]}"
+        return f"{next_day.strftime('%Y-%m-%d')} {t[:8]}"
+    return f"{d} {t}"
+
+
+def _ensure_overtime_end_after_start(start_dt: str, end_dt: str) -> Optional[str]:
+    """结束不晚于开始时，按跨夜把结束挪到次日（如 17:00 到已存成 00:00 的 24:00）。"""
+    if not start_dt or not end_dt:
+        return None
+    if end_dt > start_dt:
+        return end_dt
+    try:
+        return (datetime.strptime(end_dt[:19], "%Y-%m-%d %H:%M:%S") + timedelta(days=1)).strftime(
+            "%Y-%m-%d %H:%M:%S"
+        )
+    except ValueError:
+        return None
+
+
+def _punch_clock_str(t) -> str:
+    if t is None:
+        return ""
+    if hasattr(t, "strftime"):
+        return t.strftime("%H:%M:%S")
+    s = str(t).strip()
+    if " " in s:
+        s = s.split(" ")[-1]
+    if len(s) == 5 and ":" in s:
+        s += ":00"
+    return s[:8]
+
+
+def _next_ymd(date_ymd: str) -> str:
+    try:
+        return (datetime.strptime(date_ymd, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+    except ValueError:
+        return ""
+
+
+def _overnight_bridge_contains(applicant: str, date_ymd: str, start_dt: str, end_dt: str, att_map: dict) -> bool:
+    """
+    当天最后一次未闭环入厂 + 次日 06:00 前首次离厂，拼成在厂区间。
+    该区间包含加班填报时段则视为打卡属实（跨夜未打离开卡的 17:00-24:00 等）。
+    """
+    if not applicant or not date_ymd or not start_dt or not end_dt:
+        return False
+    next_day = _next_ymd(date_ymd)
+    if not next_day:
+        return False
+    last_in = None
+    for row in att_map.get((applicant, date_ymd), []) or []:
+        t = trailing_unclosed_entry(collect_valid_times_with_marks(row))
+        if t is not None:
+            last_in = t
+            break
+    if last_in is None:
+        return False
+    first_out = None
+    for row in att_map.get((applicant, next_day), []) or []:
+        t = earliest_overnight_exit(row)
+        if t is not None:
+            first_out = t
+            break
+    if first_out is None:
+        return False
+    p_start = f"{date_ymd} {_punch_clock_str(last_in)}"
+    p_end = f"{next_day} {_punch_clock_str(first_out)}"
+    if not p_start or not p_end or p_start >= p_end:
+        return False
+    return _interval_contained_in(start_dt, end_dt, [p_start], [p_end])
 
 
 def _intervals_overlap(s1: str, e1: str, s2: str, e2: str) -> bool:
-    """两段时间是否有交集（重叠），闭区间 [s,e] 语义，与历史请假/加班数据一致"""
+    """两段时间是否有正长度交集。仅在 24:00/00:00 等端点相接不算重复。"""
     if not all([s1, e1, s2, e2]):
         return False
-    return s1 <= e2 and s2 <= e1
+    return s1 < e2 and s2 < e1
 
 
 def _truncate_to_minute(dt_str: str) -> str:
@@ -892,6 +1233,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
     加班智能校验核心逻辑。
     1) 列表内时间段重复 -> 不通过，原因「时间段重复」
     2) 与打卡记录对比，加班区间未被某段打卡包含 -> 不通过，原因「打卡不实」
+       若当天最后一次入厂未离开，且次日 06:00 前有离厂，拼接区间能包含加班时段则通过
     3) 与 jiaban 表已有记录时间段重叠 -> 不通过，原因「重复申报」
     """
     results = []
@@ -902,6 +1244,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
     for it in items:
         start_dt = _parse_overtime_datetime(it.date, it.startTime)
         end_dt = _parse_overtime_datetime(it.date, it.endTime)
+        end_dt = _ensure_overtime_end_after_start(start_dt, end_dt) if start_dt and end_dt else None
         if not start_dt or not end_dt or start_dt >= end_dt:
             results.append({"id": it.id, "pass": False, "reason": "时间无效"})
             continue
@@ -930,6 +1273,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
 
     min_date = min(dates)
     max_date = max(dates)
+    max_date_plus = _next_ymd(max_date) or max_date
 
     att_map = {}
     try:
@@ -937,7 +1281,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
         att_rows = db.execute_query(
             f"SELECT * FROM attendance_records "
             f"WHERE employee_name IN ({ph}) AND attendance_date >= %s AND attendance_date <= %s",
-            tuple(applicants) + (min_date, max_date),
+            tuple(applicants) + (min_date, max_date_plus),
         )
         for row in att_rows:
             n = (row.get("employee_name") or "").strip()
@@ -1002,6 +1346,10 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
             if all_contained:
                 punch_contained = True
                 break
+        if not punch_contained:
+            punch_contained = _overnight_bridge_contains(
+                applicant, date_ymd, start_dt, end_dt, att_map
+            )
         if not punch_contained:
             results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
             continue
