@@ -1233,6 +1233,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
     加班智能校验核心逻辑。
     1) 列表内时间段重复 -> 不通过，原因「时间段重复」
     2) 与打卡记录对比，加班区间未被某段打卡包含 -> 不通过，原因「打卡不实」
+       含工作日 7:30 前入厂至 08:00 的早到加班；
        若当天最后一次入厂未离开，且次日 06:00 前有离厂，拼接区间能包含加班时段则通过
     3) 与 jiaban 表已有记录时间段重叠 -> 不通过，原因「重复申报」
     """
@@ -1322,9 +1323,7 @@ def _run_overtime_validation_core(items: List[OvertimeValidateItem]) -> List[dic
         _, applicant, start_dt, end_dt = rec
 
         date_ymd = start_dt[:10]
-        if start_dt < f"{date_ymd} 08:00:00":
-            results.append({"id": it.id, "pass": False, "reason": "请核实是否存在打卡不实"})
-            continue
+        # 工作日早到加班从 7:30 前入厂计到 08:00，开始时间早于 08:00 仍按打卡包含校验，不再一律判不实。
 
         punch_contained = False
         for row in att_map.get((applicant, date_ymd), []):
